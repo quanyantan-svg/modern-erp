@@ -828,7 +828,7 @@ describe('M7 — frontend wiring', () => {
 
 describe('M7 — M1–M6 regression sanity', () => {
   test('mobile launcher still hides empty groups (decision reports group only shown when authorized)', async () => {
-    const vite = await (await import('vite')).createServer({ root: repoRoot, server: { middlewareMode: true, hmr: false }, appType: 'custom', logLevel: 'error' });
+    const vite = await (await import('vite')).createServer({ root: repoRoot, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom', logLevel: 'error' });
     try {
       const { buildMobileApplicationGroups } = await vite.ssrLoadModule('/src/navigation/applicationMetadata.js');
       const noReportGroups = buildMobileApplicationGroups([{ key: 'orders', label: '订单', any: ['ORDERS_VIEW'], permission: undefined, icon: null }]);

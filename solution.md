@@ -38637,3 +38637,1733 @@ paths. Complete raw focused and FAST outputs are preserved outside the repositor
 `C:\Users\Administrator\AppData\Local\Temp\modern-erp-w11a-u3-vite-hmr-correction-20261030`.
 
 **Correction status: `W11_A_U3_FAST_PORT_TEST_BLOCKED`.**
+
+### 37.54.43 W11-A U3 FAST Dual-Blocker Closure — Design Amendment (2026-10-30)
+
+#### 1. Authorization, inputs and stage boundary
+
+This section is the bounded Design amendment authorized together with the Requirement amendment
+`document.md` "W11-A U3 FAST Dual-Blocker Closure — Bounded Requirement Amendment (2026-10-30)" under
+AGENTS.md §4.0. The Requirement stage modified only `document.md`; this Design stage modifies only
+`solution.md` and the real-date append-only log.
+
+Baseline: branch `review/w11a-u3-fast-blocked-20261030`, HEAD
+`60f3fbd169d7b43bbae3824b10b538edef4aeec1`, version `1.6.2`, empty index, clean working tree. No
+production code, test, fixture, runner, schema or migration was modified by this stage. No SQLite or
+MySQL database was written outside the disposable diagnostic fixtures described in §2.6. FAST, FULL, build,
+browser and the protected MySQL gate were not run. No Git write, no Acceptance/Freeze, no release or
+deploy occurred.
+
+Inputs: `R-U3-INV-01`..`R-U3-INV-08` and `R-U3-VITE-01`..`R-U3-VITE-05`; the audited root cause in the
+Requirement §2; the frozen inventory domain primitives; the installed Vite 7.3.6 source; the complete
+repository-wide Vite call-site inventory; and the disposable-SQLite diagnostic evidence recorded in
+§2.7.
+
+#### 2. The inventory correction design
+
+##### 2.1 Module and function responsibility
+
+The correction lives entirely in `server/db.js`, in the existing `seedDemoData(db)` function. No new
+module, no new export surface for the write path, no new migration module and no new production
+endpoint is introduced.
+
+`server/db.js` gains exactly one import: `computePositionKey` from the existing canonical primitive
+`server/lib/inventory-position.js`. The frozen primitive, `server/lib/stock.js`,
+`server/migrations/inventory-position-schema.js` and the approval handler in `server/app.js` are not
+modified. The canonical primitive remains the only position-key algorithm in the repository.
+
+`server/db.js` also gains one exported read-only function,
+`detectAbnormalInventoryPositions(db)`, described in §2.5.
+
+##### 2.2 The exact seed write
+
+The demo inventory block at `server/db.js:1843`-`1854` currently writes
+`id, warehouse_id, product_id, quantity, updated_at` and leaves every dimension and the position key
+unset. The corrected block writes the canonical default dimension tuple explicitly and writes the
+`position_key` that the canonical primitive computes from that same tuple:
+
+```sql
+INSERT OR IGNORE INTO inventory(
+  id, warehouse_id, product_id, quantity, updated_at,
+  position_key, bin_id, owner_type, owner_id, stock_status, lot_id, serial_id, active
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1)
+```
+
+with the bound values, per demo row:
+
+| Column | Value | Reason |
+| --- | --- | --- |
+| `position_key` | `computePositionKey({ productId, warehouseId })` | the canonical default identity of the row |
+| `bin_id` | `NULL` | the canonical default dimension |
+| `owner_type` | `'ENTERPRISE'` | the canonical default owner |
+| `owner_id` | `NULL` | the canonical owner is the enterprise itself |
+| `stock_status` | `'AVAILABLE'` | the canonical default status |
+| `lot_id` | `NULL` | the canonical default dimension |
+| `serial_id` | `NULL` | the canonical default dimension |
+| `active` | `1` | the seeded row is an active stock fact |
+
+The dimension columns are written explicitly, and not left to the column defaults, for one reason: the
+row's stored dimensions must be the literal tuple that was hashed. `computePositionKey()` applies its
+own defaults internally, so a call that omits the dimensions still hashes the default tuple — but if a
+future migration ever changed a column default, a seed that relied on the default would silently write
+dimensions that no longer match the key it stored. Writing them explicitly makes the invariant
+structural instead of incidental.
+
+`computePositionKey()` is called with only `productId` and `warehouseId`; the remaining six dimensions
+are the primitive's own documented defaults, which are exactly the values written into the row. The key
+therefore equals the canonical identity of the row's own dimensions by construction, which is the
+property `R-U3-INV-01` and `R-U3-INV-02` require and the property the `uq_inventory_position_key`
+unique index enforces.
+
+`INSERT OR IGNORE` is retained. It is what makes the seed idempotent under `R-U3-INV-04`: the primary
+key already matches an existing seeded row, and the unique position-key index already matches an
+existing canonical row under any other physical identity. In both cases the insert is skipped, no row
+is added and no quantity is written. The seed therefore never overwrites a real business quantity.
+
+The seed is explicitly **not** performed through `adjustInventory`, `adjustInventoryAtPosition` or
+`applyInventoryMutation`. Those writers accumulate a quantity and would break idempotency, and they
+write an `inventory_mutation_log` row and a valuation movement, which a demo initialization must not
+produce.
+
+##### 2.3 Data flow per scenario
+
+**Fresh initialization.** `createSqliteDatabase` runs the migration block; `migrateInventoryPositionSchema`
+at `server/db.js:516` creates the position columns, backfills the rows that exist at that moment (none)
+and creates `uq_inventory_position_key`. The Demo Seed at `server/db.js:551` then inserts the six demo
+inventory rows, each carrying its canonical `position_key` and the canonical dimension tuple. The
+result is six active rows, zero NULL keys, zero duplicate logical positions. The approval writer
+`setInventoryQuantity` now resolves the canonical default position, finds the seeded row by
+`position_key`, and updates it in place. The `(warehouse_id, product_id)` read observes `22`. The
+enclosing assertion at `server/mobile-approval-center.test.js:195` passes with its original
+expectation.
+
+**Reopen of an existing database.** The migration block runs first and its backfill assigns the
+canonical key to every pre-existing row whose key is NULL, exactly as it already does today. The Demo
+Seed then runs and every seeded row is skipped by `INSERT OR IGNORE`, because the primary key matches
+and, after the backfill, the position key matches as well. A quantity that an approved adjustment
+changed is preserved. The reopen converges to the same physical state as the fresh path.
+
+**Repeated initialization in one process.** Identical to the reopen: the rows already exist, the
+inserts are skipped, the quantities and the keys are untouched.
+
+**Approval.** Unchanged. `approveInventoryCheck` still runs inside its transaction, still re-reads the
+authoritative inventory row, still rejects a drifted `system_quantity`, still writes the tracked
+movement, the inventory transaction, the valuation movement, the system voucher and the audit record,
+and still calls `setInventoryQuantity` for the absolute quantity. The correction changes only which
+row that call finds: it now finds the seeded row instead of missing it. No state machine, no
+permission, no business rule and no accounting fact changes.
+
+**Abnormal pre-existing inventory.** A database that already holds the defect keeps its abnormal rows.
+The migration backfill assigns the canonical key to a NULL-keyed row whenever the canonical key is
+free; when the canonical key is already held by another row, the migration's own documented fallback
+writes a synthetic `<canonical key>:fallback<rowid>` value. Neither path is changed by this
+correction, and neither path is a merge, a delete or a quantity change. The abnormal state is detected
+and reported by §2.5 and is never silently repaired by the correction.
+
+##### 2.4 Why no new migration is required
+
+A new migration module is **not** introduced, and this is a deliberate decision, not an omission.
+
+The pre-existing repair path already exists and already behaves correctly for the case that matters: the
+migration backfill computes the canonical key with the same canonical primitive, from the row's own
+dimensions, and applies it to every NULL-keyed row on every open. After the seed correction, a database
+that was initialized by the defective build converges to the canonical state on its next open, with no
+new migration, no new column and no new constraint. The only residual case is a database that already
+holds a genuine duplicate, and that case is explicitly out of scope for automatic repair under
+`R-U3-INV-07`; it is detected and reported instead.
+
+Adding a migration would therefore either duplicate an existing writer of `position_key` — a violation of
+the single-canonical-primitive rule — or silently merge and delete abnormal rows, which
+`R-U3-INV-07` prohibits.
+
+##### 2.5 The read-only abnormal inventory detection
+
+`server/db.js` exports:
+
+```text
+detectAbnormalInventoryPositions(db) -> {
+  scanned:              <number of active inventory rows inspected>,
+  nullPositionKey:      <array of row descriptors>,
+  nonCanonicalKey:      <array of { id, stored, expected } row descriptors>,
+  duplicateCanonical:   <array of { positionKey, rowIds }>,
+  abnormalRows:         <total number of abnormal rows>,
+  healthy:              <boolean>
+}
+```
+
+Behaviour:
+
+- it is **read-only**. It issues `SELECT` statements only. It never issues an `UPDATE`, a `DELETE` or an
+  `INSERT`. It therefore satisfies `R-U3-INV-06` and `R-U3-INV-07` mechanically, not by convention;
+- it classifies exactly the three observable classes of `R-U3-INV-07`: a NULL or empty `position_key`; a
+  stored key that differs from the canonical identity computed by the canonical primitive for the row's
+  own dimensions — which is what detects the synthetic `:fallback<rowid>` identity; and two or more
+  active rows whose canonical identities coincide;
+- the canonical identity of a row is computed with the **same** `computePositionKey()` primitive, from
+  the row's own `product_id`, `warehouse_id`, `bin_id`, `owner_type`, `owner_id`, `stock_status`,
+  `lot_id` and `serial_id`. It is never a re-implementation and never a second algorithm;
+- the samples are bounded so that a heavily damaged database cannot produce an unbounded report;
+- it is **not** reachable from any HTTP read route and it is not invoked by a read path.
+
+Invocation: the detection runs inside `createSqliteDatabase` immediately after the Demo Seed, so it
+runs on every open of a database in the demo path, which is the path that creates the defect, and it
+covers a database that was first opened by the defective build. When the report is not healthy, a
+structured diagnostic is emitted. The function remains exported so that an operator can run the scan
+against any database on demand.
+
+Cost disclosure: the scan is a full read of the active inventory rows and therefore runs on every open
+in the demo path only. `shouldSeedDemoData()` is false in production, so no production startup pays this
+cost, and a production database is not scanned at startup. The intended path for a production database
+is an operator-triggered call of the exported function. This trade-off is stated here rather than
+hidden, because the alternative — scanning every production startup — would add an unbounded startup
+cost to a hot path in exchange for a diagnostic that the domain's own migration already reports in its
+fallback path.
+
+##### 2.6 Schema, transaction, RBAC, state transition, error behaviour and audit
+
+- **Schema.** No new column, no new table, no new constraint and no new index. The correction uses the
+  existing `inventory.position_key` column and the existing `uq_inventory_position_key` unique index.
+- **Migration.** No new migration module and no migration registration change. See §2.4.
+- **Transaction.** The seed write is not transactional and does not need to be: it is a single
+  `INSERT OR IGNORE` statement per row, it is idempotent, and it is re-runnable. The approval path's
+  transaction is untouched.
+- **RBAC / SOD.** The seed is an initialization writer that runs before any actor exists and it is
+  gated by `shouldSeedDemoData()`, which is false unless the environment explicitly opts in or is not
+  production. No permission, no role and no separation-of-duty rule changes. The exported detection
+  function is not an HTTP surface and therefore carries no permission contract; it is a diagnostic
+  entry point in the same sense as `createDatabase` itself.
+- **State transition.** None. The correction does not add, remove or alter any state machine. The
+  inventory-check state machine (`DRAFT` → `SUBMITTED` → `APPROVED`) and its guards are untouched.
+- **Error behaviour.** The seed insert keeps `INSERT OR IGNORE`, so a canonical-key collision is a skip
+  and not a failure. A genuine SQL error still propagates and aborts the initialization, consistent with
+  the existing behaviour of the other seed writers. The detection never throws for an abnormal
+  database: an abnormal database is reported, not failed.
+- **Audit.** The seed writes no audit row, exactly as it does today, because a demo initialization is
+  not a business action. The approval path's audit row is unchanged. The detection writes no audit row,
+  because it writes nothing at all.
+
+##### 2.7 The compatibility and the frozen contract
+
+- The inventory business identity is unchanged: the canonical position tuple, the owner validation, the
+  stock-status validation, the bin validation and the valuation semantics are untouched
+  (`R-U3-INV-08`).
+- The frozen Domain 5 contract in `server/lib/inventory-position.js`,
+  `server/lib/stock.js` and `server/migrations/inventory-position-schema.js` is untouched. Their SHA-256
+  identities are recorded in §7 and are re-verified by acceptance item `P`.
+- The U3 Selector Search Key contract is untouched: the demo seed keeps its post-migration position, so
+  the demo customers keep writing their derived search keys in the insert, and the demo seed is not
+  moved back to its pre-U3 position.
+- The pre-existing repair path for a database created by the defective build is the existing migration
+  backfill and is unchanged.
+
+##### 2.8 MySQL parity
+
+The demo seed correction reaches MySQL without a MySQL-specific change, because the MySQL bootstrap
+derives its data from the SQLite snapshot. `createMySqlDatabase` builds that snapshot through
+`createSqliteSnapshot: (filename) => createSqliteDatabase(filename)`, so the snapshot's inventory rows
+carry the canonical key, and `bootstrapMySql` copies every snapshot column — including `position_key` —
+with `INSERT IGNORE INTO <table> (<all snapshot columns>)`.
+
+The physical MySQL contract was read with a recording mock adapter driving `bootstrapMySql`, without a
+MySQL connection and without a repository change. The emitted MySQL `inventory` DDL is:
+
+```text
+`position_key` VARCHAR(128),        -- nullable
+`bin_id`      VARCHAR(128),
+`owner_type`  VARCHAR(128) NOT NULL DEFAULT 'ENTERPRISE',
+`owner_id`    VARCHAR(128),
+`stock_status` VARCHAR(128) NOT NULL DEFAULT 'AVAILABLE',
+`lot_id`      VARCHAR(128),
+`serial_id`   VARCHAR(128),
+`active`      BIGINT NOT NULL DEFAULT 1,
+```
+
+with `UNIQUE (position_key)`. The canonical key is a 64-character lowercase hex digest, so it fits the
+`VARCHAR(128)` column without truncation. Because the column is nullable and a MySQL unique index admits
+several NULL values, the defective build did not break the MySQL bootstrap — it silently loaded the same
+non-canonical demo rows there. The correction removes that divergence as well, because both engines
+receive the same snapshot rows.
+
+The `server/migrations/inventory-position-schema.js` header comment states that MySQL stores
+`position_key` as `CHAR(64) NOT NULL UNIQUE`. The physical MySQL schema is `VARCHAR(128) NULL`. That
+divergence is **pre-existing**, is not introduced by U3, is not introduced by this correction and is not
+in scope here. It is disclosed because the correction writes a canonical key into that column and a
+reader of the module header would otherwise form a wrong expectation about its physical type.
+
+##### 2.9 The measured evidence behind this design
+
+All evidence was produced on disposable SQLite databases outside the repository, through the production
+`createDatabase` entry point and the production `setInventoryQuantity` writer. No repository file was
+modified and no MySQL was contacted.
+
+| Observation | Measured result |
+| --- | --- |
+| Fresh seeded inventory rows | 6 active rows, all with `position_key = NULL` |
+| Canonical key vs stored key | differs in all 6 rows |
+| Approval writer behaviour | inserts a second active row for the same logical position |
+| Logical position after approval | 2 active rows for `(warehouse-001, product-001)` |
+| The failing assertion | `before = 20`, `after = 20`, expected `22` |
+| Focused test reproduction | 77 pass, 1 fail, `expected: 22, actual: 20` |
+| Fresh, then reopen, no approval | backfill assigns the 6 correct canonical keys |
+| Fresh, then approval, then reopen | the stale seeded row receives `<canonical>:fallback<rowid>` |
+| Simulated fix, fresh | 6 rows, 0 NULL, 0 non-canonical, 0 duplicates |
+| Simulated fix, approval | `before = 20`, `after = 22`, exactly 1 active row for the logical position |
+| Simulated fix, repeated seed | quantity `22` preserved, 6 rows |
+| Simulated fix, reopen | quantity `22` preserved, 6 rows, 0 NULL, 0 non-canonical, 0 duplicates |
+
+The simulated fix reproduces the corrected seed block outside the repository, over the same production
+`createDatabase` entry point, and it demonstrates every target property before any production change is
+made.
+
+#### 3. The Vite regression correction design
+
+##### 3.1 The mechanism, read from the installed source
+
+The installed Vite is `7.3.6`. The middleware WebSocket factory is
+`node_modules/vite/dist/node/chunks/config.js`:
+
+- `config.js:25456` — in middleware mode the resolved HTTP server is `null`, and `config.js:25457`
+  passes that `null` into `createWebSocketServer` as its `server` argument;
+- `config.js:20430` — `if (config.server.ws === false) return { … }` returns a no-op WebSocket server
+  whose `listen` is a no-op. This is the **only** path that creates no listener;
+- `config.js:20448`-`20451` — with `hmr: false`, `hmr` is not an object, so `hmrPort` is falsy and
+  `wsServer` evaluates to `(!hmrPort || …) && server`, which is `true && null`, i.e. falsy;
+- `config.js:20486`-`20498` — because `wsServer` is falsy, the factory takes the fallback branch and
+  creates a **real** HTTP server for the WebSocket transport;
+- `config.js:20455` — `const port = hmrPort || 24678`, the fixed default HMR port;
+- `config.js:20584` — `wsHttpServer?.listen(port, host)`, which binds 24678;
+- `config.js:20507`-`20508` — the `EADDRINUSE` handler that prints
+  `WebSocket server error: Port 24678 is already in use`.
+
+The conclusion is exact and mechanical: **`hmr: false` alone does not prevent the port bind.** The
+listener is suppressed only by `server.ws: false`. This confirms the earlier stage's empirical finding
+and it is the reason the correction is `ws: false` and not something else. Because the port is a fixed
+constant rather than a configured one, every affected instance competes for the same port, and the
+`node --test` runner executes test files as independent concurrent processes.
+
+##### 3.2 The complete call-site audit
+
+The audit covers every Vite server creation in the repository test graph. The enumeration was produced
+from the actual `createViteServer` call sites, and the suite membership was read from
+`scripts/testing/test-suites.js`.
+
+| # | File | Line | Suite | Before | After | Action |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | `server/spa-navigation-hotfix.test.js` | 27 | FAST + FULL | `{ middlewareMode: true, hmr: false }` | `{ middlewareMode: true, hmr: false, ws: false }` | correct |
+| 2 | `server/mobile-approval-center.test.js` | 126 | FAST + FULL | `{ middlewareMode: true, hmr: false }` | `{ middlewareMode: true, hmr: false, ws: false }` | correct |
+| 3 | `server/mobile-application-launcher.test.js` | 30 | FAST + FULL | `{ middlewareMode: true, hmr: false }` | `{ middlewareMode: true, hmr: false, ws: false }` | correct |
+| 4 | `server/cost-stabilization.test.js` | 74 | FULL only | `{ middlewareMode: true }` | `{ middlewareMode: true, hmr: false, ws: false }` | correct |
+| 5 | `server/m9-final-polish.test.js` | 24 | FULL only | `{ middlewareMode: true, hmr: false }` | `{ middlewareMode: true, hmr: false, ws: false }` | correct |
+| 6 | `server/v14-e7-two-level-business-overview.test.js` | 22 | FULL only | `{ middlewareMode: true, hmr: false }` | `{ middlewareMode: true, hmr: false, ws: false }` | correct |
+| 7 | `server/v16-p1-mobile-enterprise-foundation.test.js` | 44 | FULL only | `{ middlewareMode: true, hmr: false }` | `{ middlewareMode: true, hmr: false, ws: false }` | correct |
+| 8 | `server/v16-p11-mobile-enterprise-visual-refinement.test.js` | 23 | FULL only | `{ middlewareMode: true, hmr: false }` | `{ middlewareMode: true, hmr: false, ws: false }` | correct |
+| 9 | `server/mobile-shell.test.js` | 41 | FAST + FULL | `{ middlewareMode: true, hmr: false, ws: false }` | unchanged | already correct |
+| 10 | `server/teacher-acceptance-matrix.test.js` | 775 | FAST + FULL | `{ middlewareMode: true, hmr: false, ws: false }` | unchanged | already correct |
+| 11 | `server/teacher-acceptance-matrix.test.js` | 1045 | FAST + FULL | `{ middlewareMode: true, hmr: false, ws: false }` | unchanged | already correct |
+
+The audit result, stated plainly:
+
+- the repository contains **11** middleware-mode Vite instances in **10** test files;
+- **5** of them live in FAST-registered files; of those, **2** are already correct and **3** require the
+  correction — exactly the three files named in the review instruction;
+- **6** of them live in FULL-only files and **all 6 still bind port 24678**. They are not in FAST, so
+  they did not contribute to the recorded FAST failure, but the FULL gate executes the same independent
+  test-file processes against the same fixed port, so they reproduce the identical collision in the FULL
+  gate. Leaving them uncorrected would trade a FAST failure for a FULL failure.
+
+This is the reason the future whitelist in §4 is wider than the three files named in the review
+instruction, and the reason is proven rather than precautionary: acceptance item `M` is the FULL gate,
+and FULL contains all five of these files.
+
+##### 3.3 The exact target configuration
+
+Every instance that requires the correction receives `server: { middlewareMode: true, hmr: false,
+ws: false }`. The existing `appType` and `logLevel` options are preserved verbatim. Instances 9 to 11
+are already in the target state and are not touched.
+
+##### 3.4 What is explicitly not done
+
+No Vite upgrade and no dependency change; no change to `vite.config.js`; no port assignment, no port
+range and no `hmr.port`; no change to the test concurrency, the runner flags or the suite manifest
+beyond the single registration entry required in §4; no change to any assertion, no skipped and no
+downgraded test; no change to any production source file; no process termination and no port kill.
+
+#### 4. The exact future implementation whitelist
+
+The review instruction limits the future implementation preferentially to `server/db.js`, the three
+Vite test files, the approved documents and the real-date log, and requires that any addition be proven
+necessary in this Design. The additions are proven below.
+
+| # | Path | Action | Necessity proof |
+| --- | --- | --- | --- |
+| 1 | `server/db.js` | modify | the only writer of the demo inventory rows; carries `R-U3-INV-01`..`04` and `07` |
+| 2 | `server/spa-navigation-hotfix.test.js` | modify | audit row 1; FAST port binder |
+| 3 | `server/mobile-approval-center.test.js` | modify | audit row 2; FAST port binder; also owns the `C` acceptance assertion |
+| 4 | `server/mobile-application-launcher.test.js` | modify | audit row 3; FAST port binder |
+| 5 | `server/cost-stabilization.test.js` | modify | audit row 4; FULL port binder; the only instance with neither `hmr: false` nor `ws: false` |
+| 6 | `server/m9-final-polish.test.js` | modify | audit row 5; FULL port binder |
+| 7 | `server/v14-e7-two-level-business-overview.test.js` | modify | audit row 6; FULL port binder |
+| 8 | `server/v16-p1-mobile-enterprise-foundation.test.js` | modify | audit row 7; FULL port binder |
+| 9 | `server/v16-p11-mobile-enterprise-visual-refinement.test.js` | modify | audit row 8; FULL port binder |
+| 10 | `server/inventory-demo-seed-position-identity.test.js` | **new** | the `A`–`H` inventory acceptance matrix has no existing owner. `server/phase-e-inventory-approve.test.js` and `server/phase-e-inventory-migration.test.js` deliberately set `NODE_ENV=production` and therefore never observe the Demo Seed, and `server/mobile-approval-center.test.js` owns the mobile approval centre, not the inventory seed identity. Placing the matrix in the mobile approval file would misattribute the inventory seed contract and would leave `A`, `B`, `D`, `E`, `G` and `H` unowned. |
+| 11 | `scripts/testing/test-suites.js` | modify | **mandatory.** `server/test-suite-governance.test.js` asserts `every on-disk *.test.js is classified into a suite`, and that file is registered in FAST. A new `*.test.js` under `server/` that is not listed in `FAST`, `FULL` or `HEAVY` fails that assertion, so the new file from row 10 cannot exist without this single registry entry. The new file is registered in **FULL only**, because it creates disposable SQLite databases and therefore does not meet the FAST criterion of a bounded, database-free regression. This is the same classification the earlier U3 Search Semantics suite received. |
+| 12 | `document.md` | append | the Requirement amendment |
+| 13 | `solution.md` | append | this Design amendment |
+| 14 | `log/2026-10-30.md` | append | the append-only evidence record |
+
+Explicitly **not** modified by the future implementation:
+
+`server/lib/inventory-position.js`, `server/lib/stock.js`,
+`server/migrations/inventory-position-schema.js`, `server/app.js`, `server/modules/**`,
+`server/migrations/**` other than none, `server/database/**`, `vite.config.js`, `package.json`,
+`scripts/gates/**`, `scripts/acceptance/**` except the browser harness only if the browser plan in §5
+requires it, `src/**`, the frozen Credit owners, the frozen W11-A U2 E3 suite, the protected MySQL
+launcher and campaign runner, and every file outside rows 1 to 14 above.
+
+Two files are excluded from the whitelist on purpose. `server/migrations/inventory-position-schema.js`
+is excluded because §2.4 proves no new migration is required and because the module's own header is
+frozen. `server/lib/inventory-position.js` is excluded because the canonical primitive is frozen and
+because duplicating its algorithm is explicitly prohibited.
+
+#### 5. The complete implementation and regression plan
+
+The plan is the seventeen-item acceptance matrix. Every item names the artifact that must exist after
+the implementation and the exact pass condition. The matrix is the definition of done for the future
+implementation stage.
+
+| Item | Subject | Artifact | Pass condition |
+| --- | --- | --- | --- |
+| **A** | Fresh SQLite seed physical integrity | disposable SQLite created through the production `createDatabase` | exactly the 6 demo inventory rows exist, all `active = 1`, all carry a non-empty `position_key`, 0 rows have a NULL or empty `position_key` |
+| **B** | Default position key equality | the same database | for every seeded row, the stored `position_key` is byte-identical to `computePositionKey()` computed from **that row's own** `product_id`, `warehouse_id`, `bin_id`, `owner_type`, `owner_id`, `stock_status`, `lot_id` and `serial_id`, and the six stored dimension tuples are exactly the canonical default tuple |
+| **C** | Inventory 20 → 22 approval | the real HTTP approval endpoint against the disposable database | the observed quantity is `22`; the observed row count for the logical position is `1`; the physical row identity is the seeded row, not a new row; the existing assertion at `server/mobile-approval-center.test.js:195` passes with its unchanged expectation |
+| **D** | Exactly one canonical active position | the same database after the approval | exactly one active row carries the canonical key of the logical position, and the `(warehouse_id, product_id)` tuple has exactly one active row |
+| **E** | No NULL position key after seed | fresh database and reopened database | 0 active rows with a NULL or empty `position_key` in both |
+| **F** | Inventory transaction, audit and valuation | the same database after the approval | an `inventory_transactions` row exists for the check, an `audit_logs` row exists for the approval, the valuation movement and the system voucher exist, and the voucher amount agrees with the absolute difference |
+| **G** | Repeat bootstrap and reopen | the same database file, reopened | the row count is unchanged, the quantity is unchanged at `22`, the position keys are unchanged, and 0 rows are NULL or non-canonical |
+| **H** | No unauthorized stock mutation | the same database | the seed and the correction write no `inventory_mutation_log` row and no valuation movement; the demo seed is not performed through an accumulating stock writer |
+| **I** | Three Vite middleware fixes | the three FAST files | each contains `ws: false` beside `middlewareMode: true` and `hmr: false` |
+| **J** | Complete Vite call-site audit | a machine-checked scan of the repository test graph | every middleware-mode Vite instance in every FAST-registered file and in every FULL-only file either already satisfies the target or has been corrected; the scan reports 11 instances in 10 files, 8 corrected and 3 already correct, and 0 remaining binders |
+| **K** | Focused concurrent test | the FAST Vite files executed concurrently | no `Port 24678 is already in use` diagnostic; no listener on 24678 before, during or after the run; all tests pass |
+| **L** | FAST gate | `pnpm test:fast` | 500 tests, 37 suites, 0 fail, 0 cancelled, 0 skipped, 0 todo, exit code 0 |
+| **M** | FULL gate | `pnpm test` | every test passes, 0 fail, 0 cancelled, 0 skipped, 0 todo, exit code 0, and no port diagnostic |
+| **N** | Build | `pnpm build` | the Vite production build succeeds; the module count is unchanged |
+| **O** | Edge browser preliminary | the existing U3 browser harness | the U3 surfaces still render and behave; no regression is observed. This item is preliminary and is not an acceptance of the U3 capability |
+| **P** | Frozen SHA preservation | the frozen file identities | every frozen identity recorded in §7 is byte-identical, including `server/modules/credit-check.js`, `server/modules/credit-query.js`, `server/lib/inventory-position.js`, `server/lib/stock.js` and `server/migrations/inventory-position-schema.js` |
+| **Q** | Worktree and Git governance | the repository state | the index stays empty; the branch and HEAD are unchanged; the changed-path set is exactly the whitelist rows 1 to 14; `git diff --check` passes; no commit, push, tag, merge, release or deploy occurred |
+
+Two binding rules apply to the whole matrix:
+
+- a failing test may **not** be repaired by changing the expected value `22` to `20`, by weakening the
+  assertion, by skipping it or by downgrading it (`R-U3-VITE-05`);
+- the fix may **not** be limited to making the test read select the canonical row while a non-canonical
+  inventory row remains in the database (`R-U3-VITE-05`).
+
+The execution order is: implement rows 1 to 11 → focused inventory suite → the three FAST Vite files
+focused → the concurrent Vite check `K` → `git diff --check` → FAST `L` → FULL `M` → build `N` →
+browser `O` → frozen SHA `P` → governance `Q`. Each gate that fails stops the sequence at that gate and
+is reported as a failure; it is not repaired inside the same round and no second run of the same gate is
+performed without a new authorization.
+
+#### 6. The rollback
+
+The correction is confined to the demo seed statement and to the Vite middleware options, so the
+rollback is a plain revert of the affected files with no schema change and no data migration to undo.
+Reverting the seed correction restores the defect for **freshly initialized** databases only: a
+database that was initialized while the correction was in place already holds canonical keys, and the
+existing migration backfill keeps it correct. No rollback step may delete, merge or rewrite an
+abnormal inventory row, because that would violate `R-U3-INV-07`; an abnormal database is left as it
+is and is reported.
+
+#### 7. The frozen identities that the future implementation must preserve
+
+| Path | SHA-256 |
+| --- | --- |
+| `server/modules/credit-check.js` | `6a7f322ae81f860b7066181244c786174bf5dfed5bfcf796db1f32483391c7c1` |
+| `server/modules/credit-query.js` | `24889d82a602cd2cd11807dd11807bbfa163f584b7fb6c13f55f62cdb0d04133b` |
+| `server/modules/credit-scope.js` | `f31033bd75520643c50202c18f640440aacbcde892595efad7d4e0ba2041a3bc` |
+| `server/modules/credit-special-approval.js` | `04594b3dc01240c5b3addddf50897fbeab54802daf9fbd7d49c5e36cccf289c4` |
+
+The frozen inventory primitives `server/lib/inventory-position.js`, `server/lib/stock.js` and
+`server/migrations/inventory-position-schema.js` are additionally captured by their current SHA-256 at
+the moment of the future implementation and re-verified by acceptance item `P`, because they are the
+prohibited-scope boundary of §4.
+
+#### 8. What did not happen and the pause point
+
+- No production code, test, fixture, runner, schema or migration was modified. No new file was created
+  in the repository. The working tree remains clean.
+- No SQLite or MySQL database was written outside the disposable diagnostic fixtures in §2.9, which
+  were created in the operating-system temporary directory and deleted afterwards.
+- No MySQL connection, schema operation, runner or gate execution, and no re-run of any protected gate.
+- The protected launcher, the campaign runner, the frozen W11-A U2 E3 suite and the frozen Credit owners
+  are unmodified.
+- No FAST, FULL, HEAVY, build or browser execution. No Git write. No Acceptance and no Freeze.
+
+HARD STOP after this Design. The next stage is the Implementation of the fourteen registered paths, and
+the real MySQL verification, which needs its own explicit authorization and is not part of this Design.
+
+**Design status: `W11_A_U3_FAST_DUAL_BLOCKER_DESIGN_READY`.**
+
+### 37.54.44 W11-A U3 FAST Dual-Blocker Closure — Implementation Record (2026-10-30)
+
+#### 1. Authorization, baseline and stage boundary
+
+This section records the bounded Implementation authorized under AGENTS.md §4.0 against the approved
+Requirement `document.md` "W11-A U3 FAST Dual-Blocker Closure — Bounded Requirement Amendment
+(2026-10-30)" and the approved Design §37.54.43.
+
+Baseline: branch `review/w11a-u3-fast-blocked-20261030`, HEAD
+`60f3fbd169d7b43bbae3824b10b538edef4aeec1`, version `1.6.2`, empty index, three append-only
+documentation paths in the working tree.
+
+Real MySQL, a Git write, Acceptance/Freeze, Release and Deploy were not authorized and did not happen.
+The WIP commit `60f3fbd169d7b43bbae3824b10b538edef4aeec1` remains the traceable parent baseline and
+was not amended.
+
+#### 2. The exact implementation boundary
+
+The whitelist was extracted item by item from §37.54.43 §4 and executed exactly. The changed-path set is
+an exact match against the approved fourteen paths; no fifteenth path was created or modified. The
+verification is a set comparison of the approved list against the working-tree change set, and it
+returns an exact match of 14 of 14.
+
+#### 3. The Demo Seed canonical position correction
+
+`server/db.js` gains one import, `computePositionKey` from `server/lib/inventory-position.js`. The
+frozen primitive is not modified and remains the only position-key algorithm in the repository.
+
+The demo inventory block now writes the canonical position identity in the insert itself:
+
+```sql
+INSERT OR IGNORE INTO inventory(
+  id, warehouse_id, product_id, quantity, updated_at,
+  position_key, bin_id, owner_type, owner_id, stock_status, lot_id, serial_id, active
+) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+```
+
+with `position_key` computed by `computePositionKey({ productId, warehouseId })` and the six dimension
+columns bound explicitly to `null`, `'ENTERPRISE'`, `null`, `'AVAILABLE'`, `null`, `null`. The six
+dimension columns are written explicitly rather than inherited from the column defaults, so the row's
+stored dimensions are the literal tuple that was hashed. The six seeded row identities and the six
+seeded quantities are unchanged from the previous baseline.
+
+`INSERT OR IGNORE` is retained, which is what makes the seed idempotent: the primary key matches an
+existing seeded row, and the unique position-key index matches an existing canonical row under any
+other physical identity, so the insert is skipped in both cases and no quantity is written. The seed
+is not performed through `adjustInventory`, `adjustInventoryAtPosition` or
+`applyInventoryMutation`, so it writes no inventory mutation log, no inventory transaction and no
+valuation movement, and it never accumulates a quantity.
+
+The Demo Seed keeps its post-migration position. It was not moved back before the additive Selector
+Search Key migration, so the demo customers keep writing their derived search keys in the insert and
+the four production search writers are untouched.
+
+#### 4. The independent seed verification and the fail-closed boundary
+
+`INSERT OR IGNORE` suppresses every constraint violation, so a suppressed conflict must never be
+reported as a successful seed. `verifyDemoSeedPositions(db)` reads the physical state after the seed's
+own write and, for each of the six demo positions, proves that a row carrying the canonical position
+key exists **and** that the row's own dimensions describe that same position. A row that merely
+carries the key while describing a different logical position establishes nothing.
+
+When a demo position cannot be established the function throws
+`Demo seed failed to establish canonical inventory positions: <warehouse>/<product>`, the database
+handle is closed so the file is not left locked, and the error propagates out of
+`createSqliteDatabase`. The initialization therefore fails closed rather than reporting success.
+
+The verification is read-only. It never mutates, never merges, never deletes and never rewrites a
+quantity. A genuine SQL error still propagates and aborts the initialization, consistent with the
+other seed writers.
+
+#### 5. The read-only abnormal inventory detection
+
+`server/db.js` exports `detectAbnormalInventoryPositions(db)`. It reads the active inventory rows and
+classifies three observable classes:
+
+| Class | Detection | Meaning |
+| --- | --- | --- |
+| `nullPositionKey` | the stored key is NULL or empty | the row carries no position identity |
+| `nonCanonicalKey` | the stored key differs from the canonical identity computed for the row's own dimensions | this is what detects the synthetic `<canonical>:fallback<rowid>` identity, which no canonical writer can ever match |
+| `duplicateCanonical` | two or more active rows resolve to the same canonical identity | the same logical position holds more than one active inventory fact |
+
+The canonical identity of a row is computed with the same `computePositionKey()` primitive, from the
+row's own dimensions. A row whose dimensions are not a legal canonical tuple is classified as
+non-canonical rather than crashing the scan. The sample arrays are bounded at fifty entries while the
+counts and the abnormal row total stay exact.
+
+The function issues `SELECT` statements only. It is never reachable from an HTTP read route and it is
+never invoked by a read path, which satisfies the read-never-repairs rule mechanically rather than by
+convention.
+
+`reportAbnormalInventoryPositions(db)` runs it immediately after the Demo Seed inside
+`createSqliteDatabase`, so it runs on every open of a database in the demo path — the path that
+creates the defect — and it covers a database that was first opened by the defective build. When the
+report is not healthy a structured diagnostic is emitted under the stable prefix
+`[modern-erp] abnormal inventory positions detected:`. The abnormal rows are preserved as evidence.
+
+The cost boundary is unchanged from §37.54.43 §2.5: the scan runs in the demo path only.
+`shouldSeedDemoData()` is false in production, so no production startup pays this cost and a
+production database is not scanned at startup; the exported function is the operator-triggered path.
+
+#### 6. The eight remaining Vite middleware corrections
+
+Each corrected instance now carries `server: { middlewareMode: true, hmr: false, ws: false }`. The
+single-line call sites keep their single-line form; the multi-line call sites keep their existing
+multi-line object and only the `server` line changes. The existing `appType` and `logLevel` options
+are preserved. No assertion, no lifecycle hook, no SSR loading behaviour, no React render behaviour
+and no production source file changed.
+
+`server/cost-stabilization.test.js` additionally received `hmr: false`, because it was the only
+instance that carried neither `hmr: false` nor `ws: false`.
+
+#### 7. A newly discovered twelfth Vite middleware instance
+
+The implementation is required to statically re-check all Vite middleware instances. The re-check found
+**twelve** instances in **eleven** files, not the eleven in ten files that §37.54.43 §3.2 enumerated.
+
+The additional instance is `server/decision-reports.test.js:831`:
+
+```js
+const vite = await (await import('vite')).createServer({ root: repoRoot, server: { middlewareMode: true, hmr: false }, appType: 'custom', logLevel: 'error' });
+```
+
+It creates its server through a dynamic `import('vite')` and the `.createServer(...)` method rather
+than through the static `createServer as createViteServer` alias, and the §37.54.43 enumeration was
+built from that alias. The instance is registered in FULL only, so it never contributed to the
+recorded FAST failure.
+
+It was **not modified**. It is outside the approved fourteen-path whitelist; the authorization
+forbids adding a fifteenth path, forbids modifying unauthorized files, and explicitly forbids
+repairing a WebSocket problem in an unauthorized file when FULL raises one.
+
+The measured consequence is benign in the current state: with the other eleven corrected, this
+instance is the sole holder of port 24678, and the concurrent eleven-file Vite run, the FAST gate and
+the FULL gate each recorded zero port 24678 diagnostics. The residual risk is registered: the
+instance remains a port binder, so any future middleware-mode Vite test file that omits `ws: false`
+would collide with it. Closing it needs a bounded Requirement and Design amendment that adds exactly
+one path to the whitelist. It is not a product defect.
+
+#### 8. A previously failing FULL-only regression
+
+`server/inventory-position-integration.test.js` was already failing before this implementation. Its
+case `inventory additive columns present + position_key backfilled` asserts that no inventory row
+carries a NULL or empty position key, and the demo seed created six such rows. The file is registered
+in FULL only, which is why the FAST gate never surfaced it and why the last completed FULL run
+predates the U3 reorder. The correction restores the frozen Domain 5 contract and the case now passes.
+
+#### 9. The new regression suite and the registry entry
+
+`server/inventory-demo-seed-position-identity.test.js` is registered in **FULL only**. It creates
+disposable SQLite databases and drives the real writers and the real approval HTTP surface, so it does
+not meet the FAST criterion of a bounded, database-free regression. The registry entry was mandatory:
+`server/test-suite-governance.test.js` asserts that every on-disk `*.test.js` is classified into a
+suite, and that file is registered in FAST, so an unlisted new test file would fail the FAST gate. The
+classification preserves FAST ⊆ FULL, FULL ∩ HEAVY = ∅, every on-disk test classified and no duplicate
+registration.
+
+The sixteen cases map onto the acceptance matrix as follows:
+
+| Case | Acceptance item | Substance |
+| --- | --- | --- |
+| A | A | the fresh seed creates exactly six rows with the exact seeded identities, quantities, active status and a 64-character lowercase hex key |
+| B | B | every stored key equals the canonical computation of the row's own dimensions, and the six dimensions are exactly the canonical default tuple |
+| C | C | zero active rows carry a NULL or empty key, and the detection reports the database healthy |
+| D | D | the real HTTP approval moves the canonical position from 20 to 22, read by position key, and updates the seeded row in place |
+| E | D | exactly one active row carries the canonical key, exactly one active row describes the logical position, one physical row in total, no additional row created |
+| F | F | one inventory transaction with the counted difference and the resulting balance, one audit record, one valuation movement with a real integer-cent amount, one system voucher with balanced entries, the approved business status, and no canonical inventory mutation log entry |
+| G | G | a repeated bootstrap and two reopens preserve the real quantity, the row count and the canonical identities, and produce no keyless position |
+| H | H | the legacy NULL, the recoverable NULL, the duplicated canonical position and the synthetic fallback key are each detected and reported, the detection is strictly read-only, a duplicate is never merged, deleted, summed or backdated, and the seed fails closed when it cannot establish a canonical position |
+
+The approval case reads the canonical position by its position key and asserts the original business
+expectation of `22` in addition to the unqualified read. It never manufactures the quantity, never
+changes the expectation to `20` and never weakens an existing assertion.
+
+The fail-closed case constructs the incomplete state by occupying the seeded row identity with a row
+whose own dimensions describe a different logical position, which makes the seed's own insert
+suppressed and proves that only the independent verification can stop the initialization from
+reporting success.
+
+#### 10. Gate evidence
+
+Every gate ran through the isolated child environment, with every MySQL-pointing variable stripped
+and `ERP_DB_PATH` absent, and with `ERP_DB_BACKEND=sqlite` pinned. The complete raw output of each
+gate is preserved outside the repository under
+`C:\Users\Administrator\AppData\Local\Temp\modern-erp-w11a-u3-dual-blocker-implementation-20261030`.
+
+| Gate | Command | Exit | Result | Evidence SHA-256 |
+| --- | --- | --- | --- | --- |
+| F1 inventory, 13 files | `node --test <13 inventory files>` | 0 | 223 tests, 25 suites, 223 pass, 0 fail, 0 cancelled, 0 skipped, 0 todo | `97708a8b0dc99be76e9771cc1d3d345aeb3c1504e1d1b46fadda7470b72838fa` |
+| F2 Vite, 11 files, concurrent | `node --test <11 Vite files>` | 0 | 389 tests, 55 suites, 389 pass, 0 fail; zero port 24678 diagnostics; port free before and after | `80f2a306f6a64ab5e3a8df13a8b6bcc7172c301cac7a78daf4a8095551ab3141` |
+| F3 U3 preservation, 15 files | `node --test <15 wave files>` | 0 | 322 tests, 322 pass, 0 fail, 0 cancelled, 0 skipped, 0 todo | `f0e0fc22c22f158db575925076ed479001ecfd312ee1767b9f4c051b7d737960` |
+| FAST | `pnpm test:fast` | 0 | 500 tests, 37 suites, 500 pass, 0 fail, 0 cancelled, 0 skipped, 0 todo; zero port diagnostics; 23 files | `37206d28756b252f64e8cb7c5a46016cfeb2a1f21508130de09e9b68e9644ecc` |
+| FULL | `pnpm test` | 0 | 3102 tests, 363 suites, 3102 pass, 0 fail, 0 cancelled, 0 skipped, 0 todo; zero port diagnostics; 200 files | `bee55198e8e57f360b7e1ebe9d48f4a5d3f2fea206caeac61b95e6a33de146c3` |
+| Build | `pnpm build` | 0 | Vite production build succeeded | `efbb111c7b8081e3c15534bc647fe4ee7399780914c0dd60e139c43def5f7d84` |
+| Edge browser preliminary | `node scripts/acceptance/sales-customer-wave11-a-u3-browser-uat.mjs` | 0 | B01 through B09 all PASS, 32 responsive entries, 71 requests | `58c3b64f25124898d2379f0b7f7429914865160a76a294130917904b767811c3` |
+
+The browser evidence directory holds `browser-acceptance-results.json`
+`9b1adababa0912546e2d3b2c9c7dc51f742e6a4084ab9860bd63f9a6bbebd1c7` and `manifest.json`
+`1492a537f0fed153a03fd691e452a916250d7cf0238e19a16aa3f2acf769d2c6`, the latter carrying the SHA-256 of
+every screenshot.
+
+`git diff --check` passes with no whitespace error. The new test file carries no trailing whitespace
+and no conflict marker. The index stays empty, so the new file remains untracked and unstaged.
+
+The FAST count of 500 is the original baseline count. No concurrency was reduced, no file was
+reclassified and no expectation was weakened to reach it.
+
+#### 11. The changed-file identities
+
+| Path | SHA-256 after the implementation |
+| --- | --- |
+| `server/db.js` | `dae13650dfc31e718c7d0781ab6f7f4aec2a98fdd470c0104257c78fa8540185` |
+| `server/spa-navigation-hotfix.test.js` | `492051797a06a904965efe13baccfa8bfacf06ce39eb4596b4b236508f4473d1` |
+| `server/mobile-approval-center.test.js` | `709c260c1b9d71eb30ac4d9d62232367fefd9cdd06d31295c8f8398e67c14999` |
+| `server/mobile-application-launcher.test.js` | `506273e5ab5ce8c6e1c8cf8d0c8099121ffdf7e41434a314826f5a7f7d1b51cc` |
+| `server/cost-stabilization.test.js` | `87e6504b7497efd98911e961933b64aea06b424f62821dc4cc70214da8260971` |
+| `server/m9-final-polish.test.js` | `cdf13075e6befd82d1128a595fbe3a185665ac2a52b90ec13de611034c96183b` |
+| `server/v14-e7-two-level-business-overview.test.js` | `41b972d626acac977b35c1aca27a74ca87314974a6dd9baf8c59ffa2309dead7` |
+| `server/v16-p1-mobile-enterprise-foundation.test.js` | `01bf97c5bbb1188a6de73e196d9045eab132806ca8b989ce59fed93b286153e4` |
+| `server/v16-p11-mobile-enterprise-visual-refinement.test.js` | `14fd33ba437c9a991c8c81b8b9d89c812092c6fc50958d6e130204adb51b2099` |
+| `server/inventory-demo-seed-position-identity.test.js` | `f7a8730229c6d99634fe506c6fbcaf16b7f1bd9f686a6f9e3238d3e2025ed20c` |
+| `scripts/testing/test-suites.js` | `9a4dde32ffdfd0f7ce545d2ad41657e483b8b7e39f71a2435cebea405606115c` |
+
+#### 12. The frozen identities
+
+| Path | SHA-256, unchanged |
+| --- | --- |
+| `server/modules/credit-check.js` | `6a7f322ae81f860b7066181244c786174bf5dfed5bfcf796db1f32483391c7c1` |
+| `server/modules/credit-query.js` | `24889d82a602cd2cd11807dd11807bbfa163f584b7fb6c13f55f62cdb0d04133b` |
+| `server/modules/credit-scope.js` | `f31033bd75520643c50202c18f640440aacbcde892595efad7d4e0ba2041a3bc` |
+| `server/modules/credit-special-approval.js` | `04594b3dc01240c5b3addddf50897fbeab54802daf9fbd7d49c5e36cccf289c4` |
+| `server/lib/inventory-position.js` | `970a21e0deeedd2ecba447b15068ecf6392a7a2e097b1ca887954ab40fce0a37` |
+| `server/lib/stock.js` | `9c35beae6e57ebba4e16961ec559e1cd0d113b6ed0684b05749cb6fce8e8d098` |
+| `server/migrations/inventory-position-schema.js` | `478520f8f3a327b526dc3687eccd0f0753831aa729a98ff7baee1eef588ee224` |
+| `server/lib/search-fold.js` | `54369981e8f9353efea1a7804279d6d1b332818f0a0e4249ff2512fcf28d5143` |
+| `server/migrations/sales-customer-wave11-a-selector-search-key.js` | `cf687aeb3e629ed2ea81e21d0761c58bdb547edf7fe15d9718ddf67a7e3d2965` |
+
+No frozen inventory domain primitive was modified. The Wave 9 forward amendment, the Credit Scope,
+Credit Check, Credit Query, Credit Special Approval, the U2 E3 suite, the protected MySQL launcher, the
+shared runner support, the CSP/CCHK identities, the ONE_TIME identity and the OVERDUE evidence are all
+unchanged.
+
+#### 13. The remaining MySQL boundary
+
+No real MySQL was contacted, no gate was executed and no schema was reset, modified or cleaned. The
+six risk classes of the authorization remain open:
+
+| Class | Design coverage | Real MySQL status |
+| --- | --- | --- |
+| Fresh snapshot and demo seed | the demo seed writes the canonical key, and the MySQL bootstrap copies it through `INSERT IGNORE` from the SQLite snapshot | NOT VERIFIED on real MySQL |
+| Existing legacy NULL position | the existing approved migration backfills it; the SQLite proof shows one physical fact, never two | NOT VERIFIED on real MySQL |
+| Existing duplicate position | detected and reported, never merged, deleted or summed | NOT VERIFIED on real MySQL |
+| Synthetic fallback position | detected and reported as a non-canonical identity | NOT VERIFIED on real MySQL |
+| U3 search key collation and backfill | unchanged by this implementation | NOT VERIFIED on real MySQL |
+| Wave 9 replay compatibility | unchanged by this implementation | NOT VERIFIED on real MySQL |
+
+The physical MySQL `inventory.position_key` is `VARCHAR(128) NULL` with `UNIQUE (position_key)`, read
+from the emitted DDL with a recording mock adapter and without a MySQL connection. The canonical
+64-character lowercase hex digest fits that column without truncation, and the column is nullable, so
+the defective build loaded the same non-canonical demo rows on MySQL instead of failing loudly. The
+correction removes that divergence, because both engines receive the same snapshot rows. The
+`server/migrations/inventory-position-schema.js` header comment states `CHAR(64) NOT NULL` for MySQL;
+that divergence from the actual `VARCHAR(128) NULL` is pre-existing, is not introduced by this
+correction and is not changed here.
+
+A local SQLite pass is not a MySQL pass. The real MySQL verification remains separately authorized.
+
+#### 14. What did not happen and the pause point
+
+- No production code outside `server/db.js` was modified, and no frozen primitive was touched.
+- No real MySQL connection, schema operation, runner or gate execution.
+- No Git add, commit, push, tag, merge, release or deploy; the index stays empty and the HEAD and the
+  branch are unchanged.
+- `server/decision-reports.test.js` was deliberately not modified; it is recorded as a newly
+  discovered residual port binder requiring its own bounded amendment.
+- The browser harness was executed unmodified; the three search-semantics browser scenarios remain
+  uncovered because their production implementation was never completed and the harness path is
+  outside the authorized whitelist.
+- No Acceptance and no Freeze. The U3 Final Freeze stays blocked by the open customer-name case and
+  accent semantics, the literal search escape semantics and the residual identity-domain collation
+  difference.
+
+HARD STOP after this Implementation. The next stage is the separately authorized real MySQL
+verification, which needs its own explicit authorization and a new evidence directory.
+
+**Implementation status: `W11_A_U3_SEARCH_SEMANTICS_IMPLEMENTED_READY_FOR_MYSQL_REVALIDATION`.**
+
+### 37.54.44 W11-A U3 Final Acceptance Evidence Hardening and Protected MySQL Revalidation (2026-10-30)
+
+#### 1. Authorization, baseline and stage boundary
+
+The user authorized one bounded Acceptance Evidence Hardening stage and, after every local gate passed,
+one protected real-MySQL Selector E3 revalidation. Exactly five paths were authorized: the three code
+and test paths below and the append-only `solution.md` and `log/2026-10-30.md`. No sixth path was
+created or modified.
+
+Baseline: branch `review/w11a-u3-fast-blocked-20261030`, HEAD
+`60f3fbd169d7b43bbae3824b10b538edef4aeec1`, version `1.6.2`, empty index, the fourteen authorized
+paths of the previous Implementation preserved. Real MySQL was authorized for exactly one protected
+execution. A Git write, Acceptance/Freeze, Merge, Tag, Release and Deploy were not authorized and did
+not happen.
+
+#### 2. The three bounded revisions
+
+**2.1 The last Vite middleware listener.** `server/decision-reports.test.js:831` creates its server
+through a dynamic `(await import('vite')).createServer(...)` call. Its server options are now
+`{ middlewareMode: true, hmr: false, ws: false }`. No other initialization parameter, no assertion, no
+lifecycle and no test classification changed.
+
+The repository-wide sweep is now exhaustive and by option, not by import alias:
+
+| # | File | Line | Suite | Configuration |
+| --- | --- | --- | --- | --- |
+| 1 | `server/cost-stabilization.test.js` | 74 | FULL | `middlewareMode: true, hmr: false, ws: false` |
+| 2 | `server/decision-reports.test.js` | 831 | FULL | `middlewareMode: true, hmr: false, ws: false` |
+| 3 | `server/m9-final-polish.test.js` | 24 | FULL | `middlewareMode: true, hmr: false, ws: false` |
+| 4 | `server/mobile-application-launcher.test.js` | 30 | FAST + FULL | `middlewareMode: true, hmr: false, ws: false` |
+| 5 | `server/mobile-approval-center.test.js` | 126 | FAST + FULL | `middlewareMode: true, hmr: false, ws: false` |
+| 6 | `server/mobile-shell.test.js` | 41 | FAST + FULL | `middlewareMode: true, hmr: false, ws: false` |
+| 7 | `server/spa-navigation-hotfix.test.js` | 27 | FAST + FULL | `middlewareMode: true, hmr: false, ws: false` |
+| 8 | `server/teacher-acceptance-matrix.test.js` | 775 | FAST + FULL | `middlewareMode: true, hmr: false, ws: false` |
+| 9 | `server/teacher-acceptance-matrix.test.js` | 1045 | FAST + FULL | `middlewareMode: true, hmr: false, ws: false` |
+| 10 | `server/v14-e7-two-level-business-overview.test.js` | 22 | FULL | `middlewareMode: true, hmr: false, ws: false` |
+| 11 | `server/v16-p1-mobile-enterprise-foundation.test.js` | 44 | FULL | `middlewareMode: true, hmr: false, ws: false` |
+| 12 | `server/v16-p11-mobile-enterprise-visual-refinement.test.js` | 23 | FULL | `middlewareMode: true, hmr: false, ws: false` |
+
+Twelve instances in eleven files, all conforming, and no other direct or dynamic Vite server factory
+call exists in `server/`, `scripts/` or `src/`. The global Vite configuration, the Node test runner, the
+concurrency and every port number are untouched.
+
+**2.2 The strict S10 semantic contract.** The stale open decision
+`CUSTOMER_NAME_SEARCH_SEMANTICS_OPEN` is retired. The gate now carries the approved decision token
+`CUSTOMER_NAME_SEARCH_SEMANTICS_APPROVED` and asserts the approved contract of R-U3-SEARCH-01,
+R-U3-SEARCH-02, R-U3-SEARCH-07, R-U3-SEARCH-08 and R-U3-SEARCH-09:
+
+- **A — the full ordered set.** `mysqlOrder` must strictly equal `sqliteOrder` over the complete
+  authorized set, not over a subset. The comparison additionally proves that the compared order really
+  contains the hard identities: the fold collision, the original mixed case, the two customers that
+  share one display name and the customer that owns two Credit Objects.
+- **B — the exact pagination.** For the page sizes 1, 2, 3, 5, 7 and 13 the option identity sequence
+  of every slice is identical on both engines, every page reports the same authorized total, no option
+  repeats, no option is omitted, and the concatenation of the pages rebuilds the full ordered sequence.
+- **C — the search probe parity.** Every approved Unicode and literal probe is asserted three ways: the
+  SQLite result equals the approved expectation, the MySQL result equals the approved expectation, and
+  the MySQL result equals the SQLite result. A divergence on an approved dimension is an acceptance
+  failure and is asserted as an empty divergence list. The strict S04 assertions are preserved
+  unchanged.
+- **D — the evidence.** The evidence keeps the SQLite and the MySQL results, the probe labels, the SQL
+  mode, the MySQL collation, the full ordering of both engines, the pagination slices and the physical
+  definition of the four derived search key columns on both engines.
+- **E — the structure.** S01 to S10 are preserved as ten flat top-level TAP tests with no nested plan,
+  no skip, no todo and no only. The frozen U2 E3 suite, the protected runner and the shared fixtures are
+  not modified.
+
+The one dimension outside the approved search semantics is the exact identity filter of the selector,
+which compares under the collation of the identity column: case-insensitive on MySQL and case-sensitive
+on SQLite. R-U3-SEARCH-03 keeps that filter an equality comparison, so the difference is measured and
+recorded under `RESIDUAL_EXACT_IDENTITY_COLLATION_RISK`, it is never asserted to be equal, and the
+business identity equality policy is not widened.
+
+**2.3 The browser search semantics evidence.** `scripts/acceptance/sales-customer-wave11-a-u3-browser-uat.mjs`
+keeps B01 to B09 unchanged and adds B10, B11 and B12. The fixture customers are created through the
+**production** write path — the real `POST /api/customers` and the real `POST /api/credit/profiles`
+with a real administrator session — so the derived search keys are written by the production writers and
+are never fabricated, and the shared fixture files are not modified.
+
+- **B10 — the Unicode search.** Six probes typed into the real search field: `muller`, `müller`,
+  `Müller`, `MÜLLER`, `ångström` and `Ångström`. Each must select exactly one customer, the rendered
+  option must carry the expected customer code and the original display name, the count must be one and
+  the empty state must not appear. A customer that only another salesperson may see must never be found,
+  the empty state must appear, and the administrator must still see it, so the exclusion is proven to
+  be a scope decision and not missing data.
+- **B11 — the literal characters.** `%`, `_` and `\` are typed into the real search field. Each must
+  select exactly one customer out of the 33 authorized options, so a literal character can never select
+  the whole table. A literal character without a match must report zero and must render the empty state.
+- **B12 — the deterministic ordering.** The rendered order must equal the server order, the same query
+  must keep the same order, the pagination boundary must be real: the first page disables the previous
+  button, the last page disables the next button, the pages neither overlap nor omit, the second page
+  equals the server slice, and the previous page restores the first page exactly. The option identity
+  must be the canonical three-part identity, and a refresh and a back-and-forward navigation must both
+  keep the deterministic order and a continuous URL.
+
+The 320, 390, 430 and 680 responsive matrix and the before/after lifecycle are unchanged. The
+canonical empty state class is shared with the exposure workspace, so the selector empty state is
+identified by its own title instead of by the class.
+
+#### 3. The local gates
+
+Every gate ran through the isolated child environment with the MySQL-pointing variables stripped and
+`ERP_DB_PATH` absent. The complete raw output is preserved outside the repository under
+`C:\Users\Administrator\AppData\Local\Temp\modern-erp-w11a-u3-acceptance-hardening-20261030`.
+
+| Gate | Exit | Result | Evidence SHA-256 |
+| --- | --- | --- | --- |
+| Targeted Vite concurrent, 11 files | 0 | 389 tests, 55 suites, 389 pass, 0 fail; zero port 24678 diagnostics; the port free before and after | `f5c4d2a596ce4a666a4033ea95e075a1620378b39fb2c6ceaa027ddcb1b92d98` |
+| MySQL suite static contract, before the run | 0 | 21 of 21 checks pass | `8e12bddee38ccf67573dd99ae54fdf43f115c67d41db689d914b6c8b14a9d910` |
+| MySQL suite static contract, after the run | 0 | 7 of 7 checks pass, including the new guard that no boolean is compared with a number | `ab8840341d905a3d0eaa1eba21891b3bf0720bab05cc38f563f2d383a023434a` |
+| Browser B01 to B12 | 0 | 12 of 12 PASS, 32 responsive entries, 23 screenshots | `f81fb632ce36930634f23208c6d81fed3e82be9bb06c7fc36c8d0184cb11c060` |
+| Search semantics and U3 SQLite | 0 | 145 tests, 145 pass, 0 fail | `7decb25cf5288b7f398c1d3848f28af8c2f4f13a24119dd8a446cdc975e6b0b0` |
+| FAST | 0 | 500 tests, 37 suites, 500 pass, 0 fail, 0 cancelled, 0 skipped, 0 todo; zero port diagnostics | `6820b8b599b279ceabdd24c3cec0657e7861a499c3bcf36473fc9c1cce680928` |
+| FULL | 0 | 3102 tests, 363 suites, 3102 pass, 0 fail, 0 cancelled, 0 skipped, 0 todo; zero port diagnostics | `4e2416e23f604f52064594f40ce93e53cd746a8f198a6ede26c8bba44b1e254e` |
+| Build | 0 | the Vite production build succeeded | `ea115d9c4de23b991e4670cf6beba9a5b9b92ecd2cac986428ade9ef36775e9b` |
+| `git diff --check` | 0 | no whitespace error | — |
+
+The FAST count of 500 and the FULL count of 3102 are unchanged from the previous stage. No test was
+skipped, downgraded or reclassified, no concurrency was reduced and no port was reassigned.
+
+#### 4. The protected MySQL Selector E3 execution
+
+The authorized launcher was used exactly once, with no manual MySQL script and no hand-picked schema:
+
+```text
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/gates/run-mysql-local-gate.ps1 -Script test:mysql:wave11-a:selector
+```
+
+The launcher's own preflight proved the target before the campaign started: the target
+`modern_erp_domain_test` as `modern_erp_test@127.0.0.1`, server `8.0.37` with the pinned UUID
+`256c7a4e-d275-11f1-885b-b025aa71d167`, the pinned grants SHA-256
+`bef61617d1b96913f479c7642176eca53f60410b003773707cd56355e4ce807e`, and the initial inventory
+`tables=0 views=0 triggers=0 routines=0 events=0`. The runtime prerequisite
+`log_bin_trust_function_creators` was verified read-only before the run and was `ON` with
+`VARIABLE_SOURCE = DYNAMIC`, so the instance had not been restarted since the flag was set.
+
+**The campaign result was FAIL: 9 of 10 tests passed, S10 failed.** The raw transcript is
+`24c2ce8ce8af35b9d48bfbc0158e4fcccdc11d715b6fe9d72de1bdd0fe657694` and the evidence JSON is
+`e3d848fe54a4a75b67071a5cd67b81184d5f982c82044a17a59239c5bc789531`.
+
+What the passing tests already prove on real MySQL:
+
+- S01: the SQLite and the MySQL option sets are identical at 16 options, and the additive compatibility
+  M03 (V1 to V2), M10 (fresh bootstrap and live Wave 9 replay) and M12 (an illegal column type is
+  refused and V2 is restored) all pass. The final `credit_profile` search key columns are `longtext`,
+  nullable, `utf8mb4_0900_bin`.
+- S02: all seven Credit Read Modes project the same logical options on both engines, and the denied
+  reader is refused with `CREDIT_SCOPE_DENIED` and no customer identity.
+- S03: the count, the list and the grouping share one authorized set, and the pagination rebuilds the
+  unpaginated set on both engines.
+- S04: **the strict literal and Unicode probe assertions pass on real MySQL.** The `%`, `_` and `\`
+  literals and the five Unicode probes select exactly the approved expectation on both engines, which
+  is the direct cross-engine proof of the approved search semantics on the probe dimension.
+- S05 to S09: the exact identity filter, the invalid input contract, the effective-date window, the
+  revoked membership, the 409 on an ambiguous effective Profile, the indistinguishable unknown and
+  unauthorized identities, and the repeatable zero-write GET all hold on both engines.
+
+**The root cause of the S10 failure is a TEST ORACLE DEFECT, not a product defect.** The failing
+assertion was the pre-existing metadata guard
+
+```js
+assert.ok(Number.isSafeInteger(Number(mysqlFacts.session.max_sort_length)) >= 1024, 'the MySQL group-key boundary must be readable');
+```
+
+`Number.isSafeInteger(...)` returns a boolean, and a boolean compared with 1024 is always false, so the
+assertion could never pass for any safe integer. It was introduced into this file by the search
+semantics Implementation and had never been executed against real MySQL, because the last successful
+MySQL run used an earlier version of the file. The live server value is 1024 and was proven twice
+read-only: through a direct catalogue query and through the repository's own MySQL adapter, both
+returning the number 1024 with `character_set_server = utf8mb4` and
+`collation_server = utf8mb4_0900_ai_ci`.
+
+The correction applied to the authorized file is the one line that expresses the stated intent of the
+assertion, and it is the exact form the adjacent assertion already uses:
+
+```js
+assert.ok(Number(mysqlFacts.session.max_sort_length) >= 1024, 'the MySQL group-key boundary must be readable');
+```
+
+**The gate was not re-run.** The authorization covered one protected execution and it has been used.
+
+**The consequence is stated precisely.** Because S10 aborted at its first metadata guard, the new
+strict assertions of §37.54.44 §2.2 — the full ordered set equality and the exact pagination parity —
+were **not exercised on real MySQL**. The approved search probe parity **was** exercised and passed, on
+both engines, in S04. The ordering and pagination parity remain unverified on the live target.
+
+**The cleanup contract is satisfied.** The campaign reported
+`FINAL ZERO OBJECTS = {"tables":0,"views":0,"triggers":0,"routines":0,"events":0}` and the launcher
+confirmed `CLEANUP = tables=0 views=0 triggers=0 routines=0 events=0` on a fresh session.
+
+#### 5. The remaining MySQL risks
+
+The six risk classes of the authorization remain open. The Demo Seed inventory position identity is
+still NOT verified on real MySQL, because the protected gate covers the Credit Selector surface and not
+the inventory seed; it is registered here as an independent remaining risk and is not claimed as
+accepted:
+
+| Class | Design coverage | Real MySQL status |
+| --- | --- | --- |
+| Fresh snapshot and Demo Seed, including the demo inventory position identity | the demo seed writes the canonical key and the six canonical dimensions; the MySQL bootstrap copies them through the SQLite snapshot | NOT VERIFIED on real MySQL — the protected gate does not exercise the inventory seed |
+| Existing legacy NULL position | the existing approved migration backfills it; the SQLite proof shows exactly one physical fact | NOT VERIFIED on real MySQL |
+| Existing duplicate position | detected and reported, never merged, deleted or summed | NOT VERIFIED on real MySQL |
+| Synthetic fallback position | detected and reported as a non-canonical identity | NOT VERIFIED on real MySQL |
+| U3 search key collation and backfill | the collation is pinned and the backfill verified on both engines in S01 | the `credit_profile` columns are proven `utf8mb4_0900_bin`; the `customers` columns are read in S10 and were not reached |
+| Wave 9 replay compatibility | M03 and M10 pass on the live target | VERIFIED on real MySQL in S01 |
+
+A local SQLite pass is not a MySQL pass, and this stage declares no MySQL acceptance.
+
+#### 6. The frozen identities
+
+Every frozen identity is byte-identical to the previous stage: `server/modules/credit-check.js`
+`6a7f322ae81f860b7066181244c786174bf5dfed5bfcf796db1f32483391c7c1`,
+`server/modules/credit-query.js`
+`24889d82a602cd2cd11807dd11807bbfa163f584b7fb6c13f55f62cdb0d04133b`,
+`server/modules/credit-scope.js`
+`f31033bd75520643c50202c18f640440aacbcde892595efad7d4e0ba2041a3bc`,
+`server/modules/credit-special-approval.js`
+`04594b3dc01240c5b3addddf50897fbeab54802daf9fbd7d49c5e36cccf289c4`,
+`server/lib/inventory-position.js`
+`970a21e0deeedd2ecba447b15068ecf6392a7a2e097b1ca887954ab40fce0a37`,
+`server/lib/stock.js` `9c35beae6e57ebba4e16961ec559e1cd0d113b6ed0684b05749cb6fce8e8d098`,
+`server/migrations/inventory-position-schema.js`
+`478520f8f3a327b526dc3687eccd0f0753831aa729a98ff7baee1eef588ee224`,
+`server/lib/search-fold.js` `54369981e8f9353efea1a7804279d6d1b332818f0a0e4249ff2512fcf28d5143`,
+`server/migrations/sales-customer-wave11-a-selector-search-key.js`
+`cf687aeb3e629ed2ea81e21d0761c58bdb547edf7fe15d9718ddf67a7e3d2965`,
+`server/modules/credit-query-options.js`
+`dd46f1d049c1c44a3c3168a3c29f65b3110e071eedf7ed6ade81c22acb1e3cbf`,
+`server/app.js` `c3e908f836d2aedcfc054a2d904e97de3c3ec542674c6f78a93becd2a2878e63`,
+`server/test-utils/wave11-a-selector-gate-fixture.js`
+`4bce5e411c41d6868d973f002ed7c3c99dfd4b724a56bd3a3c484616c6c5fff3`,
+`server/test-utils/wave11-a-credit-query-fixture.js`
+`80a251a2cd05f58746490280683b905414b8d6b05f6eb91535e6d818ffbb9eab`,
+`server/test-utils/wave11-sec-scope-fixture.js`
+`142aa30a2fc909b80c157520b42a1948cbdd15d6fed16a2da81a36d900e094aa`,
+`scripts/gates/mysql-sales-wave11-a-selector-gate.mjs`
+`e1cbf47190b991b4174e173929f73e70bc51ddaab7600ed3c434735c591fa779`,
+`scripts/gates/run-mysql-local-gate.ps1`
+`209527dce8ef7cd4a05a6951e041892256c3b06736cbdde12be86bef0e00bd65` and `package.json`
+`43d6ec696d2a54896c6968bc163710341a8a85431bad9efa29cdd44169047dee`.
+
+The only changed code identity of this stage is the gate suite itself,
+`server/mysql-sales-customer-wave11-a-credit-query-options.integration.js`, which moved from
+`79038823c1efc5ec9b4af187eaf3512482e5b1b069414b4b7dfca74300f01a23` to
+`38680723fd309e5564f8b50a7795c3661023e2695ae6560dc139882f5c78f4fd`.
+
+#### 7. What did not happen and the pause point
+
+- No production code, schema, migration, frozen Credit core or inventory primitive was modified. The
+  two production-adjacent paths in the whitelist carry test and harness code only.
+- No protected launcher, runner, campaign machinery, credential store or identity baseline was modified.
+- The protected gate was executed exactly once and was not re-run.
+- No Git add, commit, push, tag, merge, release or deploy; the index stays empty, the branch and HEAD
+  are unchanged and the version stays `1.6.2`.
+- The historical evidence of the original U3 E3 run, the original search divergence evidence, the B06
+  failure evidence, the original B01 to B09 pass, the previous FAST 499 of 500 failure and the latest
+  FAST and FULL passes are all preserved and were not rewritten.
+- No Acceptance and no Freeze.
+
+HARD STOP. The bounded follow-up is one more protected execution of the same gate with the corrected
+assertion, which needs its own explicit authorization. The W11-A U3 Final Freeze stays blocked by that
+open verification and by the open customer-name case and accent semantics, the literal search escape
+semantics and the residual identity-domain collation difference.
+
+**Stage status: `W11_A_U3_MYSQL_REVALIDATION_FAILED`.**
+
+### 37.54.45 W11-A U3 Protected MySQL S10 Bounded Revalidation (2026-10-30)
+
+#### 1. Authorization and boundary
+
+The user authorized exactly one complete protected W11-A U3 Selector MySQL E3 gate execution on the
+corrected S10 `max_sort_length` assertion. No new production code change, no new test logic change, no
+schema or migration change, no manual database reset, no change to the protected launcher, no change
+to the MySQL permissions or credentials, no Git write, no Acceptance/Freeze, no Merge, Tag, Release or
+Deploy was authorized, and none occurred.
+
+Baseline: branch `review/w11a-u3-fast-blocked-20261030`, HEAD
+`60f3fbd169d7b43bbae3824b10b538edef4aeec1`, version `1.6.2`, empty index, the seventeen authorized
+changed paths preserved. No reset, restore, clean, checkout, rebase or merge was performed.
+
+#### 2. The exact S10 assertion correction
+
+The reported correction is the single assertion
+
+```js
+assert.ok(
+  Number.isSafeInteger(Number(mysqlFacts.session.max_sort_length))
+    && Number(mysqlFacts.session.max_sort_length) >= 1024,
+  'the MySQL group-key boundary must be readable',
+);
+```
+
+The verification confirmed every point of the authorization:
+
+1. the integer-validity check is retained inside the corrected assertion;
+2. the `>= 1024` lower bound is retained;
+3. the assertion is active — it is not commented out, deleted or bypassed, and the pre-existing
+   `max_sort_length must be readable` assertion above it is untouched;
+4. no other S10 assertion changed, and S01 to S09 are unchanged;
+5. the test count and the TAP structure are unchanged: ten flat top-level tests, ids S01 to S10
+   contiguous, no nested plan, no skip, no todo and no only;
+6. the strict S10 contract still executes to its last assertion: the full ordered-set equality, the
+   cross-engine pagination parity, the three-way search probe equality, the zero divergence assertion,
+   the no-duplicate and no-omitted option identity assertions and the MySQL physical collation
+   evidence.
+
+The old open search policy is not restored. The evidence carries
+`semanticDecision = CUSTOMER_NAME_SEARCH_SEMANTICS_APPROVED`, and the residual exact identity
+collation risk stays measured, disclosed and never asserted equal.
+
+**The difference that this stage corrected.** The previous stage had left the corrected assertion as
+the single condition `Number(...) >= 1024`, which relied on the adjacent untouched readability
+assertion for the integer check. The authorized target is the conjunction, so the corrected assertion
+now carries both conditions itself. The change is provably confined to that one assertion: the
+previous-stage file was reconstructed by reverting exactly that assertion and its SHA-256 was
+recomputed, and it reproduced the recorded previous-stage identity
+`38680723fd309e5564f8b50a7795c3661023e2695ae6560dc139882f5c78f4fd` exactly. No other byte of the file
+differs. The new identity is
+`39a34ee86ee3c6ed2981fef5243a53a38aa5dd2b402b83e9058dc6df70c72e3d`.
+
+#### 3. The minimal static verification
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `node --check server/mysql-sales-customer-wave11-a-credit-query-options.integration.js` | 0 | no syntax error |
+| `git diff --check` | 0 | no whitespace error |
+| `git status --short` | 0 | the seventeen authorized paths, unchanged set |
+
+The nineteen-point static verification of the S10 correction passed 19 of 19.
+
+FAST, FULL and the build were not re-executed in this round, because the only change is an assertion
+inside the protected MySQL integration suite, which is not registered in the ordinary FAST or FULL
+scope. The previous local PASS evidence therefore remains valid evidence for the previous state and is
+**not** claimed as a post-correction re-run.
+
+#### 4. The protected target preflight
+
+The runtime prerequisite was verified read-only before the execution, using the same DPAPI credential
+store as the launcher and printing no password: `log_bin_trust_function_creators` was `ON` with
+`VARIABLE_SOURCE = DYNAMIC`, so the instance had not been restarted since the flag was set, and the live
+`max_sort_length` was `1024`.
+
+The launcher's own preflight then proved the protected target before the campaign started: the target
+`modern_erp_domain_test` as `modern_erp_test@127.0.0.1`, server `8.0.37` with the pinned UUID
+`256c7a4e-d275-11f1-885b-b025aa71d167`, the pinned grants SHA-256
+`bef61617d1b96913f479c7642176eca53f60410b003773707cd56355e4ce807e`, and the initial inventory
+`tables=0 views=0 triggers=0 routines=0 events=0`. The machine-wide gate lock was taken, the protected
+reset and cleanup were performed by the existing machinery, and neither the target identity, the
+credentials, the authorization baseline nor the launcher was modified.
+
+#### 5. The S01 to S10 results
+
+| Id | Result | Substance |
+| --- | --- | --- |
+| S01 | PASS | the real MySQL adapter and the shared production fixture; the SQLite and the MySQL option sets are identical at 16; the additive compatibility M03 `V1_TO_V2_PASS`, M10 `FRESH_BOOTSTRAP_AND_LIVE_REPLAY_PASS` and M12 `ILLEGAL_TYPE_REFUSED_AND_V2_RESTORED` |
+| S02 | PASS | the seven Credit Read Modes project the same logical options on both engines — admin 16, cross 16, self 15, other 16, unmapped 15, expired 15, future 15 — and the denied reader is refused with `CREDIT_SCOPE_DENIED` and no customer identity |
+| S03 | PASS | the count, the list and the grouping share one authorized set and the pagination rebuilds the unpaginated set on both engines |
+| S04 | PASS | the defined, literal and Unicode probes match the authorized set on both engines |
+| S05 | PASS | the exact identity filter and the invalid input contract are identical |
+| S06 | PASS | the effective-date window and the revoked membership match SC101 |
+| S07 | PASS | an ambiguous effective Profile answers 409 on both engines |
+| S08 | PASS | an unknown exact identity is indistinguishable from an unauthorized one |
+| S09 | PASS | every measured GET is repeatable and leaves the database unchanged |
+| S10 | PASS | the ordering, the pagination and the search probes are identical on both engines |
+
+The process exit code was `0`. The strict TAP contract, independently re-verified with the
+repository's own `scripts/gates/mysql-wave10-tap-transcript.mjs`, holds exactly: one `TAP version 13`
+header, one plan `1..10`, ten records with contiguous ids 1 to 10, every record a plain `ok`, zero
+skip, zero todo, zero bail out, zero malformed record, and every summary field exactly once — `tests
+10`, `pass 10`, `fail 0`, `cancelled 0`, `skipped 0`, `todo 0`.
+
+#### 6. S04 — the Unicode and literal search
+
+The strict S04 assertions passed on the live target. The probe sets are:
+
+- defined: `ascii-code-lower`, `ascii-code-upper`, `ascii-code-mixed`, `ascii-other-code`,
+  `credit-object-identity`, `unauthorized-target`;
+- literal: `literal-percent`, `literal-underscore`, `literal-backslash`, `literal-escaped-backslash`;
+- Unicode: `accent-folded`, `accent-exact-lower`, `accent-upper-case`, `unicode-case-lower`,
+  `unicode-case-exact`.
+
+The case-insensitive search, the Latin accent fold, the Unicode case fold and the literal treatment of
+`%`, `_` and `\` therefore select the authorized set identically on SQLite and on MySQL, and the
+unauthorized target selects nothing on either engine.
+
+#### 7. S10 — the strict parity, executed to its last assertion
+
+- **`max_sort_length` — the real value: 1024.** The integer-validity check holds and the `>= 1024`
+  lower bound holds, so the previously failing guard now passes on its own terms.
+- **The full SQLite ordered set: 16 identities**, and **the full MySQL ordered set: 16 identities**.
+- **Exact ordered-set equality: `fullOrderIdentical = true`.** The two complete sequences are
+  byte-identical, including the four shared customers whose `code_search_key` is NULL and therefore
+  sort first on both engines, the mixed-case customer, the two customers that share one display name
+  and the customer that owns two Credit Objects.
+- **Six pagination page sizes: 1, 2, 3, 5, 7 and 13.** For each size the page slices are identical
+  on both engines, every page reports the same authorized total, no option repeats, no option is
+  omitted, and the concatenation of the pages rebuilds the full ordered sequence.
+- **Search probe three-way equality:** for all eleven approved probes the SQLite result equals the
+  approved expectation, the MySQL result equals the approved expectation and the MySQL result equals
+  the SQLite result.
+- **Divergent probe count: 0.** The assertion `no approved search probe may diverge between the two
+  engines` holds with an empty divergence list.
+- **MySQL physical collation evidence:** `sql_mode` is
+  `IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION`,
+  `collation_server` is `utf8mb4_0900_ai_ci`, `collation_connection` is `utf8mb4_general_ci`, the
+  `utf8mb4_0900_ai_ci` `PAD_ATTRIBUTE` is `NO PAD` and `IS_COMPILED` is `Yes`, and the observed maximum
+  `credit_object_type` length is 11 bytes, which stays below the 1024-byte boundary. The four derived
+  search key columns are `text`, nullable, `BINARY` on SQLite and `longtext`, nullable,
+  `utf8mb4_0900_bin` on MySQL — including the two `customers` columns that the previous failed run
+  never reached.
+
+**The residual exact identity collation risk remains open and is measured, not asserted.** The
+case-variant exact identity resolves to no row on SQLite and to one row on MySQL, so
+`enginesAgree = false`. It is recorded under `RESIDUAL_EXACT_IDENTITY_COLLATION_RISK` with the status
+`DISCLOSED_MEASURED_NOT_ASSERTED_EQUAL`, it is not part of the approved probe set, and this gate never
+widens the business identity equality policy.
+
+#### 8. The cleanup
+
+The campaign reported
+`FINAL ZERO OBJECTS = {"tables":0,"views":0,"triggers":0,"routines":0,"events":0}` and the launcher
+confirmed `CLEANUP = CONFIRMED (tables=0 views=0 triggers=0 routines=0 events=0)` on a fresh session,
+after the campaign's own report. All five object categories are zero, so the cleanup contract is
+satisfied and the gate result stands as a PASS. No manual cleanup was performed.
+
+#### 9. The evidence
+
+The new evidence is in an independent directory and does not overwrite any historical artifact:
+`C:\Users\Administrator\AppData\Local\Temp\modern-erp-w11a-u3-revalidation-20261030`.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `mysql-e3/gate-run-raw.log` | `548ce83ed6953561ad2bfc03f6802a597ed112bf89440a93eba2944f7362d615` |
+| `mysql-e3/evidence/selector-mysql-e3-evidence.json` | `e389756d80fbb662b94fc3acdc0481e651497337180fc89aea8e79ec7f4b6700` |
+| `s10-correction-verification.log` | `26f8442a06efcf04590645708b3867d47c07c511bab8cef0e3fdfbf3ff406276` |
+| `static-node-check.log` | `15652721cf2751810d7b9d25a6b268da99483b6254cb356debc6a4a60f236773` |
+| `static-git-diff-check.log` | `b4b801cf2d5f57e385b33b9bed2aff711a08779ab39da0ee86d9e88a2df2ff12` |
+| `static-git-status.log` | `8c5304fdb98db802521afd218779acc8c270637a1d02170188486c3074233b7a` |
+| `strict-tap-verification.log` | `2b8e2a448745253d028f82162494df35a56721427adf9cc3992a094e26a4f30c` |
+
+The historical evidence is preserved byte-identically: the first revalidation failure transcript is
+still `24c2ce8ce8af35b9d48bfbc0158e4fcccdc11d715b6fe9d72de1bdd0fe657694` and its evidence JSON is
+still `e3d848fe54a4a75b67071a5cd67b81184d5f982c82044a17a59239c5bc789531`, together with the original
+E3 10 of 10 pass, the original search divergence evidence, the B06 historical failure, the original
+B01 to B09 pass, the previous FAST 499 of 500 failure, the FAST 500 of 500 pass, the FULL 3102 of 3102
+pass and the browser B01 to B12 pass.
+
+#### 10. The frozen identities and the final worktree
+
+Every frozen identity is byte-identical: `server/modules/credit-check.js`
+`6a7f322ae81f860b7066181244c786174bf5dfed5bfcf796db1f32483391c7c1`,
+`server/modules/credit-query.js`
+`24889d82a602cd2cd11807dd11807bbfa163f584b7fb6c13f55f62cdb0d04133b`,
+`server/modules/credit-scope.js`
+`f31033bd75520643c50202c18f640440aacbcde892595efad7d4e0ba2041a3bc`,
+`server/modules/credit-special-approval.js`
+`04594b3dc01240c5b3addddf50897fbeab54802daf9fbd7d49c5e36cccf289c4`,
+`server/lib/inventory-position.js`
+`970a21e0deeedd2ecba447b15068ecf6392a7a2e097b1ca887954ab40fce0a37`,
+`server/lib/stock.js` `9c35beae6e57ebba4e16961ec559e1cd0d113b6ed0684b05749cb6fce8e8d098`,
+`server/migrations/inventory-position-schema.js`
+`478520f8f3a327b526dc3687eccd0f0753831aa729a98ff7baee1eef588ee224`,
+`server/lib/search-fold.js` `54369981e8f9353efea1a7804279d6d1b332818f0a0e4249ff2512fcf28d5143`,
+`server/migrations/sales-customer-wave11-a-selector-search-key.js`
+`cf687aeb3e629ed2ea81e21d0761c58bdb547edf7fe15d9718ddf67a7e3d2965`,
+`server/modules/credit-query-options.js`
+`dd46f1d049c1c44a3c3168a3c29f65b3110e071eedf7ed6ade81c22acb1e3cbf`,
+`server/app.js` `c3e908f836d2aedcfc054a2d904e97de3c3ec542674c6f78a93becd2a2878e63`,
+`server/test-utils/wave11-a-selector-gate-fixture.js`
+`4bce5e411c41d6868d973f002ed7c3c99dfd4b724a56bd3a3c484616c6c5fff3`,
+`server/test-utils/wave11-a-credit-query-fixture.js`
+`80a251a2cd05f58746490280683b905414b8d6b05f6eb91535e6d818ffbb9eab`,
+`server/test-utils/wave11-sec-scope-fixture.js`
+`142aa30a2fc909b80c157520b42a1948cbdd15d6fed16a2da81a36d900e094aa`,
+`scripts/gates/mysql-sales-wave11-a-selector-gate.mjs`
+`e1cbf47190b991b4174e173929f73e70bc51ddaab7600ed3c434735c591fa779`,
+`scripts/gates/run-mysql-local-gate.ps1`
+`209527dce8ef7cd4a05a6951e041892256c3b06736cbdde12be86bef0e00bd65` and `package.json`
+`43d6ec696d2a54896c6968bc163710341a8a85431bad9efa29cdd44169047dee`.
+
+The only changed code identity is the gate suite itself. The final worktree carries exactly the
+seventeen authorized changed paths, the index is empty, the branch and HEAD are unchanged, the version
+stays `1.6.2` and the annotated tags `v1.6.0`, `v1.6.1` and `v1.6.2` are unchanged.
+
+#### 11. The remaining MySQL inventory risks
+
+A Selector Gate PASS is not an inventory-domain MySQL acceptance and is not a whole-W11-A MySQL
+acceptance. The following stay registered and outside this verification:
+
+1. the Fresh MySQL Demo Inventory canonical position identity — the protected gate covers the Credit
+   Selector surface and never exercises the inventory seed;
+2. the legacy NULL inventory positions;
+3. the duplicate canonical inventory positions;
+4. the synthetic fallback positions;
+5. the MySQL historical inventory data repair strategy;
+6. the business confirmation of the residual exact identity collation.
+
+**Stage status: `W11_A_U3_MYSQL_SELECTOR_E3_REVALIDATION_PASS_PENDING_FINAL_ACCEPTANCE`.**
+
+### 37.54.46 W11-A U3 Final Acceptance Readiness Audit and Bounded Residual Risk Design (2026-10-30)
+
+#### 1. Authorization, inputs and boundary
+
+This section is the bounded Design amendment authorized together with the Requirement amendment
+"document.md — W11-A U3 Final Acceptance Readiness — Bounded Residual Risk Requirement Amendment
+(2026-10-30)". It records the Final Acceptance Readiness Audit, the Risk A audit conclusion and the
+bounded Design for the one confirmed gap.
+
+No Implementation, no real MySQL, no Git write and no Final Acceptance or Freeze occurred. The
+completed gate evidence is preserved unchanged and is not reclassified.
+
+#### 2. Risk A — the Exact Identity Collation audit
+
+##### 2.1 The production path that was read
+
+- the exact identity input parsing: `server/modules/credit-query-options.js` `readInput` — the
+  customer identity and the Credit Object identity pass through `requiredText` and are not normalized,
+  while the Credit Object type passes through `requiredCode` and is therefore upper-cased;
+- the identity predicate: `buildAuthorizedRelation` adds `cp.customer_id=?`, `cp.credit_object_type=?`
+  and `cp.credit_object_id=?` to the same where clause as the read scope;
+- the free-text search: the same function matches the four derived search key columns with
+  `LIKE ? ESCAPE '!'` over byte-exact keys, which is why the search dimension is engine-consistent;
+- the read scope resolver: `server/modules/credit-scope.js` `resolveCreditProfileReadScope` and
+  `resolveCreditReadMode`, with the scope predicate
+  `(cp.salesperson_scope_key = '*' OR cp.salesperson_scope_key = ?)`;
+- the anchor shape guard: `server/modules/credit-anchor.js` `ensureCreditLockAnchor` and `sameShape`;
+- the MySQL physical collations, read from the emitted DDL with a recording mock adapter, without a
+  MySQL connection.
+
+##### 2.2 The physical MySQL contract of the identity columns
+
+| Column | Physical type | Collation |
+| --- | --- | --- |
+| `customers.id` | `VARCHAR(128) NOT NULL`, `PRIMARY KEY (id)` | `utf8mb4_0900_ai_ci` — case-insensitive |
+| `customers.code` | `VARCHAR(128) NOT NULL`, `UNIQUE (code)` | `utf8mb4_0900_ai_ci` — case-insensitive |
+| `credit_profile.customer_id` | `VARCHAR(128) NOT NULL` | `utf8mb4_0900_ai_ci` — case-insensitive |
+| `credit_profile.credit_object_type` | `LONGTEXT NOT NULL` | `utf8mb4_0900_ai_ci` — case-insensitive |
+| `credit_profile.credit_object_id` | `VARCHAR(128) NOT NULL` | `utf8mb4_0900_ai_ci` — case-insensitive |
+| `credit_profile.salesperson_scope_key` | `VARCHAR(128) NOT NULL` | `utf8mb4_0900_ai_ci` — case-insensitive |
+| `credit_lock_anchors.anchor_key` | `VARCHAR(512) NOT NULL`, `UNIQUE (anchor_key)` | `utf8mb4_0900_ai_ci` — case-insensitive |
+
+The SQLite side declares no explicit collation on these columns and therefore uses the default `BINARY`
+comparison.
+
+##### 2.3 The seven answers
+
+1. **The divergence occurs in the exact identity filter, not in the ordinary `q` search.** The `q` search
+   compares the derived search key columns, which the U3 migration pins to `BINARY` on SQLite and to
+   `utf8mb4_0900_bin` on MySQL, with an explicit escape clause. S04 and S10 prove it with **zero**
+   divergent probes over the eleven approved probes.
+2. **The comparison that produces the difference** is the equality on the customer identity and on the
+   Credit Object identity under the identity column collation. The Credit Object type cannot contribute,
+   because the production input contract upper-cases it before the comparison and the writer stores the
+   upper-cased code.
+3. **A wrong business identity cannot be returned.** On MySQL the customer identity primary key, the
+   customer code unique key and the Credit lock anchor key unique key are all case-insensitive, so two
+   business identities differing only by case cannot coexist. The anchor shape guard compares the stored
+   anchor shape with the requested shape using byte equality, so a case-variant identity is refused on
+   write with `CREDIT_ANCHOR_SHAPE_CONFLICT`; on SQLite the reference lookup is byte-sensitive and
+   refuses it with `404 客户不存在`. Each engine therefore resolves a case-variant identity inside an
+   unambiguous identity space, and the resolved identity is the canonical one.
+4. **The authorization boundary is unaffected.** The scope predicate is conjoined in the same where
+   clause and gates every candidate row before the projection. Its bound value is derived by
+   `resolveSelfSalespersonId` from the server's own `salesperson_profiles.id` record, and
+   `credit_profile.salesperson_scope_key` is written from that same value, so no user-supplied case
+   variant ever reaches the scope comparison. The denied mode refuses with `CREDIT_SCOPE_DENIED` before
+   any query runs, and the measured case-variant resolution returned `cus-w11-self`, which is inside the
+   reader's authorized set of fifteen.
+5. **There is no unauthorized disclosure.** The identity predicate can only narrow the already
+   authorized relation; it can never add a row that the scope predicate excluded. The neutral response
+   for an unknown identity and for an unauthorized identity stays byte-identical on both engines, which
+   S08 proves.
+6. **The current Requirement does not state an identity case policy.** R-U3-SEARCH-03 defines the exact
+   identity filter only as an equality comparison and does not define a case policy. The R-U3-GATE-04
+   open decision covered the customer-name **search** and was resolved by R-U3-SEARCH-01; it never
+   covered the identity filter. The approved parity strictness taxonomy of R-U3-GATE-03 does, however,
+   classify exactly this case twice: as a test environment difference, because two business identities
+   that differ only by case cannot be stored under a case-insensitive unique key, and as an acceptable
+   database implementation difference, because a collation behaviour that the business contract does not
+   define is measured on both engines, reported, and must never widen the authorized set.
+7. **It is an acceptable, documented known limitation and not a business semantic inconsistency that
+   must be corrected.** The disposition the Requirement already prescribes is satisfied: the difference
+   is measured on both engines and reported as a typed finding, the authorized set is never widened, and
+   no engine is selected as the business authority. Correcting it would require either declaring one
+   engine authoritative or changing the approved Search Fold or the literal search contract, both of
+   which are prohibited.
+
+The consequence is a disposition rather than a correction: the risk is classified as an accepted
+residual and requires an explicit business risk acceptance from the business owner, which is recorded
+as an open decision in §9.
+
+#### 3. Risk A — why no second Requirement was created
+
+The Requirement already provides the classification and the disposition, and the condition the taxonomy
+attaches — that the difference must never widen the authorized set — is proven by the production code
+analysis of §2.3 and by the S02, S04, S08 and S10 results. Creating a second Requirement would
+duplicate an approved rule and would risk freezing an engine as the business authority. The audit
+conclusion is therefore recorded in R-U3-INV-06 and no further Requirement is created.
+
+#### 4. Risk B — the Fresh MySQL Demo Inventory audit
+
+##### 4.1 The path that was read
+
+| Element | Finding |
+| --- | --- |
+| `server/db.js` Demo Seed | writes the canonical `position_key` from the single primitive `computePositionKey()` and writes the six canonical dimension columns explicitly, then calls `verifyDemoSeedPositions`, which fails closed when a demo position cannot be established |
+| `computePositionKey` | the single primitive in `server/lib/inventory-position.js`; the default tuple is `owner_type = ENTERPRISE`, `owner_id = NULL`, `stock_status = AVAILABLE`, `bin_id = NULL`, `lot_id = NULL`, `serial_id = NULL` |
+| MySQL snapshot capture | `captureSqliteSnapshot` builds the snapshot through `createSqliteDatabase`, so the snapshot carries the migrated schema **and** the seeded rows, including their canonical keys |
+| Snapshot row copy | `bootstrapMySql` copies with `INSERT IGNORE INTO <table> (<every snapshot column>)`, so `position_key` and the dimension columns are copied verbatim |
+| Physical position key type | MySQL `inventory.position_key` is `VARCHAR(128)` and nullable; the canonical key is a 64-character lowercase hex digest, so it fits without truncation |
+| Unique constraints | MySQL emits `CREATE UNIQUE INDEX uq_inventory_position_key ON inventory (position_key)`, and the canonical default tuple is preserved by the column defaults `owner_type DEFAULT 'ENTERPRISE'`, `stock_status DEFAULT 'AVAILABLE'`, `active DEFAULT 1` and the nullable `owner_id`, `bin_id`, `lot_id` and `serial_id` |
+| MySQL bootstrap ordering | the tables are created from the snapshot, and the live adapter then runs the additive Search Key migration, which pins the collation and verifies the backfill before the adapter is returned |
+| Protected gate infrastructure | the existing launcher, the DPAPI credential, the fixed target identity, the machine-wide lock, the strict TAP parser and the five-class zero cleanup are reusable unchanged |
+
+The snapshot as the MySQL bootstrap sees it was read directly: all six demo rows carry their canonical
+key, the canonical owner and status, `active = 1` and the seeded quantities 20, 100, 30, 16, 80 and 22.
+
+The design expectation is therefore met at the snapshot level. What is unverified is the **live** MySQL
+behaviour: that the copy lands, that the unique index holds, that the approval updates the seeded row in
+place, that the transaction, audit, valuation and voucher are written, that a reopen is idempotent, and
+that the cleanup is zero.
+
+##### 4.2 The historical abnormal states
+
+The legacy NULL position, the duplicate canonical position and the synthetic fallback position remain
+registered risks. The read-only detection exists and is proven on SQLite; the automatic repair is
+prohibited and the frozen Inventory Position migration is not modified. The remediation strategy for
+existing abnormal data is a separate Requirement of its own and is out of this scope.
+
+#### 5. The independent protected MySQL Inventory Gate
+
+##### 5.1 The suite
+
+`server/mysql-inventory-demo-seed-position.integration.js` is a new protected MySQL integration suite,
+modelled on the closed Selector suite. Its role is to prove the canonical Demo Inventory position
+identity on the live target. It is flat top-level TAP only, with exactly eight top-level cases
+`M-INV-01` to `M-INV-08`, no `describe`, no `it`, no skip, no todo and no only, so that the protected
+strict TAP parser accepts it.
+
+It is **not** registered in FAST, FULL or HEAVY. It runs only through its own protected gate, exactly
+like `server/mysql-sales-customer-wave11-a-credit-query-options.integration.js`, which is registered in no
+suite. `scripts/testing/test-suites.js` is therefore **not** modified, and the suite governance
+invariant that every on-disk `*.test.js` is classified into a suite is unaffected because the protected
+MySQL integration suites are not on-disk-discovered.
+
+##### 5.2 The gate entry
+
+`scripts/gates/mysql-inventory-demo-seed-gate.mjs` is a new gate entry modelled on
+`scripts/gates/mysql-sales-wave11-a-selector-gate.mjs`. It calls the existing
+`runProtectedMySqlCampaign` with its own campaign label
+`W11-A U3 INVENTORY DEMO SEED MYSQL E3 ACCEPTANCE` and its own suite label
+`W11-A-U3-INVENTORY-DEMO-SEED`. It adds no reset, no identity check, no cleanup, no TAP parser, no MySQL
+driver and no lease logic of its own. It never modifies the protected runner, the protected launcher,
+the credential store or the identity baseline.
+
+##### 5.3 The package script
+
+`package.json` gains exactly one script, `test:mysql:inventory-demo-seed`, pointing at the new gate
+entry. The existing `test:mysql:wave11-a:selector` keeps pointing at the closed Selector gate and no
+existing script changes.
+
+##### 5.4 The isolation boundary from the closed Selector E3 gate
+
+- a distinct campaign label and a distinct suite label, so the two gates never share a campaign id or
+  a lease;
+- a distinct evidence directory, `U3_INVENTORY_EVIDENCE_DIR`, so the Selector evidence is never
+  overwritten;
+- the closed Selector suite `server/mysql-sales-customer-wave11-a-credit-query-options.integration.js`
+  is not modified, so the S01 to S10 identities and their recorded results stay exactly as they are;
+- the machine-wide gate lock serialises the new gate against every other gate on the same target, so the
+  two campaigns can never run concurrently;
+- the new gate performs its own reset and its own five-class cleanup through the protected runner, so
+  the Selector gate's cleanup contract is unaffected.
+
+##### 5.5 The execution method
+
+```text
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/gates/run-mysql-local-gate.ps1 -Script test:mysql:inventory-demo-seed
+```
+
+The launcher remains the only entry point. It proves the identity and the empty schema, takes the
+machine-wide lock, binds the destructive authorization to the pinned target, runs the campaign, validates
+the TAP transcript strictly, resets the schema again and releases the lease. The execution needs its own
+explicit authorization and its own new evidence directory.
+
+##### 5.6 The environment mechanics the implementation must honour
+
+Two facts of the protected machinery decide how the suite must be written, and both are read from the
+real code rather than assumed:
+
+- the protected campaign runner sets `NODE_ENV = 'test'` and `ERP_SEED_DEMO = 'false'` in the child
+  environment. `createTempDb({ production: true })` would additionally force
+  `NODE_ENV = 'production'` and `ERP_SEED_DEMO = 'false'` while the database is created, which
+  suppresses the Demo Seed. The inventory suite therefore calls `createTempDb` **without** the
+  `production` option, so that `shouldSeedDemoData()` returns true and the Demo Seed actually runs on
+  the live target. The `createTempDb` factory also performs the disposable-target authorization, so the
+  suite inherits the protected guard.
+- `approveInventoryCheck` is a private function of `server/app.js` and is not exported, and
+  `server/app.js` is frozen. The approval therefore cannot be invoked as a module function and must be
+  driven through the **real HTTP surface**: the suite starts the real application over the MySQL adapter
+  on an ephemeral port, authenticates through the real login route and drives the real inventory-check
+  state machine through the real create, submit and approve endpoints. The demo seed provides the two
+  identities the contract needs, because the approval handler refuses a self-approval: the warehouse user
+  creates and submits the check and the administrator approves it.
+
+One further fixture fact is required and is stated here so that it is not a surprise in the
+implementation: the demo product carries no standard manufacturing cost, so the valuation of an approved
+adjustment would be the legacy unvalued movement with a zero amount, and `createSystemVoucher` skips an
+entry set whose amounts are all zero, so no voucher would be written. To exercise the complete money
+path that M-INV-06 requires, the suite applies exactly one explicit fixture fact before the approval,
+the demo product's standard manufacturing cost, exactly as the local SQLite suite does. The fresh
+position facts are asserted before that fact is applied, so M-INV-01 to M-INV-04 observe the untouched
+fresh bootstrap.
+
+##### 5.7 The eight cases
+
+| Case | Fixture and assertion |
+| --- | --- |
+| M-INV-01 | the fresh target holds exactly six demo inventory rows, and each carries a 64-character lowercase hex canonical key |
+| M-INV-02 | for every demo row, the key recomputed by `computePositionKey` from the row's own database dimension tuple is byte-identical to the persisted key, and the dimension tuple is exactly the canonical default tuple |
+| M-INV-03 | no active row carries a NULL, an empty or a synthetic `<canonical>:fallback<rowid>` key |
+| M-INV-04 | no logical inventory position, that is the canonical identity, holds more than one active row |
+| M-INV-05 | the approved check moves the seeded canonical position from 20 to 22, the row identity is unchanged, the row count is unchanged, and the canonical position holds exactly one active row |
+| M-INV-06 | one inventory transaction with the counted difference and the resulting balance, one audit record, one valuation movement with a real integer-cent amount, one system voucher with balanced entries whose amount agrees with the valuation amount, and the approved business status with its reviewer |
+| M-INV-07 | a reopen and a repeated initialization preserve the quantity 22, the row count and the canonical identities, and add no row |
+| M-INV-08 | the five object categories are zero after the campaign, reported by the campaign and confirmed by the launcher on a fresh session |
+
+#### 6. The exact future implementation whitelist
+
+Six paths, and no seventh:
+
+| # | Path | Action | Purpose |
+| --- | --- | --- | --- |
+| 1 | `server/mysql-inventory-demo-seed-position.integration.js` | new | the protected MySQL inventory suite, eight flat top-level cases, not registered in any suite |
+| 2 | `scripts/gates/mysql-inventory-demo-seed-gate.mjs` | new | the protected gate entry, its own campaign and suite identity |
+| 3 | `package.json` | modify | exactly one new script `test:mysql:inventory-demo-seed` |
+| 4 | `document.md` | append | the Requirement amendment of this stage |
+| 5 | `solution.md` | append | this Design amendment |
+| 6 | `log/2026-10-30.md` | append | the append-only stage record |
+
+Explicitly **not** modified: `scripts/gates/mysql-wave10-runner-support.mjs`, the protected runner and
+its frozen contract; `scripts/gates/run-mysql-local-gate.ps1`, the protected launcher;
+`scripts/gates/mysql-sales-wave11-a-selector-gate.mjs`; the closed Selector suite
+`server/mysql-sales-customer-wave11-a-credit-query-options.integration.js`;
+`scripts/testing/test-suites.js`; `server/app.js`; every production module, migration and schema; and
+every frozen Credit core and inventory primitive.
+
+#### 7. The future acceptance matrix
+
+| Item | Subject | Pass condition |
+| --- | --- | --- |
+| N1 | the suite contract | exactly eight flat top-level cases `M-INV-01` to `M-INV-08`, no nested plan, no skip, no todo, no only |
+| N2 | the static contract | the suite imports no MySQL driver, adds no reset, no identity check, no cleanup and no TAP parser of its own |
+| N3 | the gate entry contract | the gate entry calls only the existing `runProtectedMySqlCampaign`, with its own campaign and suite labels, and never references the Selector suite |
+| N4 | the registry | `scripts/testing/test-suites.js` is unchanged and the new suite is registered in no suite |
+| N5 | the protected execution | the launcher runs the gate once, the campaign reports the five-class zero inventory, the launcher confirms the cleanup, and the strict TAP transcript validates 8 of 8 |
+| N6 | the isolation | the Selector evidence, the Selector suite file and the Selector gate entry are byte-identical before and after |
+| N7 | the frozen SHA | every frozen identity in §8 is byte-identical after the implementation |
+| N8 | the worktree | the changed-path set is exactly the six paths of §6 plus the paths already authorized, the index stays empty, the branch, the HEAD and the version are unchanged |
+
+#### 8. The rollback
+
+The implementation is confined to two new files and one package script, so the rollback is the removal of
+those two files and the removal of that one script entry. No schema, no migration and no data change is
+involved, and the disposable target is reset by the protected runner itself. Nothing in the rollback may
+touch a real inventory row.
+
+#### 9. The required user decisions
+
+Two decisions are outside this stage and are recorded as open:
+
+1. the explicit business risk acceptance for the Exact Identity Collation residual of §2 and §3, which
+   the approved taxonomy classifies and disposes of but which the business owner must accept;
+2. the authorization for the single protected execution of the independent Demo Inventory gate of §5,
+   and the decision on whether the historical inventory remediation strategy gets its own Requirement.
+
+#### 10. What did not happen and the pause point
+
+- No production code, test, migration, launcher, package script or suite registry was modified in this
+  stage. Only the two authorized documentation paths were appended.
+- No real MySQL was contacted and no gate was executed.
+- No Git write, no Acceptance and no Freeze.
+- The completed FAST, FULL, build, browser and Selector MySQL evidence is preserved and unchanged.
+
+HARD STOP after this Design. The next stage is the Implementation of the six registered paths, and
+separately the authorized protected execution of the new gate.
+
+**Stage status: `W11_A_U3_RESIDUAL_RISK_DESIGN_READY`.**
+
+### 37.54.47 W11-A U3 Demo Seed Inventory MySQL Gate — Implementation Record and Protected Execution (2026-10-31)
+
+#### 1. Authorization, inputs and boundary
+
+This section records the Implementation of the six registered paths of §37.54.46.6 and the single authorized
+protected execution of the independent Demo Inventory gate of §37.54.46.5.
+
+The Requirement layer is `document.md` "W11-A U3 Demo Seed Inventory MySQL Gate — Implementation Result, Residual
+Acceptance and Historical Disposition (2026-10-31)" under R-U3-INV-09 and R-U3-INV-10.
+
+No Git write, no Acceptance and no Freeze were authorized, and none occurred. The completed FAST, FULL, build,
+browser and Selector MySQL evidence is preserved and is not reclassified.
+
+#### 2. The implementation
+
+##### 2.1 The suite — `server/mysql-inventory-demo-seed-position.integration.js`
+
+A new protected MySQL integration suite, flat top-level TAP only, with exactly eight top-level cases
+`M-INV-01` to `M-INV-08`, no `describe`, no `it`, no `skip`, no `todo` and no `only`.
+
+It runs against the real disposable MySQL 8 target through the existing `MySqlSyncAdapter`, the existing
+protected campaign lease (`createWave10MysqlLifecycle`), the production database initialization path and the
+real HTTP surface (`createApp` over an ephemeral loopback port, the real login route and the real inventory-check
+state machine). It never falls back to SQLite: the fixture asserts `db.dialect === 'mysql'`.
+
+The suite adds no MySQL driver, no reset, no identity check, no object inventory of its own and no TAP parser of
+its own. The protected runner remains the single owner of target identity, reset, TAP validation and final
+cleanup.
+
+##### 2.2 The gate entry — `scripts/gates/mysql-inventory-demo-seed-gate.mjs`
+
+It imports exactly one module, the shared `runProtectedMySqlCampaign`, and calls it with the independent
+campaign label `W11-A U3 INVENTORY DEMO SEED MYSQL E3 ACCEPTANCE` and the independent suite label
+`W11-A-U3-INVENTORY-DEMO-SEED`. It never references the closed Selector suite. The closed Selector suite
+`server/mysql-sales-customer-wave11-a-credit-query-options.integration.js` and the closed Selector gate entry
+`scripts/gates/mysql-sales-wave11-a-selector-gate.mjs` were not modified, so the S01 to S10 identities and their
+recorded results stay exactly as they are, and the two campaigns never share a campaign id or a lease.
+
+##### 2.3 The Demo Seed environment boundary
+
+The protected campaign runner hands the suite child `NODE_ENV=test` and `ERP_SEED_DEMO=false`.
+`shouldSeedDemoData()` treats only `NODE_ENV=production` as a suppression, so under that child environment the
+decision is `true` and the Demo Seed really runs on the live target. The suite therefore calls `createTempDb`
+**without** the `production` option; it never uses `createTempDb({production:true})` and never suppresses the
+seed to obtain a pass on an empty schema.
+
+This was proven twice before the campaign:
+
+1. statically, `shouldSeedDemoData()` evaluated under `NODE_ENV=test` and `ERP_SEED_DEMO=false` returns `true`;
+2. dynamically, `captureSqliteSnapshot(createSqliteSnapshot, true)` — the exact snapshot construction the MySQL
+   bootstrap consumes — produces exactly six inventory rows, and every one of them carries the canonical
+   `position_key` computed by `computePositionKey` from its own stored dimensions.
+
+The suite additionally captures that same snapshot inside its own `before` hook and compares it with the live
+MySQL rows, so the "complete row copy" obligation is asserted against the real bootstrap source rather than
+against a re-implementation of it.
+
+##### 2.4 The eight cases
+
+| Case | Implementation |
+| --- | --- |
+| M-INV-01 | the fresh MySQL bootstrap holds exactly six demo inventory rows with the canonical row identities, the canonical quantities and a 64-character lowercase hex key, and the live rows are deep-equal to the SQLite snapshot rows |
+| M-INV-02 | for every row, `computePositionKey` recomputed from the row's own stored dimensions is byte-identical to the stored key, the stored tuple is exactly the canonical default tuple, and the physical column is a character column that holds 64 characters |
+| M-INV-03 | no active row carries a NULL, an empty or a synthetic `<canonical>:fallback<rowid>` key; the unique index is recorded as supporting evidence only, the data is the contract |
+| M-INV-04 | no canonical identity holds two active rows, and the source identity, product, warehouse, quantity and business position of the approved position are recorded |
+| M-INV-05 | the real HTTP approval: a create without the permission is refused with 403, the creator cannot approve its own submitted check and is refused with 409 `盘点单创建人不能审批自己的单据`, the warehouse actor creates and submits, the administrator approves, and the seeded canonical row is updated in place from 20 to 22 with the row count unchanged and exactly one active row for the logical position |
+| M-INV-06 | exactly one inventory transaction, one audit record, one valuation movement with a real integer-cent amount, one balanced system voucher whose amount agrees with the valuation, and zero duplicate side effects; the amounts are derived from the counted difference and the frozen standard cost read back from the business rows, never from a hardcoded expectation |
+| M-INV-07 | the original connection is released and a new one is opened against the same schema through `createDatabase({backend:'mysql'})`, the production initialization path; the quantity stays 22, the row count stays 6, the canonical identities are stable, no row is added and no second inventory transaction, valuation movement or voucher appears. The database is never destroyed and rebuilt, so a destroy-and-recreate can never masquerade as a reopen |
+| M-INV-08 | the HTTP server and the MySQL adapter are released, the evidence file is written with a recorded SHA-256 that is verified against its own content, all eight case records are present and no session token or credential is in the evidence. The five-class zero is **not** claimed by the suite: the acceptance data is still present when the suite ends, so the outer cleanup has real work to do |
+
+##### 2.5 The one explicit fixture fact
+
+The demo product carries no standard manufacturing cost, so an approved adjustment would be the legacy unvalued
+movement with a zero amount and `createSystemVoucher` would skip an empty entry set. The suite therefore applies
+exactly one fixture fact, the demo product's standard manufacturing cost of 259900 cents, and it applies it only
+after M-INV-01 to M-INV-04 have observed the untouched fresh bootstrap, exactly as the local SQLite suite does.
+The valuation amount is then derived from the counted difference and the cost read back from the product row.
+
+#### 3. The local validation
+
+| Gate | Result |
+| --- | --- |
+| A `node --check` on both new files | exit 0 |
+| B `package.json` JSON parse | version `1.6.2`, the new script present |
+| C the exact package.json diff | exactly one added script line, nothing else |
+| D the static suite contract | exactly eight flat top-level cases `M-INV-01` to `M-INV-08`, no nested plan, no `describe`, no `it`, no `skip`, no `todo`, no `only`, no MySQL driver, no reset, no identity check, no object inventory, no TAP parser of its own |
+| E the gate entry contract | one import, only `runProtectedMySqlCampaign`, independent campaign and suite labels, never the Selector suite |
+| F the environment and lease contract | `shouldSeedDemoData()` is `true` under the runner child environment; the snapshot carries six canonical rows; the lifecycle decodes and re-verifies the runner-issued lease; the disposable target acknowledgement is exact |
+| G `pnpm test:fast` | 500 of 500 |
+| H `pnpm test` | 3102 of 3102 |
+| I `pnpm build` | built |
+| J `git diff --check` | clean |
+| K the frozen SHA set | 15 of 16 byte-identical, the single exception being the approved `package.json` amendment |
+| L the changed-path whitelist | exactly the twenty paths: the seventeen pre-authorized ones plus the three of this stage; the index is empty and the branch, HEAD and version are unchanged |
+
+Before the campaign the suite was additionally dry-run against a disposable SQLite database through a generated
+probe outside the tracked tree, to prove the real HTTP flow, the real SQL assertions, the exact guard message, the
+valuation and voucher assertions, the reopen semantics and the strict TAP shape before the single authorized
+MySQL execution was spent. The probe was removed afterwards.
+
+#### 4. The protected execution
+
+The execution entry point was the protected launcher, exactly as designed:
+
+```text
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/gates/run-mysql-local-gate.ps1 -Script test:mysql:inventory-demo-seed
+```
+
+The gate ran exactly once. No failure was repaired and no rerun was attempted.
+
+The launcher proved the target from the pinned local identity baseline and the DPAPI-encrypted credential before
+the campaign started:
+
+- MySQL `8.0.37`, matching the MySQL 8 version policy;
+- server UUID `256c7a4e-d275-11f1-885b-b025aa71d167`, exactly the pinned value;
+- current user `modern_erp_test@127.0.0.1`, exactly the pinned value;
+- grants fingerprint `bef61617d1b96913f479c7642176eca53f60410b003773707cd56355e4ce807e`, exactly the pinned value;
+- database identity `modern_erp_domain_test` on `127.0.0.1:3306`, exactly the pinned value;
+- initial object inventory tables 0, views 0, triggers 0, routines 0, events 0, matching `EMPTY_ONLY`;
+- the machine-wide lock `ModernERP.MySqlGate.modern_erp_domain_test` acquired.
+
+The campaign reported `W11-A-U3-INVENTORY-DEMO-SEED = PASS (8/8; skipped=0; cancelled=0; todo=0)`.
+
+#### 5. The five-class cleanup
+
+The cleanup is confirmed three times, independently:
+
+1. the protected runner, after its own final reset, reported
+   `FINAL ZERO OBJECTS = {"tables":0,"views":0,"triggers":0,"routines":0,"events":0}`;
+2. the protected launcher, on a fresh session with the destructive authorization variables removed, reported
+   `CLEANUP = CONFIRMED (tables=0 views=0 triggers=0 routines=0 events=0)`;
+3. a separate read-only preflight on a fresh session, with the destructive variables explicitly absent, returned
+   `"ok":true` with the same five zero counts and an empty drift list.
+
+The suite itself never claimed the five-class zero. It recorded the object inventory before the outer cleanup
+(tables 325, views 1, triggers 5, routines 0, events 0) so that the outer cleanup is a real operation.
+
+#### 6. The `package.json` bounded forward exception
+
+The frozen file `package.json` carried the SHA-256
+`43d6ec696d2a54896c6968bc163710341a8a85431bad9efa29cdd44169047dee` before this stage and carries
+`5ac498f0ef715007a14bb0c0c20d0bf479b94b4f46194edd8b9807136e18a8b1` after it. The exact JSON diff is one added
+script entry:
+
+```diff
+     "test:mysql:wave11-a:selector": "node scripts/gates/mysql-sales-wave11-a-selector-gate.mjs",
++    "test:mysql:inventory-demo-seed": "node scripts/gates/mysql-inventory-demo-seed-gate.mjs",
+```
+
+The version stays `1.6.2`. No other script, dependency, engine or package metadata changed. The reason for the
+amendment is the one new protected gate entry, which needs one package command. This exception does not extend
+to any other frozen file, and the claim that the `package.json` file SHA is unchanged is withdrawn for this
+stage.
+
+#### 7. The frozen identities
+
+Every frozen identity of §37.54.46.10 is byte-identical after the implementation: `server/modules/credit-check.js`,
+`server/modules/credit-query.js`, `server/modules/credit-scope.js`,
+`server/modules/credit-special-approval.js`, `server/lib/inventory-position.js`, `server/lib/stock.js`,
+`server/migrations/inventory-position-schema.js`, `server/lib/search-fold.js`,
+`server/migrations/sales-customer-wave11-a-selector-search-key.js`,
+`server/modules/credit-query-options.js`, `server/app.js`,
+`server/test-utils/wave11-a-selector-gate-fixture.js`,
+`server/test-utils/wave11-a-credit-query-fixture.js`, `server/test-utils/wave11-sec-scope-fixture.js`,
+`scripts/gates/mysql-sales-wave11-a-selector-gate.mjs` and `scripts/gates/run-mysql-local-gate.ps1`. The single
+exception is the explicitly approved `package.json` amendment of §6.
+
+The closed Selector suite keeps its identity
+`39a34ee86ee3c6ed2981fef5243a53a38aa5dd2b402b83e9058dc6df70c72e3d`, and `scripts/testing/test-suites.js` is
+unchanged: the new suite is `*.integration.js`, it is registered in no suite, and the on-disk `*.test.js`
+classification invariant is unaffected.
+
+#### 8. What did not happen and the pause point
+
+- No production code, schema, migration, launcher, runner, campaign machinery, credential store or identity
+  baseline was modified.
+- No production identity comparison code was modified to record the residual acceptance.
+- No historical inventory repair SQL, migration, compensating movement or accounting adjustment was added.
+- The gate was executed exactly once and was not re-run.
+- No Git add, commit, push, tag, merge, release or deploy; the index stays empty, the branch and HEAD are
+  unchanged and the version stays `1.6.2`.
+- No Acceptance and no Freeze.
+
+HARD STOP. The next stage is the Final Acceptance of the W11-A U3 package, which needs its own explicit
+authorization.
+
+**Stage status: `W11_A_U3_RESIDUAL_RISK_MYSQL_INVENTORY_GATE_PASS_PENDING_FINAL_ACCEPTANCE`.**

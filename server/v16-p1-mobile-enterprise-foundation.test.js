@@ -41,7 +41,7 @@ let applicationRegistry;
 before(async () => {
   vite = await createViteServer({
     root: repoRoot,
-    server: { middlewareMode: true, hmr: false },
+    server: { middlewareMode: true, hmr: false, ws: false },
     appType: 'custom',
     logLevel: 'error',
   });

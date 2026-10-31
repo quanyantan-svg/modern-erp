@@ -15,7 +15,7 @@ import {
   seedObservedReceivable,
   shiftCreditDate,
 } from '../../server/test-utils/wave11-a-credit-query-fixture.js';
-import { HISTORICAL, TODAY } from '../../server/test-utils/wave11-sec-scope-fixture.js';
+import { HISTORICAL, PROFILE_FROM, TODAY } from '../../server/test-utils/wave11-sec-scope-fixture.js';
 
 const edgePath = process.env.EDGE_PATH || 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 const evidenceDir = process.env.U3_BROWSER_EVIDENCE_DIR
@@ -126,6 +126,132 @@ async function directApi(page, path) {
     const response = await fetch(target, { headers: { authorization: `Bearer ${localStorage.getItem('modern_erp_token')}` } });
     return { status: response.status, body: await response.json().catch(() => null) };
   }, path);
+}
+
+async function adminGet(baseUrl, token, path) {
+  const response = await fetch(`${baseUrl}${path}`, { headers: { authorization: `Bearer ${token}` } });
+  return { status: response.status, body: await response.json().catch(() => null) };
+}
+
+// The production write path. The customer and the Credit Profile are created
+// through the real HTTP routes with a real administrator session, so the
+// derived search keys are written by the production writers and are never
+// fabricated here. The shared fixture files are not modified.
+async function adminPost(baseUrl, token, path, body, idempotencyKey) {
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${token}`,
+      ...(idempotencyKey ? { 'idempotency-key': idempotencyKey } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  return { status: response.status, body: await response.json().catch(() => null) };
+}
+
+// The canonical option identity of the selector, byte-identical to the value
+// the page renders in the option element.
+const IDENTITY_SEPARATOR = String.fromCharCode(31);
+const identityValue = (option) => `${option.customerId}${IDENTITY_SEPARATOR}${option.creditObjectType}${IDENTITY_SEPARATOR}${option.creditObjectId}`;
+
+async function seedSearchSemanticsFixture(baseUrl, adminToken) {
+  const customers = [];
+  const define = async ({ code, name, creditObjectId, salespersonId = null }) => {
+    const customer = await adminPost(
+      baseUrl, adminToken, '/api/customers',
+      { code, name, contact: '', phone: '', address: '' },
+      `u3-browser-customer-${code}`,
+    );
+    assert.equal(customer.status, 201, `the production customer writer must accept ${code}: ${JSON.stringify(customer.body)}`);
+    const profile = await adminPost(
+      baseUrl, adminToken, '/api/credit/profiles',
+      {
+        customerId: customer.body.id,
+        salespersonId,
+        creditObjectType: 'SALES_ORDER',
+        creditObjectId,
+        creditLimitCents: 100000,
+        initialState: 'NORMAL',
+        status: 'ACTIVE',
+        ratingGrade: 'A',
+        overdueDayPolicy: '15',
+        effectiveFrom: PROFILE_FROM,
+        effectiveTo: null,
+      },
+      `u3-browser-profile-${creditObjectId}`,
+    );
+    assert.equal(profile.status, 201, `the production credit profile writer must accept ${creditObjectId}: ${JSON.stringify(profile.body)}`);
+    customers.push({ code, name, customerId: customer.body.id, creditObjectId });
+    return customers[customers.length - 1];
+  };
+
+  await define({ code: 'CUS-U3-MULLER', name: 'Müller GmbH', creditObjectId: 'CREDIT-U3-MULLER' });
+  await define({ code: 'CUS-U3-ANGSTROM', name: 'Ångström AB', creditObjectId: 'CREDIT-U3-ANGSTROM' });
+  await define({ code: 'CUS-U3-PERCENT', name: 'Fifty % Discount Co', creditObjectId: 'CREDIT-U3-PERCENT' });
+  await define({ code: 'CUS-U3-UNDERSCORE', name: 'Under_Score Co', creditObjectId: 'CREDIT-U3-UNDERSCORE' });
+  await define({ code: 'CUS-U3-BACKSLASH', name: 'Back\\Slash Co', creditObjectId: 'CREDIT-U3-BACKSLASH' });
+  // Only the other salesperson may see this customer.
+  await define({ code: 'CUS-U3-RESTRICTED', name: 'Restricted Scope Co', creditObjectId: 'CREDIT-U3-RESTRICTED', salespersonId: 'sp-other' });
+  // Enough further customers to cross the selector page boundary.
+  for (let index = 1; index <= 24; index += 1) {
+    const suffix = String(index).padStart(2, '0');
+    await define({ code: `CUS-U3-ORD-${suffix}`, name: `Ordering Fixture ${suffix}`, creditObjectId: `CREDIT-U3-ORD-${suffix}` });
+  }
+  return { customers };
+}
+
+// The rendered selector list and its page indicator. The placeholder option
+// is not a logical option and is excluded.
+async function readSelectorOptions(page) {
+  const options = await page.locator('.credit-query__context select').nth(0).locator('option')
+    .evaluateAll((rows) => rows.map((row) => ({ value: row.value, text: row.textContent })));
+  const indicatorCount = await page.locator('.credit-query__selector-page span').count();
+  const indicator = indicatorCount
+    ? (await page.locator('.credit-query__selector-page span').first().innerText()).replace(/\s+/g, ' ').trim()
+    : '';
+  return { options: options.filter((option) => option.value !== ''), indicator };
+}
+
+// The selector settles when it has rendered its options or when it has
+// rendered the empty state. Waiting for the skeleton alone is not enough:
+// the skeleton disappears before the rendered list is committed.
+// The selector area has its own empty state. The canonical empty state class is
+// shared with the exposure workspace, so the selector one is identified by its
+// own title instead of by the class.
+const SELECTOR_EMPTY_TITLE = '当前权限范围内没有可查询的信用对象';
+
+async function selectorEmptyStateCount(page) {
+  return page.evaluate((title) => [...document.querySelectorAll('.canonical-empty-state')]
+    .filter((node) => (node.textContent || '').includes(title)).length, SELECTOR_EMPTY_TITLE);
+}
+
+async function settleSelector(page) {
+  await page.waitForFunction((title) => {
+    const select = document.querySelectorAll('.credit-query__context select')[0];
+    const empty = [...document.querySelectorAll('.canonical-empty-state')]
+      .some((node) => (node.textContent || '').includes(title));
+    return Boolean((select && select.options.length > 1) || empty);
+  }, SELECTOR_EMPTY_TITLE, { timeout: 15000 });
+}
+
+// A real user input into the real search field, followed by the real HTTP
+// response of the real page. The wait predicate matches the exact query, so a
+// superseded read can never be mistaken for the current one.
+async function searchInSelector(page, query) {
+  const input = page.locator('.credit-query__context input').nth(0);
+  const waitFor = page.waitForResponse((res) => {
+    if (!res.url().includes('/api/credit/query-options')) return false;
+    return (new URL(res.url()).searchParams.get('q') || '') === query;
+  });
+  await input.fill(query);
+  const response = await waitFor;
+  await page.waitForFunction(() => !document.querySelector('.credit-query__context .skeleton'), null, { timeout: 10000 });
+  await settleSelector(page);
+  const body = await response.json().catch(() => null);
+  const selector = await readSelectorOptions(page);
+  const emptyState = await selectorEmptyStateCount(page);
+  return { status: response.status(), body, selector, emptyState, url: response.url() };
 }
 
 async function switchToHistory(page) {
@@ -493,6 +619,206 @@ try {
   await main.page.waitForFunction(() => document.querySelector('.canonical-empty-state'));
   record('B09', { fixture: 'held superseded selector read + one network abort + real invalid/empty queries', role: creditLogin.user.roleCode, permissions: ['CREDIT_VIEW'], action: 'rapid search, loading, stale-read guard, network retry, invalid and empty', request: { heldRequests, aborted, invalid: conflict }, dom: { loadingVisible, retryRecovered: await main.page.locator('.credit-query__result').count(), emptyState: await main.page.locator('.canonical-empty-state').count(), staleContextUnchanged: contextAfterStale === newestContext } });
 
+  // ---------------------------------------------------------------------
+  // B10 .. B12 — the approved search semantics, driven through the real
+  // search input of the real page against the real HTTP backend.
+  //
+  // The fixture customers are created through the PRODUCTION write path: the
+  // real `POST /api/customers` and the real `POST /api/credit/profiles` with
+  // a real administrator session. The derived search keys are therefore
+  // written by the production writers and are never fabricated here, and the
+  // shared fixture files are not modified.
+  // ---------------------------------------------------------------------
+  const adminLogin = await login(baseUrl, 'w11-admin');
+  const searchFixture = await seedSearchSemanticsFixture(baseUrl, adminLogin.token);
+
+  // ---- B10 — the Unicode and case folding through the real search input ----
+  const unicodeProbes = [
+    { label: 'accent-folded', query: 'muller', expectedCode: 'CUS-U3-MULLER', expectedName: 'Müller GmbH' },
+    { label: 'accent-exact-lower', query: 'müller', expectedCode: 'CUS-U3-MULLER', expectedName: 'Müller GmbH' },
+    { label: 'accent-exact-capital', query: 'Müller', expectedCode: 'CUS-U3-MULLER', expectedName: 'Müller GmbH' },
+    { label: 'accent-upper-case', query: 'MÜLLER', expectedCode: 'CUS-U3-MULLER', expectedName: 'Müller GmbH' },
+    { label: 'unicode-case-lower', query: 'ångström', expectedCode: 'CUS-U3-ANGSTROM', expectedName: 'Ångström AB' },
+    { label: 'unicode-case-exact', query: 'Ångström', expectedCode: 'CUS-U3-ANGSTROM', expectedName: 'Ångström AB' },
+  ];
+  const unicodeResults = [];
+  for (const probe of unicodeProbes) {
+    const result = await searchInSelector(main.page, probe.query);
+    assert.equal(result.status, 200, `${probe.label} the search request must succeed`);
+    assert.equal(result.body.total, 1, `${probe.label} the search must select exactly one customer`);
+    assert.equal(result.selector.options.length, 1, `${probe.label} the selector must render exactly one option`);
+    assert.ok(result.selector.options[0].text.includes(probe.expectedCode), `${probe.label} the wrong customer was selected: ${result.selector.options[0].text}`);
+    assert.ok(result.selector.options[0].text.includes(probe.expectedName), `${probe.label} the display name must be preserved: ${result.selector.options[0].text}`);
+    assert.equal(result.emptyState, 0, `${probe.label} the empty state must not be shown`);
+    assert.ok(result.selector.indicator.includes('共 1 项'), `${probe.label} the count must be one: ${result.selector.indicator}`);
+    unicodeResults.push({ label: probe.label, query: probe.query, total: result.body.total, option: result.selector.options[0].text });
+  }
+
+  // A customer that only another salesperson may see must never be found by
+  // this reader, and the exclusion must be a scope decision rather than
+  // missing data: the administrator does see it.
+  const restrictedResult = await searchInSelector(main.page, 'CUS-U3-RESTRICTED');
+  assert.equal(restrictedResult.status, 200);
+  assert.equal(restrictedResult.body.total, 0, 'a customer outside the reader scope must never be found');
+  assert.equal(restrictedResult.selector.options.length, 0, 'no option may be rendered for an unauthorized customer');
+  assert.equal(restrictedResult.emptyState, 1, 'the unauthorized search must render the empty state');
+  const adminRestricted = await adminGet(baseUrl, adminLogin.token, '/api/credit/query-options?q=CUS-U3-RESTRICTED&limit=100');
+  assert.equal(adminRestricted.status, 200);
+  assert.equal(adminRestricted.body.total, 1, 'the restricted customer must exist for the administrator');
+
+  await main.page.screenshot({ path: join(evidenceDir, 'search-unicode-390.png'), fullPage: true });
+  record('B10', {
+    fixture: searchFixture.customers.map((customer) => ({ code: customer.code, name: customer.name })),
+    role: creditLogin.user.roleCode,
+    permissions: creditLogin.user.permissions,
+    action: 'real search input: Unicode, Latin accent and mixed-case queries',
+    request: { status: unicodeResults.length, probes: unicodeResults },
+    dom: { restrictedTotal: restrictedResult.body.total, restrictedEmptyState: restrictedResult.emptyState, administratorTotal: adminRestricted.body.total },
+  });
+
+  // ---- B11 — the literal characters through the real search input ----
+  const literalProbes = [
+    { label: 'literal-percent', query: '%', expectedCode: 'CUS-U3-PERCENT', expectedName: 'Fifty % Discount Co' },
+    { label: 'literal-underscore', query: '_', expectedCode: 'CUS-U3-UNDERSCORE', expectedName: 'Under_Score Co' },
+    { label: 'literal-backslash', query: '\\', expectedCode: 'CUS-U3-BACKSLASH', expectedName: 'Back\\Slash Co' },
+  ];
+  const fullScope = await adminGet(baseUrl, creditLogin.token, '/api/credit/query-options?limit=100');
+  assert.equal(fullScope.status, 200);
+  const authorizedTotal = fullScope.body.total;
+  assert.ok(authorizedTotal > 1, 'the reader must have more than one authorized option');
+  const literalResults = [];
+  for (const probe of literalProbes) {
+    const result = await searchInSelector(main.page, probe.query);
+    assert.equal(result.status, 200, `${probe.label} the search request must succeed`);
+    assert.equal(result.body.total, 1, `${probe.label} the literal character must select exactly one customer`);
+    assert.ok(result.body.total < authorizedTotal, `${probe.label} the literal character must not select the whole table`);
+    assert.equal(result.selector.options.length, 1, `${probe.label} the selector must render exactly one option`);
+    assert.ok(result.selector.options[0].text.includes(probe.expectedCode), `${probe.label} the wrong customer was selected: ${result.selector.options[0].text}`);
+    assert.ok(result.selector.options[0].text.includes(probe.expectedName), `${probe.label} the display name must be preserved: ${result.selector.options[0].text}`);
+    assert.ok(result.selector.indicator.includes('共 1 项'), `${probe.label} the count must be one: ${result.selector.indicator}`);
+    literalResults.push({ label: probe.label, query: probe.query, total: result.body.total, authorizedTotal, option: result.selector.options[0].text });
+  }
+  // A literal character that matches nothing must render the empty state and
+  // report a zero count instead of the whole table.
+  const literalNoMatch = await searchInSelector(main.page, '%zzz');
+  assert.equal(literalNoMatch.status, 200);
+  assert.equal(literalNoMatch.body.total, 0, 'a literal character without a match must report zero');
+  assert.equal(literalNoMatch.selector.options.length, 0);
+  assert.equal(literalNoMatch.emptyState, 1, 'a literal character without a match must render the empty state');
+
+  await main.page.screenshot({ path: join(evidenceDir, 'search-literal-390.png'), fullPage: true });
+  record('B11', {
+    fixture: 'three customers whose names carry %, _ and \\',
+    role: creditLogin.user.roleCode,
+    permissions: creditLogin.user.permissions,
+    action: 'real search input: the literal %, _ and \\ characters',
+    request: { probes: literalResults, noMatch: { total: literalNoMatch.body.total } },
+    dom: { authorizedTotal, emptyState: literalNoMatch.emptyState },
+  });
+
+  // ---- B12 — the deterministic ordering, the pagination boundary and the state continuity ----
+  const orderingContext = await contextFor(baseUrl, creditLogin.token);
+  const orderingPage = orderingContext.page;
+  await orderingPage.goto(`${baseUrl}/`, { waitUntil: 'networkidle' });
+  await orderingPage.goto(`${baseUrl}/#credit-query`, { waitUntil: 'networkidle' });
+  await orderingPage.locator('[data-testid="credit-query-page"]').waitFor();
+  await settleSelector(orderingPage);
+
+  const firstRead = await readSelectorOptions(orderingPage);
+  const firstKeys = firstRead.options.map((option) => option.value);
+  assert.ok(firstKeys.length > 0, 'the selector must render its authorized options');
+  const apiFirstPage = await adminGet(baseUrl, creditLogin.token, '/api/credit/query-options?limit=30&offset=0');
+  assert.equal(apiFirstPage.status, 200);
+  assert.deepEqual(
+    firstKeys,
+    apiFirstPage.body.options.map(identityValue),
+    'the rendered order must be the server order',
+  );
+
+  // The same query must produce the same order again. A real search and a
+  // real clearing of the search must restore exactly the first order.
+  await searchInSelector(orderingPage, 'CUS-U3');
+  const repeated = await searchInSelector(orderingPage, '');
+  assert.deepEqual(repeated.selector.options.map((option) => option.value), firstKeys, 'the same query must keep the same order');
+
+  // The pagination boundary: the first page disables the previous button, the
+  // last page disables the next button, and the pages neither overlap nor
+  // omit an option.
+  const selectorPreviousButton = orderingPage.locator('.credit-query__selector-page button').nth(0);
+  const selectorNextButton = orderingPage.locator('.credit-query__selector-page button').nth(1);
+  assert.equal(await selectorPreviousButton.isDisabled(), true, 'the previous page button must be disabled on the first page');
+  assert.equal(await selectorNextButton.isDisabled(), false, 'the next page button must be enabled on the first page');
+  const firstIndicator = firstRead.indicator;
+  assert.ok(firstIndicator.includes(`共 ${authorizedTotal} 项`), `the first page must report the authorized total: ${firstIndicator}`);
+
+  const secondWait = orderingPage.waitForResponse((res) => res.url().includes('/api/credit/query-options') && new URL(res.url()).searchParams.get('offset') === '30');
+  await selectorNextButton.click();
+  const secondResponse = await secondWait;
+  assert.equal(secondResponse.status(), 200);
+  await orderingPage.waitForFunction(() => !document.querySelector('.credit-query__context .skeleton'), null, { timeout: 10000 });
+  const secondRead = await readSelectorOptions(orderingPage);
+  const secondKeys = secondRead.options.map((option) => option.value);
+  assert.equal(await selectorNextButton.isDisabled(), true, 'the next page button must be disabled on the last page');
+  assert.equal(await selectorPreviousButton.isDisabled(), false, 'the previous page button must be enabled on the last page');
+  assert.equal(new Set([...firstKeys, ...secondKeys]).size, firstKeys.length + secondKeys.length, 'the pages must not overlap');
+  assert.equal(firstKeys.length + secondKeys.length, authorizedTotal, 'the pages must cover the whole authorized set');
+  const apiSecondPage = await adminGet(baseUrl, creditLogin.token, '/api/credit/query-options?limit=30&offset=30');
+  assert.equal(apiSecondPage.status, 200);
+  assert.deepEqual(secondKeys, apiSecondPage.body.options.map(identityValue), 'the second page must be the server slice');
+  assert.ok(secondRead.indicator.includes(`第 ${firstKeys.length + 1}–${authorizedTotal} 项`), `the second page must report its own range: ${secondRead.indicator}`);
+
+  // The previous page returns to exactly the first page.
+  const firstWait = orderingPage.waitForResponse((res) => res.url().includes('/api/credit/query-options') && new URL(res.url()).searchParams.get('offset') === '0');
+  await selectorPreviousButton.click();
+  const firstResponse = await firstWait;
+  assert.equal(firstResponse.status(), 200);
+  await orderingPage.waitForFunction(() => !document.querySelector('.credit-query__context .skeleton'), null, { timeout: 10000 });
+  const returnedRead = await readSelectorOptions(orderingPage);
+  assert.deepEqual(returnedRead.options.map((option) => option.value), firstKeys, 'the previous page must restore the first page exactly');
+
+  // The option identity is the canonical three-part identity. A real option is
+  // selected first, so the read observes an identity and not the placeholder.
+  const selectorSelect = orderingPage.locator('.credit-query__context select').nth(0);
+  await selectorSelect.selectOption(firstKeys[0]);
+  const selectedValue = await selectorSelect.inputValue();
+  const identityParts = selectedValue.split(String.fromCharCode(31));
+  assert.equal(identityParts.length, 3, 'the option value must carry the canonical identity');
+  assert.ok(identityParts[0] && identityParts[1] && identityParts[2], 'the canonical identity must be complete');
+
+  // A refresh and a back navigation must both keep the deterministic order,
+  // and the URL must stay continuous.
+  const hashBefore = await orderingPage.evaluate(() => location.hash);
+  await orderingPage.reload({ waitUntil: 'networkidle' });
+  await orderingPage.locator('[data-testid="credit-query-page"]').waitFor();
+  await settleSelector(orderingPage);
+  const afterReload = await readSelectorOptions(orderingPage);
+  assert.deepEqual(afterReload.options.map((option) => option.value), firstKeys, 'a refresh must keep the deterministic order');
+  assert.equal(await orderingPage.evaluate(() => location.hash), hashBefore, 'the URL must survive a refresh');
+  await orderingPage.goBack({ waitUntil: 'networkidle' });
+  await orderingPage.goForward({ waitUntil: 'networkidle' });
+  await orderingPage.locator('[data-testid="credit-query-page"]').waitFor();
+  await settleSelector(orderingPage);
+  const afterForward = await readSelectorOptions(orderingPage);
+  assert.deepEqual(afterForward.options.map((option) => option.value), firstKeys, 'a back and forward navigation must keep the deterministic order');
+  assert.equal(await orderingPage.evaluate(() => location.hash), hashBefore, 'the URL must stay continuous across the navigation');
+  await orderingPage.screenshot({ path: join(evidenceDir, 'ordering-390.png'), fullPage: true });
+  await orderingContext.context.close();
+  record('B12', {
+    fixture: `${authorizedTotal} authorized options over ${searchFixture.customers.length} production-written customers`,
+    role: creditLogin.user.roleCode,
+    permissions: creditLogin.user.permissions,
+    action: 'the deterministic order, the pagination boundary, the refresh and the back/forward continuity',
+    request: { authorizedTotal, firstPage: apiFirstPage.status, secondPage: apiSecondPage.status },
+    dom: {
+      firstPageOptions: firstKeys.length,
+      secondPageOptions: secondKeys.length,
+      firstIndicator,
+      secondIndicator: secondRead.indicator,
+      selectedIdentityParts: identityParts.length,
+      hashBefore,
+    },
+  });
+
   // Responsive proof covers SC101, list/filter/pagination, detail and the
   // historical-to-current separation at every required width.
   for (const width of [320, 390, 430, 680]) {
@@ -534,11 +860,12 @@ try {
   await main.context.close();
 
   evidence.completedAt = new Date().toISOString();
-  evidence.summary = { passed: Object.keys(evidence.cases).length, expected: 9, result: 'PASS' };
+  evidence.summary = { passed: Object.keys(evidence.cases).length, expected: 12, result: 'PASS' };
   const resultPath = join(evidenceDir, 'browser-acceptance-results.json');
   writeFileSync(resultPath, JSON.stringify(evidence, null, 2));
   const screenshotFiles = ['sc101', 'history-list', 'filter-sheet', 'detail', 'detail-current']
-    .flatMap((label) => [320, 390, 430, 680].map((width) => `${label}-${width}.png`));
+    .flatMap((label) => [320, 390, 430, 680].map((width) => `${label}-${width}.png`))
+    .concat(['search-unicode-390.png', 'search-literal-390.png', 'ordering-390.png']);
   const manifest = {
     result: { file: 'browser-acceptance-results.json', sha256: sha256(resultPath) },
     screenshots: screenshotFiles.map((file) => ({ file, sha256: sha256(join(evidenceDir, file)) })),

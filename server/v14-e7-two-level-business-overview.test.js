@@ -19,7 +19,7 @@ let AppNavigationProvider;
 let flows;
 
 before(async () => {
-  vite = await createViteServer({ root, server: { middlewareMode: true, hmr: false }, appType: 'custom', logLevel: 'error' });
+  vite = await createViteServer({ root, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom', logLevel: 'error' });
   const overview = await vite.ssrLoadModule('/src/pages/business-overview.jsx');
   BusinessOverview = overview.default;
   flows = overview.BUSINESS_FLOWS;

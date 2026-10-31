@@ -123,7 +123,7 @@ before(async () => {
   await new Promise((resolveListen) => httpServer.listen(0, '127.0.0.1', resolveListen));
   baseUrl = `http://127.0.0.1:${httpServer.address().port}`;
   await login('admin', 'admin123'); await login('sales', 'sales123'); await login('reviewer', 'review123'); await login('warehouse', 'warehouse123'); await login('accounting', 'accounting123');
-  vite = await createViteServer({ root, server: { middlewareMode: true, hmr: false }, appType: 'custom', logLevel: 'error' });
+  vite = await createViteServer({ root, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom', logLevel: 'error' });
   const module = await vite.ssrLoadModule('/src/components/MobileApprovalCenter.jsx');
   ({ ApprovalCard, ApprovalDetail, ApprovalListState, ApprovalTabs, APPROVAL_TABS, approvalActionRequest } = module);
   MobileApprovalCenter = module.default;

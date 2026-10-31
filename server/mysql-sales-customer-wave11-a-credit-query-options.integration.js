@@ -11,12 +11,21 @@
 // read scope is always resolved by the production resolver. It never rewrites
 // SC101, SC102, the OVERDUE evidence or the ONE_TIME approval semantics.
 //
-// The customer-name case and accent semantics are an OPEN business decision
-// (`CUSTOMER_NAME_SEARCH_SEMANTICS_OPEN`). This suite MEASURES that dimension
-// on both engines and preserves the difference. It never asserts cross-engine
-// equality on it, it never normalizes the two results into one, it never picks
-// one engine as the business authority, and it never changes the production
-// SQL, the schema or a collation.
+// The customer-name search semantics are an APPROVED business decision
+// (document.md R-U3-SEARCH-01, R-U3-SEARCH-02, R-U3-SEARCH-07, R-U3-SEARCH-08
+// and R-U3-SEARCH-09). The case, accent and Unicode folding, the literal
+// treatment of `%`, `_` and `\`, the deterministic ordering and the stable
+// pagination are contracts of the business, so this suite ASSERTS cross-engine
+// equality on them. A difference on an approved dimension is an acceptance
+// failure and never a recorded observation.
+//
+// One dimension stays outside the approved search semantics: the exact
+// identity filter of the selector compares the customer, the Credit Object
+// type and the Credit Object identity under the collation of the identity
+// column, which is case-insensitive on MySQL and case-sensitive on SQLite.
+// R-U3-SEARCH-03 keeps that filter an equality comparison, so the difference
+// is DISCLOSED and measured, it is never asserted as equal, and this suite
+// never widens the business identity equality policy.
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -36,8 +45,8 @@ import {
   NO_CREDIT, OTHER_ACTOR, SELF_ACTOR, TODAY, UNMAPPED_ACTOR, read,
 } from './test-utils/wave11-sec-scope-fixture.js';
 import {
-  AMBIGUOUS_CUSTOMER, AMBIGUOUS_OBJECT, BACKSLASH_CUSTOMER, CASE_CUSTOMER, DUPLICATE_CUSTOMERS,
-  DUPLICATE_NAME, MULTI_CUSTOMER, MULTI_OBJECTS, PERCENT_CUSTOMER, SUB_LIMIT_ONLY_CUSTOMER,
+  AMBIGUOUS_CUSTOMER, AMBIGUOUS_OBJECT, BACKSLASH_CUSTOMER, CASE_CUSTOMER, COLLATION_UNAMBIGUOUS_OPTION_KEYS,
+  DUPLICATE_CUSTOMERS, DUPLICATE_NAME, MULTI_CUSTOMER, MULTI_OBJECTS, PERCENT_CUSTOMER, SUB_LIMIT_ONLY_CUSTOMER,
   SUB_LIMIT_ONLY_OBJECT, UNDERSCORE_CUSTOMER, UNICODE_CUSTOMER, WINDOW_CUSTOMER, WINDOW_OBJECT,
   expectedSelectorOptions, insertAmbiguousEffectiveVersion, readMySqlCollationFacts,
   removeAmbiguousEffectiveVersion, seedSelectorGateWorld, selectorOptionKey,
@@ -51,9 +60,16 @@ if (process.env.ERP_MYSQL_TEST_ALLOW_RESET !== 'true') {
   throw new Error('MYSQL TEST ENVIRONMENT = UNAVAILABLE (ERP_MYSQL_TEST_ALLOW_RESET=true required)');
 }
 
-// The business contract does not define the case and accent semantics of a
-// free-text customer name. The gate measures it and keeps it visible.
-const OPEN_DECISION = 'CUSTOMER_NAME_SEARCH_SEMANTICS_OPEN';
+// The approved search semantics. The former open decision
+// `CUSTOMER_NAME_SEARCH_SEMANTICS_OPEN` was retired by R-U3-SEARCH-01,
+// R-U3-SEARCH-02, R-U3-SEARCH-07, R-U3-SEARCH-08 and R-U3-SEARCH-09, and this
+// gate now asserts the approved contract instead of measuring a difference.
+const APPROVED_SEARCH_SEMANTICS = 'CUSTOMER_NAME_SEARCH_SEMANTICS_APPROVED';
+
+// The one dimension that stays outside the approved search semantics. It is
+// the identity domain, not the search domain, and R-U3-SEARCH-03 keeps the
+// exact identity filter an equality comparison.
+const RESIDUAL_IDENTITY_COLLATION_RISK = 'RESIDUAL_EXACT_IDENTITY_COLLATION_RISK';
 
 const APPROVED_DTO_FIELDS = Object.freeze([
   'customerId', 'customerCode', 'customerName', 'customerActive',
@@ -77,7 +93,8 @@ let compatibilityEvidence;
 const evidence = {
   startedAt: new Date().toISOString(),
   campaign: 'W11-A U3 SELECTOR MYSQL E3 ACCEPTANCE',
-  semanticDecision: OPEN_DECISION,
+  semanticDecision: APPROVED_SEARCH_SEMANTICS,
+  residualRisk: RESIDUAL_IDENTITY_COLLATION_RISK,
   cases: {},
   findings: {},
 };
@@ -98,6 +115,58 @@ function scopeTypesOf(result) {
   return Object.fromEntries(result.body.options.map((option) => [keyOf(option), option.availableScopeTypes]));
 }
 
+// The read-only physical definition probe of the four derived search key
+// columns. The MySQL side reads the catalogue; the SQLite side reads the table
+// definition and the declared collation. It never writes and never changes a
+// collation.
+const SEARCH_KEY_COLUMN_TARGETS = Object.freeze([
+  Object.freeze({ table: 'customers', columns: Object.freeze(['code_search_key', 'name_search_key']) }),
+  Object.freeze({ table: 'credit_profile', columns: Object.freeze(['credit_object_type_search_key', 'credit_object_id_search_key']) }),
+]);
+
+function readSearchKeyColumnDefinitions(db) {
+  const definitions = [];
+  if (db.dialect === 'mysql') {
+    for (const target of SEARCH_KEY_COLUMN_TARGETS) {
+      const rows = db.prepare(`SELECT COLUMN_NAME name, DATA_TYPE data_type, IS_NULLABLE is_nullable,
+          COLLATION_NAME collation_name
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?
+          AND COLUMN_NAME IN (${target.columns.map(() => '?').join(',')})
+        ORDER BY ORDINAL_POSITION`).all(target.table, ...target.columns);
+      for (const row of rows) {
+        definitions.push({
+          table: target.table,
+          name: row.name,
+          dataType: String(row.data_type).toLowerCase(),
+          nullable: row.is_nullable === 'YES',
+          collation: row.collation_name,
+        });
+      }
+    }
+    return definitions;
+  }
+  for (const target of SEARCH_KEY_COLUMN_TARGETS) {
+    const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(target.table)?.sql || '';
+    for (const column of db.prepare(`PRAGMA table_info(${target.table})`).all()) {
+      if (!target.columns.includes(column.name)) continue;
+      const escaped = column.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const canonical = new RegExp(
+        `(?:\\(|,)\\s*${escaped}\\s+TEXT\\s+COLLATE\\s+BINARY(?:\\s+NULL)?(?=,|\\))`,
+        'i',
+      ).test(ddl);
+      definitions.push({
+        table: target.table,
+        name: column.name,
+        dataType: String(column.type).toLowerCase(),
+        nullable: Number(column.notnull) === 0,
+        collation: canonical ? 'BINARY' : 'DEFAULT',
+      });
+    }
+  }
+  return definitions;
+}
+
 function writeEvidence() {
   try {
     const dir = process.env.U3_SELECTOR_EVIDENCE_DIR
@@ -109,7 +178,7 @@ function writeEvidence() {
     const sha256 = createHash('sha256').update(readFileSync(file)).digest('hex');
     // A TAP diagnostic, never a TAP record: the first word is not one of the
     // reserved summary names, so the strict parser cannot read it as a record.
-    process.stdout.write(`# W11-A-U3-E3 EVIDENCE ${file} sha256=${sha256} semanticDecision=${OPEN_DECISION}\n`);
+    process.stdout.write(`# W11-A-U3-E3 EVIDENCE ${file} sha256=${sha256} semanticDecision=${APPROVED_SEARCH_SEMANTICS}\n`);
   } catch (error) {
     process.stdout.write(`# W11-A-U3-E3 EVIDENCE WRITE FAILED ${error.message}\n`);
   }
@@ -462,12 +531,17 @@ test('W11-A-U3-E3-S09 every measured GET is repeatable and leaves the database u
   }
 });
 
-test('W11-A-U3-E3-S10 the ordering, the collation and the grouping are measured and stable', async () => {
+test('W11-A-U3-E3-S10 the ordering, the pagination and the search probes are identical on both engines', async () => {
+  // ---- the live MySQL metadata, read only ----
   const mysqlFacts = readMySqlCollationFacts(mysqlDb);
   assert.ok(mysqlFacts, 'the read-only MySQL metadata probe must run on the MySQL side');
   assert.equal(readMySqlCollationFacts(sqliteDb), null, 'the SQLite side must not pretend to be MySQL');
   assert.ok(Number.isSafeInteger(Number(mysqlFacts.session.max_sort_length)), 'max_sort_length must be readable');
-  assert.ok(Number(mysqlFacts.session.max_sort_length) >= 1024, 'the MySQL group-key boundary must be readable');
+  assert.ok(
+    Number.isSafeInteger(Number(mysqlFacts.session.max_sort_length))
+      && Number(mysqlFacts.session.max_sort_length) >= 1024,
+    'the MySQL group-key boundary must be readable',
+  );
   assert.ok(
     Number(mysqlFacts.observed.max_bytes) <= 50,
     'the production writer bounds credit_object_type to 50 characters',
@@ -477,8 +551,49 @@ test('W11-A-U3-E3-S10 the ordering, the collation and the grouping are measured 
     'the group-key truncation boundary must be unreachable for the supported range',
   );
 
+  // ---- the physical definition of the four derived search key columns ----
+  const sqliteKeyColumns = readSearchKeyColumnDefinitions(sqliteDb);
+  const mysqlKeyColumns = readSearchKeyColumnDefinitions(mysqlDb);
+  assert.equal(sqliteKeyColumns.length, 4, 'the SQLite side exposes exactly four derived search key columns');
+  assert.equal(mysqlKeyColumns.length, 4, 'the MySQL side exposes exactly four derived search key columns');
+  for (const definition of sqliteKeyColumns) {
+    assert.equal(definition.dataType, 'text', `${definition.table}.${definition.name} sqlite type`);
+    assert.equal(definition.nullable, true, `${definition.table}.${definition.name} sqlite nullability`);
+    assert.equal(definition.collation, 'BINARY', `${definition.table}.${definition.name} sqlite collation`);
+  }
+  for (const definition of mysqlKeyColumns) {
+    assert.equal(definition.dataType, 'longtext', `${definition.table}.${definition.name} mysql type`);
+    assert.equal(definition.nullable, true, `${definition.table}.${definition.name} mysql nullability`);
+    assert.equal(definition.collation, 'utf8mb4_0900_bin', `${definition.table}.${definition.name} mysql collation`);
+  }
+
+  // ---- A. the full ordered option set is identical on both engines ----
   const sqliteOrder = (await options(sqliteDb, ADMIN, { limit: 100 })).body.options.map(keyOf);
   const mysqlOrder = (await options(mysqlDb, ADMIN, { limit: 100 })).body.options.map(keyOf);
+  assert.equal(sqliteOrder.length, mysqlOrder.length, 'both engines must project the same number of logical options');
+  assert.deepEqual(mysqlOrder, sqliteOrder, 'the full ordered option set must be identical on both engines');
+
+  // The compared order must actually contain the identities that make the
+  // ordering hard: the fold collision, the original mixed case, the two
+  // customers that share one display name and the customer that owns two
+  // Credit Objects.
+  assert.ok(sqliteOrder.includes(CASE_KEY), 'the mixed-case customer must be part of the compared order');
+  assert.ok(sqliteOrder.includes(UNICODE_KEY), 'the accented customer must be part of the compared order');
+  assert.ok(sqliteOrder.includes(PERCENT_KEY), 'the percent customer must be part of the compared order');
+  assert.ok(sqliteOrder.includes(UNDERSCORE_KEY), 'the underscore customer must be part of the compared order');
+  assert.ok(sqliteOrder.includes(BACKSLASH_KEY), 'the backslash customer must be part of the compared order');
+  assert.equal(
+    sqliteOrder.filter((key) => key.startsWith(`${MULTI_CUSTOMER}:`)).length,
+    2,
+    'the customer with two Credit Objects must contribute two ordered identities',
+  );
+  assert.equal(
+    sqliteOrder.filter((key) => DUPLICATE_CUSTOMERS.some((customer) => key.startsWith(`${customer.id}:`))).length,
+    2,
+    'the two customers that share one display name must contribute two ordered identities',
+  );
+
+  // The collation-unambiguous subset keeps the same relative order as well.
   const sqliteUnambiguous = sqliteOrder.filter((key) => COLLATION_UNAMBIGUOUS_OPTION_KEYS.includes(key));
   const mysqlUnambiguous = mysqlOrder.filter((key) => COLLATION_UNAMBIGUOUS_OPTION_KEYS.includes(key));
   assert.deepEqual(
@@ -486,66 +601,132 @@ test('W11-A-U3-E3-S10 the ordering, the collation and the grouping are measured 
     sqliteUnambiguous,
     'the collation-unambiguous identities must keep the same relative order on both engines',
   );
-  for (const [db, order] of [[sqliteDb, sqliteOrder], [mysqlDb, mysqlOrder]]) {
-    const total = order.length;
-    const paged = [];
-    for (let offset = 0; offset < total; offset += 1) {
-      const page = await options(db, ADMIN, { limit: 1, offset });
-      assert.equal(page.body.total, total);
-      assert.equal(page.body.options.length, 1);
-      paged.push(keyOf(page.body.options[0]));
+
+  // ---- B. the pagination is exactly equal on both engines ----
+  const paginationSlices = [];
+  for (const limit of [1, 2, 3, 5, 7, 13]) {
+    const sqliteSlices = [];
+    const mysqlSlices = [];
+    for (let offset = 0; offset < sqliteOrder.length; offset += limit) {
+      const sqlitePage = await options(sqliteDb, ADMIN, { limit, offset });
+      const mysqlPage = await options(mysqlDb, ADMIN, { limit, offset });
+      assert.equal(sqlitePage.statusCode, 200, `limit=${limit} offset=${offset}`);
+      assert.equal(mysqlPage.statusCode, 200, `limit=${limit} offset=${offset}`);
+      assert.equal(sqlitePage.body.total, mysqlPage.body.total, `limit=${limit} offset=${offset} total`);
+      assert.equal(sqlitePage.body.total, sqliteOrder.length, `limit=${limit} offset=${offset} authorized total`);
+      assert.equal(
+        sqlitePage.body.options.length,
+        mysqlPage.body.options.length,
+        `limit=${limit} offset=${offset} page size`,
+      );
+      sqliteSlices.push(sqlitePage.body.options.map(keyOf));
+      mysqlSlices.push(mysqlPage.body.options.map(keyOf));
     }
-    assert.deepEqual(paged, order, 'the stable pagination must reproduce the ordered set');
-    assert.equal(new Set(paged).size, total, 'the stable pagination must not overlap');
+    const sqliteFlat = sqliteSlices.flat();
+    const mysqlFlat = mysqlSlices.flat();
+    assert.deepEqual(mysqlFlat, sqliteFlat, `limit=${limit} the page slices must be identical on both engines`);
+    assert.equal(new Set(sqliteFlat).size, sqliteOrder.length, `limit=${limit} the pages must not repeat an option`);
+    assert.equal(sqliteFlat.length, sqliteOrder.length, `limit=${limit} the pages must not omit an option`);
+    assert.deepEqual(sqliteFlat, sqliteOrder, `limit=${limit} the pages must rebuild the full ordered sequence`);
+    paginationSlices.push({
+      limit,
+      sliceCount: sqliteSlices.length,
+      first: sqliteSlices[0],
+      last: sqliteSlices[sqliteSlices.length - 1],
+    });
   }
 
+  // ---- C. every approved search probe is identical on both engines ----
   const authorized = sortedKeys(await options(sqliteDb, SELF_ACTOR, { limit: 100 }));
-  const measured = [
-    { label: 'ascii-case-lower', q: 'cus-w11-case' },
-    { label: 'ascii-case-upper', q: 'CUS-W11-CASE' },
-    { label: 'unicode-case-lower', q: 'ångström' },
-    { label: 'unicode-case-exact', q: 'Ångström' },
-    { label: 'accent-folded', q: 'muller' },
-    { label: 'accent-exact-lower', q: 'müller' },
-    { label: 'accent-exact-capital', q: 'Müller' },
-    { label: 'accent-upper-case', q: 'MÜLLER' },
-    { label: 'backslash-escape', q: 'cus-w11-sel\\f' },
-    { label: 'wildcard-percent', q: '%' },
-    { label: 'wildcard-underscore', q: '_' },
+  const probes = [
+    { label: 'ascii-case-lower', q: 'cus-w11-case', expected: [CASE_KEY] },
+    { label: 'ascii-case-upper', q: 'CUS-W11-CASE', expected: [CASE_KEY] },
+    { label: 'unicode-case-lower', q: 'ångström', expected: [UNICODE_KEY] },
+    { label: 'unicode-case-exact', q: 'Ångström', expected: [UNICODE_KEY] },
+    { label: 'accent-folded', q: 'muller', expected: [CASE_KEY] },
+    { label: 'accent-exact-lower', q: 'müller', expected: [CASE_KEY] },
+    { label: 'accent-exact-capital', q: 'Müller', expected: [CASE_KEY] },
+    { label: 'accent-upper-case', q: 'MÜLLER', expected: [CASE_KEY] },
+    { label: 'backslash-escape', q: 'cus-w11-sel\\f', expected: [] },
+    { label: 'wildcard-percent', q: '%', expected: [PERCENT_KEY] },
+    { label: 'wildcard-underscore', q: '_', expected: [UNDERSCORE_KEY] },
   ];
   const findings = {};
-  for (const probe of measured) {
+  for (const probe of probes) {
     const sqliteResult = await options(sqliteDb, SELF_ACTOR, { q: probe.q, limit: 100 });
     const mysqlResult = await options(mysqlDb, SELF_ACTOR, { q: probe.q, limit: 100 });
     assert.equal(sqliteResult.statusCode, 200, probe.label);
     assert.equal(mysqlResult.statusCode, 200, probe.label);
     const sqliteKeys = sortedKeys(sqliteResult);
     const mysqlKeys = sortedKeys(mysqlResult);
+    assert.deepEqual(sqliteKeys, probe.expected, `${probe.label} sqlite must equal the approved expectation`);
+    assert.deepEqual(mysqlKeys, probe.expected, `${probe.label} mysql must equal the approved expectation`);
+    assert.deepEqual(mysqlKeys, sqliteKeys, `${probe.label} mysql must equal sqlite`);
     assert.deepEqual(sqliteKeys.filter((key) => !authorized.includes(key)), [], `${probe.label} sqlite stays authorized`);
     assert.deepEqual(mysqlKeys.filter((key) => !authorized.includes(key)), [], `${probe.label} mysql stays authorized`);
-    assert.equal(sqliteResult.body.total, sqliteKeys.length, `${probe.label} sqlite count`);
-    assert.equal(mysqlResult.body.total, mysqlKeys.length, `${probe.label} mysql count`);
+    assert.equal(sqliteResult.body.total, probe.expected.length, `${probe.label} sqlite count`);
+    assert.equal(mysqlResult.body.total, probe.expected.length, `${probe.label} mysql count`);
     findings[probe.label] = {
       q: probe.q,
+      expected: probe.expected,
       sqlite: sqliteKeys,
       mysql: mysqlKeys,
       divergent: JSON.stringify(sqliteKeys) !== JSON.stringify(mysqlKeys),
     };
   }
-  assert.equal(Object.keys(findings).length, measured.length, 'every measured probe must be recorded');
+  assert.equal(Object.keys(findings).length, probes.length, 'every approved probe must be recorded');
   for (const finding of Object.values(findings)) {
     assert.ok(Array.isArray(finding.sqlite) && Array.isArray(finding.mysql), 'a measured probe keeps both engine results');
   }
+  // A divergence on an approved search dimension is an acceptance failure.
+  const divergentProbes = Object.values(findings).filter((finding) => finding.divergent).map((finding) => finding.label);
+  assert.deepEqual(divergentProbes, [], 'no approved search probe may diverge between the two engines');
+
+  // ---- D. the residual identity collation risk, disclosed and not asserted ----
+  // The exact identity filter compares under the collation of the identity
+  // column. That is the identity domain, not the approved search semantics,
+  // and R-U3-SEARCH-03 keeps the filter an equality comparison. The behaviour
+  // is measured and recorded, it is never asserted to be equal, and the
+  // identity equality policy is not widened here.
+  const caseVariantIdentity = {
+    customerId: 'CUS-W11-SELF',
+    creditObjectType: CREDIT_OBJECT_TYPE,
+    creditObjectId: 'CREDIT-CUS-W11-SELF',
+  };
+  const sqliteIdentity = await options(sqliteDb, SELF_ACTOR, caseVariantIdentity);
+  const mysqlIdentity = await options(mysqlDb, SELF_ACTOR, caseVariantIdentity);
+  assert.equal(sqliteIdentity.statusCode, 200);
+  assert.equal(mysqlIdentity.statusCode, 200);
+
   evidence.findings.collation = {
-    semanticDecision: OPEN_DECISION,
+    semanticDecision: APPROVED_SEARCH_SEMANTICS,
     mysqlFacts,
     probes: findings,
+    divergentProbes,
     sqliteOrder,
     mysqlOrder,
+    fullOrderIdentical: JSON.stringify(sqliteOrder) === JSON.stringify(mysqlOrder),
     collationUnambiguousOrderMatches: JSON.stringify(sqliteUnambiguous) === JSON.stringify(mysqlUnambiguous),
+    paginationSlices,
+    searchKeyColumnDefinitions: { sqlite: sqliteKeyColumns, mysql: mysqlKeyColumns },
+  };
+  evidence.findings.residualIdentityCollation = {
+    risk: RESIDUAL_IDENTITY_COLLATION_RISK,
+    status: 'DISCLOSED_MEASURED_NOT_ASSERTED_EQUAL',
+    dimension: 'the exact identity filter of the selector',
+    requirement: 'R-U3-SEARCH-03 keeps the exact identity filter an equality comparison',
+    note: 'the identity columns are utf8mb4_0900_ai_ci on MySQL and BINARY on SQLite, so a case-variant identity can resolve on one engine and not on the other. This is the identity domain, not the approved search semantics. It is recorded here, it is not part of the approved probe set, and this suite never widens the business identity equality policy.',
+    caseVariantIdentity,
+    sqlite: { total: sqliteIdentity.body.total, options: sqliteIdentity.body.options.map(keyOf) },
+    mysql: { total: mysqlIdentity.body.total, options: mysqlIdentity.body.options.map(keyOf) },
+    enginesAgree: JSON.stringify(sqliteIdentity.body.options.map(keyOf)) === JSON.stringify(mysqlIdentity.body.options.map(keyOf)),
   };
   evidence.cases.S10 = {
-    semanticDecision: OPEN_DECISION,
-    divergentProbes: Object.values(findings).filter((finding) => finding.divergent).map((finding) => finding.label),
+    semanticDecision: APPROVED_SEARCH_SEMANTICS,
+    residualRisk: RESIDUAL_IDENTITY_COLLATION_RISK,
+    fullOrderIdentical: true,
+    divergentProbes,
+    paginationPageSizes: paginationSlices.map((slice) => slice.limit),
+    approvedProbeCount: probes.length,
   };
 });

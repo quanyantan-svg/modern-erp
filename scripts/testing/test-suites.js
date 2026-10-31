@@ -204,6 +204,17 @@ const FULL = [
   'server/inventory-position-wave-a.test.js',
   'server/inventory-position-integration.test.js',
 
+  // W11-A U3 — Demo Seed canonical inventory position identity
+  // (document.md R-U3-INV-01..08, solution.md §37.54.43 §2 and §5). It owns
+  // the physical identity of the inventory rows the Demo Seed creates. It
+  // exists because the Domain 5 inventory suites deliberately suppress the
+  // Demo Seed (NODE_ENV=production), so no existing suite ever observed a
+  // seeded inventory row. Each case creates one disposable temp SQLite and
+  // drives the real inventory writers and the real approval HTTP surface, so
+  // it is deliberately NOT registered in FAST: it does not meet the FAST
+  // criterion of a bounded, database-free regression.
+  'server/inventory-demo-seed-position-identity.test.js',
+
   // ----- V21 Inventory & Warehouse Domain Closure — Wave B mutation contract -----
   // applyInventoryMutation dispatcher + availability model + locks +
   // VMI physical owner dimensional mutation + lock ordering.

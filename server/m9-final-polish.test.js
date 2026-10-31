@@ -21,7 +21,7 @@ let BusinessOverview;
 let AppNavigationProvider;
 
 before(async () => {
-  vite = await createViteServer({ root, server: { middlewareMode: true, hmr: false }, appType: 'custom', logLevel: 'error' });
+  vite = await createViteServer({ root, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom', logLevel: 'error' });
   BusinessOverview = (await vite.ssrLoadModule('/src/pages/business-overview.jsx')).default;
   AppNavigationProvider = (await vite.ssrLoadModule('/src/navigation/AppNavigationContext.jsx')).AppNavigationProvider;
 });

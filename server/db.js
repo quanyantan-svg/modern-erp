@@ -41,6 +41,7 @@ import { migrateInventoryPositionSchema } from './migrations/inventory-position-
 import { migrateSalesCustomerDomain } from './migrations/sales-customer-domain.js';
 import { migrateW11ASelectorSearchKey } from './migrations/sales-customer-wave11-a-selector-search-key.js';
 import { foldSearchText } from './lib/search-fold.js';
+import { computePositionKey } from './lib/inventory-position.js';
 
 export const PERMISSIONS = [
   ['SALES_VIEW', '查看销售商业单据'],
@@ -548,7 +549,25 @@ function createSqliteDatabase(filename) {
   // W11-A U3 — the demo seed runs after the additive search key migration, so
   // the demo customers write their derived search keys in the insert itself
   // and a repeated initialization never breaks an existing customer.
-  if (shouldSeedDemoData()) seedDemoData(db);
+  // The demo seed also writes the canonical inventory position identity in
+  // the insert itself, because the inventory position backfill in
+  // migrateInventoryPositionSchema has already run by this point and can
+  // never reach a row inserted afterwards.
+  if (shouldSeedDemoData()) {
+    try {
+      seedDemoData(db);
+    } catch (error) {
+      // Fail closed: an incomplete demo seed is never reported as a
+      // successful initialization, and the handle is released so the
+      // database file is not left locked.
+      try { db.close(); } catch (_) { /* the original error is the one that matters */ }
+      throw error;
+    }
+    // Read-only detection of a pre-existing abnormal inventory position.
+    // The abnormal rows are preserved and reported; they are never merged,
+    // never deleted and never repaired here.
+    reportAbnormalInventoryPositions(db);
+  }
 
   return db;
 }
@@ -1792,6 +1811,173 @@ function seedSchema(db) {
   ]) insertSubject.run(...s);
 }
 
+// The Demo Seed's own contract, verified independently of the write.
+//
+// INSERT OR IGNORE suppresses every constraint violation, so a suppressed
+// conflict must never be reported as a successful seed. This check reads only:
+// for every demo position it proves that a row carrying the canonical
+// position key exists AND that the row's own dimensions describe that same
+// position. A row that merely carries the key while describing a different
+// logical position does not establish anything, and neither does a missing
+// row. When the seed could not establish its position the state is
+// incomplete and the initialization fails closed instead of reporting
+// success.
+//
+// It never mutates, never merges, never deletes and never rewrites a
+// quantity.
+function verifyDemoSeedPositions(db) {
+  const missing = [];
+  for (const warehouseId of ['warehouse-001', 'warehouse-002']) {
+    for (const productId of ['product-001', 'product-002', 'product-003']) {
+      const positionKey = computePositionKey({ productId, warehouseId });
+      const row = db.prepare(`SELECT id, product_id, warehouse_id, bin_id, owner_type, owner_id,
+          stock_status, lot_id, serial_id
+        FROM inventory WHERE position_key=? LIMIT 1`).get(positionKey);
+      let established = false;
+      if (row) {
+        try {
+          established = computePositionKey({
+            productId: row.product_id,
+            warehouseId: row.warehouse_id,
+            binId: row.bin_id,
+            ownerType: row.owner_type,
+            ownerId: row.owner_id,
+            stockStatus: row.stock_status,
+            lotId: row.lot_id,
+            serialId: row.serial_id,
+          }) === positionKey;
+        } catch (_) {
+          established = false;
+        }
+      }
+      if (!established) missing.push(`${warehouseId}/${productId}`);
+    }
+  }
+  if (missing.length) {
+    throw new Error(
+      'Demo seed failed to establish canonical inventory positions: ' + missing.join(', '),
+    );
+  }
+}
+
+const ABNORMAL_POSITION_SAMPLE_LIMIT = 50;
+
+// Read-only detection of abnormal inventory positions.
+//
+// It issues SELECT statements only. It never writes, so neither a read path
+// nor an initialization can repair, merge or delete an abnormal inventory
+// row. It classifies three observable classes:
+//   1. an active row whose position_key is NULL or empty;
+//   2. an active row whose stored position_key differs from the canonical
+//      identity computed for its own dimensions. This includes the synthetic
+//      `<canonical>:fallback<rowid>` identity that the migration fallback
+//      writes when the canonical key is already taken: it is not the identity
+//      of any logical position and no canonical writer can ever match it;
+//   3. two or more active rows that resolve to the same canonical identity.
+//
+// The canonical identity of a row is computed with the same canonical
+// primitive, from the row's own dimensions. It is never a second algorithm.
+export function detectAbnormalInventoryPositions(db) {
+  const rows = db.prepare(`SELECT id, product_id, warehouse_id, bin_id, owner_type, owner_id,
+      stock_status, lot_id, serial_id, position_key, quantity
+    FROM inventory WHERE active = 1`).all();
+
+  const nullPositionKey = [];
+  const nonCanonicalKey = [];
+  const duplicateCanonical = [];
+  const abnormalIds = new Set();
+  const byCanonical = new Map();
+  let nullCount = 0;
+  let nonCanonicalCount = 0;
+
+  for (const row of rows) {
+    let expected = null;
+    try {
+      expected = computePositionKey({
+        productId: row.product_id,
+        warehouseId: row.warehouse_id,
+        binId: row.bin_id,
+        ownerType: row.owner_type,
+        ownerId: row.owner_id,
+        stockStatus: row.stock_status,
+        lotId: row.lot_id,
+        serialId: row.serial_id,
+      });
+    } catch (_) {
+      // The row's own dimensions are not a legal canonical tuple, so no
+      // canonical writer could ever address this row.
+      expected = null;
+    }
+
+    const stored = row.position_key === null || row.position_key === '' ? null : String(row.position_key);
+    const descriptor = {
+      id: row.id,
+      warehouseId: row.warehouse_id,
+      productId: row.product_id,
+      quantity: row.quantity,
+    };
+
+    if (stored === null) {
+      nullCount += 1;
+      abnormalIds.add(row.id);
+      if (nullPositionKey.length < ABNORMAL_POSITION_SAMPLE_LIMIT) nullPositionKey.push(descriptor);
+    } else if (expected === null || stored !== expected) {
+      nonCanonicalCount += 1;
+      abnormalIds.add(row.id);
+      if (nonCanonicalKey.length < ABNORMAL_POSITION_SAMPLE_LIMIT) {
+        nonCanonicalKey.push({ ...descriptor, stored, expected });
+      }
+    }
+
+    if (expected !== null) {
+      const bucket = byCanonical.get(expected);
+      if (bucket) bucket.push(row.id);
+      else byCanonical.set(expected, [row.id]);
+    }
+  }
+
+  let duplicateCount = 0;
+  for (const [positionKey, rowIds] of byCanonical) {
+    if (rowIds.length < 2) continue;
+    duplicateCount += 1;
+    for (const id of rowIds) abnormalIds.add(id);
+    if (duplicateCanonical.length < ABNORMAL_POSITION_SAMPLE_LIMIT) {
+      duplicateCanonical.push({ positionKey, rowIds });
+    }
+  }
+
+  return {
+    scanned: rows.length,
+    healthy: nullCount === 0 && nonCanonicalCount === 0 && duplicateCount === 0,
+    abnormalRows: abnormalIds.size,
+    counts: {
+      nullPositionKey: nullCount,
+      nonCanonicalKey: nonCanonicalCount,
+      duplicateCanonical: duplicateCount,
+    },
+    nullPositionKey,
+    nonCanonicalKey,
+    duplicateCanonical,
+  };
+}
+
+// Emit the abnormal inventory diagnostic. The abnormal rows are preserved as
+// evidence: they are reported, never merged and never deleted.
+function reportAbnormalInventoryPositions(db) {
+  const report = detectAbnormalInventoryPositions(db);
+  if (!report.healthy) {
+    console.error('[modern-erp] abnormal inventory positions detected: ' + JSON.stringify({
+      scanned: report.scanned,
+      abnormalRows: report.abnormalRows,
+      counts: report.counts,
+      nullPositionKeyIds: report.nullPositionKey.slice(0, 5).map((item) => item.id),
+      nonCanonicalKeyIds: report.nonCanonicalKey.slice(0, 5).map((item) => item.id),
+      duplicateCanonicalKeys: report.duplicateCanonical.slice(0, 5).map((item) => item.positionKey),
+    }));
+  }
+  return report;
+}
+
 function seedDemoData(db) {
   const now = new Date().toISOString();
 
@@ -1840,18 +2026,44 @@ function seedDemoData(db) {
   insertWarehouse.run('warehouse-001', 'WH-001', '深圳总仓', '广东省深圳市南山区', '张经理', now, now);
   insertWarehouse.run('warehouse-002', 'WH-002', '东莞分仓', '广东省东莞市长安镇', '李主管', now, now);
 
-  // V21 — inventory seed rows go in with NULL position_key at this stage;
-  // migrateInventoryPositionSchema runs in the late-migration block and
-  // backfills position_key for every legacy (warehouse_id, product_id)-only
-  // row using the canonical default identity hash. The id column must be
-  // populated explicitly so subsequent position-key aware updates can find
-  // the row by id (TEXT PRIMARY KEY has no auto-increment).
-  const insertInventory = db.prepare('INSERT OR IGNORE INTO inventory(id, warehouse_id, product_id, quantity, updated_at) VALUES (?, ?, ?, ?, ?)');
+  // V21 — the demo inventory rows carry the CANONICAL default position
+  // identity in the insert itself.
+  //
+  // The demo seed runs AFTER the late-migration block, so
+  // migrateInventoryPositionSchema has already executed its position_key
+  // backfill. A row inserted now is therefore never reached by that backfill
+  // and would stay keyless, which leaves the approval writer unable to find
+  // it by position and forces a second active row for the same logical
+  // position. The key is produced by the single canonical primitive
+  // computePositionKey(); the six dimension columns are written explicitly so
+  // that the row's stored dimensions are the literal tuple that was hashed,
+  // rather than a value inherited from a column default.
+  //
+  // The id column is populated explicitly because TEXT PRIMARY KEY has no
+  // auto-increment. INSERT OR IGNORE keeps the seed idempotent: an existing
+  // row is never overwritten, so a real business quantity survives a repeated
+  // initialization, and an already occupied canonical position never gains a
+  // second active fact.
+  const insertInventory = db.prepare(`INSERT OR IGNORE INTO inventory(
+    id, warehouse_id, product_id, quantity, updated_at,
+    position_key, bin_id, owner_type, owner_id, stock_status, lot_id, serial_id, active
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`);
   for (const wh of ['warehouse-001', 'warehouse-002']) {
-    insertInventory.run(`seed-inv-${wh}-001`, wh, 'product-001', wh === 'warehouse-001' ? 20 : 16, now);
-    insertInventory.run(`seed-inv-${wh}-002`, wh, 'product-002', wh === 'warehouse-001' ? 100 : 80, now);
-    insertInventory.run(`seed-inv-${wh}-003`, wh, 'product-003', wh === 'warehouse-001' ? 30 : 22, now);
+    const demoStock = [
+      ['001', 'product-001', wh === 'warehouse-001' ? 20 : 16],
+      ['002', 'product-002', wh === 'warehouse-001' ? 100 : 80],
+      ['003', 'product-003', wh === 'warehouse-001' ? 30 : 22],
+    ];
+    for (const [seq, productId, quantity] of demoStock) {
+      insertInventory.run(
+        `seed-inv-${wh}-${seq}`,
+        wh, productId, quantity, now,
+        computePositionKey({ productId, warehouseId: wh }),
+        null, 'ENTERPRISE', null, 'AVAILABLE', null, null,
+      );
+    }
   }
+  verifyDemoSeedPositions(db);
 
   db.prepare("INSERT OR IGNORE INTO sales_orders (id,order_no,customer_id,status,total_cents,remark,creator_id,submitted_at,created_at,updated_at) VALUES ('order-demo-001','SO-DEMO-001','customer-001','SUBMITTED',684300,'首张演示订单，等待销售主管审核','user-sales',?,?,?)").run(now, now, now);
   db.prepare("INSERT OR IGNORE INTO sales_order_items (id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES ('item-demo-001','order-demo-001','product-001',2,259900,519800,1)").run();

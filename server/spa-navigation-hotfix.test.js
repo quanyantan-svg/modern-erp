@@ -24,7 +24,7 @@ let relationshipPage;
 let orderWorkflowStages;
 
 before(async () => {
-  vite = await createViteServer({ root, server: { middlewareMode: true, hmr: false }, appType: 'custom', logLevel: 'error' });
+  vite = await createViteServer({ root, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom', logLevel: 'error' });
   ({ AppLink, AppNavigationProvider } = await vite.ssrLoadModule('/src/navigation/AppNavigationContext.jsx'));
   MobileWorkflowProgress = (await vite.ssrLoadModule('/src/components/MobileWorkflowProgress.jsx')).default;
   ({ RelationshipSections, relationshipPage } = await vite.ssrLoadModule('/src/pages/logistics-finance.jsx'));

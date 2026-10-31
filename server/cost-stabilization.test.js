@@ -71,7 +71,7 @@ describe('Cost frontend modal behavior', () => {
   let ui;
 
   before(async () => {
-    vite = await createViteServer({ root: resolve('.'), server: { middlewareMode: true }, appType: 'custom' });
+    vite = await createViteServer({ root: resolve('.'), server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom' });
     ui = await vite.ssrLoadModule('/src/pages/treasury-cost.jsx');
   });
   after(async () => { await vite.close(); });

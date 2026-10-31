@@ -14710,3 +14710,627 @@ Acceptance/Freeze, release or deploy occurred. The additive compatibility implem
 closed at focused scope but cannot be accepted while the independent FAST failure remains unresolved.
 
 **Implementation status: `W11_A_U3_SEARCH_SEMANTICS_IMPLEMENTATION_BLOCKED`.**
+
+## W11-A U3 FAST Dual-Blocker Closure — Bounded Requirement Amendment (2026-10-30)
+
+### 1. Authorization, baseline and scope
+
+The user authorized four consecutive governance stages under AGENTS.md §4.0 for the independent GitHub
+source review of the W11-A U3 work: a bounded root cause audit, this bounded Requirement amendment, a
+bounded Design amendment and a complete implementation and regression plan, ending in a hard stop. The
+authorization permits changes only to `document.md`, `solution.md` and the real-date append-only log. It
+does not authorize production or test code changes, migration execution, SQLite or MySQL database
+changes, a FAST or FULL rerun, a build, a Git write, Acceptance/Freeze, release or deployment. The real
+MySQL verification remains separately authorized.
+
+The verified baseline is branch `review/w11a-u3-fast-blocked-20261030`, HEAD
+`60f3fbd169d7b43bbae3824b10b538edef4aeec1`, package version `1.6.2`, empty index and a clean working
+tree. The GitHub review snapshot is WIP, NOT ACCEPTED and NOT FROZEN.
+
+The two blockers under closure are:
+
+1. the Demo Seed inventory regression that breaks the inventory-check approval assertion, and
+2. the Vite middleware-server port contention that breaks the FAST gate.
+
+The requirement identities established by this amendment are `R-U3-INV-01` through `R-U3-INV-08` for the
+inventory subject and `R-U3-VITE-01` through `R-U3-VITE-05` for the Vite regression subject.
+
+### 2. Audited failure identity and root cause
+
+#### 2.1 The inventory failure
+
+The exact failed assertion is `server/mobile-approval-center.test.js:195`, `inventory check approve
+uses the transactional stock adjustment`, which expected `22` and observed `20`. The enclosing suite
+`M3R actions reuse existing state machines` failed; the focused file run reproduces 77 pass and exactly
+1 fail with `expected: 22, actual: 20`.
+
+The root cause is an initialization-order regression introduced by W11-A U3. Before U3, the Demo Seed
+ran inside `seed(db)`, which executes before the late-migration block, so the demo inventory rows
+existed when `migrateInventoryPositionSchema(db)` performed its `position_key` backfill and received
+their canonical keys. U3 moved `seedDemoData(db)` out of `seed(db)` to `server/db.js:551`, after
+`migrateInventoryPositionSchema(db)` at `server/db.js:516`, so the demo inventory rows are now inserted
+after the backfill has already run. The demo insert at `server/db.js:1849` writes only
+`id, warehouse_id, product_id, quantity, updated_at` and never writes `position_key`, so the six demo
+inventory rows are created with a NULL `position_key` and are never backfilled on the fresh
+initialization path.
+
+The measured physical consequence, reproduced on a disposable SQLite database, is:
+
+- the fresh seeded database holds six active inventory rows and all six carry `position_key = NULL`;
+- the canonical default identity for each of the six rows is computable and differs from the stored
+  value in every case;
+- the approval writer `setInventoryQuantity` resolves the canonical default position, finds no row
+  carrying that `position_key`, and therefore inserts a second active inventory row for the same logical
+  position instead of updating the seeded row;
+- the `(warehouse_id, product_id)` read therefore observes the stale seeded quantity `20` while the
+  newly inserted canonical row carries `22`, and one logical position now holds two active inventory
+  facts.
+
+The failure is therefore a genuine physical inventory defect and not a test-query ambiguity. The
+existing Domain 5 inventory suites never observed it because
+`server/phase-e-inventory-approve.test.js` and `server/phase-e-inventory-migration.test.js` deliberately
+set `NODE_ENV=production` and therefore exclude the Demo Seed from their fixtures.
+
+The reopen path does not repair the defect. A fresh database that is reopened without an approval does
+receive the correct canonical keys, because the migration backfill re-runs and no canonical-key conflict
+exists. A database that was already approved and therefore already holds a duplicate does not: the
+backfill cannot assign the canonical key because the unique index already holds it, and its documented
+fallback writes a synthetic non-canonical key of the form `<canonical key>:fallback<rowid>`. That
+synthetic identity is not produced by the canonical primitive, is not the identity of any logical
+position, and can never be matched by a canonical writer.
+
+#### 2.2 The Vite failure
+
+The FAST gate emits `WebSocket server error: Port 24678 is already in use`. In the installed Vite
+7.3.6, `config.server.ws === false` is the only configuration that creates no WebSocket listener at
+all. `hmr: false` alone does not prevent the listener: the middleware mode passes a null HTTP server
+into the WebSocket factory, the factory's internal server selection therefore yields a falsy value, the
+factory takes its fallback branch, creates a real HTTP server and listens on the fixed default HMR port
+24678. Every middleware-mode Vite instance in the test graph that does not set `ws: false` is a port
+binder, and independent test-file processes therefore compete for the same port.
+
+### 3. R-U3-INV-01 — The canonical position identity of the Demo Seed
+
+Every active inventory row created by the Demo Seed must carry a `position_key` that is produced by the
+single canonical primitive `computePositionKey()` exported by `server/lib/inventory-position.js`. A
+second position-key algorithm, a re-implementation of the tuple normalization, a hand-written hash or a
+locally derived digest are all prohibited. The canonical primitive and the frozen Domain 5 contract are
+not modified by this amendment.
+
+### 4. R-U3-INV-02 — No active inventory row without a legal position identity
+
+A fresh database initialization and a reopen of an existing database must both leave zero active
+inventory rows whose `position_key` is NULL or empty. The Demo Seed is a permitted initialization
+writer and may not create a row that the canonical position identity cannot express. The canonical
+dimension tuple of a seeded row is the default identity: `owner_type = ENTERPRISE`, `owner_id = NULL`,
+`stock_status = AVAILABLE`, `bin_id = NULL`, `lot_id = NULL`, `serial_id = NULL`, `active = 1`.
+
+### 5. R-U3-INV-03 — Exactly one canonical active position per logical position
+
+Two or more active inventory rows must never describe the same canonical position identity. This
+applies to the seeded rows, to the rows produced by the approval writer and to the rows produced by a
+repeated initialization. The Demo Seed may not create a second active row for a position that already
+holds an active fact, and the approval writer must therefore find and update the seeded row instead of
+inserting a parallel row.
+
+### 6. R-U3-INV-04 — Repeated initialization never overwrites a real business quantity
+
+The Demo Seed must be idempotent. Re-running the initialization against a database that already carries
+the seeded rows, including after an approved inventory adjustment has changed their quantity, must not
+overwrite, restore or reset that quantity, and must not create an additional row. The canonical key
+uniqueness constraint is the authority that prevents a parallel row when the seeded identity already
+exists under a different physical row identity.
+
+### 7. R-U3-INV-05 — The approval, transaction, audit, movement and valuation contract is unchanged
+
+The inventory-check approval must continue to run inside its transaction, must continue to re-read the
+authoritative inventory state, must continue to write its audit record, its tracked movement, its
+inventory transaction, its valuation movement and its system voucher, and must continue to fail closed
+when the authoritative state has drifted. The correction is confined to the identity written by the
+initialization path. The frozen inventory domain primitives, including `server/lib/stock.js`,
+`server/lib/inventory-position.js`, `server/migrations/inventory-position-schema.js` and the approval
+handler in `server/app.js`, are not modified.
+
+### 8. R-U3-INV-06 — A read never repairs inventory
+
+No read path, list endpoint, report or approval query may detect an abnormal inventory position and
+then repair, merge, backfill or delete it. A read may observe and report, and never writes.
+
+### 9. R-U3-INV-07 — Existing abnormal inventory is detected, never merged and never deleted
+
+An existing database that already carries an abnormal inventory position must be detected and reported.
+The detection must cover at least the three observable classes:
+
+1. an active inventory row whose `position_key` is NULL or empty;
+2. an active inventory row whose stored `position_key` differs from the canonical identity computed by
+   the canonical primitive for its own dimensions, which includes the synthetic
+   `<canonical key>:fallback<rowid>` identity produced by the migration fallback;
+3. two or more active inventory rows that resolve to the same canonical position identity.
+
+The detection is read-only. It must not merge the duplicates, must not delete a row, must not rewrite a
+`position_key` and must not change any quantity. The detection must not be reachable from a read
+endpoint and must not be executed as a repair during an initialization that is otherwise allowed to
+succeed. An abnormal existing database therefore keeps its abnormal rows, and the operator learns about
+them through the reported diagnostic.
+
+### 10. R-U3-INV-08 — The inventory business identity is unchanged
+
+The correction does not change the inventory business identity, the canonical position tuple, the
+dimension semantics, the owner validation, the stock-status validation, the bin validation, the frozen
+Domain 5 contract, the valuation semantics or the accounting semantics. No new business fact, no new
+schema column, no new constraint and no new migration is introduced by this amendment. The existing
+migration backfill remains the only writer of `position_key` for pre-existing rows.
+
+### 11. R-U3-VITE-01 — No middleware-mode Vite instance in the test graph binds a TCP port
+
+Every middleware-mode Vite server instance created by any test in the repository test graph must be
+configured so that it creates no WebSocket listener and therefore binds no TCP port. In the installed
+Vite 7.3.6 the only such configuration is `server.ws: false`, and it must be accompanied by
+`server.hmr: false` so that the HMR client is not configured against a transport that does not exist.
+
+### 12. R-U3-VITE-02 — The call-site audit is complete
+
+Every Vite middleware server initialization point in the repository test graph must be enumerated and
+classified, and every enumerated instance must be either already free of a port bind or brought to the
+free state. An instance that is not registered in the FAST suite must not be exempt: the FULL gate runs
+the same independent test-file processes, so a remaining port binder in a FULL-only file reproduces the
+same collision there. The audit must record the file, the line, the suite membership and the before and
+after configuration of every instance.
+
+### 13. R-U3-VITE-03 — The correction is configuration-only
+
+The correction is limited to the middleware server options of the enumerated instances. It must not
+upgrade Vite, must not modify `vite.config.js`, must not change or reassign a port, must not reduce the
+test concurrency, must not change an assertion, must not skip or downgrade a test and must not alter
+any production source file.
+
+### 14. R-U3-VITE-04 — The exact target configuration
+
+Every enumerated instance that requires correction receives `server: { middlewareMode: true, hmr: false,
+ws: false }`. The existing `appType` and `logLevel` options of each instance are preserved. An instance
+that already satisfies the target is left untouched.
+
+### 15. R-U3-VITE-05 — The inventory assertion expectation is not renegotiated
+
+The failing inventory assertion keeps its expectation. The expected value `22` is the correct business
+outcome of an approved inventory check on a seeded quantity of `20` with a difference of `2`. The
+assertion may not be changed to `20`, may not be weakened, may not be skipped and may not be
+downgraded. The production defect is corrected, not the expectation. A correction that only changed the
+test read, for example by making the test select the canonical row explicitly, is prohibited while a
+non-canonical inventory row remains in the database.
+
+### 16. Boundary, prohibitions and the acceptance obligation
+
+The following are prohibited in the future implementation of this amendment:
+
+- modifying the frozen inventory domain primitives, the canonical position primitive, the inventory
+  migration, the approval handler or any other production module outside the approved whitelist;
+- introducing a second position-key algorithm;
+- performing the Demo Seed through an inventory mutation that accumulates a quantity, because the seed
+  is not idempotent under accumulation;
+- moving the Demo Seed back to its pre-U3 position and thereby breaking the additive Selector Search
+  Key migration, whose own writer contract requires the demo customers to write their derived search
+  keys in the insert;
+- repairing, merging or deleting abnormal inventory during a read or during an initialization;
+- changing the expectation of the failing inventory assertion;
+- adding a new migration module, a new schema column, a new production endpoint or a new inventory
+  business rule;
+- an unapproved expansion of the implementation whitelist during the implementation itself.
+
+The acceptance obligation is the seventeen-item matrix recorded in the following Design section, with
+one item per letter from `A` to `Q`. The future implementation must produce the exact physical
+inventory evidence, not a test-only approximation of it.
+
+### 17. Open decisions
+
+No business decision is left open by this amendment. The customer-name case and accent semantics, the
+literal search escape semantics and the residual identity-domain collation difference recorded by the
+earlier U3 stages remain exactly as they were and are not addressed, changed or resolved here. The
+W11-A U3 Final Freeze stays blocked by those open decisions and by this closure being unaccepted.
+
+## W11-A U3 FAST Dual-Blocker Closure — Implementation Evidence (2026-10-30)
+
+### 1. Authorization and boundary
+
+The user authorized one consecutive bounded Implementation under AGENTS.md §4.0: the Demo Inventory Seed
+canonical position fix, the existing invalid inventory detection, the remaining Vite middleware
+corrections, the new inventory seed regression suite, the FULL suite registry update, the focused
+regression, FAST, FULL, the build, the Edge browser preliminary UAT and the documentation evidence,
+ending in a hard stop. Real MySQL, a Git write, Acceptance/Freeze, Release and Deploy were not
+authorized and did not happen.
+
+The baseline was branch `review/w11a-u3-fast-blocked-20261030`, HEAD
+`60f3fbd169d7b43bbae3824b10b538edef4aeec1`, version `1.6.2` and an empty index. The WIP commit remains
+the traceable parent baseline.
+
+### 2. The exact fourteen-path implementation whitelist
+
+The whitelist was extracted item by item from `solution.md` §37.54.43 §4 and executed exactly. The
+changed-path set after the implementation is an exact match against the approved list:
+
+| # | Path | Action | Result |
+| --- | --- | --- | --- |
+| 1 | `server/db.js` | modify | canonical demo position, independent seed verification, read-only detection |
+| 2 | `server/spa-navigation-hotfix.test.js` | modify | `ws: false` added |
+| 3 | `server/mobile-approval-center.test.js` | modify | `ws: false` added |
+| 4 | `server/mobile-application-launcher.test.js` | modify | `ws: false` added |
+| 5 | `server/cost-stabilization.test.js` | modify | `hmr: false` and `ws: false` added |
+| 6 | `server/m9-final-polish.test.js` | modify | `ws: false` added |
+| 7 | `server/v14-e7-two-level-business-overview.test.js` | modify | `ws: false` added |
+| 8 | `server/v16-p1-mobile-enterprise-foundation.test.js` | modify | `ws: false` added |
+| 9 | `server/v16-p11-mobile-enterprise-visual-refinement.test.js` | modify | `ws: false` added |
+| 10 | `server/inventory-demo-seed-position-identity.test.js` | new | 16 cases, 4 suites, registered in FULL only |
+| 11 | `scripts/testing/test-suites.js` | modify | one new FULL entry |
+| 12 | `document.md` | append | this record |
+| 13 | `solution.md` | append | §37.54.44 |
+| 14 | `log/2026-10-30.md` | append | the append-only development record |
+
+No fifteenth path was created or modified. The `server/decision-reports.test.js` finding recorded in
+§6 is disclosed and deliberately left untouched.
+
+### 3. The Demo Seed root cause and the physical before/after
+
+The root cause was the W11-A U3 initialization reorder: `seedDemoData(db)` runs after
+`migrateInventoryPositionSchema(db)`, and the demo inventory insert never wrote `position_key`, so the
+six seeded rows could never be reached by the migration backfill.
+
+The measured physical state before the correction, on a disposable SQLite database through the
+production `createDatabase` entry point: six active inventory rows, all six with `position_key = NULL`;
+the approval writer unable to find the seeded row by canonical position and therefore inserting a
+second active row for the same logical position; the approval assertion observing the stale `20`
+instead of `22`; one logical position holding two active inventory facts.
+
+The measured physical state after the correction: six active inventory rows, all six carrying the
+canonical `position_key` computed by the frozen primitive from their own dimensions, all six storing
+exactly the canonical default dimension tuple; the approval updating the seeded row
+`seed-inv-warehouse-001-001` in place from `20` to `22`; exactly one active row for the logical
+position and no second physical fact; zero NULL position keys.
+
+The correction writes the position key and the six dimension columns explicitly, so the row's stored
+dimensions are the literal tuple that was hashed rather than a value inherited from a column default.
+The key is produced by `computePositionKey()` from the single canonical primitive; no second identity
+algorithm was introduced. The seed remains idempotent under `INSERT OR IGNORE` and was never performed
+through an accumulating stock writer, so it writes no inventory mutation log, no inventory transaction
+and no valuation movement.
+
+### 4. Independent verification and fail-closed behavior
+
+`INSERT OR IGNORE` suppresses every constraint violation, so the seed carries an independent
+verification that reads the physical state after its own write and proves that every demo position is
+materialised by a row whose own dimensions describe that position. When the seed cannot establish its
+position, the initialization fails closed instead of reporting success, and the database handle is
+released so the file is not left locked. A genuine SQL error still propagates and aborts the
+initialization.
+
+### 5. Existing abnormal inventory state
+
+The read-only detection classifies three observable classes: an active row whose `position_key` is NULL
+or empty; an active row whose stored key differs from the canonical identity computed for its own
+dimensions, which is what detects the synthetic `<canonical>:fallback<rowid>` identity; and two or more
+active rows that resolve to the same canonical identity. It issues `SELECT` statements only. It never
+merges, never deletes, never rewrites a key and never changes a quantity.
+
+The measured historical behavior:
+
+- a legacy NULL position key with no canonical conflict is backfilled by the existing approved migration
+  on reopen and produces exactly one physical inventory fact, never two;
+- a legacy duplicated position is detected and reported, is never merged, never deleted, the two
+  quantities are never summed and never overwritten, no stocktake, adjustment or canonical mutation
+  flow is fabricated, and the stale fact keeps a non-canonical identity that no canonical writer can
+  match;
+- the abnormal rows are preserved as evidence and reported through a structured diagnostic.
+
+### 6. The Vite middleware instances — a newly discovered twelfth instance
+
+The approved Design enumerated eleven middleware-mode Vite instances in ten test files. The
+implementation is required to statically re-check all of them, and that re-check found **twelve**
+instances in **eleven** files.
+
+The twelfth instance is `server/decision-reports.test.js:831`, which creates its server through a
+dynamic `(await import('vite')).createServer({ root: repoRoot, server: { middlewareMode: true, hmr:
+false }, appType: 'custom', logLevel: 'error' })` call. The Design's enumeration was built from the
+static `createServer as createViteServer` alias and therefore did not match it.
+
+The instance is registered in FULL only, so it never contributed to the recorded FAST failure. It was
+**not modified**: it is outside the approved fourteen-path whitelist, the authorization forbids adding
+a fifteenth path and forbids modifying unauthorized files, and it explicitly forbids repairing a
+WebSocket problem in an unauthorized file.
+
+The measured consequence of leaving it unchanged: with the other eleven corrected, this instance is the
+sole holder of port 24678, so it produced no conflict. The concurrent eleven-file Vite run, the FAST
+gate and the FULL gate each recorded **zero** port 24678 diagnostics, and the port was free before and
+after the run.
+
+The residual risk is real and is registered here: the instance remains a port binder, so any future
+middleware-mode Vite test file that omits `ws: false` would collide with it. Closing it requires a
+bounded Requirement and Design amendment that adds exactly one path to the whitelist. It is not a
+product defect and it does not affect any business contract.
+
+### 7. The previously failing FULL-only regression
+
+The implementation audit found that `server/inventory-position-integration.test.js` was **already
+failing** before this correction: its case `inventory additive columns present + position_key
+backfilled` asserts that no inventory row carries a NULL or empty position key, and the demo seed
+created six such rows. The file is registered in FULL only, which is why the FAST gate never surfaced
+it and why the last completed FULL run predates the U3 reorder. The correction restores that frozen
+Domain 5 contract and the case now passes.
+
+### 8. The new regression suite and the suite registry
+
+`server/inventory-demo-seed-position-identity.test.js` is registered in **FULL only**, because it
+creates disposable SQLite databases and drives the real writers and the real approval HTTP surface,
+and therefore does not meet the FAST criterion of a bounded, database-free regression. Its sixteen
+cases cover the fresh seed, the canonical key equality, the canonical dimension tuple, the zero-NULL
+rule, the 20 to 22 approval, the single canonical active position, the transaction, audit, valuation
+and voucher consistency, the reopen and repeated bootstrap idempotency, the legacy NULL, duplicate and
+synthetic fallback detection, the read-only guarantee of the detection and the fail-closed seed.
+
+The approval case reads the canonical position by its position key and asserts the original business
+expectation of `22`; it never manufactures the quantity, never changes the expectation to `20` and
+never weakens an existing assertion.
+
+### 9. Gate results
+
+| Gate | Result |
+| --- | --- |
+| Focused F1 — inventory, 13 files | 223 tests, 25 suites, 223 pass, 0 fail, exit 0 |
+| Focused F2 — all Vite files, 11 files, concurrent | 389 tests, 55 suites, 389 pass, 0 fail, exit 0, zero port 24678 diagnostics, port free before and after |
+| Focused F3 — U3 preservation, 15 files | 322 tests, 322 pass, 0 fail, exit 0 |
+| FAST | 500 tests, 37 suites, 500 pass, 0 fail, 0 cancelled, 0 skipped, 0 todo, exit 0, zero port diagnostics |
+| FULL | 3102 tests, 363 suites, 3102 pass, 0 fail, 0 cancelled, 0 skipped, 0 todo, exit 0, zero port diagnostics, 200 files |
+| Build | exit 0, Vite production build succeeded |
+| `git diff --check` | pass, no whitespace error |
+| Whitelist verification | exact match, 14 of 14 |
+| Index | empty |
+| Edge browser preliminary | exit 0, B01 through B09 all PASS, 32 responsive entries, 71 requests |
+
+The FAST count of 500 is the original baseline count and was not reduced, reclassified or avoided.
+
+### 10. The browser preliminary coverage boundary
+
+The existing approved Edge browser harness was executed unmodified against the real Vite production
+build, the real HTTP server, a disposable SQLite database and the real identities. Its B01 through B09
+matrix, the pagination case, the deep link, detail, refresh, back and forward case, the stale-read
+protection cases and the 320, 390, 430 and 680 responsive matrix all pass.
+
+The Unicode customer-name search, the literal `%`, `_` and backslash search semantics and the
+deterministic ordering are **not** covered by that harness. They belong to the search-semantics
+browser plan recorded in `solution.md` §37.54.39 and §37.54.40, whose production implementation was
+never completed, and the harness path is outside the authorized whitelist, so it was not modified to
+add them. This is disclosed as an uncovered scope, not claimed as a pass.
+
+### 11. Frozen protection and the remaining MySQL boundary
+
+Every frozen identity is byte-identical: `server/modules/credit-check.js`
+`6a7f322ae81f860b7066181244c786174bf5dfed5bfcf796db1f32483391c7c1`, `server/modules/credit-query.js`
+`24889d82a602cd2cd11807dd11807bbfa163f584b7fb6c13f55f62cdb0d04133b`, `server/modules/credit-scope.js`
+`f31033bd75520643c50202c18f640440aacbcde892595efad7d4e0ba2041a3bc`,
+`server/modules/credit-special-approval.js`
+`04594b3dc01240c5b3addddf50897fbeab54802daf9fbd7d49c5e36cccf289c4`,
+`server/lib/inventory-position.js` `970a21e0deeedd2ecba447b15068ecf6392a7a2e097b1ca887954ab40fce0a37`,
+`server/lib/stock.js` `9c35beae6e57ebba4e16961ec559e1cd0d113b6ed0684b05749cb6fce8e8d098` and
+`server/migrations/inventory-position-schema.js`
+`478520f8f3a327b526dc3687eccd0f0753831aa729a98ff7baee1eef588ee224`.
+
+No real MySQL was contacted, no MySQL gate was executed and no MySQL schema was reset, modified or
+cleaned. The six MySQL risk classes of the authorization remain open for a separately authorized
+real-MySQL verification: the fresh snapshot and demo seed, the existing legacy NULL position, the
+existing duplicate position, the synthetic fallback position, the U3 search key collation and
+backfill, and the Wave 9 replay compatibility. A local SQLite pass is not a MySQL pass.
+
+### 12. Open decisions
+
+No business decision was taken in this implementation. The customer-name case and accent semantics, the
+literal search escape semantics and the residual identity-domain collation difference remain open and
+unchanged, so the W11-A U3 Final Freeze stays blocked by them.
+
+## W11-A U3 Final Acceptance Readiness — Bounded Residual Risk Requirement Amendment (2026-10-30)
+
+### 1. Authorization, baseline and boundary
+
+The user authorized one continuous stage: a Final Acceptance Readiness Audit, a bounded Residual Risk
+Requirement amendment for a real requirement gap only, and a bounded Design amendment for a confirmed
+gap, ending in a hard stop. No Implementation, no real MySQL, no Git write and no Final Acceptance or
+Freeze was authorized, and none occurred.
+
+Baseline: branch `review/w11a-u3-fast-blocked-20261030`, HEAD
+`60f3fbd169d7b43bbae3824b10b538edef4aeec1`, version `1.6.2`, empty index, the seventeen authorized
+changed paths preserved. All completed gate evidence is preserved and is not re-opened, and none of it is
+reclassified as failed: FAST 500 of 500, FULL 3102 of 3102, the build, the Edge browser B01 to B12, the
+MySQL Selector S01 to S10 at 10 of 10, the S04 Unicode and literal search, the S10 full ordering and
+pagination parity, the protected cleanup and the unchanged frozen SHA set. No completed gate result is
+extended into an Inventory Domain MySQL acceptance.
+
+The audit found **one real requirement gap**: no Requirement obliges the canonical Demo Inventory
+position identity to be verified on the live MySQL target. R-U3-INV-01 to R-U3-INV-08 define that
+obligation. The Exact Identity Collation risk was audited against the real production code and is
+**already disposed of** by the approved Requirement taxonomy, so no second Requirement is created for it;
+R-U3-INV-06 records that audit conclusion and its acceptance obligation.
+
+### 2. R-U3-INV-01 — The Fresh MySQL Demo Inventory identity must be verified on the live target
+
+The local SQLite proof establishes the Demo Seed canonical position contract, but the MySQL side is a
+separate physical system with its own column types, its own collations and its own snapshot copy, and it
+is unverified. The canonical position identity of the Demo Seed shall therefore be verified on the live
+protected MySQL target, in the same disposable environment and under the same protected machinery as every
+other MySQL acceptance.
+
+### 3. R-U3-INV-02 — The verification is an independent protected gate
+
+The verification shall be an independent protected gate with its own campaign identity, its own suite
+identity, its own lease and its own evidence directory. It shall not be added to the closed Selector E3
+suite S01 to S10, it shall not alter any of those test identities, and it shall not modify the protected
+runner, the protected launcher, the credential store or the identity baseline. The machine-wide gate lock
+shall continue to serialise it against every other gate on the same target.
+
+### 4. R-U3-INV-03 — The eight acceptance cases
+
+The verification shall assert exactly the following eight cases, and every case shall fail on any
+difference:
+
+| Case | Subject | Assertion |
+| --- | --- | --- |
+| M-INV-01 | the fresh MySQL Demo Inventory | exactly six demo inventory rows exist and each carries a canonical `position_key` |
+| M-INV-02 | the key against the row's own dimensions | the key recomputed by the canonical primitive from the row's own database dimension tuple is byte-identical to the persisted key |
+| M-INV-03 | the key hygiene | no active row carries a NULL, an empty or a synthetic `<canonical>:fallback<rowid>` key |
+| M-INV-04 | the logical position uniqueness | no logical inventory position holds more than one active row |
+| M-INV-05 | the approval effect | an approved inventory check moves the seeded canonical position from 20 to 22 and updates the original canonical row in place, creating no second row |
+| M-INV-06 | the approval write set | the inventory transaction, the audit record, the valuation movement and the accounting voucher are written and mutually consistent |
+| M-INV-07 | the idempotency | a reopen and a repeated initialization preserve the real quantity and add no row |
+| M-INV-08 | the cleanup | the five object categories are zero after the campaign |
+
+The fixture shall be created by the real production writers and the approval shall be driven through the
+real HTTP surface and its real state machine. The comparison shall never be reduced to a subset, the
+fixture shall never be shrunk to manufacture a pass and no difference shall be filtered away.
+
+### 5. R-U3-INV-04 — The historical abnormal states are classified and never repaired
+
+The verification covers the **fresh** bootstrap only. It shall never be read as a historical inventory
+remediation result. The legacy NULL position, the duplicate canonical position, the synthetic fallback
+position and the existing inventory movements and valuations remain registered risks.
+
+Those historical states may only be safely identified and risk-classified. Automatic merging, automatic
+deletion, automatic key rewriting, quantity overwriting, quantity summing and the fabrication of
+stocktake or adjustment movements are prohibited. The read-only detection is the only permitted handling
+of an existing abnormal row, and the frozen Inventory Position migration shall not be modified to
+eliminate a symptom.
+
+### 6. R-U3-INV-05 — The cleanup contract
+
+The verification shall satisfy the same five-class zero-object cleanup contract as every other protected
+campaign, and a non-zero category fails the gate. No manual cleanup may be used to turn a failed result
+into a pass.
+
+### 7. R-U3-INV-06 — The exact identity collation is an accepted residual
+
+The exact identity filter of the Credit Selector compares the customer identity, the Credit Object type
+and the Credit Object identity for equality under the collation of the identity columns, which is case-
+and accent-insensitive on MySQL and byte-sensitive on SQLite. The audit established that:
+
+1. the divergence is confined to the exact identity filter. The free-text search compares the derived,
+   byte-exact search key columns with an explicit escape clause, and it is engine-consistent, which the
+   S04 and S10 results prove with zero divergent probes;
+2. the comparison that differs is the equality on the customer identity and the Credit Object identity
+   under the identity column collation. The Credit Object type cannot differ, because the input is
+   normalized to upper case by the production input contract;
+3. no wrong business identity can be returned. On MySQL the customer identity primary key, the customer
+   code unique key and the Credit lock anchor key unique key are all case-insensitive, so two business
+   identities differing only by case cannot coexist, and the anchor shape guard compares the stored shape
+   with byte equality, so a case-variant identity is refused on write with a conflict. On SQLite the
+   primary key is byte-sensitive, so the comparison is correspondingly exact. Each engine therefore
+   resolves inside an unambiguous identity space;
+4. the authorization boundary is unaffected. The read scope predicate is conjoined in the same where
+   clause and gates every candidate row, its bound value is derived from the server's own salesperson
+   record and is written from that same value into the scope key, and the denied mode refuses before any
+   query runs;
+5. no unauthorized disclosure is possible, because the identity predicate can only narrow the already
+   authorized relation. The neutral response for an unknown and for an unauthorized identity stays
+   byte-identical on both engines;
+6. the business Requirement defines the exact identity filter only as an equality comparison and does not
+   define a case policy for it. The approved parity strictness taxonomy already classifies a collation
+   behaviour that the business contract does not define as an acceptable database implementation
+   difference, with the disposition that it is measured on both engines, reported, and never widens the
+   authorized set. That disposition is satisfied.
+
+The divergence is therefore an acceptable and documented residual limitation, and it is accepted as such
+only with an explicit business risk acceptance. No engine shall be declared the business authority, the
+approved Unicode Search Fold and the literal search contract shall not be modified, and the exact identity
+filter shall remain an equality comparison.
+
+### 8. R-U3-INV-07 — The prohibition on widening the acceptance
+
+A pass of the Selector E3 gate or of the Demo Inventory verification shall never be interpreted as an
+Inventory Domain MySQL acceptance, as a historical inventory remediation result, or as a W11-A MySQL
+acceptance. The remaining MySQL inventory risks stay registered.
+
+### 9. R-U3-INV-08 — The scope of this amendment
+
+This amendment creates no new business fact, no new schema, no new migration, no new business rule and
+no new production behaviour. It creates one acceptance obligation and one acceptance disposition, and it
+defers the historical inventory remediation strategy to a separate Requirement of its own.
+
+## W11-A U3 Demo Seed Inventory MySQL Gate — Implementation Result, Residual Acceptance and Historical Disposition (2026-10-31)
+
+### 1. Authorization, baseline and boundary
+
+The user authorized one stage: the Implementation of the six registered paths of `solution.md §37.54.46.6`, the
+acceptance of the Exact Identity Collation residual as an explicit business risk, the registration of the
+historical inventory remediation direction, and exactly one protected real-MySQL execution of the new independent
+Demo Inventory gate. No Git write, no Acceptance and no Freeze were authorized, and none occurred.
+
+Baseline: branch `review/w11a-u3-fast-blocked-20261030`, HEAD
+`60f3fbd169d7b43bbae3824b10b538edef4aeec1`, version `1.6.2`, empty index, the seventeen authorized changed paths
+preserved. The completed gate evidence is preserved and is not re-opened, and none of it is reclassified as
+failed: FAST 500 of 500, FULL 3102 of 3102, the build, the Edge browser B01 to B12, the MySQL Selector S01 to
+S10, the S04 Unicode and literal search, the S10 full ordering and pagination parity, the protected cleanup and
+the unchanged frozen SHA set.
+
+### 2. R-U3-INV-09 — The Exact Identity Collation residual is an accepted residual
+
+The Exact Identity Collation difference audited under R-U3-INV-06 is registered as `ACCEPTED_RESIDUAL` by an
+explicit business risk acceptance of the business owner.
+
+The acceptance covers exactly and only:
+
+1. the Selector Exact Identity Filter of `GET /api/credit/query-options`;
+2. the existing exact identity comparison mechanism, which stays an equality comparison;
+3. the measured SQLite/MySQL case-variant difference on the identity columns, which is case-insensitive on
+   MySQL and byte-sensitive on SQLite;
+4. the measured facts that the difference never widens the authorized set, that no wrong business identity can
+   be returned, that a case-variant identity is refused on write by the anchor shape guard, and that the neutral
+   response for an unknown and for an unauthorized identity stays byte-identical on both engines.
+
+The acceptance explicitly does not cover and does not change:
+
+- any other API, handler, writer, query or report that compares an identity;
+- the approved Unicode Search Fold and the literal search contract;
+- the production identity policy, which is not widened to case-insensitive identity equality;
+- the declaration of any engine as the business authority;
+- any claim that all identity queries are equivalent across the two engines.
+
+No production identity comparison code was modified in order to record this acceptance, and no such modification
+is authorized by it.
+
+If a real identity conflict, an authorization bypass or a data disclosure is later observed, this acceptance
+does not cover that new fact: the residual returns to audit and the acceptance is void for it. A future change
+of the identity policy obliges a new audit of the same subject.
+
+### 3. R-U3-INV-10 — The historical inventory direction is registered and is not implemented
+
+The historical inventory position abnormalities are registered as a separate Requirement direction of their own,
+`Inventory Historical Position Integrity`, with the following scope:
+
+- the legacy NULL position keys;
+- the duplicated canonical inventory positions;
+- the synthetic fallback positions;
+- the historical stock facts behind them;
+- the reconciliation of the inventory valuation and the inventory ledger;
+- the fail-closed detection of an abnormal row;
+- the manual repair authorization boundary.
+
+This stage implements none of it. No historical data repair SQL, no migration, no compensating movement and no
+accounting adjustment was added, and the frozen Inventory Position migration was not modified.
+
+The Fresh Demo Inventory gate PASS is a fresh-bootstrap result only. It never marks a historical anomaly
+`CLOSED` and never replaces the historical remediation requirement.
+
+If such an anomaly is found in a future deployment target, the related data migration or deployment shall be
+blocked and the anomaly disposed of independently first.
+
+### 4. The acceptance result
+
+The independent protected MySQL gate `W11-A U3 INVENTORY DEMO SEED MYSQL E3 ACCEPTANCE` executed exactly once on
+the live disposable MySQL 8 target and passed:
+
+- the target identity was proven against the pinned baseline before the campaign and the initial object
+  inventory was empty;
+- the eight acceptance cases M-INV-01 to M-INV-08 passed 8 of 8, with zero fail, zero skip, zero cancelled and
+  zero todo;
+- the protected runner reported the five-class zero object inventory after the campaign;
+- the protected launcher independently confirmed the cleanup on a fresh session: tables 0, views 0, triggers 0,
+  routines 0, events 0.
+
+### 5. R-U3-INV-07 restated — the acceptance is not widened
+
+A pass of the Demo Inventory gate is not an Inventory Domain MySQL acceptance, not a historical inventory
+remediation result and not a W11-A MySQL acceptance. The remaining MySQL inventory risks stay registered.
