@@ -52,7 +52,7 @@ import {
   buildMigrationIndex, listMarkdown, showFile, splitSections, git, resolveReference, isRetained,
 } from './lib/migration-index.mjs';
 import {
-  buildCurrentIndex, activeContractFiles, reviewFiles, bodyFingerprints, diffOwnBodies,
+  buildCurrentIndex, activeContractFiles, reviewFiles, bodyFingerprints, diffTraceableBodies,
   resolveStructural, fileText, under, directChildren,
 } from './lib/current-index.mjs';
 
@@ -280,15 +280,23 @@ function canonicalId(meta) {
 }
 
 function runCurrentChecks(target, anchor, only = null) {
-  const cur = buildCurrentIndex(REPO_ROOT, target);
-
   if (only !== null) {
     if (only !== 'N7') throw new Error(`current 模式仅支持聚焦检查 N7，收到: ${only}`);
+    let cur;
+    try {
+      cur = buildCurrentIndex(REPO_ROOT, target);
+    } catch (error) {
+      record('N7', '已批准合同的修改可经变更记录与 Git Diff 追溯', false,
+        `目标版本不可读取: ${target} (${error.message})`);
+      return;
+    }
     const trace = traceabilityProblems(anchor, target, cur);
     record('N7', '已批准合同的修改可经变更记录与 Git Diff 追溯', trace.problems.length === 0,
       trace.problems.length ? trace.problems : trace.detail);
     return;
   }
+
+  const cur = buildCurrentIndex(REPO_ROOT, target);
 
   /* N1 链接与锚点 */
   const curBroken = scanLinks(target, cur.files);
@@ -486,48 +494,94 @@ function runCurrentChecks(target, anchor, only = null) {
 function traceabilityProblems(anchor, target, cur) {
   const problems = [];
   const detail = [];
-  const scope = [...GOVERNED_FILES, ...activeContractFiles(cur), ...reviewFiles(cur)]
-    .filter((v, i, a) => a.indexOf(v) === i);
   const historyTarget = target === 'WORKTREE' ? 'HEAD' : target;
+  let anchorIndex;
+  try {
+    git(REPO_ROOT, ['rev-parse', '--verify', `${anchor}^{commit}`]);
+    git(REPO_ROOT, ['rev-parse', '--verify', `${historyTarget}^{commit}`]);
+    git(REPO_ROOT, ['merge-base', '--is-ancestor', anchor, historyTarget]);
+    anchorIndex = buildCurrentIndex(REPO_ROOT, anchor);
+  } catch {
+    return {
+      problems: [`  目标版本无效或验收锚点不是其祖先: ${anchor} -> ${historyTarget}`],
+      detail,
+    };
+  }
+
+  const historicalReviews = git(REPO_ROOT, [
+    '-c', 'core.quotePath=false', 'log', '--format=', '--name-only', `${anchor}..${historyTarget}`, '--', 'docs/reviews',
+  ]).split('\n').filter(file => file.startsWith('docs/reviews/') && file.endsWith('.md'));
+  const scope = [
+    ...GOVERNED_FILES,
+    ...activeContractFiles(anchorIndex), ...reviewFiles(anchorIndex),
+    ...activeContractFiles(cur), ...reviewFiles(cur),
+    ...historicalReviews,
+  ]
+    .filter((v, i, a) => a.indexOf(v) === i);
   const worktreeChanges = target === 'WORKTREE' ? worktreeChangedFiles() : new Set();
 
   for (const f of scope) {
     const oldText = fileText(REPO_ROOT, anchor, f);
     const newText = fileText(REPO_ROOT, target, f);
-    if (newText === null) continue;
-    const isNew = oldText === null;
-    const d = isNew ? { changed: [], added: [], removed: [] } : diffOwnBodies(oldText, newText);
-
     if (worktreeChanges.has(f)) {
       problems.push(`  WORKTREE 含未提交或未跟踪的受治理文件变化，不能以 Git Commit 追溯: ${f}`);
-      continue;
     }
+    if (oldText !== null && newText === null) {
+      problems.push(`  受治理文件从 anchor 到 target 整体消失，N7 不允许删除或移动豁免: ${f}`);
+    }
+  }
 
-    if (!isNew && !d.changed.length && !d.added.length && !d.removed.length) continue;
+  let commits;
+  try {
+    commits = git(REPO_ROOT, ['rev-list', '--reverse', '--topo-order', `${anchor}..${historyTarget}`])
+      .split('\n').filter(Boolean);
+  } catch {
+    problems.push(`  无法枚举提交区间: ${anchor}..${historyTarget}`);
+    return { problems, detail };
+  }
 
-    const commits = gitCommits(anchor, historyTarget, f);
-    if (!commits.length) {
-      problems.push(`  受治理文件在验收锚点之后发生变化，但在 ${anchor.slice(0, 12)}..${historyTarget} 找不到任何提交: ${f}`);
+  for (const commit of commits) {
+    const parents = git(REPO_ROOT, ['show', '-s', '--format=%P', commit]).trim().split(/\s+/).filter(Boolean);
+    if (!parents.length) {
+      problems.push(`  提交没有可比较的父提交，无法可靠解析: ${commit}`);
       continue;
     }
-    if (isNew) {
-      if (!commits.some(c => c.message.includes(f))) {
-        problems.push(`  新增受治理文件缺少提到它的提交记录: ${f}（提交信息需出现该文件路径「${f}」）`);
-      } else {
-        detail.push(`  ${f}: 新增文件，提交信息已引用其路径`);
+    // Merge commit 明确采用第一父提交语义；这样合并结果相对主线引入的变化不会被跳过。
+    const parent = parents[0];
+    const message = git(REPO_ROOT, ['show', '-s', '--format=%B', commit]);
+    const changedFiles = new Set(git(REPO_ROOT, [
+      '-c', 'core.quotePath=false', 'diff', '--name-only', parent, commit, '--',
+    ]).split('\n').filter(Boolean));
+    for (const f of scope.filter(file => changedFiles.has(file))) {
+      const before = fileText(REPO_ROOT, parent, f);
+      const after = fileText(REPO_ROOT, commit, f);
+      if (before === after) continue;
+      const short = commit.slice(0, 12);
+      if (before !== null && after === null) {
+        problems.push(`  ${short} 整体删除或移动受治理文件，N7 无豁免: ${f}`);
+        continue;
       }
-      continue;
-    }
-    const base = f.split('/').pop();
-    const touched = [...d.changed, ...d.added, ...d.removed];
-    for (const id of touched) {
-      const token = new RegExp(`(^|[^0-9.])${id.replace(/\./g, '\\.')}([^0-9.]|$)`);
-      if (!commits.some(c => token.test(c.message) || c.message.includes(f) || c.message.includes(base))) {
-        problems.push(`  章节 §${id} 的修改无法追溯到提交（提交信息需提及 §${id} 或「${base}」）: ${f}`);
+      if (before === null && after !== null) {
+        if (!message.includes(f)) problems.push(`  ${short} 新增受治理文件但提交信息缺少完整路径: ${f}`);
+        else detail.push(`  ${short} ${f}: 新增文件以完整路径追溯`);
+        continue;
       }
-    }
-    if (!problems.some(p => p.includes(f))) {
-      detail.push(`  ${f}: ${touched.length} 个章节变更均可追溯`);
+
+      const diff = diffTraceableBodies(before, after);
+      const touched = [...new Set([...diff.changed, ...diff.added, ...diff.removed])];
+      const hasFullPath = message.includes(f);
+      const missingIds = touched.filter(id => {
+        const token = new RegExp(`(^|[^0-9.])${id.replace(/\./g, '\\.')}([^0-9.]|$)`);
+        return !token.test(message);
+      });
+      if (diff.unownedChanged || touched.length === 0) {
+        if (!hasFullPath) problems.push(`  ${short} 修改了元数据、文件头或无法可靠归属章节的内容，提交信息必须含完整路径: ${f}`);
+      } else if (!hasFullPath && missingIds.length) {
+        problems.push(`  ${short} 未引用全部变更章节（缺少 ${missingIds.map(id => `§${id}`).join(', ')}）或完整路径: ${f}`);
+      }
+      if (!problems.some(p => p.includes(short) && p.includes(f))) {
+        detail.push(`  ${short} ${f}: ${hasFullPath ? '完整路径' : `${touched.length} 个章节 ID`}追溯通过`);
+      }
     }
   }
   return { problems, detail };
@@ -545,15 +599,6 @@ function worktreeChangedFiles() {
     for (const file of git(REPO_ROOT, args).split('\n').filter(Boolean)) changed.add(file);
   }
   return changed;
-}
-
-/** 列出 anchor..target 之间改动某文件的提交及其完整提交信息。 */
-function gitCommits(anchor, target, file) {
-  const out = git(REPO_ROOT, ['log', '--format=%H%x1f%B%x1e', `${anchor}..${target}`, '--', file]);
-  return out.split('\x1e').map(s => s.trim()).filter(Boolean).map(chunk => {
-    const [hash, ...rest] = chunk.split('\x1f');
-    return { hash, message: rest.join('\x1f').trim() };
-  });
 }
 
 /* ================= 主流程 ================= */

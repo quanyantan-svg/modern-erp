@@ -161,25 +161,48 @@ export function bodyFingerprints(index, files) {
  * 编号按出现顺序，重复的同一编号只保留一次。
  */
 export function diffOwnBodies(oldText, newText) {
-  const oldMap = new Map();
-  for (const h of splitHeadings(oldText)) {
-    if (h.depth < 2 || h.depth > 4) continue;
-    if (!h.id) continue;
-    if (!oldMap.has(h.id)) oldMap.set(h.id, normalizeBody(h.ownBody));
-  }
-  const newMap = new Map();
-  for (const h of splitHeadings(newText)) {
-    if (h.depth < 2 || h.depth > 4) continue;
-    if (!h.id) continue;
-    if (!newMap.has(h.id)) newMap.set(h.id, normalizeBody(h.ownBody));
-  }
+  const { changed, added, removed } = diffTraceableBodies(oldText, newText);
+  return { changed, added, removed };
+}
+
+/**
+ * 为 N7 提供逐提交差异：编号 H2–H6 可由章节 ID 追溯，其余内容必须由完整路径追溯。
+ * 比较使用原始正文（仅统一 CRLF），避免空白或格式变化被规范化后静默漏报。
+ */
+export function diffTraceableBodies(oldText, newText) {
+  const snapshot = (text) => {
+    const normalized = text.replace(/\r/g, '');
+    const headings = splitHeadings(normalized);
+    const sections = new Map();
+    const ownedLines = new Set();
+    for (const h of headings) {
+      if (h.depth < 2 || h.depth > 6 || !h.id) continue;
+      if (!sections.has(h.id)) sections.set(h.id, h.ownBody);
+      const lineCount = h.ownBody.split('\n').length;
+      for (let line = h.startLine; line < h.startLine + lineCount; line++) ownedLines.add(line);
+    }
+    const unowned = normalized.split('\n')
+      .filter((_, index) => !ownedLines.has(index + 1))
+      .join('\n');
+    return { sections, unowned };
+  };
+
+  const oldSnapshot = snapshot(oldText);
+  const newSnapshot = snapshot(newText);
+  const oldMap = oldSnapshot.sections;
+  const newMap = newSnapshot.sections;
   const changed = [], added = [], removed = [];
   for (const [id, fp] of newMap) {
     if (!oldMap.has(id)) added.push(id);
     else if (oldMap.get(id) !== fp) changed.push(id);
   }
   for (const id of oldMap.keys()) if (!newMap.has(id)) removed.push(id);
-  return { changed, added, removed };
+  return {
+    changed,
+    added,
+    removed,
+    unownedChanged: oldSnapshot.unowned !== newSnapshot.unowned,
+  };
 }
 
 /**
@@ -219,11 +242,10 @@ export function fileText(repoRoot, ref, file) {
     if (!existsSync(abs)) return null;
     return readFileSync(abs, 'utf8').replace(/\r/g, '');
   }
-  try {
-    return showFile(repoRoot, ref, file);
-  } catch {
-    return null;
-  }
+  const listed = git(repoRoot, ['-c', 'core.quotePath=false', 'ls-tree', '-r', '--name-only', ref, '--', file])
+    .split('\n').filter(Boolean);
+  if (!listed.includes(file)) return null;
+  return showFile(repoRoot, ref, file);
 }
 
 /** 取某文件在 ref 下是否存在。 */
