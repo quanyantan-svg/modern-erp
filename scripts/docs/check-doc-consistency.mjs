@@ -36,13 +36,14 @@
  *   node scripts/docs/check-doc-consistency.mjs --mode migration
  *   node scripts/docs/check-doc-consistency.mjs --mode migration --target <commit>
  *   node scripts/docs/check-doc-consistency.mjs --mode current --target HEAD
+ *   node scripts/docs/check-doc-consistency.mjs --mode current --target WORKTREE --only N7
  *
  * 约束：
  *   - 只读：只执行 git show / ls-tree / ls-files，不写任何文件、不碰数据库；
  *   - 只用 Node.js 内置模块；
  *   - 失败时返回非零退出码；
  *   - 不修改 FAST / FULL / HEAVY 测试分组；
- *   - 不依赖临时目录。
+ *   - 正式检查不依赖临时目录；回归测试在独立临时克隆中运行。
  */
 
 import path from 'node:path';
@@ -116,13 +117,15 @@ function parseArgs(argv) {
   let baseline = DEFAULT_BASELINE;
   let target = null;
   let anchor = ACCEPTED_ANCHOR;
+  let only = null;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--mode') mode = argv[++i];
     else if (argv[i] === '--baseline') baseline = argv[++i];
     else if (argv[i] === '--target') target = argv[++i];
     else if (argv[i] === '--anchor') anchor = argv[++i];
+    else if (argv[i] === '--only') only = argv[++i];
   }
-  return { mode, baseline, target, anchor };
+  return { mode, baseline, target, anchor, only };
 }
 
 /* ---------------- 链接 / 锚点 ---------------- */
@@ -276,8 +279,16 @@ function canonicalId(meta) {
   return null;
 }
 
-function runCurrentChecks(target, anchor) {
+function runCurrentChecks(target, anchor, only = null) {
   const cur = buildCurrentIndex(REPO_ROOT, target);
+
+  if (only !== null) {
+    if (only !== 'N7') throw new Error(`current 模式仅支持聚焦检查 N7，收到: ${only}`);
+    const trace = traceabilityProblems(anchor, target, cur);
+    record('N7', '已批准合同的修改可经变更记录与 Git Diff 追溯', trace.problems.length === 0,
+      trace.problems.length ? trace.problems : trace.detail);
+    return;
+  }
 
   /* N1 链接与锚点 */
   const curBroken = scanLinks(target, cur.files);
@@ -425,7 +436,7 @@ function runCurrentChecks(target, anchor) {
     traceProblems.length ? traceProblems : traceDetail);
 
   /* N7 已批准合同的修改可追溯 */
-  const trace = traceabilityProblems(anchor, cur);
+  const trace = traceabilityProblems(anchor, target, cur);
   record('N7', '已批准合同的修改可经变更记录与 Git Diff 追溯', trace.problems.length === 0,
     trace.problems.length ? trace.problems : trace.detail);
 
@@ -465,31 +476,40 @@ function runCurrentChecks(target, anchor) {
 }
 
 /**
- * N7：对每个受治理文件，比较验收锚点版本与 HEAD 版本的自有正文，
+ * N7：对每个受治理文件，比较验收锚点版本与目标版本的自有正文，
  * 找出被修改 / 新增 / 删除的章节编号，并要求能在 Git 历史中找到
  * 提到该章节编号或该文件的提交（即「变更记录 + Git Diff」可追溯）。
+ *
+ * WORKTREE 具有额外语义：任何未提交或未跟踪的受治理文件变化都必须
+ * 明确失败，不能借用 HEAD 中已有的提交记录冒充可追溯。
  */
-function traceabilityProblems(anchor, cur) {
+function traceabilityProblems(anchor, target, cur) {
   const problems = [];
   const detail = [];
   const scope = [...GOVERNED_FILES, ...activeContractFiles(cur), ...reviewFiles(cur)]
     .filter((v, i, a) => a.indexOf(v) === i);
+  const historyTarget = target === 'WORKTREE' ? 'HEAD' : target;
+  const worktreeChanges = target === 'WORKTREE' ? worktreeChangedFiles() : new Set();
 
   for (const f of scope) {
     const oldText = fileText(REPO_ROOT, anchor, f);
-    const newText = fileText(REPO_ROOT, 'HEAD', f);
+    const newText = fileText(REPO_ROOT, target, f);
     if (newText === null) continue;
     const isNew = oldText === null;
     const d = isNew ? { changed: [], added: [], removed: [] } : diffOwnBodies(oldText, newText);
-    const touched = [...d.changed, ...d.added];
-    if (!touched.length && !d.removed.length) continue;
 
-    const commits = gitCommits(anchor, 'HEAD', f);
-    if (!commits.length) {
-      problems.push(`  受治理文件在验收锚点之后发生变化，但找不到任何提交: ${f}`);
+    if (worktreeChanges.has(f)) {
+      problems.push(`  WORKTREE 含未提交或未跟踪的受治理文件变化，不能以 Git Commit 追溯: ${f}`);
       continue;
     }
-    const base = f.split('/').pop();
+
+    if (!isNew && !d.changed.length && !d.added.length && !d.removed.length) continue;
+
+    const commits = gitCommits(anchor, historyTarget, f);
+    if (!commits.length) {
+      problems.push(`  受治理文件在验收锚点之后发生变化，但在 ${anchor.slice(0, 12)}..${historyTarget} 找不到任何提交: ${f}`);
+      continue;
+    }
     if (isNew) {
       if (!commits.some(c => c.message.includes(f))) {
         problems.push(`  新增受治理文件缺少提到它的提交记录: ${f}（提交信息需出现该文件路径「${f}」）`);
@@ -498,6 +518,8 @@ function traceabilityProblems(anchor, cur) {
       }
       continue;
     }
+    const base = f.split('/').pop();
+    const touched = [...d.changed, ...d.added, ...d.removed];
     for (const id of touched) {
       const token = new RegExp(`(^|[^0-9.])${id.replace(/\./g, '\\.')}([^0-9.]|$)`);
       if (!commits.some(c => token.test(c.message) || c.message.includes(f) || c.message.includes(base))) {
@@ -509,6 +531,20 @@ function traceabilityProblems(anchor, cur) {
     }
   }
   return { problems, detail };
+}
+
+/** 一次性收集 WORKTREE 中未提交（含 staged）与未跟踪路径。 */
+function worktreeChangedFiles() {
+  const changed = new Set();
+  const commands = [
+    ['-c', 'core.quotePath=false', 'diff', '--name-only'],
+    ['-c', 'core.quotePath=false', 'diff', '--cached', '--name-only'],
+    ['-c', 'core.quotePath=false', 'ls-files', '--others', '--exclude-standard'],
+  ];
+  for (const args of commands) {
+    for (const file of git(REPO_ROOT, args).split('\n').filter(Boolean)) changed.add(file);
+  }
+  return changed;
 }
 
 /** 列出 anchor..target 之间改动某文件的提交及其完整提交信息。 */
@@ -523,7 +559,7 @@ function gitCommits(anchor, target, file) {
 /* ================= 主流程 ================= */
 
 function main() {
-  const { mode, baseline, target, anchor } = parseArgs(process.argv.slice(2));
+  const { mode, baseline, target, anchor, only } = parseArgs(process.argv.slice(2));
   const resolvedTarget = target || 'WORKTREE';
 
   if (mode === 'migration') {
@@ -538,7 +574,7 @@ function main() {
       'ERP 文档一致性检查 —— current 模式（当前文档完整性）\n' +
       `  校验目标: ${resolvedTarget}\n` +
       `  G0 验收锚点: ${anchor}\n\n`);
-    runCurrentChecks(resolvedTarget, anchor);
+    runCurrentChecks(resolvedTarget, anchor, only);
   } else {
     process.stderr.write(`未知模式: ${mode}（可用: migration | current）\n`);
     process.exit(2);

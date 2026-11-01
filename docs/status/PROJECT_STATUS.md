@@ -338,7 +338,10 @@ G0 是**治理层**工作包，**不关闭任何业务 Gap**。以下全部保�
 
 - G-1…G-5（`PROJECT_STATUS.md` §35.8）；
 - D-2…D-5 开放设计决策（见 [`docs/decisions/OPEN-BUSINESS-DECISIONS.md`](../decisions/OPEN-BUSINESS-DECISIONS.md)）；
-- M1 的 A-P01 / A-P02 / B-P01 / B-P02 / C-P01…C-P04 / D-P01 / D-P02 集中业务决策；
+- M1 的 **12 项开放业务政策**：`A-P02`、`B-P01`、`B-P02`、`C-P01`、`C-P02`、`C-P03`、
+  `C-P04`、`D-P01`、`D-P02`、`M1-P-02`、`M1-P-03`、`M1-P-04`；
+- `A-P01` 单独处于 `OWNER_RATIFICATION_PENDING`，**不计入**上述 12 项开放业务政策；
+- `M1-P-01` 的主歧义已按批准的 OUT-09 / OUT-08 规则闭合，**不得**重新列入待决项；
 - `W11_A_ACCEPTANCE_PASS` 未签发；
 - Procurement & Outsourcing `NOT READY`；
 - 全部 Release Blockers 与 Release Readiness 未就绪；
@@ -350,7 +353,10 @@ G0 是**治理层**工作包，**不关闭任何业务 Gap**。以下全部保�
    业务所有者签发 `G0_ACCEPTANCE_PASS`（§36.4）。
 2. **恢复 M1 设计审查**所需的确切条件：G0 Acceptance 通过（**已满足**）→ 用户单独授权 M1 Design 复核 →
    在受保护的独立工作区对 `work/m1-r4-6-design-correction-20261101` 做 Design 复核 →
-   业务所有者裁定 §31.12.8 的 10 项集中业务决策 → 才可能签发 Design PASS 并授权 Implementation。
+   业务所有者裁定 §26.33.14.1 / §26.33.14.2 登记的 **12 项开放业务政策**，并单独完成
+   `A-P01` 的 Owner 追认 → 才可能满足整体 Design 审批条件。各工作包的 Implementation 阻塞范围
+   仍以 §26.33.15 为准；某一工作包仍 `BLOCKED` 不等于整个 Design 已获 `APPROVED`，
+   Design PASS 后的 Implementation 仍须单独授权。
    **当前进度**：仅完成**文档结构适配**（把 M1 Requirement / Design 正文迁入 G0 文档结构），
    这**不是** Design 复核，**不是** Design PASS，**不是** Implementation 授权。
 3. 在 M1 Design 未获批前，**不得**启动委外 / VMI 的 GL、结算、Cost Implementation。
@@ -389,11 +395,16 @@ M1_G0_DOCUMENT_ADAPTATION_READY_FOR_REVIEW
 - **没有**修改 M1 的 Requirement 业务合同、Gap 映射、Capability 归属与 13 个 Gate 定义；
 - **没有**把「文档已迁移」记作「业务能力已实现」；13 个 Gate 的
   `execution_status` 仍为 **13/13 `NOT_RUN`**，`readiness_status` 仍为 **9 `NOT_RUN` + 4 `BLOCKED`**；
-- **没有**关闭 §31.12.8 的十项集中业务政策；**没有**关闭 G-1…G-5；
+- **没有**批准 §26.33.14.1 / §26.33.14.2 登记的 12 项开放业务政策；`A-P01` 仍独立待追认，
+  `M1-P-01` 仍保持已闭合；**没有**关闭 G-1…G-5；
 - Procurement & Outsourcing 的 Domain Acceptance 仍为 **`NOT READY`**
   （`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY`）；**没有任何** Domain 因此升级为 Release Ready；
 - **没有**修改任何 `src/` / `server/` 生产代码、schema、migration、API、权限、状态机或业务测试；
-- **没有**推送本分支；**没有**把本分支合入 `master`。
+- **远端同步事实（本次 M1-A1 修复前）**：GitHub / Gitee 的 `master` 均为
+  `f5838eb1d13e6ae701202b5c69c90d1cf208b269`；GitHub / Gitee 的本 M1 适配分支均已同步至
+  `9e939c3e43cf851ac834b7072b1c6b07b0306299`。
+- **本次 M1-A1 修复提交尚未推送**；修复后的本地 HEAD 将领先上述远端分支 SHA。
+  本 M1 适配分支仍**未合入** `master`。
 
 ---
 

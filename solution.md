@@ -3,7 +3,8 @@
 > 状态：`ACTIVE`
 > Owner：Platform
 > 权威来源：本文件 —— 全局架构与 Design 合同；各 Domain Design 正文见 [`docs/design/`](./docs/design/)，本文件 §0 为导航入口
-> 来源：§1–§20 保留在本文件（编号与内容未变）；§21–§37 已逐字迁入 `docs/design/`，原章节编号保持不变
+> 来源：§1–§20 保留在本文件（编号与内容未变）；原有已形成的 Domain Design 正文按 G0 迁入
+> `docs/design/`，新增的 M1 `§26.33` 候选设计单独保存在 `docs/reviews/`，不构成 Active Design
 
 ## 0. 文档导航与迁移映射
 

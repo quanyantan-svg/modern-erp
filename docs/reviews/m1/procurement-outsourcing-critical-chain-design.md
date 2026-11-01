@@ -43,11 +43,15 @@ G0 文档重构后，根目录 `solution.md` 只保留全局架构合同与 Doma
 2. §26.33 内部 R1 / R2 / R3 / R4 / R4-5 / R4-6 / R4-6-R1 / R4-6-R2 的修订轮次，
    **只是该设计自身的内部纠错**，**不等于**业务所有者已批准整个 Design。
 3. 本文件**不授权**任何 Implementation、Migration、数据库写入、发布或部署。
-4. §26.33.12 的 **13 个 Gate 全部为 `NOT_RUN`**；
-   §26.33.14 的业务政策登记与 §26.33.15 的 HARD STOP 全部保持原文状态，未被本文件改写。
-5. 业务 Owner 裁定 §31.12.8 的十项集中业务政策之后，才可能签发 Design PASS；
-   Design PASS 之后还需**单独**执行 **Active Design Promotion**（把正文移入 `docs/design/`），
-   本轮**不提前执行**。
+4. §26.33.12 的 **13 个 Gate 全部为 `NOT_RUN`**；§26.33.14.1 / §26.33.14.2 登记的
+   **12 项开放业务政策**（`A-P02`、`B-P01`、`B-P02`、`C-P01..C-P04`、`D-P01`、`D-P02`、
+   `M1-P-02`、`M1-P-03`、`M1-P-04`）均未获批准。`A-P01` 独立为
+   `OWNER_RATIFICATION_PENDING`，不计入这 12 项；`M1-P-01` 已按 OUT-09 / OUT-08 闭合。
+5. 整体 Design 的审批条件与各工作包的 Implementation 阻塞不是同一概念：业务 Owner 完成上述
+   政策裁定与独立追认后，才可能签发 Design PASS；各 WP 的精确阻塞范围仍以 §26.33.15 为准。
+   某个 WP 保持 `BLOCKED` 不会使整个设计自动成为 `APPROVED`，本说明也不擅自批准任何政策。
+6. Design PASS 之后还需**单独**执行 **Active Design Promotion**（把正文移入 `docs/design/`），
+   Implementation 仍需独立授权；本轮**不提前执行**。
 
 ---
 

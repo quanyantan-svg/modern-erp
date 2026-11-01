@@ -615,6 +615,7 @@ const FULL = [
   // scripts/ so it is registered explicitly (the suite manifest's
   // `server/ + src/lib/` discovery does not pick up scripts/).
   'scripts/gate-tap-parser.test.js',
+  'scripts/docs/check-doc-consistency.test.js',
 
   // ----- V22 — Finance Operations Domain Closure -----
   // Wave A foundation: parameters, recognition policy, payment terms,
