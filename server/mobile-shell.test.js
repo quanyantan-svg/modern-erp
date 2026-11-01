@@ -16,9 +16,10 @@
 // cannot import JSX directly).
 
 import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, statSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { createServer as createViteServer } from 'vite';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -27,6 +28,21 @@ import { createElement } from 'react';
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
 const srcDir = resolve(repoRoot, 'src');
+
+/**
+ * 解析仓库的 common Git directory。
+ *
+ * 普通 clone 下 `git rev-parse --git-common-dir` 返回相对路径 `.git`；
+ * linked worktree 下 `.git` 是文件，Git 返回主仓库 `.git` 的绝对路径。
+ * `info/exclude` 始终位于 common Git directory，因此这里必须解析后定位，
+ * 不能硬编码 `<repoRoot>/.git/info/exclude`。
+ */
+function commonGitDir() {
+  const out = execFileSync('git', ['rev-parse', '--git-common-dir'], {
+    cwd: repoRoot, encoding: 'utf8',
+  }).trim();
+  return isAbsolute(out) ? out : resolve(repoRoot, out);
+}
 
 let vite;
 let MobileShell;
@@ -487,9 +503,22 @@ describe('Reference images — must not leak into source or bundle', () => {
     assert.deepEqual(offenders, [], `no source file may import from example/ — offenders: ${offenders.join(', ')}`);
   });
 
-  test('example/ folder is in .git/info/exclude', () => {
-    const exclude = readFileSync(join(repoRoot, '.git', 'info', 'exclude'), 'utf8');
-    assert.match(exclude, /^example\//m, '.git/info/exclude must list example/');
+  test('example/ folder is ignored by Git in any checkout topology', () => {
+    // 本机附加忽略规则位于 common Git directory：
+    //   普通 clone      -> <repo>/.git/info/exclude
+    //   linked worktree -> 主仓库的 .git/info/exclude（worktree 内 .git 是文件）
+    // 因此不得硬编码 <repoRoot>/.git/info/exclude。
+    const excludePath = join(commonGitDir(), 'info', 'exclude');
+    const exclude = readFileSync(excludePath, 'utf8');
+
+    // example/ 必须被声明为忽略规则：受版本控制的仓库 .gitignore，或本机 info/exclude。
+    const gitignore = readFileSync(join(repoRoot, '.gitignore'), 'utf8');
+    const declared = /^example\//m.test(gitignore) || /^example\//m.test(exclude);
+    assert.ok(declared, `example/ must be listed in .gitignore or ${excludePath}`);
+
+    // 且必须实际生效：Git 自己必须把 example/ 判为 ignored。
+    const ignored = spawnSync('git', ['check-ignore', '-q', 'example/'], { cwd: repoRoot }).status === 0;
+    assert.ok(ignored, 'git check-ignore must report example/ as ignored');
   });
 
   test('dist/ bundle does not embed example/ image bytes (when present)', () => {

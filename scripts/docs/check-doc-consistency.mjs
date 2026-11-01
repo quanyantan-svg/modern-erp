@@ -21,8 +21,9 @@
  *   验证持续开发后的**当前**文档是否自洽。合法修改已迁移合同**不得**被误报为迁移丢失。
  *
  *   N1 链接与锚点可达        —— 相对 G0 验收锚点不得新增失效链接
- *   N2 合同 ID 唯一          —— 权威章节必须声明且可解析、唯一、不与根文件保留编号冲突、
- *                               在正文中真实存在；解析失败即 FAIL；禁止零覆盖 PASS
+ *   N2 合同 ID 唯一          —— 【已 RETIRED】经项目负责人决定主动退役，不再产生
+ *                               PASS / FAIL 判定；章节权威关系改由人工 Review 确认
+ *                               （N2 编号保留为历史标识，N1、N3–N9 与 C1–C6 不受影响）
  *   N3 无重复 Active 合同正文 —— Active 集合内不得出现第二份同一合同正文
  *   N4 元数据与状态规范      —— Active 合同文件必须声明 状态 / Owner / 权威来源
  *   N5 索引与真实路径一致    —— 索引 README 必须登记本目录全部正文，且链接可达
@@ -40,7 +41,6 @@
  *   node scripts/docs/check-doc-consistency.mjs --mode migration --target <commit>
  *   node scripts/docs/check-doc-consistency.mjs --mode current --target HEAD
  *   node scripts/docs/check-doc-consistency.mjs --mode current --target WORKTREE --only N7
- *   node scripts/docs/check-doc-consistency.mjs --mode current --target HEAD --only N2
  *
  * 约束：
  *   - 只读：只执行 git show / ls-tree / ls-files，不写任何文件、不碰数据库；
@@ -57,8 +57,7 @@ import {
 } from './lib/migration-index.mjs';
 import {
   buildCurrentIndex, activeContractFiles, reviewFiles, bodyFingerprints, diffTraceableBodies,
-  resolveStructural, fileText, under, directChildren, parseAuthoritySections, authorityIndexRef,
-  registersFile,
+  resolveStructural, fileText, under, directChildren,
 } from './lib/current-index.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -276,186 +275,29 @@ function runMigrationChecks(baseline, target) {
 
 /* ================= current 模式（N1–N9） ================= */
 
-/** 权威编号空间：根合同文件 → 保留编号上界与显示名。 */
-const AUTHORITY_SPACES = {
-  document: { label: 'Requirement', reservedMax: ROOT_REQUIREMENT_MAX },
-  solution: { label: 'Design', reservedMax: ROOT_DESIGN_MAX },
-};
-
-/** README 导航文件：不是合同正文，不参与权威章节唯一性判定。 */
-function isNavigationIndex(file) {
-  return /(^|\/)README\.md$/.test(file);
-}
-
-/**
- * N2：合同正文必须声明唯一、可解析、真实存在的权威章节。
+/*
+ * N2（合同章节 ID 唯一）已 RETIRED。
  *
- * 覆盖三类正文：
- *   - 领域合同正文  —— 必须声明权威章节；解析失败、跨文件重复、占用根文件保留编号、
- *                      正文中不存在该章节、同文件重复声明，一律 FAIL；
- *   - 分段合同正文  —— 只声明根合同而无章节号时，权威来自 Domain 索引 README，
- *                      必须被该索引逐字登记，否则 FAIL；
- *   - README 导航   —— 目录索引，不是合同正文，记为合法例外。
- *
- * 禁止零覆盖 PASS：没有正文或解析不出任何权威章节时一律 FAIL。
+ * 经项目负责人决定，N2 的自动章节编号解析与唯一性校验功能正式退役：
+ * 章节权威关系改由人工 Review 确认，不再由工具从 Markdown 元数据自动推断。
+ * N2 编号保留为历史标识，不再重新编号，N1、N3–N9 与 migration 模式 C1–C6 不受影响。
+ * 详见 AGENTS.md §5.1 与 docs/status/PROJECT_STATUS.md。
  */
-function n2Problems(cur) {
-  const active = activeContractFiles(cur);
-  const problems = [];
-  const stats = {
-    activeTotal: active.length,
-    rootContracts: 0,
-    navigationIndexes: 0,
-    segmentedContracts: 0,
-    bodiesWithCanonicalId: 0,
-    bodiesChecked: 0,
-    exceptions: 0,
-    duplicateIds: 0,
-    unparsable: 0,
-  };
-  /** 权威编号空间 → 章节号 → 声明它的文件（同一空间内章节号必须唯一）。 */
-  const spaceOwners = { document: new Map(), solution: new Map() };
-
-  for (const f of active) {
-    /* 根全局合同：自有保留编号空间，不是被检查的领域正文。 */
-    if (f === 'document.md' || f === 'solution.md') {
-      stats.rootContracts++;
-      stats.exceptions++;
-      continue;
-    }
-    /* README 导航文件：目录索引，不是合同正文。 */
-    if (isNavigationIndex(f)) {
-      stats.navigationIndexes++;
-      stats.exceptions++;
-      continue;
-    }
-
-    const entry = cur.byFile.get(f);
-    const decl = parseAuthoritySections(entry.meta);
-    stats.bodiesChecked++;
-
-    /* 完全无法解析权威声明 —— 不得静默忽略。 */
-    if (!decl) {
-      stats.unparsable++;
-      problems.push(`  合同正文既未声明根合同引用，也无法解析权威章节: ${f}`);
-      continue;
-    }
-
-    /* 分段合同：只声明根合同而没有章节号，权威来自 Domain 索引 README。 */
-    if (decl.named) {
-      const indexRef = authorityIndexRef(entry.meta);
-      const indexEntry = indexRef ? cur.byFile.get(indexRef) : null;
-      if (!indexEntry) {
-        problems.push(`  分段合同正文缺少可核验的权威索引登记（未找到索引文件）: ${f}`);
-      } else if (!registersFile(indexEntry.text, f)) {
-        problems.push(`  分段合同正文未被权威索引 ${indexRef} 登记: ${f}`);
-      } else {
-        stats.segmentedContracts++;
-        stats.exceptions++;
-      }
-      continue;
-    }
-
-    /* 领域合同正文：必须声明权威章节。 */
-    const space = AUTHORITY_SPACES[decl.root];
-    if (!space) {
-      stats.unparsable++;
-      problems.push(`  合同正文声明了未知根合同 §${decl.root}: ${f}`);
-      continue;
-    }
-    const cid = decl.canonical;
-    stats.bodiesWithCanonicalId++;
-
-    /* (a) 同一文件重复声明相同章节 */
-    const declared = [...decl.ids, ...decl.ranges.flatMap(r => [r.from, r.to])];
-    const seenInFile = new Set();
-    for (const id of declared) {
-      if (seenInFile.has(id)) {
-        stats.duplicateIds++;
-        problems.push(`  同一文件重复声明相同章节 §${id}: ${f}`);
-      }
-      seenInFile.add(id);
-    }
-
-    /* (b) 根编号区间冲突：不得占用根文件自有保留编号 */
-    const rootNum = parseInt(cid.split('.')[0], 10);
-    if (Number.isFinite(rootNum) && rootNum <= space.reservedMax) {
-      problems.push(`  ${space.label} 权威章节 §${cid} 与根文件保留范围（§0–§${space.reservedMax}）冲突: ${f}`);
-    }
-
-    /* (c) 声明的章节必须在正文中真实存在，且权威章节号本身唯一 */
-    const headings = entry.headings;
-    const exact = headings.filter(h => h.id === cid);
-    if (exact.length === 0) {
-      problems.push(`  ${space.label} 文件声明权威章节 §${cid}，但正文中无对应标题: ${f}`);
-    } else if (exact.length > 1) {
-      stats.duplicateIds++;
-      problems.push(`  同一文件重复声明相同章节 §${cid}（正文出现 ${exact.length} 次）: ${f}`);
-    }
-    for (const id of decl.ids) {
-      if (!headings.some(h => h.id === id)) {
-        problems.push(`  ${space.label} 文件声明章节 §${id}，但正文中无对应标题: ${f}`);
-      }
-    }
-    for (const r of decl.ranges) {
-      for (const end of [r.from, r.to]) {
-        if (!headings.some(h => h.id === end)) {
-          problems.push(`  ${space.label} 声明的章节区间 §${r.from}–§${r.to} 中 §${end} 在正文中不存在: ${f}`);
-        }
-      }
-    }
-
-    /* (d) 跨文件 ID 重复：同一权威空间内章节号必须唯一 */
-    const owners = spaceOwners[decl.root];
-    if (owners.has(cid)) {
-      stats.duplicateIds++;
-      problems.push(`  ${space.label} 权威章节 §${cid} 被 ${owners.get(cid)} 与 ${f} 同时声明`);
-    } else {
-      owners.set(cid, f);
-    }
-    for (const [otherId, otherFile] of owners) {
-      if (otherId === cid || otherFile === f) continue;
-      if (otherId.startsWith(cid + '.') || cid.startsWith(otherId + '.')) {
-        stats.duplicateIds++;
-        problems.push(`  ${space.label} 权威章节 §${cid}（${f}）与 §${otherId}（${otherFile}）编号层级重叠`);
-      }
-    }
-  }
-
-  /* 禁止零覆盖 PASS */
-  if (stats.bodiesChecked === 0) {
-    problems.push('  未发现任何合同正文，N2 覆盖为零，禁止 PASS');
-  }
-  if (stats.bodiesWithCanonicalId === 0 && stats.segmentedContracts === 0) {
-    problems.push('  未解析出任何权威章节声明，N2 覆盖为零，禁止 PASS');
-  }
-
-  const numeric = (a, b) => a.localeCompare(b, 'en', { numeric: true });
-  const detail = [
-    `受检 Active 合同文件 ${stats.activeTotal} 个 —— 根全局合同 ${stats.rootContracts}、README 导航 ${stats.navigationIndexes}、分段合同 ${stats.segmentedContracts}、领域合同正文 ${stats.bodiesWithCanonicalId}`,
-    `实际检查合同正文 ${stats.bodiesChecked} 个；权威章节解析成功 ${stats.bodiesWithCanonicalId} 个；合法例外 ${stats.exceptions} 个；重复 ID ${stats.duplicateIds} 个`,
-    `Requirement 空间权威章节：${[...spaceOwners.document.keys()].sort(numeric).join(' / ')}`,
-    `Design 空间权威章节：${[...spaceOwners.solution.keys()].sort(numeric).join(' / ')}`,
-  ];
-  return { problems, detail, stats };
-}
+const RETIRED_CHECKS = [{
+  id: 'N2',
+  title: '合同章节 ID 唯一且不与根文件保留范围冲突',
+  reason: '经项目负责人决定主动退役；章节权威关系改由人工 Review 确认',
+}];
 
 function runCurrentChecks(target, anchor, only = null) {
   if (only !== null) {
-    if (!['N2', 'N7'].includes(only)) throw new Error(`current 模式仅支持聚焦检查 N2 / N7，收到: ${only}`);
+    if (only !== 'N7') throw new Error(`current 模式仅支持聚焦检查 N7，收到: ${only}`);
     let cur;
     try {
       cur = buildCurrentIndex(REPO_ROOT, target);
     } catch (error) {
-      record(only, only === 'N2' ? '合同章节 ID 唯一且不与根文件保留范围冲突'
-        : '已批准合同的修改可经变更记录与 Git Diff 追溯', false,
+      record('N7', '已批准合同的修改可经变更记录与 Git Diff 追溯', false,
         `目标版本不可读取: ${target} (${error.message})`);
-      return;
-    }
-    if (only === 'N2') {
-      const n2 = n2Problems(cur);
-      record('N2', '合同章节 ID 唯一且不与根文件保留范围冲突', n2.problems.length === 0,
-        n2.problems.length ? n2.problems : n2.detail);
       return;
     }
     const trace = traceabilityProblems(anchor, target, cur);
@@ -476,13 +318,14 @@ function runCurrentChecks(target, anchor, only = null) {
       ? newBroken.map(b => `  NEW_BROKEN ${b.from} -> ${b.target}  (${b.why})`)
       : [`当前失效链接 ${curBroken.length} 条，全部为 G0 验收锚点已存在的历史遗留；新增 ${newBroken.length} 条`]);
 
-  /* N2 合同 ID 唯一 */
-  const active = activeContractFiles(cur);
-  const n2 = n2Problems(cur);
-  record('N2', '合同章节 ID 唯一且不与根文件保留范围冲突', n2.problems.length === 0,
-    n2.problems.length ? n2.problems : n2.detail);
+  /* N2 —— 已退役，只登记历史标识，不再产生 PASS / FAIL 判定 */
+  for (const retired of RETIRED_CHECKS) {
+    process.stdout.write(`[RETIRED] ${retired.id} ${retired.title}\n`);
+    process.stdout.write(`       ${retired.reason}\n`);
+  }
 
   /* N3 无重复 Active 合同正文 */
+  const active = activeContractFiles(cur);
   const dupProblems = [];
   const fpMap = bodyFingerprints(cur, active);
   const activeByFp = new Map();
@@ -778,6 +621,9 @@ function main() {
   process.stdout.write(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}\n`);
   for (const r of results) {
     process.stdout.write(`  ${r.ok ? 'PASS' : 'FAIL'}  ${r.id} ${r.title}\n`);
+  }
+  for (const retired of (mode === 'current' ? RETIRED_CHECKS : [])) {
+    process.stdout.write(`  RETIRED  ${retired.id} ${retired.title}（不参与 PASS / FAIL 判定）\n`);
   }
   process.exit(failures === 0 ? 0 : 1);
 }

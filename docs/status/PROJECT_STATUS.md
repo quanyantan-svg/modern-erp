@@ -439,6 +439,50 @@ M1_A2_ACCEPTANCE_FIX_READY
 （SHA-256 `6234d6b0d93e527aa750061f59468f309d8fe9a1369b1f8375f46c9fc2b36fe2` 复核一致）、
 未 Push / Merge / Rebase / Tag / Deploy。FULL / HEAVY / MySQL / Browser Gate 未运行，不声称通过。
 
+### 36.9 N2 主动退役与 Linked Worktree 测试修复（2026-11-01）
+
+```text
+M1_A2_N2_RETIRED_AND_WORKTREE_FIX_READY
+```
+
+| 项 | 值 |
+|---|---|
+| 分支 | `work/m1-design-g0-adaptation-20261101` |
+| 基线 | `30abe00b761f58555f670b84f6defec24a4bf751`（M1-A2 验收阻断项修复） |
+| 决定来源 | **项目负责人决定**：正式退役 N2 的自动章节编号解析与唯一性校验 |
+
+**N2 退役（RETIRED）**
+
+- N2 是**经项目负责人决定主动退役**，**不是修复成功**，也**不得被标记为 PASS**。
+  工具输出中以 `[RETIRED] N2 …` 呈现，既不是 PASS 也不是 FAIL。
+- 退役范围：Markdown 元数据中的章节编号自动解析（单节 / 区间 / 多项声明）、
+  权威章节唯一性校验、分段合同的索引登记推断。对应 helper
+  `parseAuthoritySections()` / `authorityIndexRef()` / `registersFile()`
+  经**零调用者检查**后删除；仅服务 N2 的 T32–T37 反向测试一并删除。
+- **章节权威关系改由人工 Review 确认。**
+- N2 编号**保留为历史标识**，不重新编号，避免历史记录混乱。
+- **N1、N3–N9 继续有效**；`migration` 模式的 **C1–C6 完整保留**。
+- 退役未以降低其他检查条件或隐藏失败的方式实现。
+
+**Linked Worktree 测试兼容性修复**
+
+- `server/mobile-shell.test.js` 原先硬编码 `<repoRoot>/.git/info/exclude`；
+  在 linked worktree 下 `.git` 是**文件**，该路径不存在，断言以 `ENOENT` 失败。
+- 改为通过 `git rev-parse --git-common-dir` 解析 **common Git directory**，
+  再定位 `info/exclude`：普通 clone 指向 `<repo>/.git/info/exclude`，
+  linked worktree 指向主仓库的 `.git/info/exclude`。
+- 断言同步改为验证**有效忽略行为**（仓库 `.gitignore` 或 common-dir `info/exclude`
+  任一处声明 `example/`，且 `git check-ignore` 必须实际判定为 ignored），
+  因为 `info/exclude` 是本机配置、**不会被 clone 继承**，只有受版本控制的
+  `.gitignore` 才是所有拓扑下都存在的持久机制。
+- **未跳过测试、未修改全局 Git 配置、未改变测试分组、未删除 `example/` 忽略规则**；
+  主仓库 `.git/info/exclude` 中的 `example/` 规则原样保留。
+
+**本轮明确没有做**：未修改任何 Requirement / Design / 业务合同正文，
+未修改 M1 候选设计 4199 行正文，未签发 `Design PASS`、未授权 `Implementation`、
+未执行 Domain Acceptance、未关闭 G-1…G-5、未 Push / Merge / Rebase / Tag / Deploy、
+未做任何数据库操作。FULL / HEAVY / MySQL / Browser Gate 未运行，不声称通过。
+
 ---
 
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」

@@ -19,8 +19,8 @@ function git(cwd, ...args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 }
 
-function runCheck(cwd, target = 'WORKTREE', gate = 'N7') {
-  const args = ['scripts/docs/check-doc-consistency.mjs', '--mode', 'current', '--target', target, '--only', gate];
+function runCheck(cwd, target = 'WORKTREE') {
+  const args = ['scripts/docs/check-doc-consistency.mjs', '--mode', 'current', '--target', target, '--only', 'N7'];
   const result = spawnSync(process.execPath, args, {
     cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
   });
@@ -91,7 +91,7 @@ function contractBody(id, headingId = id) {
     `> 权威来源：\`document.md\` §${id}`,
     `> 来源：\`document.md\` §${id}（源 SHA \`4cb8c477\`，正文逐字迁移，章节编号保持不变）`, '',
     `## ${headingId} N7 探针合同`, '',
-    '仅用于临时克隆中的 N2 回归验证。', '',
+    '仅用于临时克隆中的受治理正文回归验证。', '',
   ].join('\n');
 }
 
@@ -345,98 +345,6 @@ test('N7 historical governed path matrix T27-T31', { timeout: 20 * 60 * 1000 }, 
       console.log(`${row.id} | input=${row.input} | command=${row.command} | expected=${row.expected} | actual=${row.actual} | exit=${row.exit}`);
     }
     assert.equal(results.length, 5);
-  } finally {
-    rmSync(tempRoot, { recursive: true, force: true });
-  }
-});
-
-test('N2 canonical id coverage matrix T32-T37', { timeout: 20 * 60 * 1000 }, () => {
-  const { tempRoot, clone, base } = createClone(repoRoot, 'n2');
-  const results = [];
-
-  try {
-    const reset = () => {
-      assert.ok(resolve(clone).startsWith(resolve(tempRoot)), 'destructive reset must stay in temp clone');
-      git(clone, 'reset', '--hard', base);
-      git(clone, 'clean', '-fd');
-    };
-    const run = (id, input, expected, expectedPattern) => {
-      const actual = runCheck(clone, 'WORKTREE', 'N2');
-      expectGate(actual, 'N2', expected);
-      if (expectedPattern) {
-        assert.match(actual.output, expectedPattern, `${id} must fail for the intended reason:\n${actual.output}`);
-      }
-      const parsed = parseGate(actual.output, 'N2');
-      results.push({
-        id, input, command: actual.command, expected,
-        actual: parsed.verdict, exit: actual.status,
-      });
-      return actual;
-    };
-
-    /* T32：正常反引号元数据必须 PASS，且 N2 必须显示真实覆盖统计 */
-    reset();
-    writeFileSync(join(clone, 'docs', 'requirements', 'n7-probe.md'), contractBody('41'), 'utf8');
-    const t32 = run('T32', 'backtick-wrapped canonical id metadata', 'PASS');
-    assert.match(t32.output, /权威章节解析成功 \d+ 个/, 'N2 PASS must report the parsed count');
-    assert.match(t32.output, /重复 ID \d+ 个/, 'N2 PASS must report the duplicate-id count');
-    assert.match(t32.output, /实际检查合同正文 \d+ 个/, 'N2 PASS must report the checked-file count');
-
-    /* T33：缺少必须存在的权威章节声明必须 FAIL */
-    reset();
-    writeFileSync(join(clone, 'docs', 'requirements', 'n7-noid.md'), [
-      '# N7 无权威章节正文', '',
-      '> 状态：`ACTIVE`',
-      '> Owner：N7 Regression',
-      '> 权威来源：`document.md`', '',
-      '## 1. 无权威章节', '', 'body', '',
-    ].join('\n'), 'utf8');
-    run('T33', 'contract body without a canonical id', 'FAIL',
-      /缺少可核验的权威索引登记|无法解析权威章节/);
-
-    /* T34：两个不同文件占用同一权威 ID 必须 FAIL */
-    reset();
-    writeFileSync(join(clone, 'docs', 'requirements', 'n7-dup-a.md'), contractBody('42'), 'utf8');
-    writeFileSync(join(clone, 'docs', 'requirements', 'n7-dup-b.md'), contractBody('42'), 'utf8');
-    run('T34', 'two files claiming the same authoritative id', 'FAIL',
-      /同时声明/);
-
-    /* T35：声明的 ID 与正文标题不符必须 FAIL */
-    reset();
-    writeFileSync(join(clone, 'docs', 'requirements', 'n7-mismatch.md'), contractBody('43', '44'), 'utf8');
-    run('T35', 'declared id does not exist as a body heading', 'FAIL',
-      /正文中无对应标题/);
-
-    /* T36：同一文件重复声明相同章节必须 FAIL */
-    reset();
-    writeFileSync(join(clone, 'docs', 'requirements', 'n7-dupdecl.md'), [
-      '# N7 重复声明正文', '',
-      '> 状态：`ACTIVE`',
-      '> Owner：N7 Regression',
-      '> 权威来源：`document.md` §45',
-      '> 来源：`document.md` §45、§45（源 SHA `4cb8c477`，正文逐字迁移）', '',
-      '## 45. N7 探针合同', '', 'body', '',
-    ].join('\n'), 'utf8');
-    run('T36', 'same file declaring the same section twice', 'FAIL',
-      /同一文件重复声明相同章节/);
-
-    /* T37：README 导航文件不得被误判为合同正文 */
-    reset();
-    mkdirSync(join(clone, 'docs', 'requirements', 'n7-sub'), { recursive: true });
-    writeFileSync(join(clone, 'docs', 'requirements', 'n7-sub', 'README.md'), [
-      '# N7 导航索引', '',
-      '> 状态：`ACTIVE`',
-      '> Owner：N7 Regression',
-      '> 权威来源：本目录为导航索引；全局合同见 [`document.md`](../../../document.md)', '',
-      '本文件只做目录导航，不声明权威章节。', '',
-    ].join('\n'), 'utf8');
-    const t37 = run('T37', 'README navigation file is not a contract body', 'PASS');
-    assert.match(t37.output, /README 导航 \d+/, 'N2 must count README navigation files separately');
-
-    for (const row of results) {
-      console.log(`${row.id} | input=${row.input} | command=${row.command} | expected=${row.expected} | actual=${row.actual} | exit=${row.exit}`);
-    }
-    assert.equal(results.length, 6);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
