@@ -303,18 +303,23 @@ M0 **不改变任何生产行为、API、schema、migration、权限、状态机
 ### 36.4 G0 交付状态
 
 ```text
-G0_IMPLEMENTATION_COMPLETE_PENDING_USER_ACCEPTANCE
+G0_ACCEPTANCE_PASS
 ```
 
 | 项 | 值 |
 |---|---|
-| 工作分支 | `work/g0-governance-refactor-20261101` |
+| 工作分支 | `work/g0-governance-refactor-20261101`（已快进合入本地 `master`） |
 | 基线 | `master` @ `4cb8c477aa00988bbfebef905764565cdfe62b71` |
 | 交付提交 | `8186e8165fbec60f60432011a118fa8eb20a76b8`（`docs(erp): 完成 G0 开发治理体系重构`） |
+| 验收锚点 | `1aa753d6e72fdfb37968601d26cfdd422b794948`（`docs(erp): 登记 G0-R1 交付提交锚点`）—— 该提交**未被移动、删除或改写** |
 | 变更范围 | 仅治理与文档（`AGENTS.md`、`CLAUDE.md`、`README.md`、`document.md`、`solution.md`、`docs/**`、`log/**`）；**未修改任何 `src/` / `server/` 生产代码、schema、migration、API、权限、状态机或业务测试** |
 | 迁移映射 | [`docs/status/MIGRATION-MAP.md`](./MIGRATION-MAP.md) —— 143 条逐章节映射（`document.md` 58 条 + `solution.md` 85 条） |
 | 完整性校验 | 83/83 与 105/105 个 H2 章节正文**逐字保留**且**各出现一次**；逐行守恒校验 0 行丢失 |
-| G0 Acceptance | **未签发** —— 等待用户审查 |
+| G0 Acceptance | **已签发 `G0_ACCEPTANCE_PASS`**（2026-11-01，业务所有者）—— 记录见 [`docs/acceptance/g0-governance-acceptance-20261101.md`](../acceptance/g0-governance-acceptance-20261101.md) |
+
+**边界**：G0 Acceptance 是**治理层**验收，**不代表**任何业务 Domain Acceptance，
+**不批准** M1 Design，**不代表** ERP Release Ready，**不签发**任何 Freeze。
+未运行的 FULL / HEAVY / MySQL / 浏览器验证**不得**据此声称通过。
 
 ### 36.5 G0 之后仍然开放的事项
 
@@ -330,11 +335,16 @@ G0 是**治理层**工作包，**不关闭任何业务 Gap**。以下全部保�
 
 ### 36.6 下一步建议
 
-1. **用户审查 G0 并签发或拒绝 Acceptance**（本节 36.4 的状态标识）。
-2. **恢复 M1 设计审查**所需的确切条件：G0 Acceptance 通过 → 用户单独授权 M1 Design 复核 →
+1. ~~**用户审查 G0 并签发或拒绝 Acceptance**~~ —— **已完成（2026-11-01）**：
+   业务所有者签发 `G0_ACCEPTANCE_PASS`（§36.4）。
+2. **恢复 M1 设计审查**所需的确切条件：G0 Acceptance 通过（**已满足**）→ 用户单独授权 M1 Design 复核 →
    在受保护的独立工作区对 `work/m1-r4-6-design-correction-20261101` 做 Design 复核 →
    业务所有者裁定 §31.12.8 的 10 项集中业务决策 → 才可能签发 Design PASS 并授权 Implementation。
+   **当前进度**：仅完成**文档结构适配**（把 M1 Requirement / Design 正文迁入 G0 文档结构），
+   这**不是** Design 复核，**不是** Design PASS，**不是** Implementation 授权。
 3. 在 M1 Design 未获批前，**不得**启动委外 / VMI 的 GL、结算、Cost Implementation。
+4. 任何 `master` 推送、M1 合入 `master`、Active Design Promotion、Implementation、数据库操作、
+   发布与部署，**均需单独授权**。
 
 ---
 

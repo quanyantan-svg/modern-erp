@@ -10,6 +10,7 @@
 
 | 路径 | 内容 |
 |---|---|
+| [`g0-governance-acceptance-20261101.md`](./g0-governance-acceptance-20261101.md) | G0 开发治理重构的正式验收记录（`G0_ACCEPTANCE_PASS`，2026-11-01）—— 治理层验收，**不含**任何业务 Domain Acceptance |
 | [`sales-customer/`](./sales-customer/) | Sales & Customer 各 Wave 的 Acceptance / Freeze 记录与实施证据 |
 
 ## 规则
