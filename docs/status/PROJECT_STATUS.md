@@ -310,6 +310,7 @@ G0_IMPLEMENTATION_COMPLETE_PENDING_USER_ACCEPTANCE
 |---|---|
 | 工作分支 | `work/g0-governance-refactor-20261101` |
 | 基线 | `master` @ `4cb8c477aa00988bbfebef905764565cdfe62b71` |
+| 交付提交 | `8186e8165fbec60f60432011a118fa8eb20a76b8`（`docs(erp): 完成 G0 开发治理体系重构`） |
 | 变更范围 | 仅治理与文档（`AGENTS.md`、`CLAUDE.md`、`README.md`、`document.md`、`solution.md`、`docs/**`、`log/**`）；**未修改任何 `src/` / `server/` 生产代码、schema、migration、API、权限、状态机或业务测试** |
 | 迁移映射 | [`docs/status/MIGRATION-MAP.md`](./MIGRATION-MAP.md) —— 143 条逐章节映射（`document.md` 58 条 + `solution.md` 85 条） |
 | 完整性校验 | 83/83 与 105/105 个 H2 章节正文**逐字保留**且**各出现一次**；逐行守恒校验 0 行丢失 |
