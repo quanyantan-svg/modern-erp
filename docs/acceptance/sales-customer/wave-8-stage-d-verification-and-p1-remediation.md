@@ -4,6 +4,7 @@
 > Owner：Sales & Customer
 > 权威来源：无 —— 证据只引用，不作为合同
 > 来源：`document.md` / `solution.md` @ `4cb8c477aa00988bbfebef905764565cdfe62b71`（正文逐字迁移，章节编号保持不变）
+
 ## 35.25 Wave 8 Final Bounded Stage D implementation verification record
 
 This section records implementation conformance after the user accepted §35.24 and authorized the final

@@ -4,6 +4,7 @@
 > Owner：Sales & Customer
 > 权威来源：历史证据，非当前权威
 > 来源：`solution.md` §37.0–§37.53（设计部分）（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 37. W7-C1 / W7-C2′ Bounded Design Amendment (2026-10-23)
 
 ### 37.0 Authorization, scope and supersession map

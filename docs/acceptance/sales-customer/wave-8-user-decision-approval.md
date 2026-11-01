@@ -4,6 +4,7 @@
 > Owner：Sales & Customer
 > 权威来源：无 —— 证据只引用，不作为合同
 > 来源：`document.md` / `solution.md` @ `4cb8c477aa00988bbfebef905764565cdfe62b71`（正文逐字迁移，章节编号保持不变）
+
 ## Wave 8 Stage B — User Decision Approval Record
 
 Authorization source: the user's `Sales & Customer Wave 8 — User Decision Approval & Stage C Final Design Reconciliation` instruction dated 2026-10-19. This record approves the business decisions below and authorizes one bounded `solution.md §35` Design reconciliation only. It does not authorize Stage D Implementation, tests, builds, formatting, migration execution, database access, Git operations, or Wave 9–13.

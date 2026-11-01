@@ -4,6 +4,7 @@
 > Owner：Sales & Customer
 > 权威来源：`docs/design/sales-customer/README.md`
 > 来源：`solution.md` §29（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 29. Sales & Customer Domain Technical Design
 
 > 本节原冻结 Sales & Customer Domain Closure 的 Technical Design 阶段成果；2026-10-13 远端外部评审进一步发现订单变更、预留、直出、sellable scope、物理计数与 Sales-group isolation 缺口，故 Requirement 与 Design 被再次有限重开。本次修正 §29 / §30 的有界物理模型、执行合同、验收追溯与计数；DR-SAL-01 Option A 已获用户批准并完成设计闭环。2026-10-14 外部独立评审对 Requirement / Technical Design / Implementation Wave Plan 均返回 PASS，用户已明确批准正式 Freeze；冻结内容基线为 `5469891b78acb5b03940944698e5c51a38cf5491`。

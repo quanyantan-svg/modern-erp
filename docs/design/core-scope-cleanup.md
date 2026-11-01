@@ -4,6 +4,7 @@
 > Owner：Platform / Core Scope Cleanup
 > 权威来源：`solution.md` §21
 > 来源：`solution.md` §21（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 21. Core Scope Cleanup Implementation Design
 
 本节固化 Core Scope Cleanup 实施阶段的 Technical Design。Requirement 见 `document.md §26`。本节只规定本阶段实施，未列入的实现属于其它阶段。

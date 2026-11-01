@@ -341,6 +341,22 @@ Implementation Agent 自报"PASS / 完成"不能替代用户最终 Acceptance。
 - 从旧文件移除的任何内容，必须能在**当前有效文档**、**归档文件**或 **Git Commit 历史 + 映射索引** 中至少一处被重新定位；
 - 无法判定为重复、过时或已归档的内容，**不允许仅因其冗长而删除**；应标记为 `NEEDS_OWNER_REVIEW` 并保留原始内容与来源。
 
+### 5.1 可执行校验
+
+上述规则不得只靠人工遵守。仓库提供**只读**的文档一致性检查：
+
+```bash
+node scripts/docs/check-doc-consistency.mjs
+```
+
+覆盖：迁移章节覆盖率、正文逐字保留与唯一性、迁移映射表一致性、链接与标题锚点、
+历史引用（`document.md:NNNN` / `solution.md §X.Y`）解析、重复 Active 合同检测。
+失败返回非零退出码；检查**不修改任何文档内容、不访问数据库、不改变测试分组**。
+
+迁移基线固定为 `4cb8c477aa00988bbfebef905764565cdfe62b71`（G0 迁移前的 `master`），
+历史引用解析方法见 [`docs/status/MIGRATION-MAP.md`](docs/status/MIGRATION-MAP.md) §4，
+或直接执行 `node scripts/docs/resolve-reference.mjs "<引用>"`。
+
 ---
 
 ## 6. 代码规则

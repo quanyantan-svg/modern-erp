@@ -4,6 +4,7 @@
 > Owner：Sales & Customer
 > 权威来源：`docs/design/sales-customer/README.md`
 > 来源：`solution.md` §36、§36.16（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 36. Sales & Customer Credit — Stage C Combined Design Reconciliation (Waves 9–11, 2026-10-22)
 
 ### 36.0 Authorization, status and how to read this section

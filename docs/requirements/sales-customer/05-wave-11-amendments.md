@@ -4,6 +4,7 @@
 > Owner：Sales & Customer
 > 权威来源：`docs/requirements/sales-customer/README.md`
 > 来源：`document.md` Wave 11 修订节（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## Wave 11 — Sales & Customer Credit Evaluation / Reconciliation / Query — Stage B Requirement Closure (2026-10-27)
 
 ### 1. Authorization, scope and what this record is not

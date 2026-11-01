@@ -4,6 +4,7 @@
 > Owner：Sales & Customer
 > 权威来源：`docs/requirements/sales-customer/README.md`
 > 来源：`document.md` §34（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 34. Sales & Customer Domain Closure Requirement
 
 > 本节原固化 Sales & Customer Domain Closure 的 Requirement 阶段成果；2026-10-13 因远端外部评审发现 SC01 / SC08 / SC30 及后续业务语义缺口而进行**有限 Requirement reopen**。本次只精化既有 B3102 范围，不增加 SC / Invariant / UAT / Race ID；DR-SAL-01 已由用户批准 Option A，文档层缺陷已闭合。2026-10-14 外部独立评审对 Requirement / Technical Design / Implementation Wave Plan 均返回 PASS，用户已明确批准正式 Freeze；冻结内容基线为 `5469891b78acb5b03940944698e5c51a38cf5491`。2026-10-16 DR-SAL-04 Option A 与 2026-10-17 DR-SAL-05 Option C 均已由用户接受；同日发现的 LOT/SERIAL 组合矛盾现按 R1–R4 完成有界 superseding Requirement correction，仅重开 SC55 / SC56 / SC58、UAT-S-20 / UAT-S-21 及 DR-SAL-04/05 对应条款。Option C Reverse 的最终幂等 addendum 进一步明确 client-supplied `Idempotency-Key` 为必填并关闭 Requirement owner clarification。§34 其余已冻结合同不变，本增量只进入下一独立 Design Gate，不授权 Implementation 或 Wave 6 Acceptance/Freeze。

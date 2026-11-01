@@ -4,6 +4,7 @@
 > Owner：Sales & Customer
 > 权威来源：`docs/requirements/sales-customer/README.md`
 > 来源：`document.md` Wave 10 修订节（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## Wave 10 Precondition Requirement Reconciliation (2026-10-24)
 
 ### 1. Authorization, scope and frozen protection

@@ -4,6 +4,7 @@
 > Owner：Planning
 > 权威来源：`solution.md` §25
 > 来源：`solution.md` §25（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 25. Planning Domain Technical Design
 
 > Requirement：`document.md §30`。本设计按 Waves A–H 连续实施；每 Wave focused PASS 后进入下一 Wave。

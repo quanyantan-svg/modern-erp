@@ -4,6 +4,7 @@
 > Owner：Sales & Customer
 > 权威来源：`docs/design/sales-customer/README.md`
 > 来源：`solution.md` §30、§30.26（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 30. Sales & Customer Domain Implementation Wave Plan
 
 > This is the Implementation Sequencing Plan only. It was limitedly reopened on 2026-10-13 together with §29 to close the remote-review Requirement / Design defects. External review returned PASS and user Freeze approval is confirmed; the plan is now `PASS / FROZEN`. Waves 1–13 remain `NOT IMPLEMENTED / NOT ACCEPTED`.

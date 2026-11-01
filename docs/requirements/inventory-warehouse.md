@@ -4,6 +4,7 @@
 > Owner：Inventory & Warehouse
 > 权威来源：`document.md` §32
 > 来源：`document.md` §32（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 32. Inventory & Warehouse Domain Closure Requirement
 
 > 本节固化 Inventory & Warehouse Domain Closure 的 Requirement 阶段成果。

@@ -4,6 +4,7 @@
 > Owner：Sales & Customer
 > 权威来源：无 —— 证据只引用，不作为合同
 > 来源：`document.md` / `solution.md` @ `4cb8c477aa00988bbfebef905764565cdfe62b71`（正文逐字迁移，章节编号保持不变）
+
 ## Wave 8 Stage D — Implemented Capability Coverage Record
 
 > This record describes the implementation produced after the user accepted §35.19 and explicitly resumed Stage D. It does not change the approved Requirement, create a new global SC/Invariant/UAT/Race/CAP identity, or declare Final Acceptance/Freeze.

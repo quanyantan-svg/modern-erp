@@ -4,6 +4,7 @@
 > Owner：Sales & Customer
 > 权威来源：`docs/design/sales-customer/README.md`
 > 来源：`solution.md` §37.54（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 37.54 Wave 11 — Sales & Customer Credit Evaluation / Reconciliation / Query — Stage C Design Closure (2026-10-27)
 
 ### 37.54.1 Authorization, scope, authority and what this design is not

@@ -4,6 +4,7 @@
 > Owner：Sales & Customer
 > 权威来源：`docs/design/sales-customer/README.md`
 > 来源：`solution.md` §35.22–§35.24、§35.27（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 35.18–35.19 Wave 8 Stage C Final Design Reconciliation + V21 Historical Position Evidence Carrier Design（冻结基线组成部分）
 
 > G0 拆分说明：本节是 `solution.md` §35 H2 块中的 `§35.18` 与 `§35.19` 两个子节。

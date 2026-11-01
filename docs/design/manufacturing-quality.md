@@ -4,6 +4,7 @@
 > Owner：Manufacturing & Quality
 > 权威来源：`solution.md` §24
 > 来源：`solution.md` §24（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 24. Manufacturing & Quality Domain Technical Design
 
 > 本节固化 Manufacturing & Quality Domain Closure 的 Design 阶段成果。Requirement 见 `document.md §29`。Manual Evidence Baseline 来自 Prompt §0–§43；本节按 8 个 Implementation Wave (A–H) 展开。

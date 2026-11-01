@@ -4,6 +4,7 @@
 > Owner：Sales & Customer
 > 权威来源：无 —— 证据只引用，不作为合同
 > 来源：`document.md` / `solution.md` @ `4cb8c477aa00988bbfebef905764565cdfe62b71`（正文逐字迁移，章节编号保持不变）
+
 ## 35.20 Wave 8 Stage D — Actual Implementation Evidence
 
 This section records the implementation of the already approved §35.18/§35.19 design. It does not supersede those contracts or authorize Wave 9–13.

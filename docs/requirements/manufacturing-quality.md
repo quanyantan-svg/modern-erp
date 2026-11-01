@@ -4,6 +4,7 @@
 > Owner：Manufacturing & Quality
 > 权威来源：`document.md` §29
 > 来源：`document.md` §29（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 29. Manufacturing & Quality Domain Closure Requirement
 
 > 本节固化 Manufacturing & Quality Domain Closure 的 Requirement 阶段成果。

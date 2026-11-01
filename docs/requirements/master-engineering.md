@@ -4,6 +4,7 @@
 > Owner：Master & Engineering
 > 权威来源：`document.md` §28
 > 来源：`document.md` §28（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 28. Master & Engineering Domain Closure Requirement
 
 > 本节固化 Master & Engineering Domain Closure 的 Requirement 阶段成果。

@@ -4,6 +4,7 @@
 > Owner：Sales & Customer
 > 权威来源：无 —— 证据只引用，不作为合同
 > 来源：`document.md` / `solution.md` @ `4cb8c477aa00988bbfebef905764565cdfe62b71`（正文逐字迁移，章节编号保持不变）
+
 ## 34. Sales & Customer Domain Implementation — Batch A (Waves 3–5) Mapping
 
 > 本节仅记录已冻结 `§29–§30` 的实施映射，不改变 Requirement、SC、UAT、Race、schema 数量或跨域 ownership。实施基线为 `feature/sales-batch-a@af29569ed838493cca942a52361c9c2b391b93c7`。

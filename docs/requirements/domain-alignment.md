@@ -4,6 +4,7 @@
 > Owner：Platform / Domain Alignment
 > 权威来源：`document.md` §27
 > 来源：`document.md` §27（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 27. Domain Alignment Requirement（8 Domains + Platform）
 
 ### 27.1 Audit baseline and coverage decision

@@ -30,3 +30,20 @@
 - 当前工作树的脱敏不代表 Git 历史已经清理，历史重写与凭据轮换必须单独审批。
 
 发现冲突时，以根目录 canonical 文档、`docs/status/` 与当前代码为准。
+
+## 文档一致性检查（只读）
+
+`scripts/docs/` 提供少量稳定、可复跑的文档校验工具。它们**只读**：仅执行
+`git show` / `git ls-tree`，不修改任何文档内容、不访问数据库、不改变
+FAST / FULL / HEAVY 测试分组，失败时返回非零退出码。
+
+| 命令 | 用途 |
+|---|---|
+| `node scripts/docs/check-doc-consistency.mjs` | C1 章节覆盖率、C2 正文逐字保留且唯一、C3 迁移映射表一致性、C4 链接与锚点、C5 历史引用解析、C6 重复 Active 合同 |
+| `node scripts/docs/resolve-reference.mjs "solution.md:12607"` | 解析迁移前的历史行号 / 章节路径引用，返回其在新结构中的位置 |
+
+迁移基线固定为 `4cb8c477aa00988bbfebef905764565cdfe62b71`（G0 迁移前的 `master`）。
+默认校验目标为当前工作树；加 `--target HEAD` 可校验已提交状态，
+加 `--baseline <commit>` 可指定其他基线。
+
+解析规范与逐章节映射见 [`docs/status/MIGRATION-MAP.md`](./status/MIGRATION-MAP.md) §4。

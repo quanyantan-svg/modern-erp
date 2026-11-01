@@ -62,14 +62,47 @@
 > [`docs/status/PROJECT_STATUS.md`](../../status/PROJECT_STATUS.md) §35.3 与
 > [`docs/acceptance/sales-customer/`](../../acceptance/sales-customer/) 为准。
 
-## 3. 尚未纳入本目录的 Sales 相关需求
+## 3. W11-B / W11-C / W11-D 的需求状态
 
-- **W11-B**（信用评估基础）、**W11-C**（多评分/评级应用）、**W11-D**（信用对账与重算）
-  **尚未形成 Requirement**，属 `NOT_STARTED`；见 `PROJECT_STATUS.md` §35.5。
+三个工作包的 Requirement **已经形成并闭合**（Wave 11 Stage B Requirement Closure），
+不得与「尚未实施」混同。
+
+| 工作包 | Capability | Requirement 正文位置 | Requirement 状态 | Implementation |
+|---|---|---|---|---|
+| W11-B（信用评估基础） | SC103–SC105 | 本目录 `05-wave-11-amendments.md`（Wave 11 Stage B Requirement Closure） | **Stage B 已形成并闭合** | 未开始 |
+| W11-C（多评分/评级应用） | SC106–SC107 | 同上 | **Stage B 已形成并闭合** | 未开始 |
+| W11-D（信用对账与重算） | SC99–SC100 | 同上 | **Stage B 已形成并闭合** | 未开始 |
+
+配套状态：
+
+- Design：Stage C 设计正文**已形成**，见
+  [`docs/design/sales-customer/05-wave-11-stage-c.md`](../../design/sales-customer/05-wave-11-stage-c.md)
+  的 `§37.54.9` / `§37.54.10` / `§37.54.11`；但**尚未取得用户批准**
+  （状态 `WAVE11_STAGE_C_DESIGN_READY` / `WAVE11_STAGE_C_BOUNDED_CORRECTION_READY`，待外部签收）。
+- 开放设计决策 `D-2` / `D-3` / `D-4` / `D-5` **仍然开放**（`PROJECT_STATUS.md` §35.9）。
+- 三者均**没有** Acceptance / Freeze 记录；「未实施」的权威记载是 `PROJECT_STATUS.md` §35.5。
+
+状态词表：`Requirement 已闭合` ≠ `Design 已批准` ≠ `已实施` ≠ `已验收冻结`。
+
+## 3.1 其他需求覆盖信息
+
 - §35.4 记录 B3102 / B3103 的当前 Coverage 权威来源为 §34.8 + Stage B SC82–SC107。
 
-## 4. 迁移说明
+## 4. 迁移说明与历史引用解析
 
 本目录正文自 `document.md` @ `4cb8c477aa00988bbfebef905764565cdfe62b71` **逐字迁移**，
-原章节编号**原样保留**，因此 `document.md §34`、`§34.8`、`§34.15` 等深引用继续有效。
+原章节编号（`§34`、`§34.8`、`§34.15`、`§31.12` 等）**在目标文件中原样保留**。
+
+**但迁移前的根文件路径不再保有对应章节正文**：`document.md` 已从 15,836 行缩到 1,085 行，
+§26–§34 与各 Wave 修订节已迁入 `docs/requirements/`。引用这些章节时必须指向上表的新文件，
+不能沿用 `document.md §34` 这样的根文件路径。
+
+历史行号引用（`document.md:NNNN`）与章节路径引用的解析规范见
+[`docs/status/MIGRATION-MAP.md`](../../status/MIGRATION-MAP.md) §4，也可直接执行：
+
+```bash
+node scripts/docs/resolve-reference.mjs "document.md §31.12"
+node scripts/docs/resolve-reference.mjs "document.md:11187"
+```
+
 逐章节映射见 [`docs/status/MIGRATION-MAP.md`](../../status/MIGRATION-MAP.md)。

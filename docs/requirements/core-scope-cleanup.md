@@ -4,6 +4,7 @@
 > Owner：Platform / Core Scope Cleanup
 > 权威来源：`document.md` §26
 > 来源：`document.md` §26（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 26. Core Scope Cleanup Implementation Acceptance Criteria
 
 本节固化 Core Scope Cleanup 实施阶段的 Requirement Acceptance Criteria。本节必须先于 Implementation 完成；设计见 `solution.md §21`。

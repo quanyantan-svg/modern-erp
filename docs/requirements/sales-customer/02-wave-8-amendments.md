@@ -4,6 +4,7 @@
 > Owner：Sales & Customer
 > 权威来源：`docs/requirements/sales-customer/README.md`
 > 来源：`document.md` Wave 8 修订节（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## Wave 8 Stage B — Bounded Business Decisions & Cross-Domain Contract Reopen
 
 ### 1. Reopen reason, authority, scope and frozen protection

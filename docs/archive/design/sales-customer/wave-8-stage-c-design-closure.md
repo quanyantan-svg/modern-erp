@@ -4,6 +4,7 @@
 > Owner：Sales & Customer
 > 权威来源：历史证据，非当前权威
 > 来源：`solution.md` §35（§35.0–§35.17）（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 35. Sales & Customer Wave 8 — Stage C Design Closure (2026-10-19)
 
 > Status: `WAVE8_STAGE_C_DESIGN_DELIVERED — AWAITING USER APPROVAL`.

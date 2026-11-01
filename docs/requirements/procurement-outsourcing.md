@@ -4,6 +4,7 @@
 > Owner：Procurement & Outsourcing
 > 权威来源：`document.md` §31
 > 来源：`document.md` §31（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 31. Procurement & Outsourcing Domain Closure Requirement
 
 > 本节固化 Procurement & Outsourcing Domain Closure 的 Requirement 阶段成果。

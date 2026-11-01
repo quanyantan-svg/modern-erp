@@ -4,6 +4,7 @@
 > Owner：Finance Operations
 > 权威来源：`solution.md` §28
 > 来源：`solution.md` §28.0–§28.29（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 28.0 Scope of This Section
 
 A–S outputs as required by `document.md §33.5 / §33.39 / §33.40` and the Phase §6 Design Principles:

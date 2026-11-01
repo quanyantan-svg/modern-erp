@@ -4,6 +4,7 @@
 > Owner：Planning
 > 权威来源：`document.md` §30
 > 来源：`document.md` §30（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 30. Planning Domain Closure Requirement
 
 > 本节固化 B3120 Planning Domain Closure 的 Audit / Coverage / Requirement。

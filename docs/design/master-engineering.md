@@ -4,6 +4,7 @@
 > Owner：Master & Engineering
 > 权威来源：`solution.md` §23
 > 来源：`solution.md` §23（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 23. Master & Engineering Domain Technical Design
 
 > 本节固化 Master & Engineering Domain Closure 的 Design 阶段成果。

@@ -4,6 +4,7 @@
 > Owner：Platform / Domain Alignment
 > 权威来源：`solution.md` §22
 > 来源：`solution.md` §22（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 22. Domain Alignment Design（8 Domains + Platform）
 
 ### 22.1 Canonical taxonomy and projections

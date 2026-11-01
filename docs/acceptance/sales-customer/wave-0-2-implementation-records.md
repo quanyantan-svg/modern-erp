@@ -4,6 +4,7 @@
 > Owner：Sales & Customer
 > 权威来源：无 —— 证据只引用，不作为合同
 > 来源：`document.md` / `solution.md` @ `4cb8c477aa00988bbfebef905764565cdfe62b71`（正文逐字迁移，章节编号保持不变）
+
 ## 31. Sales & Customer Domain Implementation — Wave 0
 
 > Post-freeze implementation record for the externally frozen §29 Design and §30 Wave Plan. This section records repository implementation facts only; it does not modify §29 or §30 semantics.

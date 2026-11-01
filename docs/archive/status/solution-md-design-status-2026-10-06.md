@@ -4,6 +4,7 @@
 > Owner：Platform
 > 权威来源：历史证据，非当前权威；当前状态见 `docs/status/PROJECT_STATUS.md`
 > 来源：`solution.md` §21「当前设计状态」（原重复编号）（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+
 ## 21. 当前设计状态
 
 截至 2026-10-06：
