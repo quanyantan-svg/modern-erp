@@ -14,7 +14,7 @@
 | [`master-engineering.md`](./master-engineering.md) | Master & Engineering | `solution.md` §23 | 已实施 |
 | [`manufacturing-quality.md`](./manufacturing-quality.md) | Manufacturing & Quality | `solution.md` §24 | 已实施 |
 | [`planning.md`](./planning.md) | Planning | `solution.md` §25 | 已实施并冻结 |
-| [`procurement-outsourcing.md`](./procurement-outsourcing.md) | Procurement & Outsourcing | `solution.md` §26 | 设计正文；**M1 §26.33 设计仍在独立分支待复核，未合并到 `master`** |
+| [`procurement-outsourcing.md`](./procurement-outsourcing.md) | Procurement & Outsourcing | `solution.md` §26 | 设计正文；**M1 §26.33 候选设计已迁入待审区** [`docs/reviews/m1/`](../reviews/m1/)（`PENDING_REVIEW`，`Design PASS` 未签发），**不在本目录**，Active 正文仍只有 §26 |
 | [`inventory-warehouse.md`](./inventory-warehouse.md) | Inventory & Warehouse | `solution.md` §27 | 已实施 |
 | [`finance-operations.md`](./finance-operations.md) | Finance Operations | `solution.md` §28.0–§28.29 | 已实施 |
 | [`sales-customer/`](./sales-customer/) | Sales & Customer | `solution.md` §29 / §30 / Wave 8/9/11 基线 | 已实施；分波次冻结基线 |
@@ -27,6 +27,11 @@
 ## 规则
 
 - 正文与 `solution.md` §21–§37 **同源**：G0 迁移只做物理搬迁，正文逐字保留，原章节编号保持不变（因此 `§26.33`、`§37.54.48` 等深引用继续有效）。
+- **`§26.33`（M1 Integrated Critical Chain Design）不在本目录。** 该候选设计当前位于待审区
+  [`docs/reviews/m1/procurement-outsourcing-critical-chain-design.md`](../reviews/m1/procurement-outsourcing-critical-chain-design.md)，
+  状态 `PENDING_REVIEW`，`Design PASS` **未签发**，**不构成 Active 正文**；
+  只有在业务所有者批准并**单独执行 Active Design Promotion** 后才会进入本目录。
+  `§26.33` 的深引用仍然有效，只是目标文件由 `docs/design/procurement-outsourcing.md` 变为该待审文件。
 - **历史设计修订不得与 Active 正文并列。** 被取代的修订（`§35.0–§35.17`、`§37.0–§37.53` 的中间轮次）已移入
   [`docs/archive/design/sales-customer/`](../archive/design/sales-customer/)，并由本目录的基线登记指向。
 - 不得在本目录追加验收执行流水、测试输出或 Git 交付记录。

@@ -290,15 +290,26 @@ M0 **不改变任何生产行为、API、schema、migration、权限、状态机
 | G0-E-2 | §35.7 记 M0 验收锚点提交 `3e70c380…` 的"提交与双远端推送尚未授权" | 该锚点提交**已存在于 `master` 历史**（`git merge-base --is-ancestor` 校验通过），其后为 `498d501`、`4cb8c47`。§35.11 的验收结论本身不变 | `git log master` @ 2026-11-01 |
 | G0-E-3 | §35.10 "当前推荐的下一个工作包 = A（M0）" | M0 已闭合（§35.11）。**本轮 G0 是文档治理工作包**，其自身状态见 §36.4；业务包的启动仍需单独授权 | 本节 |
 
-### 36.3 M1 设计状态（未合并，单独授权）
+### 36.3 M1 设计状态（已迁入待审区，未获批准）
 
 - M1 的 **Design** 正文（`solution.md` §26.33，含 R4 / R4-5 / R4-6 / R4-6-R1 / R4-6-R2 修订）
-  目前**只存在于独立分支** `work/m1-r4-6-design-correction-20261101`（HEAD `912fd76700ff6f3ad1509eec4c9e2241c1830265`）。
-- 该设计**未合并到 `master`**，因此**不是** `master` 的当前实现，也**不得**被当作已批准或已实施。
-- 其当前状态为 **`PENDING_REVIEW`**：`Design PASS` 未签发，`Implementation` 未授权，
-  13 个 Gate 全部 `NOT_RUN`。
-- 本节**不复制**该分支的任何设计正文。分支内容在获得单独授权后按 §4 的阶段控制处理。
-- `master` 侧的 M1 权威内容只有 **Requirement**：`docs/requirements/procurement-outsourcing.md` §31.12。
+  原始版本**只**存在于独立分支 `work/m1-r4-6-design-correction-20261101`
+  （HEAD `912fd76700ff6f3ad1509eec4c9e2241c1830265`）；该分支**保持原样、未被改写**。
+- **文档结构适配分支** `work/m1-design-g0-adaptation-20261101` 已把该正文**逐字**迁入
+  **待审区** [`docs/reviews/m1/procurement-outsourcing-critical-chain-design.md`](../reviews/m1/procurement-outsourcing-critical-chain-design.md)
+  （4199 行，源行范围 3960–8158）。该文件**不构成 Current Active Contract**；
+  Active 的 Procurement & Outsourcing Design 仍**只有**
+  [`docs/design/procurement-outsourcing.md`](../design/procurement-outsourcing.md) §26。
+- 其当前状态为 **`PENDING_REVIEW`**：`Design PASS` **未签发**，`Implementation` **未授权**，
+  13 个 Gate 的 `execution_status` **13/13 `NOT_RUN`**、`readiness_status` 为 **9 `NOT_RUN` + 4 `BLOCKED`**
+  （`M1-GB03` / `M1-GC02` / `M1-GD01` / `M1-GD02`）。
+- §26.33 内部的 R1 / R2 / R3 / R4 / R4-5 / R4-6 / R4-6-R1 / R4-6-R2 修订轮次
+  **只是该设计自身的内部纠错**，**不等于**业务所有者已批准整个 Design。
+- 本节**不复制**该设计正文；正文位置、来源 SHA 与位置说明见该待审文件抬头。
+- `master` 侧的 M1 权威内容**仍只有 Requirement**：
+  [`docs/requirements/procurement-outsourcing.md`](../requirements/procurement-outsourcing.md) §31.12
+  （业务所有者已于 2026-10-31 验收，标识 `M1_REQUIREMENT_ACCEPTANCE_PASS`）。
+- **Active Design Promotion 未执行**：Design PASS 之后仍需**单独**执行把正文移入 `docs/design/` 的动作。
 
 ### 36.4 G0 交付状态
 
@@ -345,6 +356,44 @@ G0 是**治理层**工作包，**不关闭任何业务 Gap**。以下全部保�
 3. 在 M1 Design 未获批前，**不得**启动委外 / VMI 的 GL、结算、Cost Implementation。
 4. 任何 `master` 推送、M1 合入 `master`、Active Design Promotion、Implementation、数据库操作、
    发布与部署，**均需单独授权**。
+
+### 36.7 M1 文档适配分支状态（2026-11-01）
+
+```text
+M1_G0_DOCUMENT_ADAPTATION_READY_FOR_REVIEW
+```
+
+| 项 | 值 |
+|---|---|
+| 分支 | `work/m1-design-g0-adaptation-20261101` |
+| 基线 | 本地 `master` @ `f5838eb1d13e6ae701202b5c69c90d1cf208b269`（已含 G0 四个提交 + G0 Acceptance 登记） |
+| 独立工作区 | `D:/Project/VSCode/ERP系统/modern-erp-m1-adaptation` |
+| 来源分支（**未改写**） | `work/m1-r4-6-design-correction-20261101` @ `912fd76700ff6f3ad1509eec4c9e2241c1830265` |
+
+**本分支做了什么（仅文档结构）**：
+
+1. 把 M1 `document.md §31.12` 的 Requirement 增量（6 增 / 3 删）**逐字**迁入
+   [`docs/requirements/procurement-outsourcing.md`](../requirements/procurement-outsourcing.md) §31.12 ——
+   迁移后的该节与 M1 源节**逐字一致**（159 行，159 行）；
+2. 把 M1 `solution.md §26.33` 的候选设计正文（4199 行）**逐字**迁入**待审区**
+   [`docs/reviews/m1/procurement-outsourcing-critical-chain-design.md`](../reviews/m1/procurement-outsourcing-critical-chain-design.md)；
+3. 恢复 M1 的 `log/2026-10-31.md` 增量（482 行，**严格追加**）与 `log/2026-11-01.md`（790 行，全量）；
+4. 更新导航与决策登记（`docs/README.md`、`docs/reviews/README.md`、`docs/design/README.md`、
+   `docs/requirements/README.md`、`docs/decisions/OPEN-BUSINESS-DECISIONS.md`、根 `solution.md`）；
+5. 把 `scripts/docs/check-doc-consistency.mjs` 拆成 `--mode migration` / `--mode current` 双模式。
+
+**本分支明确**没有**做什么**：
+
+- **没有**签发 `Design PASS`；**没有**授权 Implementation；**没有**执行任何 Gate；
+- **没有**把 §26.33 提升为 Active Design（`docs/design/` 中该 Domain 的 Active 正文**仍只有** §26）；
+- **没有**修改 M1 的 Requirement 业务合同、Gap 映射、Capability 归属与 13 个 Gate 定义；
+- **没有**把「文档已迁移」记作「业务能力已实现」；13 个 Gate 的
+  `execution_status` 仍为 **13/13 `NOT_RUN`**，`readiness_status` 仍为 **9 `NOT_RUN` + 4 `BLOCKED`**；
+- **没有**关闭 §31.12.8 的十项集中业务政策；**没有**关闭 G-1…G-5；
+- Procurement & Outsourcing 的 Domain Acceptance 仍为 **`NOT READY`**
+  （`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY`）；**没有任何** Domain 因此升级为 Release Ready；
+- **没有**修改任何 `src/` / `server/` 生产代码、schema、migration、API、权限、状态机或业务测试；
+- **没有**推送本分支；**没有**把本分支合入 `master`。
 
 ---
 

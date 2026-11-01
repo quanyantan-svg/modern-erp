@@ -65,6 +65,7 @@
 | `solution.md` | 全局架构与 Design 合同 + 各 Domain Design 的权威导航 | 历史 Design Amendment 堆叠、验收执行流水 |
 | `docs/requirements/` | 各 Domain **当前有效** Requirement 正文 | Acceptance 记录、实施日志 |
 | `docs/design/` | 各 Domain **当前有效** Design 正文 | 被取代的历史勘误正文、验收流水 |
+| `docs/reviews/` | 待业务所有者审阅的**候选** Requirement / Design 正文（`PENDING_APPROVAL` / `PENDING_REVIEW`） | **不构成 Current Active Contract**；与 Active 正文并列宣称当前权威；冒充已批准状态 |
 | `docs/status/PROJECT_STATUS.md` | **唯一**当前项目级进度登记表 | 第二份覆盖、把历史 PASS 描述为当前 HEAD PASS |
 | `docs/status/CAPABILITY_MATRIX.md` | B3101–B3122 可追溯能力覆盖矩阵 | 凭代码文件存在就宣称 `COVERED` |
 | `docs/decisions/` | 独立重大决策记录（ADR） | 与 Requirement/Design 重复的正文 |
@@ -343,17 +344,50 @@ Implementation Agent 自报"PASS / 完成"不能替代用户最终 Acceptance。
 
 ### 5.1 可执行校验
 
-上述规则不得只靠人工遵守。仓库提供**只读**的文档一致性检查：
+上述规则不得只靠人工遵守。仓库提供**只读**的文档一致性检查，**两种模式语义不同**，
+必须分开理解、分开执行。
+
+#### 5.1.1 `current` 模式 —— 当前文档完整性（默认）
 
 ```bash
-node scripts/docs/check-doc-consistency.mjs
+node scripts/docs/check-doc-consistency.mjs            # 默认即 current 模式
+node scripts/docs/check-doc-consistency.mjs --mode current --target HEAD
 ```
 
-覆盖：迁移章节覆盖率、正文逐字保留与唯一性、迁移映射表一致性、链接与标题锚点、
-历史引用（`document.md:NNNN` / `solution.md §X.Y`）解析、重复 Active 合同检测。
-失败返回非零退出码；检查**不修改任何文档内容、不访问数据库、不改变测试分组**。
+验证**持续开发后的当前文档**是否自洽：
 
-迁移基线固定为 `4cb8c477aa00988bbfebef905764565cdfe62b71`（G0 迁移前的 `master`），
+| 检查 | 内容 |
+|---|---|
+| N1 | 链接与标题锚点可达（相对 G0 验收锚点**不得新增**失效链接） |
+| N2 | 合同章节 ID 唯一、不与根文件保留编号冲突、与文件自身标题一致 |
+| N3 | Active 集合内无第二份同一合同正文；待审候选不复制 Active 正文 |
+| N4 | Active 合同文件声明 状态 / Owner / 权威来源，状态为 `ACTIVE` |
+| N5 | 索引 README 登记本目录全部直属正文，且其链接可达 |
+| N6 | 历史行号 / 章节引用在当前结构中**仍可追溯**（结构化解析，不要求逐字不变） |
+| N7 | 已批准合同的后续修改可经「变更记录 + Git Diff」定位到提交 |
+| N8 | 待审候选声明 `PENDING` / `NOT_AUTHORIZED` / `NOT_ISSUED`，不得冒充已批准 |
+| N9 | 现场重跑 `migration` 模式的 C1–C6，证明 G0 历史迁移证明仍可独立复跑 |
+
+**合法修改已批准合同后，本模式不得报「迁移丢失」**——这正是双模式拆分的目的。
+
+#### 5.1.2 `migration` 模式 —— 历史迁移验证（显式调用）
+
+```bash
+node scripts/docs/check-doc-consistency.mjs --mode migration
+```
+
+固定比对 **G0 迁移前的 `master` → G0 验收锚点**，目标锚定不随 HEAD 漂移，
+因此历史证明**永远可独立复跑**：
+
+- Source：`4cb8c477aa00988bbfebef905764565cdfe62b71`（G0 迁移前的 `master`）
+- Target：`1aa753d6e72fdfb37968601d26cfdd422b794948`（G0 验收锚点）
+
+覆盖：C1 迁移章节覆盖率、C2 正文逐字保留与唯一、C3 迁移映射表一致性、
+C4 链接与锚点、C5 历史引用解析、C6 重复 Active 合同。
+**不得**为通过检查而删除断言、跳过项目或降低标准。
+
+失败返回非零退出码；两种模式都**只读**：不修改任何文档内容、不访问数据库、不改变测试分组。
+
 历史引用解析方法见 [`docs/status/MIGRATION-MAP.md`](docs/status/MIGRATION-MAP.md) §4，
 或直接执行 `node scripts/docs/resolve-reference.mjs "<引用>"`。
 

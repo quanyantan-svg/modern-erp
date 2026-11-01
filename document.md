@@ -2,6 +2,11 @@
 
 > Canonical business requirements — global contract + Domain requirement navigation.
 > Manual capability baseline: 2026-10-06 (§22). Document architecture: G0 governance refactor, 2026-11-01.
+>
+> 状态：`ACTIVE`
+> Owner：Platform
+> 权威来源：本文件 —— 全局业务 Requirement 合同；各 Domain Requirement 正文见 [`docs/requirements/`](./docs/requirements/)，本文件 §0 为导航入口
+> 来源：§1–§25 保留在本文件（编号与内容未变）；§26–§34 与 Wave 修订节已逐字迁入 `docs/requirements/`，原章节编号保持不变
 
 ## 0. 文档导航与迁移映射
 

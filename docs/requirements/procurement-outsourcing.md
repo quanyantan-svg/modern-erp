@@ -420,11 +420,13 @@ dependency 不进入 capability disposition 计数；它仅是 acceptance depend
 
 ---
 
-### 31.12 M1 采购与委外关键断链统一整改 Requirement（2026-10-31；待业务所有者验收）
+### 31.12 M1 采购与委外关键断链统一整改 Requirement（2026-10-31；业务所有者已验收 `M1_REQUIREMENT_ACCEPTANCE_PASS`）
 
 > **阶段与授权**：用户已接受《M1 Procurement & Outsourcing Critical Chain Audit Report》的有限勘误，并明确授权将已确认 Gap 和四组业务决策统一整理进入 **REQUIREMENT**。本节仅为业务 Requirement 修订，不构成 DESIGN / IMPLEMENTATION / ACCEPTANCE / FREEZE 或 Git 远端写入授权。依据：`document.md §22.1 / §22.21 / §31.1–31.11 / §35.8`、`solution.md §26`、M1 审计报告及 M1-AE 有限勘误；远端基线 `master@498d50143c1bd54f0d71447e5477872775910a81`。
 >
 > **证据纪律**：手册语义取自业务审查方提供的 B3101 / B3121 摘要及已批准 §22/§31，不得声称 Claude/Codex 可直接读取原 Word 手册。M1 原报告中的临时 SQLite 运行结果是“原审计执行者报告的证据”，本节不冒称重新执行；未运行的 MySQL / 浏览器验收均为 `NOT_RUN`。原 §31.11 的历史证据与 `NOT READY` 状态保持原样。
+>
+> **验收登记（2026-10-31，R-ACC 独立步骤）**：业务所有者明确接受 M1 原 Audit 及 M1-AE 有限勘误，批准本节 Requirement，签发 **`M1_REQUIREMENT_ACCEPTANCE_PASS`**，并授权进入 M1 Design。本登记**只**改写本节的阶段状态标识与授权边界，**不**修改 §31.12 的业务合同、Gap 映射、Capability 归属、验收 Gate 与十项未决业务政策；§31.11 的历史证据与 `NOT READY` 状态保持原样。已核实的 GitHub 基线为 `master@4cb8c477aa00988bbfebef905764565cdfe62b71`（`docs(m1): approve procurement and outsourcing requirement`，Requirement 正文已随该提交推送到 `github` 与 `origin` 双远端）。Design 授权边界与十项未决政策处置见 `solution.md §26.33`。
 
 #### 31.12.1 目标、范围和 Domain Owner
 
@@ -569,10 +571,11 @@ T-REQ-03：错误断言精确验证 status + error code/message + 状态不变�
 
 #### 31.12.11 Requirement Stage 状态与 HARD STOP
 
-- 本节是 **M1 Requirement 统一需求包的待验收文本**，不修改当前已冻结能力；§31 原始 Closure 历史不能被本节伪装成现已通过的 Domain Acceptance。
+- 本节是 **M1 Requirement 统一需求包的已验收文本**（`M1_REQUIREMENT_ACCEPTANCE_PASS`，2026-10-31），不修改当前已冻结能力；§31 原始 Closure 历史不能被本节伪装成现已通过的 Domain Acceptance。
 - 上游 M1 原报告及 M1-AE 有限勘误为审计输入；两者保留独立证据层级。原报告 UAT-20 `+50` 误判已撤回；VMI confirm HTTP 200；原报告 7 处 SQL INSERT 的小计更正为四个文件内 **8 处显式 INSERT**；E-06 是静态确认、运行未证。
 - **尚未通过的决策**：A-P01/A-P02（结构/条件协调）、B-P01/B-P02（在制成本/审批）、C-P01..C-P04（会计政策及跨域接口）、D-P01/D-P02（VMI 结算策略）仍需设计/业务 Owner 按表裁定；不得因为本 Requirement 草案已写而默认为 APPROVED。
 - **当前总体状态**：`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY`。原 `G-1..G-5`、独立 UI/VMI/证据 Gap 保持开放；本阶段不签发 `COVERED`、Acceptance、Freeze、Release Readiness。
-- **本阶段结束标识**：`M1_REQUIREMENT_DRAFT_READY_PENDING_OWNER_REVIEW`。等待用户批准 Requirement 与未决业务政策；**未授权 Design、Implementation、Migration、MySQL 写入、Git Commit/Push、发布、部署**。文档更新完成后按 `AGENTS.md §4.2` HARD STOP。
+- **Requirement 阶段结束标识**：`M1_REQUIREMENT_ACCEPTANCE_PASS`（2026-10-31 业务所有者批准）。该标识**只**覆盖本节 Requirement 文本的验收，不覆盖任何 Capability 的 `COVERED`、Domain Acceptance、Freeze 或 Release Readiness。
+- **后续授权**：业务所有者已授权进入 **M1 Design**（`AGENTS.md §4.3`），Design 唯一允许修改 `solution.md` 与 M1 相关章节及当天日志，并在完成后 HARD STOP。**仍未授权** Implementation、Migration 执行、MySQL 写入/重置、Git commit/push/merge/tag、发布、部署；§31.12.9 全部 13 个 Gate 仍为 `NOT_RUN`。
 
 ---

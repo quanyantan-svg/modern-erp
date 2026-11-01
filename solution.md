@@ -1,5 +1,10 @@
 # Modern ERP 当前技术设计与实现
 
+> 状态：`ACTIVE`
+> Owner：Platform
+> 权威来源：本文件 —— 全局架构与 Design 合同；各 Domain Design 正文见 [`docs/design/`](./docs/design/)，本文件 §0 为导航入口
+> 来源：§1–§20 保留在本文件（编号与内容未变）；§21–§37 已逐字迁入 `docs/design/`，原章节编号保持不变
+
 ## 0. 文档导航与迁移映射
 
 > 本文件是**全局架构与 Design 合同及设计导航**，不是各 Domain 详细设计的正文。
@@ -26,7 +31,14 @@
 
 本文件 §1–§20 的编号与内容保持不变。原先 §21–§37 的 Domain 设计与 Wave 设计修订已**逐字迁移**到上表对应文件，
 原章节编号**在目标文件中原样保留**（例如 `docs/design/procurement-outsourcing.md` 仍以 `## 26. …` 开头，
-`§26.33` 等深引用继续有效）。
+`§37.54.48` 等深引用继续有效）。
+
+`§26.33`（M1 Integrated Critical Chain Design）是一个**例外**：它是 G0 之后**新增**的候选设计，
+当前位于待审区 [`docs/reviews/m1/procurement-outsourcing-critical-chain-design.md`](docs/reviews/m1/procurement-outsourcing-critical-chain-design.md)
+（源 `solution.md §26.33` @ `912fd76700ff6f3ad1509eec4c9e2241c1830265`，正文逐字保留，编号与结构不变）。
+它**不是** Active Design：状态 `PENDING_REVIEW`，`Design PASS` **未签发**，**不构成** Current Active Contract，
+**不授权** Implementation；`§26.33` 深引用仍然有效，只是目标文件为该待审文件而非 `docs/design/`。
+见 [`docs/status/PROJECT_STATUS.md`](docs/status/PROJECT_STATUS.md) §36.3 / §36.7。
 
 `solution.md` 原有两个 `## 21.`（重复编号）已消解：`21. 当前设计状态` 是 2026-10-06 的**过期状态快照**，
 已移入 `docs/archive/status/solution-md-design-status-2026-10-06.md`；`21. Core Scope Cleanup Implementation Design`
