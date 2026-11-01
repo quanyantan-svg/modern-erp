@@ -406,6 +406,39 @@ M1_G0_DOCUMENT_ADAPTATION_READY_FOR_REVIEW
 - **本次 M1-A1 修复提交尚未推送**；修复后的本地 HEAD 将领先上述远端分支 SHA。
   本 M1 适配分支仍**未合入** `master`。
 
+### 36.8 M1-A2 验收阻断项修复状态（2026-11-01）
+
+```text
+M1_A2_ACCEPTANCE_FIX_READY
+```
+
+| 项 | 值 |
+|---|---|
+| 分支 | `work/m1-design-g0-adaptation-20261101` |
+| 基线 | `11c28a5f9f8fa02ede371f8519fc06a8e69625eb`（M1-A2） |
+| 修复范围 | 仅文档治理检查器、其正式测试、索引 helper、`AGENTS.md` N2/N7 语义与当日日志 |
+
+本轮修复三项独立审计确认的**检查器**缺陷，**不涉及**任何业务合同、Design 或 Implementation 语义：
+
+1. **N2 零覆盖虚假 PASS（P1）** —— 权威章节解析无法处理反引号包裹的 `` `document.md` §31 ``，
+   32 个 Active 合同文件实际解析成功 0 个，且解析失败被静默跳过。修复后按
+   **根全局合同 2 / README 导航 4 / 分段合同 4 / 领域合同正文 22** 显式分类判定；
+   分段合同必须被 Domain 索引 README 逐字登记（数据驱动规则，非目录豁免）；
+   PASS 输出必须显示实际检查文件数、解析成功数、合法例外数与重复 ID 数，**禁止零覆盖 PASS**。
+2. **N7 历史临时合同漏检（P1）** —— 受治理路径集合此前只覆盖 `docs/reviews/`。
+   修复后取自 anchor..target 的**真实 Git 历史**，覆盖 `docs/requirements/`、`docs/design/`、
+   `docs/reviews/`；区间内创建后删除的正文同样进入审查；Rename/Move 以显式
+   `--no-renames` 语义一律 Fail Closed。
+3. **正式测试环境依赖（P1）** —— 测试在当前 HEAD 直接执行会因「安装 commit」为空而中止。
+   修复后仅在暂存区确有 Diff 时才提交安装 commit，否则直接以 clone HEAD 为基线；
+   安装按 LF 归一并固定 clone 换行，**结果与全局 `core.autocrlf` 无关**。
+   测试证据的 `actual` 列改为从子进程输出与退出码解析得出。
+
+**本轮明确没有做**：未签发 `Design PASS`、未授权 `Implementation`、未执行 Domain Acceptance、
+未把 §26.33 提升为 Active Design、未关闭 G-1…G-5、未修改候选设计 4199 行正文
+（SHA-256 `6234d6b0d93e527aa750061f59468f309d8fe9a1369b1f8375f46c9fc2b36fe2` 复核一致）、
+未 Push / Merge / Rebase / Tag / Deploy。FULL / HEAVY / MySQL / Browser Gate 未运行，不声称通过。
+
 ---
 
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」

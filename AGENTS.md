@@ -359,12 +359,12 @@ node scripts/docs/check-doc-consistency.mjs --mode current --target HEAD
 | 检查 | 内容 |
 |---|---|
 | N1 | 链接与标题锚点可达（相对 G0 验收锚点**不得新增**失效链接） |
-| N2 | 合同章节 ID 唯一、不与根文件保留编号冲突、与文件自身标题一致 |
+| N2 | 合同章节 ID 唯一、不与根文件保留编号冲突、与文件自身标题一致；正文必须声明权威章节，解析失败即 FAIL；README 导航与分段合同按显式规则单独判定；**禁止零覆盖 PASS** |
 | N3 | Active 集合内无第二份同一合同正文；待审候选不复制 Active 正文 |
 | N4 | Active 合同文件声明 状态 / Owner / 权威来源，状态为 `ACTIVE` |
 | N5 | 索引 README 登记本目录全部直属正文，且其链接可达 |
 | N6 | 历史行号 / 章节引用在当前结构中**仍可追溯**（结构化解析，不要求逐字不变） |
-| N7 | 已批准合同的后续修改可经「变更记录 + Git Diff」定位到提交 |
+| N7 | 已批准合同的后续修改可经「变更记录 + Git Diff」定位到提交；受治理路径取自 anchor..target **真实 Git 历史**，整文件删除与 Rename 一律 Fail Closed |
 | N8 | 待审候选声明 `PENDING` / `NOT_AUTHORIZED` / `NOT_ISSUED`，不得冒充已批准 |
 | N9 | 现场重跑 `migration` 模式的 C1–C6，证明 G0 历史迁移证明仍可独立复跑 |
 

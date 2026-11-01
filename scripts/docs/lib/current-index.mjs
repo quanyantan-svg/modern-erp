@@ -76,7 +76,7 @@ export function splitHeadings(text) {
  */
 export function parseMetadata(text) {
   const meta = {};
-  const lines = text.split('\n');
+  const lines = text.replace(/\r/g, '').split('\n');
   let started = false;
   for (const line of lines) {
     if (!started) {
@@ -100,6 +100,89 @@ export function parseMetadata(text) {
 /** 文件是否在给定前缀目录下。 */
 export function under(file, dir) {
   return file === dir || file.startsWith(dir + '/');
+}
+
+/** 权威章节声明里允许出现的根合同文件。 */
+const AUTHORITY_ROOT_RE = /\b(document|solution)\.md\b/;
+
+/** 权威章节声明里允许出现的 Markdown 装饰（反引号 / 星号 / 下划线）。 */
+const AUTHORITY_DECORATION_RE = /[`*_]/g;
+
+/**
+ * 解析合同正文声明的「权威章节」。
+ *
+ * 根合同引用允许被 Markdown 装饰包裹（`` `document.md` §31 ``），
+ * 章节号允许是单节（§31）、区间（§28.0–§28.29）或多项（§35.22–§35.24、§35.27）。
+ *
+ * 返回：
+ *   { root, canonical, ids, ranges, named, source }
+ *   root      —— 'document' | 'solution'，权威编号所属的根合同空间
+ *   canonical —— 权威章节号（声明中的第一个编号）；分段合同时为 null
+ *   ids       —— 逐个声明的章节号
+ *   ranges    —— 声明的章节区间 [{ from, to }]
+ *   named     —— 只声明了根合同而没有章节号（分段合同正文）
+ *   source    —— 取自哪个元数据键
+ * 完全无法解析时返回 null。
+ */
+export function parseAuthoritySections(meta) {
+  let named = null;
+  for (const key of ['来源', '权威来源']) {
+    const raw = meta[key];
+    if (!raw) continue;
+    const text = raw.replace(AUTHORITY_DECORATION_RE, '');
+    const rootMatch = AUTHORITY_ROOT_RE.exec(text);
+    if (!rootMatch) continue;
+    const root = rootMatch[1];
+    const tail = text.slice(rootMatch.index + rootMatch[0].length);
+    const ids = [];
+    const ranges = [];
+    for (const part of tail.split(/[、,]/)) {
+      const rangeMatch = /§\s*(\d+(?:\.\d+)*)\s*[–—~—-]\s*§?\s*(\d+(?:\.\d+)*)/.exec(part);
+      if (rangeMatch) {
+        ranges.push({ from: rangeMatch[1], to: rangeMatch[2] });
+        continue;
+      }
+      const single = /§\s*(\d+(?:\.\d+)*)/.exec(part);
+      if (single) ids.push(single[1]);
+    }
+    if (ids.length || ranges.length) {
+      return {
+        root,
+        canonical: ranges.length ? ranges[0].from : ids[0],
+        ids,
+        ranges,
+        named: false,
+        source: key,
+      };
+    }
+    if (!named) named = { root, canonical: null, ids: [], ranges: [], named: true, source: key };
+  }
+  return named;
+}
+
+/**
+ * 解析分段合同正文声明的权威索引文件（Domain 索引 README）。
+ * 返回仓库相对路径，或 null。
+ */
+export function authorityIndexRef(meta) {
+  const raw = meta['权威来源'];
+  if (!raw) return null;
+  const text = raw.replace(AUTHORITY_DECORATION_RE, '');
+  const m = /(docs\/(?:requirements|design)\/[^\s，,。；;）)]*README\.md)/.exec(text);
+  return m ? m[1] : null;
+}
+
+/**
+ * 权威索引正文是否登记了指定文件。
+ * 以「整词」比对，避免同前缀文件名互相误命中。
+ */
+export function registersFile(indexText, file) {
+  const base = file.split('/').pop();
+  return indexText
+    .replace(AUTHORITY_DECORATION_RE, '')
+    .split(/\s+/)
+    .map(token => token.replace(/^[|\-]+/, '').replace(/[|\-]+$/, ''))
+    .some(token => token === base);
 }
 
 /**

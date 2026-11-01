@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, copyFileSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,8 +19,8 @@ function git(cwd, ...args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 }
 
-function runCheck(cwd, target = 'WORKTREE') {
-  const args = ['scripts/docs/check-doc-consistency.mjs', '--mode', 'current', '--target', target, '--only', 'N7'];
+function runCheck(cwd, target = 'WORKTREE', gate = 'N7') {
+  const args = ['scripts/docs/check-doc-consistency.mjs', '--mode', 'current', '--target', target, '--only', gate];
   const result = spawnSync(process.execPath, args, {
     cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
   });
@@ -33,15 +33,38 @@ function runCheck(cwd, target = 'WORKTREE') {
   };
 }
 
+/**
+ * 从子进程输出解析门禁判定。
+ * 返回 { verdict: 'PASS'|'FAIL'|null, line }；找不到判定行时 verdict 为 null。
+ */
+function parseGate(output, gate) {
+  const line = output.split(/\r?\n/).find((item) => item.includes(`] ${gate} `));
+  if (!line) return { verdict: null, line: null };
+  const m = /^\[(PASS|FAIL)\]\s/.exec(line.trim());
+  return { verdict: m ? m[1] : null, line };
+}
+
+/**
+ * 严格断言：PASS ⇔ exit 0，FAIL ⇔ exit 1；
+ * spawn error、signal、错误退出码、判定与退出码不自洽，全部使测试失败。
+ */
 function expectGate(result, gate, expected) {
   assert.equal(result.error, undefined, `spawn error: ${result.error}`);
   assert.equal(result.signal, null, `terminated by signal: ${result.signal}`);
   const expectedStatus = expected === 'PASS' ? 0 : 1;
   assert.equal(result.status, expectedStatus,
     `${gate} ${expected} must exit ${expectedStatus}, got ${result.status}:\n${result.output}`);
-  const line = result.output.split(/\r?\n/).find((item) => item.includes(`] ${gate} `));
-  assert.ok(line, `missing ${gate} result:\n${result.output}`);
-  assert.match(line, new RegExp(`^\\[${expected}\\] ${gate} `));
+  const parsed = parseGate(result.output, gate);
+  assert.ok(parsed.line, `missing ${gate} result:\n${result.output}`);
+  assert.equal(parsed.verdict, expected,
+    `${gate} verdict must be ${expected}, got ${parsed.verdict}:\n${result.output}`);
+  assert.equal(parsed.verdict === 'PASS', result.status === 0,
+    `${gate} verdict ${parsed.verdict} is inconsistent with exit code ${result.status}:\n${result.output}`);
+}
+
+/** 按 LF 归一后复制：安装到临时 clone 的实现不依赖全局 core.autocrlf。 */
+function copyNormalized(src, dest) {
+  writeFileSync(dest, readFileSync(src, 'utf8').replace(/\r/g, ''), 'utf8');
 }
 
 function candidateText(id = '99') {
@@ -59,21 +82,62 @@ function candidateText(id = '99') {
   ].join('\n');
 }
 
-test('N7 adversarial matrix T01-T26', { timeout: 15 * 60 * 1000 }, () => {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'erp-doc-n7-'));
+/** 合同正文模板（带反引号包裹的权威章节声明）。 */
+function contractBody(id, headingId = id) {
+  return [
+    `# N7 探针合同 ${id}`, '',
+    '> 状态：`ACTIVE`',
+    '> Owner：N7 Regression',
+    `> 权威来源：\`document.md\` §${id}`,
+    `> 来源：\`document.md\` §${id}（源 SHA \`4cb8c477\`，正文逐字迁移，章节编号保持不变）`, '',
+    `## ${headingId} N7 探针合同`, '',
+    '仅用于临时克隆中的 N2 回归验证。', '',
+  ].join('\n');
+}
+
+/**
+ * 建立临时克隆并安装被测实现。
+ *
+ * 安装规则：
+ *   - clone 的检出与换行一律固定为 LF（命令级 -c + clone 本地 config），
+ *     因此结果与机器全局 core.autocrlf 无关，也不需要用户改全局配置；
+ *   - 先检查暂存区是否真的有 Diff，只有确实产生变更时才提交「安装 commit」；
+ *   - 若被测实现与 clone HEAD 完全一致，直接以 HEAD 作为测试基线，不产生空提交；
+ *   - 绝不使用 --allow-empty 掩盖无变更提交；
+ *   - 全部安装动作只发生在临时 clone 内。
+ */
+function createClone(root, label) {
+  const tempRoot = mkdtempSync(join(tmpdir(), `erp-doc-${label}-`));
   const clone = join(tempRoot, 'repo');
+  git(tempRoot, '-c', `safe.directory=${repoRoot}`, '-c', `safe.directory=${sourceGitDir}`,
+    '-c', 'core.autocrlf=false', 'clone', '--quiet', '--no-hardlinks', repoRoot, clone);
+  git(clone, 'config', 'user.name', 'N7 Regression');
+  git(clone, 'config', 'user.email', 'n7-regression@example.invalid');
+  git(clone, 'config', 'core.autocrlf', 'false');
+  copyNormalized(checkerSource, join(clone, 'scripts', 'docs', 'check-doc-consistency.mjs'));
+  copyNormalized(indexSource, join(clone, 'scripts', 'docs', 'lib', 'current-index.mjs'));
+  git(clone, 'add', 'scripts/docs/check-doc-consistency.mjs', 'scripts/docs/lib/current-index.mjs');
+  const staged = git(clone, 'diff', '--cached', '--name-only');
+  let installed = false;
+  if (staged) {
+    git(clone, 'commit', '--quiet', '-m', 'test: install N7 test implementation');
+    installed = true;
+  }
+  const base = git(clone, 'rev-parse', 'HEAD');
+  return { tempRoot, clone, base, installed };
+}
+
+test('N7 adversarial matrix T01-T26', { timeout: 20 * 60 * 1000 }, () => {
+  const { tempRoot, clone, base, installed } = createClone(repoRoot, 'n7');
   const results = [];
 
   try {
-    git(tempRoot, '-c', `safe.directory=${repoRoot}`, '-c', `safe.directory=${sourceGitDir}`,
-      'clone', '--quiet', '--no-hardlinks', repoRoot, clone);
-    git(clone, 'config', 'user.name', 'N7 Regression');
-    git(clone, 'config', 'user.email', 'n7-regression@example.invalid');
-    copyFileSync(checkerSource, join(clone, 'scripts', 'docs', 'check-doc-consistency.mjs'));
-    copyFileSync(indexSource, join(clone, 'scripts', 'docs', 'lib', 'current-index.mjs'));
-    git(clone, 'add', 'scripts/docs/check-doc-consistency.mjs', 'scripts/docs/lib/current-index.mjs');
-    git(clone, 'commit', '--quiet', '-m', 'test: install N7 test implementation');
-    const base = git(clone, 'rev-parse', 'HEAD');
+    /* 安装必须与源文件逐字节一致（按 LF 归一），否则结果会依赖全局 core.autocrlf。 */
+    const installedChecker = readFileSync(join(clone, 'scripts', 'docs', 'check-doc-consistency.mjs'), 'utf8');
+    assert.ok(!installedChecker.includes('\r'),
+      'installed checker must be LF-normalized so the result does not depend on core.autocrlf');
+    assert.equal(installedChecker, readFileSync(checkerSource, 'utf8').replace(/\r/g, ''),
+      'installed checker must equal the source implementation after LF normalization');
 
     const reset = () => {
       assert.ok(resolve(clone).startsWith(resolve(tempRoot)), 'destructive reset must stay in temp clone');
@@ -91,7 +155,11 @@ test('N7 adversarial matrix T01-T26', { timeout: 15 * 60 * 1000 }, () => {
     const run = (id, input, expected, target = 'WORKTREE') => {
       const actual = runCheck(clone, target);
       expectGate(actual, 'N7', expected);
-      results.push({ id, input, command: actual.command, expected, actual: expected, exit: actual.status });
+      const parsed = parseGate(actual.output, 'N7');
+      results.push({
+        id, input, command: actual.command, expected,
+        actual: parsed.verdict, exit: actual.status,
+      });
       return actual;
     };
 
@@ -197,7 +265,178 @@ test('N7 adversarial matrix T01-T26', { timeout: 15 * 60 * 1000 }, () => {
     for (const row of results) {
       console.log(`${row.id} | input=${row.input} | command=${row.command} | expected=${row.expected} | actual=${row.actual} | exit=${row.exit}`);
     }
+    console.log(`install-commit-created=${installed} | base=${base}`);
     assert.equal(results.length, 26);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('N7 historical governed path matrix T27-T31', { timeout: 20 * 60 * 1000 }, () => {
+  const { tempRoot, clone, base } = createClone(repoRoot, 'n7h');
+  const results = [];
+
+  try {
+    const reset = () => {
+      assert.ok(resolve(clone).startsWith(resolve(tempRoot)), 'destructive reset must stay in temp clone');
+      git(clone, 'reset', '--hard', base);
+      git(clone, 'clean', '-fd');
+    };
+    const commit = (message) => { git(clone, 'add', '-A'); git(clone, 'commit', '--quiet', '-m', message); };
+    const run = (id, input, expected, target = 'HEAD') => {
+      const actual = runCheck(clone, target);
+      expectGate(actual, 'N7', expected);
+      const parsed = parseGate(actual.output, 'N7');
+      results.push({
+        id, input, command: actual.command, expected,
+        actual: parsed.verdict, exit: actual.status,
+      });
+      return actual;
+    };
+
+    /* T27：新建 Requirement 后又删除 —— 必须进入 N7 审查并 FAIL */
+    reset();
+    writeFileSync(join(clone, 'docs', 'requirements', 'n7-tmp.md'), contractBody('41'), 'utf8');
+    commit('docs: 新增 docs/requirements/n7-tmp.md');
+    git(clone, 'rm', '--quiet', 'docs/requirements/n7-tmp.md');
+    commit('docs: 移除 docs/requirements/n7-tmp.md');
+    const t27 = run('T27', 'create then delete a Requirement body inside the interval', 'FAIL');
+    assert.match(t27.output, /整体删除或移动受治理文件|整体消失/, 'T27 must report the deleted Requirement');
+
+    /* T28：新建 Design 后又删除 */
+    reset();
+    writeFileSync(join(clone, 'docs', 'design', 'n7-tmp.md'), contractBody('42'), 'utf8');
+    commit('docs: 新增 docs/design/n7-tmp.md');
+    git(clone, 'rm', '--quiet', 'docs/design/n7-tmp.md');
+    commit('docs: 移除 docs/design/n7-tmp.md');
+    const t28 = run('T28', 'create then delete a Design body inside the interval', 'FAIL');
+    assert.match(t28.output, /整体删除或移动受治理文件|整体消失/, 'T28 must report the deleted Design');
+
+    /* T29：新建 Review 后又删除 */
+    reset();
+    writeFileSync(join(clone, 'docs', 'reviews', 'n7-tmp.md'), candidateText('43'), 'utf8');
+    commit('docs: 新增 docs/reviews/n7-tmp.md');
+    git(clone, 'rm', '--quiet', 'docs/reviews/n7-tmp.md');
+    commit('docs: 移除 docs/reviews/n7-tmp.md');
+    const t29 = run('T29', 'create then delete a Review candidate inside the interval', 'FAIL');
+    assert.match(t29.output, /整体删除或移动受治理文件|整体消失/, 'T29 must report the deleted Review');
+
+    /* T30：新建后改名并删除 —— Rename/Move 必须 Fail Closed */
+    reset();
+    writeFileSync(join(clone, 'docs', 'requirements', 'n7-move.md'), contractBody('44'), 'utf8');
+    commit('docs: 新增 docs/requirements/n7-move.md');
+    git(clone, 'mv', 'docs/requirements/n7-move.md', 'docs/requirements/n7-moved.md');
+    commit('docs: 移动 docs/requirements/n7-move.md');
+    git(clone, 'rm', '--quiet', 'docs/requirements/n7-moved.md');
+    commit('docs: 移除 docs/requirements/n7-moved.md');
+    const t30 = run('T30', 'create, rename and then delete a Requirement body', 'FAIL');
+    assert.match(t30.output, /整体删除或移动受治理文件|整体消失/, 'T30 must report the renamed-away Requirement');
+
+    /* T31：普通非治理文件的创建与删除不得误触发 N7 */
+    reset();
+    mkdirSync(join(clone, 'docs', 'notes'), { recursive: true });
+    writeFileSync(join(clone, 'docs', 'notes', 'n7-ordinary.md'), '# ordinary note\n\nnot a governed contract\n', 'utf8');
+    commit('docs: 新增 docs/notes/n7-ordinary.md');
+    git(clone, 'rm', '--quiet', 'docs/notes/n7-ordinary.md');
+    commit('docs: 移除 docs/notes/n7-ordinary.md');
+    run('T31', 'create and delete an ordinary non-governed document', 'PASS');
+
+    for (const row of results) {
+      console.log(`${row.id} | input=${row.input} | command=${row.command} | expected=${row.expected} | actual=${row.actual} | exit=${row.exit}`);
+    }
+    assert.equal(results.length, 5);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('N2 canonical id coverage matrix T32-T37', { timeout: 20 * 60 * 1000 }, () => {
+  const { tempRoot, clone, base } = createClone(repoRoot, 'n2');
+  const results = [];
+
+  try {
+    const reset = () => {
+      assert.ok(resolve(clone).startsWith(resolve(tempRoot)), 'destructive reset must stay in temp clone');
+      git(clone, 'reset', '--hard', base);
+      git(clone, 'clean', '-fd');
+    };
+    const run = (id, input, expected, expectedPattern) => {
+      const actual = runCheck(clone, 'WORKTREE', 'N2');
+      expectGate(actual, 'N2', expected);
+      if (expectedPattern) {
+        assert.match(actual.output, expectedPattern, `${id} must fail for the intended reason:\n${actual.output}`);
+      }
+      const parsed = parseGate(actual.output, 'N2');
+      results.push({
+        id, input, command: actual.command, expected,
+        actual: parsed.verdict, exit: actual.status,
+      });
+      return actual;
+    };
+
+    /* T32：正常反引号元数据必须 PASS，且 N2 必须显示真实覆盖统计 */
+    reset();
+    writeFileSync(join(clone, 'docs', 'requirements', 'n7-probe.md'), contractBody('41'), 'utf8');
+    const t32 = run('T32', 'backtick-wrapped canonical id metadata', 'PASS');
+    assert.match(t32.output, /权威章节解析成功 \d+ 个/, 'N2 PASS must report the parsed count');
+    assert.match(t32.output, /重复 ID \d+ 个/, 'N2 PASS must report the duplicate-id count');
+    assert.match(t32.output, /实际检查合同正文 \d+ 个/, 'N2 PASS must report the checked-file count');
+
+    /* T33：缺少必须存在的权威章节声明必须 FAIL */
+    reset();
+    writeFileSync(join(clone, 'docs', 'requirements', 'n7-noid.md'), [
+      '# N7 无权威章节正文', '',
+      '> 状态：`ACTIVE`',
+      '> Owner：N7 Regression',
+      '> 权威来源：`document.md`', '',
+      '## 1. 无权威章节', '', 'body', '',
+    ].join('\n'), 'utf8');
+    run('T33', 'contract body without a canonical id', 'FAIL',
+      /缺少可核验的权威索引登记|无法解析权威章节/);
+
+    /* T34：两个不同文件占用同一权威 ID 必须 FAIL */
+    reset();
+    writeFileSync(join(clone, 'docs', 'requirements', 'n7-dup-a.md'), contractBody('42'), 'utf8');
+    writeFileSync(join(clone, 'docs', 'requirements', 'n7-dup-b.md'), contractBody('42'), 'utf8');
+    run('T34', 'two files claiming the same authoritative id', 'FAIL',
+      /同时声明/);
+
+    /* T35：声明的 ID 与正文标题不符必须 FAIL */
+    reset();
+    writeFileSync(join(clone, 'docs', 'requirements', 'n7-mismatch.md'), contractBody('43', '44'), 'utf8');
+    run('T35', 'declared id does not exist as a body heading', 'FAIL',
+      /正文中无对应标题/);
+
+    /* T36：同一文件重复声明相同章节必须 FAIL */
+    reset();
+    writeFileSync(join(clone, 'docs', 'requirements', 'n7-dupdecl.md'), [
+      '# N7 重复声明正文', '',
+      '> 状态：`ACTIVE`',
+      '> Owner：N7 Regression',
+      '> 权威来源：`document.md` §45',
+      '> 来源：`document.md` §45、§45（源 SHA `4cb8c477`，正文逐字迁移）', '',
+      '## 45. N7 探针合同', '', 'body', '',
+    ].join('\n'), 'utf8');
+    run('T36', 'same file declaring the same section twice', 'FAIL',
+      /同一文件重复声明相同章节/);
+
+    /* T37：README 导航文件不得被误判为合同正文 */
+    reset();
+    mkdirSync(join(clone, 'docs', 'requirements', 'n7-sub'), { recursive: true });
+    writeFileSync(join(clone, 'docs', 'requirements', 'n7-sub', 'README.md'), [
+      '# N7 导航索引', '',
+      '> 状态：`ACTIVE`',
+      '> Owner：N7 Regression',
+      '> 权威来源：本目录为导航索引；全局合同见 [`document.md`](../../../document.md)', '',
+      '本文件只做目录导航，不声明权威章节。', '',
+    ].join('\n'), 'utf8');
+    const t37 = run('T37', 'README navigation file is not a contract body', 'PASS');
+    assert.match(t37.output, /README 导航 \d+/, 'N2 must count README navigation files separately');
+
+    for (const row of results) {
+      console.log(`${row.id} | input=${row.input} | command=${row.command} | expected=${row.expected} | actual=${row.actual} | exit=${row.exit}`);
+    }
+    assert.equal(results.length, 6);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
