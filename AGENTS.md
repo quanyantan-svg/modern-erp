@@ -1,6 +1,6 @@
 # Modern ERP 开发与 AI 治理规则
 
-本文件是仓库内**唯一权威的开发与 AI/Vibe Coding 治理政策**。  
+本文件是仓库内**唯一权威的开发与 AI/Vibe Coding 治理政策**。
 `CLAUDE.md`、Skill、工具配置或历史日志只能引用本文件，不得维护第二套相互冲突的开发规则。
 
 如果任何工具行为、提示词、历史文档或 AI 自身习惯与本文件冲突，以本文件为准；如冲突涉及用户明确授权，则停止并向用户报告。
@@ -18,7 +18,7 @@
 - `master` 是持续开发分支，可以领先 release tag；
 - Git release tag 是发布身份权威，不得移动、删除或重建既有 tag。
 
-## 1.1 产品架构与需求双轴
+### 1.1 产品架构与需求双轴
 
 最终产品架构固定为：
 
@@ -52,86 +52,97 @@
 
 ---
 
-## 2. 项目必备文档
+## 2. 文档体系与权威来源
 
-每个项目阶段都必须维护：
+### 2.1 文档职责边界
 
-1. `README.md`
-   - 项目简介；
-   - 技术栈；
-   - 运行/构建/测试/部署；
-   - 主要代码结构；
-   - release 状态；
-   - 代码结构变化时及时更新。
+每份文档只承担一种职责。**超出职责的内容不得写入该文档**。
 
-2. `document.md`
-   - 唯一业务需求来源；
-   - 当前功能；
-   - 目标 Capability；
-   - Coverage/Gap；
-   - 业务规则、状态、权限、边界；
-   - 需求变化时及时更新。
+| 文档 | 唯一职责 | 明确禁止写入 |
+|---|---|---|
+| `README.md` | 项目定位、技术栈、基本架构、启动/测试/部署入口、当前状态摘要、文档导航 | 完整执行报告、历史测试流水、阶段修订过程、第二份状态登记表 |
+| `document.md` | 全局业务 Requirement 合同 + 各 Domain Requirement 的权威导航 | 实施报告、测试输出、技术勘误、Git 交付记录 |
+| `solution.md` | 全局架构与 Design 合同 + 各 Domain Design 的权威导航 | 历史 Design Amendment 堆叠、验收执行流水 |
+| `docs/requirements/` | 各 Domain **当前有效** Requirement 正文 | Acceptance 记录、实施日志 |
+| `docs/design/` | 各 Domain **当前有效** Design 正文 | 被取代的历史勘误正文、验收流水 |
+| `docs/status/PROJECT_STATUS.md` | **唯一**当前项目级进度登记表 | 第二份覆盖、把历史 PASS 描述为当前 HEAD PASS |
+| `docs/status/CAPABILITY_MATRIX.md` | B3101–B3122 可追溯能力覆盖矩阵 | 凭代码文件存在就宣称 `COVERED` |
+| `docs/decisions/` | 独立重大决策记录（ADR） | 与 Requirement/Design 重复的正文 |
+| `docs/acceptance/` | 验收与冻结证据 | 当前状态登记 |
+| `docs/operations/` | 运维与测试运行手册 | 需求与设计正文 |
+| `docs/archive/` | 历史版本与不再生效的材料 | 任何"当前权威"声明 |
+| `log/YYYY-MM-DD.md` | 当天开发与沟通记录（append-only） | 大体量原始证据全文 |
 
-3. `solution.md`
-   - 唯一技术设计来源；
-   - 模块/函数职责；
-   - 数据流和调用关系；
-   - 事务、权限、错误、migration、测试策略；
-   - 新增代码/设计时及时更新。
+大体量原始证据（测试控制台输出、迁移日志、原始审计附件）另存独立归档文件，由日志**引用**，不复制全文。
 
-4. `log/YYYY-MM-DD.md`
-   - 当天开发与沟通记录；
-   - append-only；
-   - 只追加，不删除、不重写历史。
+### 2.2 文档生命周期状态
 
-额外治理文件：
+每项 Requirement / Design 必须能判断其状态：
 
-- `AGENTS.md`：本文件，唯一 AI/Vibe Coding 治理规则；
-- `CLAUDE.md`：Claude Code 项目入口，只引用 `AGENTS.md`；
-- `.claude/skills/erp-mobile-taste/SKILL.md`：明确 UI 设计任务才允许加载；
-- `docs/`：运维资料与历史证据，不得形成第二套当前规格；
-- `APPLY_GUIDE.md`：仅一次性恢复/应用说明，不是 canonical；恢复完成可删除。
+| 状态 | 含义 |
+|---|---|
+| `DRAFT` | 起草中，未提交审阅 |
+| `PENDING_APPROVAL` | 已提交，等待业务所有者决定 |
+| `APPROVED` | 已获批准，尚未实施 |
+| `IMPLEMENTED` | 已按批准合同实施，但尚未验收 |
+| `ACCEPTED` | 已通过验收 |
+| `FROZEN` | 已冻结为基线，变更须走显式解冻 |
+| `SUPERSEDED` | 已被更新版本取代，保留历史结论 |
+| `ARCHIVED` | 不再生效，保留可追溯性 |
+
+- 状态必须根据实际业务语义使用，**不得机械地把所有文档推到 `FROZEN`**；
+- 一个当前业务合同**只能有一个权威正文**；
+- 历史版本可以保留，但不得与 Active 版本同时宣称自己是当前权威；
+- 不得丢失历史批准人、日期、原始 Commit SHA、测试证据和影响范围。
+
+### 2.3 新增文档规则
+
+新增任何文档前必须声明：
+
+1. **用途** —— 它解决什么问题；
+2. **Owner** —— 谁负责维护和废弃它；
+3. **状态** —— §2.2 生命周期状态之一；
+4. **权威来源** —— 它与 `document.md` / `solution.md` / 状态登记表的关系。
+
+没有明确 Owner 的文档不得成为权威来源。
+
+### 2.4 状态登记唯一性
+
+- 全仓库只有 `docs/status/PROJECT_STATUS.md` 是当前项目级进度登记表；
+- `README.md` 只能**链接和简述**该登记表，不得形成第二份独立状态登记；
+- 任何"当前状态"陈述必须能定位到该表中的一行。
+
+### 2.5 章节 ID 与重编号
+
+- 冻结合同 ID 不得未经映射随意重编号；
+- 文档迁移必须保留原编号，并建立显式映射：
+  `Original File + Original Section + Source SHA → New File + New Section / Archive Reference`；
+- 深引用（如 `§31.12`、`§37.54.48`）是有效合同锚点，迁移后必须仍然可定位。
 
 ---
 
-## 3. 修改前必读
+## 3. 上下文读取策略（四层）
 
-### 3.1 新会话 / 新阶段必须完整阅读
+**废除"每次新任务无差别把全部历史文档加载进当前上下文"的做法。**
+按任务需要逐层加载，不得越级批量读取。禁止用聊天记忆代替仓库文件和 Git 证据。
 
-开始任何新的 AI/Claude Code/Codex 开发会话，或上下文已经不可靠时，必须从头到尾完整阅读：
+### L0 — 项目全局入口（每个新任务必读）
 
-- `README.md`
-- `document.md`
-- `solution.md`
-- `AGENTS.md`
-- 当前工具入口规则（Claude Code 读取 `CLAUDE.md`）
-- `log/` 中按日期倒序最近 3 个**实际存在**的开发日志日期；同日拆分文件全部读取
+- `AGENTS.md`（本文件）；
+- `README.md`（项目入口与当前状态摘要）；
+- `docs/status/PROJECT_STATUS.md`（当前进度、阻塞项、下一步）；
+- 当前 Git 状态（`git status --short --branch`、`git log -5 --oneline`）。
 
-下列情况也必须重新建立完整基线：
+### L1 — 任务相关业务合同
 
-- `git checkout`
-- `git pull`
-- `git rebase`
-- `git merge`
-- 切换分支
-- 重大跨域/架构/数据库/库存/财务任务
-- canonical 文档发生全局语义变化
-- 上下文被压缩到不能确认已完整阅读
+按任务涉及的 Domain 与 Capability 读取：
 
-不得用旧聊天记忆代替仓库事实。
+- 对应 Requirement（`document.md` 导航 → `docs/requirements/<domain>.md`）；
+- 对应 Design（`solution.md` 导航 → `docs/design/<domain>.md`）；
+- 对应决策记录（`docs/decisions/`）；
+- 对应验收 / 冻结状态（`docs/acceptance/`、`PROJECT_STATUS.md`）。
 
-### 3.2 同一连续任务
-
-同一个已经开始、canonical 文档没有变化的单一 implementation task 内，不需要每改一个文件重新读一遍全部文档。
-
-但开始新的功能/阶段时，必须重新核对：
-
-- 当前 Requirement；
-- 当前 Design；
-- 当天新增日志；
-- 本次完整代码调用链。
-
-### 3.3 修改代码前必须把相关代码读完
+### L2 — 代码与依赖上下文
 
 修改代码前必须完整阅读：
 
@@ -139,39 +150,58 @@
 - 目标函数完整定义；
 - 所有直接调用方；
 - 目标函数调用的关键下游；
-- 相关 schema/migration；
+- 相关 schema / migration；
+- 相关 permission / state / transaction / audit 逻辑；
 - 相关 tests；
-- 相关 permission/state/transaction/audit 逻辑；
-- 相关 frontend route/surface。
+- 相关 frontend route / surface；
+- 受影响的跨域边界。
 
-跨域、架构、库存、财务、会计、数据库、migration 等任务，阅读范围必须扩大到受影响领域的完整代码区域。
+跨域、架构、库存、财务、会计、数据库、migration 任务，阅读范围必须扩大到受影响领域的完整代码区域。
 
 不得根据文件名或局部 grep 就假设业务关系已经理解。
 
 不得修改与本次功能无关的代码。
 
+### L3 — 历史证据（仅在必要时加载）
+
+只有在出现以下情况时才读取历史：
+
+- 当前合同存在冲突，需要确认哪一版权威；
+- 需要确认此前批准的业务政策；
+- 需要追踪冻结 SHA；
+- 需要理解历史迁移或兼容性；
+- 需要调查 Regression；
+- 当前状态索引明确指出历史依赖。
+
+历史证据来源优先级：`docs/archive/` 与 `docs/acceptance/` → Git 历史 → `log/`。
+
+### 3.1 上下文纪律
+
+- 不得把五万行级文档全文复制进会话；
+- 不得为了"确认一下"而批量读取多个 Domain 的完整正文；
+- 审计大文档时使用分片、结构化索引和脚本解析，结论以索引 + 定点原文核验为准；
+- 同一连续任务内，canonical 文档未变化时不必每改一个文件重读全部文档。
+
 ---
 
-## 4. 文档先行
-
-任何新增功能、行为变化、Capability Gap 修复或架构调整必须先完成文档。
+## 4. 开发阶段控制
 
 固定顺序：
 
 `AUDIT → COVERAGE/GAP → REQUIREMENT → DESIGN → IMPLEMENTATION → ACCEPTANCE/FREEZE`
 
-### 4.0 连续阶段授权（Consecutive Stage Authorization）
+各阶段是**不同的治理阶段**。证据范围、文件修改边界和验收标准不得合并，也不得互相替代。
 
-AUDIT、REQUIREMENT、DESIGN、IMPLEMENTATION、ACCEPTANCE/FREEZE 始终是不同的治理阶段。各阶段的证据范围、文件修改边界和验收标准不得合并，也不得互相替代。
+### 4.0 连续阶段授权（Consecutive Stage Authorization）
 
 当用户在同一次指令中**一次性明确授权多个连续阶段**时（例如同时授权 Requirement 与 Design），可以在一次工作会话内连续执行这些阶段，不要求每个阶段结束后都暂停对话等待再次确认。
 
 连续执行时必须满足：
 
 - 每个阶段分别记录：授权来源、范围、输入依据、实际修改的文件、结论、未解决问题、下一阶段边界；
-- 各阶段证据独立留存，不得合并为单一“已完成”声明；
-- Requirement 阶段仍然**只修改 `document.md` 中与本次需求相关的章节**并追加当天日志，**不得提前修改 `solution.md`**；
-- Design 阶段仍然**只修改 `solution.md` 中与本次功能相关的设计**并追加当天日志；
+- 各阶段证据独立留存，不得合并为单一"已完成"声明；
+- Requirement 阶段仍然**只修改 Requirement 正文**并追加当天日志，**不得提前修改 Design**；
+- Design 阶段仍然**只修改 Design 正文**并追加当天日志；
 - 不得跨阶段边界修改文件：Requirement 不写实现代码，Design 不写实现代码；
 - **DESIGN 完成后必须 HARD STOP。** 不得自动进入 IMPLEMENTATION，必须等待用户明确批准 Implementation；
 - Acceptance / Freeze 仍按 §4.5 执行，仍须用户最终验收；
@@ -214,17 +244,17 @@ Coverage 只允许：
 
 此阶段：
 
-- **只修改 `document.md` 与本次需求相关章节**；
+- **只修改与本次需求相关的 Requirement 正文**（`document.md` 对应章节与 `docs/requirements/` 对应 Domain 正文）；
 - 不修改无关需求；
 - 不写实现代码；
-- 不提前改 `solution.md`；
+- 不提前改 Design；
 - 完成后停止，等待用户明确确认；如果用户已按 §4.0 一次性授权连续执行 Requirement 与 Design，则不因本步骤停顿而中断，直接进入 §4.3，并在本阶段记录中写明该授权来源。
 
 ### 4.3 DESIGN
 
 Requirement 获批后（或用户已按 §4.0 一次性授权连续执行 Requirement 与 Design 时）：
 
-- **只修改 `solution.md` 与本次功能相关的设计**；
+- **只修改与本次功能相关的 Design**（`solution.md` 对应章节与 `docs/design/` 对应 Domain 正文）；
 - 说明实现过程，不粘贴大段实现代码；
 - 至少说明：
   - module/function responsibility；
@@ -247,11 +277,11 @@ Requirement 获批后（或用户已按 §4.0 一次性授权连续执行 Requir
 
 必须：
 
-- 严格按 `solution.md` 实现；
+- 严格按已批准的 Design 实现；
 - 不自行扩大需求；
 - 不自行改变设计；
 - 不新增未经批准的功能；
-- 不以“顺手优化”为理由扩大范围；
+- 不以"顺手优化"为理由扩大范围；
 - 不留下 TODO 占位；
 - 新功能/行为变化必须添加测试；
 - 错误必须显式处理，禁止静默忽略；
@@ -274,67 +304,49 @@ Requirement 获批后（或用户已按 §4.0 一次性授权连续执行 Requir
 
 最终 Acceptance 必须基于：
 
-- `document.md`
-- `solution.md`
-- 真实远端/本地代码
-- Coverage Matrix
-- focused tests
-- regression
-- build
-- `git diff --check`
-- heavy/MySQL gate（当适用）
+- `document.md` 与对应 Requirement 正文；
+- `solution.md` 与对应 Design 正文；
+- 真实远端/本地代码；
+- Coverage Matrix；
+- focused tests；
+- regression；
+- build；
+- `git diff --check`；
+- heavy/MySQL gate（当适用）。
 
-Implementation Agent 自报“PASS / 完成”不能替代用户最终 Acceptance。
+Implementation Agent 自报"PASS / 完成"不能替代用户最终 Acceptance。
 
 只有用户明确确认 PASS 后，才能 Freeze 对应 Capability/Manual，并进入下一阶段。
 
 ---
 
-## 5. Canonical 文档职责
+## 5. 防止文档再次膨胀
 
-### README.md
+以下为强制规则：
 
-仅负责：
+1. 禁止将 Agent 完整执行报告粘贴进 Requirement / Design。
+2. 禁止为了记录一次测试而复制完整控制台输出。
+3. 禁止在同一文档反复追加"当前状态"的新副本。
+4. 禁止在没有明确 Owner 的情况下创建新的权威文档。
+5. 禁止同一个 Requirement / Design 维持两份 Active 正文。
+6. 禁止未经映射随意重编号冻结合同 ID。
+7. 文档修改必须精确到业务能力与对应章节。
+8. 新增文档必须声明用途、Owner、状态及权威来源（§2.3）。
+9. 过期设计必须进行明确 Supersession，而不是无限追加纠错段落。
+10. 不以固定行数上限代替内容质量判断；文档过长必须分析结构原因。
 
-- 项目入口；
-- 技术栈；
-- 目录结构；
-- 运行/测试/部署；
-- release 状态；
-- 架构摘要。
+补充约束：
 
-以下变化时必须更新 README：
-
-- 项目结构；
-- 启动/安装命令；
-- runtime；
-- database backend 使用方式；
-- package scripts；
-- deployment entry；
-- release 状态。
-
-### document.md
-
-唯一业务 Requirement 来源。
-
-新增功能时只在 Requirement 阶段修改与该功能有关内容，不重写无关章节。
-
-### solution.md
-
-唯一技术 Design 来源。
-
-新增功能时只在 Design 阶段增加或修改相关设计，不写与本功能无关的实现细节。
-
-### log/YYYY-MM-DD.md
-
-只追加，不删除，不覆盖。
+- 文档迁移必须保留原章节编号并建立 §2.5 映射表；
+- 从旧文件移除的任何内容，必须能在**当前有效文档**、**归档文件**或 **Git Commit 历史 + 映射索引** 中至少一处被重新定位；
+- 无法判定为重复、过时或已归档的内容，**不允许仅因其冗长而删除**；应标记为 `NEEDS_OWNER_REVIEW` 并保留原始内容与来源。
 
 ---
 
 ## 6. 代码规则
 
 - 使用清晰、合理、可扩展的结构；
-- 按已批准的 `solution.md` 编写；
+- 按已批准的 Design 编写；
 - 同一业务原语只允许一个 active canonical implementation；
 - 删除/迁移前必须完成 zero-caller / dependency proof；
 - 不为了目录美观进行 big-bang rewrite；
@@ -394,7 +406,7 @@ Mobile-first：
 6. focused tests；
 7. full gate（按任务等级）。
 
-不得一次性为“架构漂亮”迁移整个仓库。
+不得一次性为"架构漂亮"迁移整个仓库。
 
 ---
 
@@ -530,7 +542,7 @@ commit 信息必须使用中文，清楚说明：
 - `package.json` version 是否变化；
 - release tag 是否变化。
 
-### 11.5 外部 Git 动作授权
+### 11.5 外部 Git 操作授权
 
 未经用户明确批准，禁止：
 
@@ -541,7 +553,7 @@ commit 信息必须使用中文，清楚说明：
 - release；
 - Git 历史重写。
 
-“直接通过 GitHub API 写文件”本质上也是远端 commit/push，未经用户批准同样禁止。
+"直接通过 GitHub API 写文件"本质上也是远端 commit/push，未经用户批准同样禁止。
 
 不得移动、删除或重建既有 release tag。
 
@@ -619,7 +631,7 @@ Skill 不得改变：
 
 ---
 
-## 15. 当前 Core Scope Cleanup 特别规则
+## 15. Core Scope Cleanup 特别规则
 
 已确认最终删除的非核心扩展：
 
@@ -641,7 +653,8 @@ Skill 不得改变：
 - approvals；
 - audit。
 
-`projects-workflow.jsx` / `server/modules/business.js` 属于 mixed-owner，必须按函数/责任拆分，禁止整文件删除。
+历史 mixed-owner 文件（曾记为 `projects-workflow.jsx` / `server/modules/business.js`）必须按函数/责任拆分，禁止整文件删除。
+**当前基线（`master` @ `4cb8c47`）中这两个文件已不存在**，本条因此转为：任何重新引入同名文件的改动，必须重新履行 dependency audit。
 
 历史数据库表不得在普通 cleanup 中直接 DROP。
 
@@ -670,4 +683,4 @@ Skill 不得改变：
 4. 获得用户确认；
 5. 再恢复 Implementation。
 
-不得用“已经改了一半”“顺手处理”“工具有权限”作为继续违规操作的理由。
+不得用"已经改了一半""顺手处理""工具有权限"作为继续违规操作的理由。

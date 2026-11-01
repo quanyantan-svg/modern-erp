@@ -59,310 +59,26 @@ Modern ERP 是一套基于 **React 19 + Vite 7 + Node.js 22.23.2 + SQLite/MySQL 
 
 这些能力属于已有产品资产。后续新版 ERP 采用**渐进式演进**，不进行整仓重写。
 
-## 当前项目状态快照（2026-10-31）
+## 当前状态摘要
 
-本节是**当前状态的唯一入口**。它引用而不复制历史冻结证据；历史结论一律保留在
-`document.md` / `solution.md` 的 dated 章节与 `log/` 中，**不得以本节覆盖历史**。
-上一版项目级审计为《ERP Project-Wide Progress Baseline & Next Milestone Audit》（2026-10-31），
-其勘误见 `solution.md §37.54.48`。
+当前项目状态、阻塞项与下一步的唯一登记处是
+**[docs/status/PROJECT_STATUS.md](./docs/status/PROJECT_STATUS.md)**。
+本文件不维护第二份状态表。
 
-本节所属的 **M0 阶段（项目级文档基线纠偏与审计勘误）已由业务所有者于 2026-10-31 验收通过**：
-`M0_BASELINE_ACCEPTANCE_PASS`，验收锚点 `3e70c380eec7d34dd938a29d23dbf07227656ef1`，
-登记见 `document.md §35.11`。该验收**只闭合 M0 本身**：它**不构成任何 Domain 的
-Domain-Level Acceptance**，**不签发** `W11_A_ACCEPTANCE_PASS`，也**不关闭**
-G-1…G-5、D-2…D-5、历史库存完整性或任何 Release Blocker。
+当前基线：已发布 release tag `v1.6.2`，`package.json` 版本 `1.6.2`；
+`master` 是持续开发分支，可领先 release tag。精确开发状态以 Git SHA 或 `git describe` 为准。
+**没有任何 Domain 达到 Release Readiness；生产发布仍未获授权。**
 
-### 九个 Domain 当前进度
+## 核心范围、端到端主链与当前运行限制
 
-冻结层级严格区分七种状态，不得互相替代：
-`Requirement Complete` → `Implementation Complete` → `Stage Acceptance` → `Capability Freeze`
-→ `Domain-Level Acceptance` → `Manual Capability Closure` → `Release Readiness`。
+规范来源是 [document.md](./document.md)：
 
-| Domain | Requirement | Implementation | Stage Acceptance | Capability Freeze | Domain-Level Acceptance | Manual Capability Closure | Release Readiness |
-|---|---|---|---|---|---|---|---|
-| Master & Engineering | §28 Complete | Complete | — | — | 未见 token（下游日志记 `V17 §28` FROZEN） | 未见 | 未就绪 |
-| Manufacturing & Quality | §29 Complete | Complete | — | — | 未见 token（下游日志记 `V18 §29` FROZEN） | 未见 | 未就绪 |
-| Planning | §30 Complete | Complete | `Final Acceptance: PASS` | `Freeze: YES`（`log/2026-10-08.md:288`） | 有明确用户 Freeze | §30 覆盖范围内 | 未就绪（整体） |
-| Procurement & Outsourcing | §31 Complete | Complete | 28/28 browser + 11/11 MySQL race | 未冻结 | **§31.11 `NOT READY`，不得 Freeze** | 未见 | 未就绪 |
-| Inventory & Warehouse | §32 Complete | Partial Complete | — | — | 未见 token | 未见 | 未就绪 |
-| Finance Operations | §33 Complete | Complete | — | — | 未见 token（`USER FREEZE NOT VERIFIED`） | 未见 | 未就绪 |
-| Sales & Customer | §34 FROZEN | Complete（Wave 0–10 + W11） | Wave 6/7/9 + Gate A PASS | Wave 6/7/9 + Gate A + Wave 10 | 部分（Wave 8 待提交；Waves 1–2 无验收记录） | CAP-1..36 部分 | 未就绪 |
-| Accounting & Analytics | **无 Domain Closure Requirement** | Partial | — | — | 未见 | **未闭合**（B3114–B3117） | 未就绪 |
-| Platform | **无 Domain Closure Requirement** | Partial | — | — | 未见 | **未闭合**（B3122） | 未就绪 |
+- §6 必须保持的端到端主链（O2C / P2P / Plan-to-Produce / Plan-to-Outsource / R2R）；
+- §8 当前运行限制与长期目标的区分；
+- §9 非核心扩展范围收口（projects / tasks / timesheets / contacts / followups / activities）。
 
-**没有任何 Domain 达到 Release Readiness。** 生产发布仍未获授权（`document.md:11187`）。
-
-### B3101–B3122 最新 Coverage 来源
-
-`document.md §22`（2026-10-06）仍是**已批准的手册能力基线**，其 Coverage 列是初判，**不得当作当前进度**。
-当前权威 Coverage 来源如下；**未经逐条证据支持的 Capability 保持 `UNVERIFIED`**。
-
-| 手册 | 权威 Coverage 来源 | 状态 |
-|---|---|---|
-| B3101 采购 / B3121 委外 | §31.3.1（PRC-01..26）、§31.3.3（OUT-01..23）、VMI-01..05 | Requirement 已完成；Acceptance `NOT READY` |
-| B3102 销售 | §34.8（CAP-1..27） | 已实现并部分冻结 |
-| B3103 信用 | §34.8（CAP-28..36）+ SC82–SC107 | 已实现并冻结（W11-SEC/U1/U2/OVERDUE/U3） |
-| B3104 库存 / B3105 条码 | §32.3（INV-01..44） | Requirement 已完成；Domain Acceptance 未见 |
-| B3106 存货核算 / B3107 固资 | §33.1.3 仅确认归属 | **无能力矩阵，Coverage `UNVERIFIED`** |
-| B3108–B3113 | §33.5（FO01..FO58）+ §33.2 三种识别模型 | Requirement 已完成；Domain Acceptance 未见 |
-| B3114–B3117 | 无 | **无能力矩阵，Coverage `UNVERIFIED`** |
-| B3118 工程数据 | §28.3（ME-01..31） | 已实现；Domain Acceptance 未见 |
-| B3119 生产管理 | §29.3（MQ-01..43） | 已实现；Domain Acceptance 未见 |
-| B3120 计划 | §30.2（PL-01..45） | 已实现并冻结 |
-| B3122 工作流 | §22.22 | 仍然开放（正确） |
-
-### 已验收 / 待验收 / 未实施
-
-- **已验收并冻结**：Planning；Sales Wave 6 / 7 / 9、Gate A、Wave 10（能力冻结，发布仍阻塞）；
-  Package B 测试隔离；W11-SEC-01、W11-A U1、U2、OVERDUE、U3。
-- **已验收（文档层基线验收，非能力冻结）**：M0 项目级文档基线纠偏与审计勘误
-  （`M0_BASELINE_ACCEPTANCE_PASS`，锚点 `3e70c380eec7d34dd938a29d23dbf07227656ef1`）。
-  它**不构成任何 Domain 的 Domain-Level Acceptance**，也不关闭任何待治理缺陷或 Release Blocker。
-- **实现完成但缺 Domain-Level Acceptance**：Master & Engineering、Manufacturing & Quality、
-  Inventory & Warehouse、Finance Operations。
-- **待验收**：Procurement & Outsourcing（`NOT READY`）。
-- **未实施**：W11-B（Evaluation Foundation）、W11-C（Multi-Scorer / Rating）、W11-D（Reconciliation）；
-  Accounting & Analytics 的 Cash Flow、Report Designer、Management Accounting；
-  Platform Generic Workflow 执行引擎。
-
-### W11 依赖 DAG（`solution.md §37.54.15.1` 为准）
-
-```text
-[W11-SEC] ──> [W11-A] Credit Query / Exception History
-
-[W11-B] Evaluation Foundation ──> [W11-C] Multi-Scorer / Rating Application
-
-[W11-D] Reconciliation / Recalculation ──> 仅依赖 [W11-SEC] 的 Scope 合同
-```
-
-硬依赖只有三条：`W11-A → W11-SEC`、`W11-C → W11-B`、`W11-D → W11-SEC`。
-`W11-B`、`W11-D` **不依赖** `W11-A`；`W11-A` **不依赖** `W11-B/C`；`W11-D` **不依赖** `W11-B/C`。
-`W11-D ↔ W11-A` 仅为**可选复用**（`solution.md §37.54.15.1` CORRECTION-5，2026-10-27）。
-
-**W11-A 包级 Acceptance**：其唯一硬依赖 W11-SEC 已通过；契约范围
-（`§37.54.15.3`：3 个 GET 端点 + `credit-query.js` + `credit-query.jsx` + U1/U2/U3 增量）已全部
-验收冻结。包级标识 `W11_A_ACCEPTANCE_PASS` **仍被保留、尚未签发**——签发是用户的决定，不由本次纠偏代签。
-W11-A OVERDUE Foundation 的冻结记录本身**未记载 Git SHA**（其工作树保持未暂存/未提交），
-在包级冻结引用完整锚点集之前应先闭合该锚点。
-
-### Frozen SHA / Git 状态
-
-| 项 | 值 |
-|---|---|
-| Frozen Implementation（W11-A U3） | `ec618eb81684d645707c70a8b69ff9379682fbaa`（tree `908c10310cd92a509374ada2bd31b5882be580f2`） |
-| Closure HEAD | `ebe3363fe88d64222a6aa619a932bfe9a4fa3578` |
-| WIP 父提交 / Recovery 基线 | `60f3fbd169d7b43bbae3824b10b538edef4aeec1` / `8c716f64dbeb8d650c3dd87a43661ed205fdcfdd` |
-| 分支 | `review/w11a-u3-fast-blocked-20261030`（GitHub 与 Gitee 同名 Review Branch 均已指向 Closure HEAD） |
-| `master`（两端） | `aee1e0c13d26dd840ae4b596340212eef03479c0`（未变） |
-| Release tag | `v1.6.0` / `v1.6.1` / `v1.6.2`（未变） |
-| 版本 | `1.6.2`（未变） |
-
-### 五条端到端主链闭合情况
-
-| 主链 | 步骤齐备 | 结构完整 | 主要断点 |
-|---|---|---|---|
-| Order-to-Cash | 10/10 | 是 | 识别模式分支（`LEGACY_DIRECT` 的 AR 来源是 Delivery 而非 Invoice）；AR aging 不带 source 维度 |
-| Procure-to-Pay | 12/12 | 否 | **Receipt Notice → Purchase Receipt 转换未接线**（`assertNoticeCompatibleWithReceipt` 无生产调用点）；`SEPARATE` 下 GRNI→Bill 为人工 |
-| Plan-to-Produce | 9/9 | 是 | Planned Order → Production Instruction → Production Order 经 `production_instruction_items.planned_order_id` 与 `production_orders.production_instruction_item_id` **两跳 FK 完整可追溯**；仅指令表头不直接携带 `planned_order_id` |
-| Plan-to-Outsource | 9 识别 / 4 不可达 | 否 | `outsourcing_receipt_items` 无生产写入路径；processing-fee bill 无 GL 凭证；无 `receiptNoticeId` FK |
-| Record-to-Report | 7/7 | 部分 | 无 Accounting Event 层（FO58 无实现）；TB/P&L/BS 不保留 source 维度，报告终点不可回溯业务单据 |
-
-### 当前 Release Blockers
-
-| 标识 | 状态 | 阻塞范围 |
-|---|---|---|
-| `W10-INV-RISK-01` | `BLOCKS_RELEASE_ONLY` | 仅发布 |
-| `WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED` | 冻结且发布阻塞 | 发布 |
-| `LEGACY_DATA_EVIDENCE_PENDING` | 开放 | 非阻塞（外部证据依赖未解） |
-| `CREDENTIAL_EXPOSURE_OPEN` | `USER_ACCEPTED / DEFERRED` | 非阻塞（**已被接受并延后，不等于风险消除**） |
-| `R-U3-INV-09` | `ACCEPTED_RESIDUAL` | 非阻塞（限 Selector 精确身份过滤的已测 Collation 差异） |
-| `R-U3-INV-10` | `DEFERRED_OUT_OF_SCOPE` | 阻塞受影响目标的部署/迁移 |
-| `CURRENT ACCEPTANCE HARNESS DRIFT` | 开放 | Procurement 最终验收/冻结 |
-| `D-2` / `D-3` / `D-4` / `D-5` | 开放设计决策 | W11-B、W11-C |
-
-### 当前推荐的下一个工作包
-
-**A — 项目 Git / 文档基线纠偏**（即本节，即 M0）。**已于 2026-10-31 验收通过**：
-`M0_BASELINE_ACCEPTANCE_PASS`，锚点 `3e70c380eec7d34dd938a29d23dbf07227656ef1`。
-理由：当前 canonical 文档陈述的仍是若干阶段之前的
-状态，任何后续业务包都会基于错误基线被规划与复核；本包零回归风险、零 MySQL 依赖，且已把
-两项源码级缺陷（`outsourcing_receipt_items` 无生产写入路径、processing-fee bill 无 GL 凭证）
-写入待治理清单。详见 `document.md §35` 与 `solution.md §37.54.48`。
-
-M0 验收后，**后续业务包的启动仍需各自的显式授权**；W11-A 整包验收、G-1…G-5、D-2…D-5、
-历史库存完整性与全部 Release Blocker 均保持开放，采购委外 Domain 仍为 `NOT READY`。
-
----
-
-## 当前主要 Gap
-
-> 本节仍以 `document.md §22` / §35 的权威 Coverage 来源为准；下列条目为**面向下一步的深化方向**，
-> 不是能力缺失的最终判定。凡与 §35 冲突，以 §35 与对应 Domain Closure 为准。
-
-
-### Master & Engineering 仍保留的跨域 / deferred Gap
-
-- Organization / Organization Scope（Multi-Organization 基线外）
-- Bin / 仓位（Inventory & Warehouse 所有）
-- 完整 MRP substitute 消费与完整委外执行
-- 完整 APS / MES / HMI
-- Mold / Mold Combination 与复杂 Auxiliary Attributes（缺原手册细节证据）
-
-### Sales & Customer
-
-- Credit Profile / Credit Limit / Occupancy / Credit Check / Special Approval（Wave 9 基础与 Wave 10 运行时已实现并验收冻结）；
-  Wave 11 的**信用查询 / 异常历史 / 选择器 / 搜索语义已验收冻结**（W11-SEC-01、U1、U2、OVERDUE、U3），
-  **尚未实施**的是信用评估基础与多评分/评级应用（W11-B / W11-C）与信用对账重算（W11-D）
-- 更完整的 replacement / replenishment obligation
-
-### Planning
-
-- 更细粒度的时界/批量/合并策略与 APS 深化
-- 替代料自动消耗策略深化
-- 完整委外执行（当前只提供 OUTSOURCE 计划释放交接，不替代委外子域）
-- 跨组织计划（Multi-Organization 基线外）
-
-### Procurement & Outsourcing
-
-- 已实现 Sourcing、Supplier Allocation / Quota、采购价格与折扣、PO Change、Receipt Notice、采购退货四分支、Procurement Scan；
-- VMI business layer 已实现；自 V21 起 Inventory owner dimension **已可用**，VMI 收货 / 消耗 / 所有权转移
-  统一经 `applyInventoryMutation` 落物理库存（所有权转移使用 `OWNER_CHANGE` 移动类型，
-  该移动类型由库存域按 owner 身份成对记账），legacy fail-closed helper 已移除并成为 no-op
-  （`server/modules/procurement-vmi.js:14-20`；`server/lib/inventory-mutation.js:43,248`）。
-  **仍然开放**的是旧验收 harness 的 UAT-14 oracle 仍硬编码 409 `INVENTORY_OWNER_DIMENSION_UNAVAILABLE`
-  （`scripts/acceptance/procurement-outsourcing-functional-uat.mjs:235-240`），
-  即 `document.md §35.8` 的 **G-5**：修 test 还是修 contract 仍属业务决定；
-- Outsourcing Order、材料发/退/补、倒冲、收货、加工费 Supplier Bill/AP、成本证据、完工退货商业贷项、差异/WIP/报表已实现；
-- **历史检查点（2026-10-09）**：functional browser UAT 25/28 PASS，缺口为 authoritative Planning handoff
-  consumption、Completion Receipt Notice、`OUTSOURCING_RECEIPT` Inspection。**该检查点已被后续实现取代**：
-  OUT-05 / OUT-17 / OUT-18 已在源码落地，11 个采购委外真实 handler race 已有 11/11 真实 MySQL 证据。
-  当前 Domain 仍未冻结，原因是 `document.md §31.11` 仍记 `NOT READY`，且存在新的验收 harness 漂移；
-  详见「当前项目状态快照」的 Release Blockers；
-- responsive browser matrix 为 7 surfaces × 320/390/430/680 = 28/28 PASS；disposable MySQL 8 integration/concurrency/performance gates PASS。
-
-### Manufacturing & Quality
-
-- Dispatch
-- Operation Transfer
-- 更多检验类型
-- Non-conformance disposition
-
-### Inventory & Warehouse
-
-> Bin、Stock Status、Form Conversion、库存锁定与预留、ABC 报表的**数据模型与权威写入已实现**
-> （`warehouse-bin.js`、`stock-status.js`、`inventory-form-conversion.js`、`inventory-lock.js`、
-> `inventory-availability.js`、`/api/inventory-abc`）；下列为仍待闭合的部分。
-
-- Barcode **生成与标签打印**（当前只有解析/校验/规则与绑定 CRUD）
-- PDA 执行层（扫描 → 生成业务单据）与盘点扫码入口、收发货扫码校验
-- Assembly / Disassembly（库存组装/拆卸）
-- Bin / Stock Status / Owner Dimension / Stocktake 的 **HTTP CRUD 路由尚未登记**
-  （模块存在但未被 `server/app.js` 引入）
-- Inventory Age / Obsolete 等深化
-
-### Finance Operations
-
-- 更深的票据背书/贴现会计联动与现金预测
-- 批量发票、法定电子发票及税务硬件集成（法定电子发票与税务硬件集成为 **OUT_OF_SCOPE**）
-- Purchase Expense Allocation
-- 多币种
-
-> 固定资产（B3107）已按 `document.md §33.1.3` 归属 **Accounting & Analytics**，不再列入 Finance Operations。
-> 付款申请、现金盘点、银行对账、Treasury 关账、到期计划与账单生命周期均已实现；仍缺 GRNI 反冲
-> （设计如此）与 FO13 暂估转正式的**反冲**一半。
-
-### Accounting & Analytics
-
-- Smart Accounting Rule Engine
-- Accounting Event / Voucher Template 深化
-- Business ↔ GL Reconciliation 产品化
-- Cash Flow
-- Report Designer / Formula Engine
-- Management Accounting / Operating Ledger / Amoeba
-- 完整 Fixed Asset 生命周期（B3107 归属本 Domain，见 `document.md §33.1.3`）
-
-### Platform
-
-- Generic Workflow
-- Workflow Definition / Instance / Node / Action
-- Document Relationship
-- Document Conversion
-- Numbering
-- Organization Scope
-
-## 核心产品范围收口
-
-以下现有扩展不属于 B3101–B3122 核心 ERP 产品范围，已确定从最终产品移除：
-
-- `projects`
-- `tasks`
-- `timesheets`
-- `contacts`（现有 CRM Extension）
-- `followups`
-- `activities`
-
-重要边界：
-
-- 删除 CRM `contacts` 不等于删除 ERP Customer/Supplier Contact；
-- 客户联系人、收货地址、结算方、付款方等仍属于核心 Sales & Customer；
-- 若旧 contacts 数据可迁移为核心联系人，必须先迁移再删除；
-- 原 `projects-workflow.jsx` 与 `server/modules/business.js` 已完成 Platform ownership 提取；
-- notifications / workflows 分别由明确的 Platform page/module 承载，workflows 用户 Route 仍保持 disabled；
-- 历史数据库表不得在普通代码清理中直接 DROP；
-- schema cleanup 必须单独完成数据保留、备份、SQLite/MySQL migration 与 rollback 设计。
-
-## 必须保持的端到端主链
-
-### Order-to-Cash
-
-`Customer / Quotation → Sales Order → Credit → Planning/Reservation → Delivery/OQC → Inventory/COGS → Sales Invoice → AR → Collection/Credit/Refund/Write-off → Accounting`
-
-### Procure-to-Pay
-
-`Demand/MRP → Purchase Requisition → Sourcing → Purchase Order → Receipt/IQC → Inventory/GRNI → Supplier Bill / AP → Payment/Credit/Refund/Write-off → Cost/Accounting`
-
-### Plan-to-Produce
-
-`Sales Order/Forecast → MRP → Planned Order/Instruction → Production Order → BOM/Material List → Issue/Return/Supplement → Operation Execution → Inspection → Production Receipt → WIP/Cost`
-
-### Plan-to-Outsource
-
-`MRP → Outsourcing Plan/Order → Outsourcing Material List → Issue → Supplier Processing → Receipt/Inspection → Outsourcing Receipt → Processing AP → Material + Processing Cost`
-
-### Record-to-Report
-
-`Business Facts → Inventory/AR/AP/Treasury/Asset/Cost → Accounting Event → Voucher → GL → Period End → Financial Reports / Management Accounting`
-
-## 当前运行限制
-
-当前事实仍然是：
-
-- 单组织；
-- 单本位币；
-- Generic Workflow 尚未完成（当前只有 `approval_workflows` 定义表与其 `steps` JSON 列，
-  **没有任何执行引擎**；审批仍是 6 个领域硬编码适配器）；
-- Credit 的**评估 / 评分 / 对账**（W11-B / W11-C / W11-D）尚未实施；信用查询侧已验收冻结；
-- Barcode 的**生成与 PDA 执行层**尚未完成；完整 Outsourcing 子域已实现；
-- 部分 `cash-journals` / `bills` / `fixed-assets` / `workflows` 用户 Route 仍 disabled；
-- `server/app.js` 与部分页面仍较大；
-
-### 当前发布阻塞项
-
-生产发布**未获授权**。当前阻塞标识与状态：
-
-| 标识 | 状态 | 阻塞范围 |
-|---|---|---|
-| `W10-INV-RISK-01` | `BLOCKS_RELEASE_ONLY` | 仅发布 |
-| `WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED` | 冻结且发布阻塞 | 发布 |
-| `LEGACY_DATA_EVIDENCE_PENDING` | 开放 | 非阻塞 |
-| `CREDENTIAL_EXPOSURE_OPEN` | `USER_ACCEPTED / DEFERRED` | 非阻塞（已接受并延后） |
-| `R-U3-INV-09` | `ACCEPTED_RESIDUAL` | 非阻塞 |
-| `R-U3-INV-10` | `DEFERRED_OUT_OF_SCOPE` | 阻塞受影响目标的部署/迁移 |
-| `CURRENT ACCEPTANCE HARNESS DRIFT` | 开放 | Procurement 最终验收/冻结 |
-| `D-2` / `D-3` / `D-4` / `D-5` | 开放设计决策 | W11-B、W11-C |
-- 部分领域仍存在 mixed-owner 文件。
-
-这些是**当前限制**，不是永久产品原则。Organization-ready、多币种等后续通过对应 Capability 的 Requirement/Design 独立实现；在真正完成前不得通过 UI 或文档宣称已经支持。
+当前的断点、五条主链闭合情况与 Release Blockers 见
+[docs/status/PROJECT_STATUS.md](./docs/status/PROJECT_STATUS.md) §35.8 与 §35.9。
 
 ## 实际技术栈
 
@@ -595,16 +311,27 @@ Sales & Customer Batch A 的独立浏览器验收脚本（需要本机 Edge、�
 
 生产目标路径为 Ubuntu 22.04 + Node.js 22.23.2 + MySQL 8 + Nginx + systemd。
 
-## Canonical 文档
+## 文档导航
 
-- `README.md`：项目入口、技术栈、运行/测试/部署、目录和发布状态；
-- `document.md`：唯一当前功能与业务需求来源；
-- `solution.md`：唯一当前技术设计与实现参考；
-- `AGENTS.md`：唯一当前开发与 AI/Vibe Coding 治理政策；
-- `CLAUDE.md`：Claude Code 入口，只引用 `AGENTS.md`；
-- `log/YYYY-MM-DD.md`：append-only 开发历史；
-- `docs/`：运维资料和历史证据，不得形成第二套当前规格。
+| 需要找什么 | 去哪里 |
+|---|---|
+| 项目定位、技术栈、启动 / 测试 / 部署入口 | 本文件 |
+| 全局业务 Requirement 合同与 Domain 需求导航 | [document.md](./document.md) |
+| 全局技术 Design 合同与 Domain 设计导航 | [solution.md](./solution.md) |
+| 某个 Domain 的当前 Requirement 正文 | [docs/requirements/](./docs/requirements/) |
+| 某个 Domain 的当前 Design 正文 | [docs/design/](./docs/design/) |
+| **当前项目状态、阻塞项与下一步** | [docs/status/PROJECT_STATUS.md](./docs/status/PROJECT_STATUS.md) |
+| B3101–B3122 能力覆盖追溯 | [docs/status/CAPABILITY_MATRIX.md](./docs/status/CAPABILITY_MATRIX.md) |
+| G0 文档迁移映射（可追溯性） | [docs/status/MIGRATION-MAP.md](./docs/status/MIGRATION-MAP.md) |
+| 重大决策记录 | [docs/decisions/](./docs/decisions/) |
+| 验收与冻结证据 | [docs/acceptance/](./docs/acceptance/) |
+| 运维与测试运行手册 | [docs/operations/](./docs/operations/) |
+| 历史材料（非当前权威） | [docs/archive/](./docs/archive/) |
+| 开发与沟通历史 | [log/](./log/) |
+| 开发与 AI/Vibe Coding 治理政策 | [AGENTS.md](./AGENTS.md) |
+| Claude Code 入口 | [CLAUDE.md](./CLAUDE.md) |
 
+`AGENTS.md` 是唯一权威的治理政策；`CLAUDE.md` 只引用它，不维护第二套规则。
 `APPLY_GUIDE.md` 不是 canonical 文档，仅可用于一次性恢复/应用说明；恢复完成后可以删除。
 
 ## 当前开发主线
@@ -660,155 +387,3 @@ AUDIT
 - 破坏性数据库操作必须单独批准。
 
 私有项目，禁止外传。
-
-## Wave 8 销售履约扩展（已验收并冻结）
-
-当前工作树已实现 Service Fulfillment 与 Consignment 的上下文工作面，并保留全局 Launcher 不新增主入口：
-
-- 销售订单可进入 Service Fulfillment，执行 `PENDING / CONFIRMED / CANCELLED` 流程；
-- Consignment 支持商业地点、指令、Handoff、Settlement、Return 与三层查询；
-- Consignment 的物理库存变化仍由 Inventory V21 canonical writer 负责，Finance 暴露仍由既有 Finance writer 负责；
-- `inventory_mutation_log` 仅增加经批准的九个 nullable 历史位置证据字段，没有第五张 Wave 8 业务表或影子库存/AR；
-- SQLite 与 MySQL 8 迁移均走 canonical migration lifecycle，旧行保持可读且不做猜测式 backfill；
-- Wave 8 四张业务表在 MySQL 上由共享 snapshot reconciliation 先行创建；migration 追加只读的 `information_schema` 物理合同断言（列/默认值/NULL/CHECK/FK/UNIQUE/index 顺序/collation），结构不兼容时 fail closed 且不做修复性 DDL；`lot_code_key` 已按最终设计收敛为 MySQL binary collation，并保留升级前歧义检测。
-- `SALES_VIEW` 是本轮新增权限且有 §35.18.8 批准依据，不是 HEAD 既有权限；Wave 8 读取判定为 `SALES_MANAGE OR SALES_VIEW` 再叠加对应窄权限，写入判定为 `SALES_MANAGE` + 窄权限。
-
-Wave 8 测试入口：
-
-- `server/sales-customer-wave8-functional.test.js`：Stage D 功能与证据回归；
-- `server/sales-customer-wave8-remediation.test.js`：P0/P1 反例复现与闭环（P0-1 零金额、P0-2 SO 商业权威、partition entitlement、handoff 仓库、三层报告、RBAC、C1 锁序证据）；
-- `server/sales-customer-wave8-mysql-metadata.test.js`：四表 MySQL 既有结构 fail-closed 证明；
-- `server/sales-customer-wave8-mixed-delivery.test.js`：混合/纯服务 Delivery 与 RBAC 负向矩阵（真实 HTTP 面）；
-- `server/mysql-sales-customer-wave8-concurrency.integration.js`：真实 MySQL 独立会话 R-SAL-20/21/22 与 A3 竞态。
-- 浏览器响应式与 direct/refresh/back/forward 入口为 `node scripts/acceptance/sales-customer-wave8-acceptance.mjs`（本机 Edge，320/390/430/680 CSS px）。
-
-用户已于 2026-10-21 明确确认 `WAVE8_FINAL_ACCEPTANCE_PASS`。上述 Wave 8 批准范围现作为冻结基线；冻结仅适用于 Wave 8，不冻结整个 ERP 项目，也不授权 Wave 9–13、发布、部署或版本变更。
-
-## 统一本机 MySQL 测试目标
-
-本机全部真实 MySQL 集成测试统一使用**同一个实例、同一个 Schema、同一个最小权限账号**：
-
-| 项 | 值 |
-|---|---|
-| Host / Port | `127.0.0.1` / `3306` |
-| Database | `modern_erp_domain_test` |
-| User | `modern_erp_test` |
-| 口令 | 不入库；由 Windows 当前用户的 DPAPI 加密保存 |
-
-本机当前仅存两个用户项目 Schema：统一测试目标 `modern_erp_domain_test`（专用空库）与历史遗留的
-`calculator_db`。`calculator_db` 仍存在 `calculation_history` 的 Missing Tablespace 问题
-（其 `.ibd` 文件缺失，MySQL 错误日志持续记录），**并未恢复正常**；本项目不使用它，
-受保护 Gate 也不会触碰它。
-
-一次性设置（掩码提示输入口令 → DPAPI 保存 → 建立固定身份基线）：
-
-```bash
-pnpm test:mysql:local:setup
-```
-
-此后运行受保护 MySQL Gate 只需一条命令：
-
-```bash
-pnpm test:mysql:local                                   # 默认运行 W11-SEC Gate
-powershell -File scripts/gates/run-mysql-local-gate.ps1 -Script test:mysql:wave10
-```
-
-`pnpm test:mysql:local` **当前默认只运行 W11-SEC Gate**，这**不代表全部历史 MySQL Gate 已完成适配**：
-
-| Gate | 与统一目标的关系 |
-|---|---|
-| `test:mysql:wave11-sec` | 统一 launcher 的默认目标，已在本机实测通过 |
-| `test:mysql:wave10` / `test:mysql:gate-b` | 复用同一受保护 runner，可用同一 launcher 调用；本轮**未**重跑 |
-| `test:mysql:finance-concurrency` / `test:mysql:performance` | 可运行，但**绕过**受保护合同（不校验 disposable target 身份指纹），且其 runner 只 `DROP TABLE`、不满足五类归零清理合同；尚未接入统一 launcher |
-| `test:mysql`（gate-a）/ `test:mysql:concurrency` / `test:mysql:legacy` | **尚未适配**：其并发套件要求 `information_schema.PROCESSLIST` 可见，最小权限账号无 `PROCESS` 权限；不得以扩大测试账号权限绕过 |
-
-launcher 会依次：读取 DPAPI 凭据 → 只读核验身份与空库 → 取得机器级互斥锁（所有会清理 Schema 的 Gate 串行执行）→ 运行 Gate → 用新会话复核五类对象归零。
-
-固定身份基线（server UUID / CURRENT_USER / grants SHA-256）保存在
-`%LOCALAPPDATA%\ModernERP\mysql-gate\target.json`，**只被比较，从不被重新生成**；
-身份漂移会被拒绝启动，重新建立基线必须显式执行 setup 脚本。
-
-**运行前提**（launcher 的只读 preflight 逐项核验，任一不满足即拒绝启动 Gate）：
-
-- `MySQL80` 服务正常运行，`127.0.0.1:3306` 可达；
-- 固定身份基线有效 —— server UUID / CURRENT_USER / grants SHA-256 与基线一致，漂移即拒绝启动；
-- 专用数据库 `modern_erp_domain_test` 初始为空（五类对象计数全 0）；
-- 最小权限合同匹配 —— 由仓库既有 `assertExactLeastPrivilegeGrants` 核验，本仓库不复制第二份权限清单；
-- Trigger bootstrap 前置条件满足 —— 见下节。
-
-**Trigger bootstrap 前置条件（`log_bin_trust_function_creators`）**：
-
-本机 MySQL 开启二进制日志（`log_bin=1`）时，最小权限账号无法 `CREATE TRIGGER`，
-而 Gate 的 Schema bootstrap 必须创建触发器（`inventory_mutation_log` 3 个 + Wave 2 价格 3 个），
-因此必须开启 `log_bin_trust_function_creators=1`。这是**服务器级开关**，不改变账号授权集合，
-也不改变固定身份基线。
-
-- 该开关当前值 `1` 是**运行时设置**（`SET GLOBAL`），**不持久化**：实例配置文件未指定该项，
-  `mysqld-auto.cnf` 不存在，`performance_schema.variables_info` 报 `VARIABLE_SOURCE = DYNAMIC`。
-- `MySQL80` **重启后会回到默认值 `0`**。届时二进制日志仍开启，最小权限账号将无法创建触发器，
-  Gate 会在 Schema bootstrap 阶段以 `ER_BINLOG_CREATE_ROUTINE_NEED_SUPER` 失败。
-- 重启后必须先通过**单独的、经授权的管理员操作**恢复该前置条件，再执行 Gate。
-- **普通 launcher 不得自动以 root 修改全局变量** —— 该动作不属于 Gate 流程，必须显式授权、单独执行。
-- **不允许为绕过该问题扩大 `modern_erp_test` 的权限**（例如授予 `SUPER` / `SET_USER_ID`），
-  也不允许改动 Schema 跳过触发器；二者都会破坏最小权限合同与业务控制。
-
-## Gate A 销售 Wave 7 MySQL 门禁（已验收并冻结）
-
-`pnpm test:mysql` 与 `pnpm test:mysql:gate-a` 指向同一个受保护的 bounded Gate A runner，只运行
-A-PARITY / A-PROD / A-RAW / A-TXLIFE 四个套件。旧通用 MySQL gate 保留在独立的
-`pnpm test:mysql:legacy` 与 `pnpm test:mysql:concurrency`，不属于 Gate A。
-
-用户已于 2026-10-24 明确接受 `GATE_A_MYSQL_CAMPAIGN_PASS`。一次授权的真实 MySQL 执行
-（`mysql://modern_erp_test@127.0.0.1:3306/modern_erp_domain_test`，MySQL 8.0.37）四套件全部 PASS：
-
-| 套件 | 用例文件 | 结果 |
-|---|---|---|
-| A-PARITY | `server/mysql-sales-customer-wave7.integration.js` | 4 / 4 PASS |
-| A-PROD | `server/mysql-sales-customer-wave7-concurrency.integration.js` | 6 / 6 PASS |
-| A-RAW | `server/mysql-sales-customer-wave7-raw-locks.integration.js` | 4 / 4 PASS |
-| A-TXLIFE | `server/mysql-transaction-start-safety.integration.js` | 8 / 8 PASS |
-
-- 冻结仅适用于 Gate A 验收边界，不冻结整个 ERP 项目；
-- **历史状态（2026-10-24 记录时）**：Gate B 保持 `BLOCKED_BY_WAVE10`，Wave 10 已实现但尚未验收，
-  Wave 11 未启动。**该状态已被后续记录取代**：Wave 10 已于 2026-10-27 完成验收并冻结
-  （`WAVE10_FULL_ACCEPTANCE_PASS` / `WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED`），
-  Wave 11 已推进至 W11-SEC-01 与 W11-A U1/U2/OVERDUE/U3。Gate B 与 Wave 10 的**发布**仍阻塞，
-  详见「当前项目状态快照」的 Release Blockers；
-- 该冻结不是 Git commit、tag、发布、部署、migration 或版本变更。
-
-## Wave 10 信用检查与特别审批（已验收并冻结）
-
-Wave 10 在 Wave 9 信用基础上实现首个可执行信用运行时：
-
-| 交付物 | 文件 |
-|---|---|
-| 两张新表与双数据库迁移 | `server/migrations/sales-customer-wave10-credit-check.js` |
-| 信用检查引擎 | `server/modules/credit-check.js` |
-| 信用特别审批工作流 | `server/modules/credit-special-approval.js` |
-| 销售订单提交 / 审批与销售出库确认集成 | `server/modules/sales-orders.js`、`server/app.js` |
-| 信用检查评估与信用特别审批页面 | `src/pages/credit-check.jsx` |
-| 集中测试 | `server/sales-customer-wave10-credit-check.test.js` |
-
-API：`POST /api/credit/check`、`GET /api/credit/check-results`、`POST /api/credit/special-approvals`、
-`GET /api/credit/special-approvals`、`GET /api/credit/special-approvals/:id`、
-`POST /api/credit/special-approvals/:id/decide`。
-
-- 信用敞口完全由销售与财务权威事实派生，不存在第二套信用余额或物理敞口缓存；
-- 信用检查在销售订单提交、销售订单审批、销售出库确认三个阶段执行，缺失强制档案时后端 fail closed；
-- 信用管理默认关闭（`CREDIT_MANAGEMENT_ENABLED` 缺省 false），未启用时既有业务流程行为完全不变；
-- 特别审批只对产生该结论的一个信用范围有效，受权限上限、失效业务日期与申请审批分离约束；
-- **Wave 10 已于 2026-10-27 验收并冻结**（`WAVE10_FULL_ACCEPTANCE_PASS`）；能力冻结但**发布仍阻塞**
-  （`WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED`）。Wave 11 已推进至 W11-A U3（2026-10-31 验收冻结）。
-  冻结记录：`document.md` "Wave 10 Capability Freeze (2026-10-27)"。
-
-### Wave 10 MySQL readiness
-
-- The live MySQL initialization path now recreates the canonical
-  `finance_open_item_effects` derived View after its dependency tables are bootstrapped, matching
-  SQLite fresh, repeated and upgrade initialization behavior.
-- The protected Wave 10 Guard requires the exact dedicated-account contract: the eleven approved
-  target-schema privileges, three table-scoped Performance Schema reads, global `USAGE` only, no
-  roles and no grant delegation. The trusted normalized grant SHA-256 remains an explicit
-  preflight input.
-- The prepared account is `modern_erp_wave10@127.0.0.1`; its credential is intentionally not
-  stored in this repository. Real Wave 10 MySQL Acceptance remains separately authorized.
