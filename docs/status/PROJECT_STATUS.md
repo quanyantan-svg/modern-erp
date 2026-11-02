@@ -910,6 +910,58 @@ Release / Deploy。**R1 完成后 HARD STOP**，等待独立审查与下一工�
 
 ---
 
+### 37.18 M1-Core `M1C-WP1-R2` 委外历史收货效力证据 Fail-Closed 修复（2026-11-02）
+
+**业务所有者决定**：WP-1 独立审查确认一个剩余合同问题 —— `resolveOutsourcingOrderCapacity()`
+把**任意存在**的 `iqc_inspections` 记录都当作委外历史收货已生效的证明，未区分「存在质检
+记录」与「已完成有效质量判定」。业务所有者批准一次**严格限定范围**的 `M1C-WP1-R2` 修复，
+修复范围**仅限**该效力判定及其必要测试。
+
+| 对象 | 当前状态 |
+|---|---|
+| `M1C-WP1-R2` | `IMPLEMENTED`，**等待独立审查**；`M1C-WP-1` 的 Implementation PASS **未**签发 |
+| 修复提交 | `c013b8dbe7d59a725194ce2396eb786d13622891`（`fix(erp): 收紧委外历史收货效力证据为已完成且有效的质量判定`） |
+| 原缺陷 | `iqc_inspections.status` 默认 `PENDING`、`result` 完成前为 NULL，一张**未完成**的检验记录也让历史收货被判为「已生效已确认」，而非 Active Design §10 / `MC-REQ-12` 要求的「历史未证实 → fail closed」 |
+| 修复方式 | 质量判定证据收紧为「**已完成**（`status='COMPLETED'`）且**结果有效**（`result IN ('PASS','WAIVED')`），并满足 canonical 有效质量门禁语义（`deriveQualityState` 为 `PASS` / `WAIVED`）」；`DRAFT` / `PENDING` / `CANCELLED` / 已完成 `FAIL` / 失效判定一律不成立 |
+| 未改动的证据分支 | 库存流水 / 估值流水 / 成本证据三类分支**未改动** → 已存在真实权威库存或估值证据的合法历史收货**不被误伤** |
+| 拒绝合同 | 不可证明的历史收货 → 创建与确认 OUTSOURCE 通知均精确 409 `RECEIPT_NOTICE_OUTSOURCING_CAPACITY_UNPROVEN`；业务事实零变化，拒绝审计**恰好 1 条**（事务之外提交） |
+| 历史数据 | 未改写任何历史数据，未虚构历史来源明细 |
+| `M1C-G01..M1C-G07` | **7/7 `NOT_RUN`**；本轮**未**执行任何 Gate |
+| `M-15` / Migration 实测 / MySQL Gate | `DEFERRED` / `NOT_RUN` / `NOT_RUN` |
+| Procurement Domain Acceptance | **NOT_ISSUED**；`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY` 不变 |
+| Release / Deploy | **NOT_AUTHORIZED**；本轮**未** Push |
+
+**缺陷复现**：新增 `server/m1c-wp1-r2-outsourcing-receipt-effect-evidence.test.js`
+（A–I 共 10 例，登记入 FULL）。**修复前 10 例中 6 例失败**（`PENDING` / `DRAFT` /
+`CANCELLED` / 已完成 `FAIL` 四类检验记录均让通知创建错误返回 201；历史变为不可证后确认
+通知错误返回 200；零副作用与拒绝审计断言不成立）。
+
+**门禁证据**：R2 focused **10/10**、WP-1 focused **25/25**、R1 focused **7/7**、
+委外相关回归 **44/44**、`pnpm test:fast` **510/510**、`pnpm test`（FULL）**3180/3180**
+（基线 3170 + 新增 10 例）、`pnpm build`、`git diff --check`、文档一致性 current 模式
+（N1 / N3–N9 全部 PASS，N2 已退役）全部通过。
+
+**遗留 / 未解决矛盾**：
+- **质量判定不等于库存效力**：本轮按 Active Design §10 的证据清单保留「已完成且有效的质量
+  判定」为独立证据类型，因此**仅有**一条已完成 `PASS` / `WAIVED` 检验记录、而没有任何
+  库存 / 估值 / 成本流水的历史收货，仍被判为「已生效已确认」。现有质量记录结构本身无法
+  独立证明库存效力 —— 该**残余边界**如实登记，未自行推导。生产链路下真正生效的收货同时
+  具备库存流水与成本证据，故该边界只影响「生效动作未落库存」的历史数据。若要求进一步
+  收紧（质量判定只作必要条件、不得单独成立），属合同变更，须走 Requirement / Design。
+- **旧列 `receipt_id` 的检验记录未被采信**：canonical 判别列是
+  `iqc_inspections.outsourcing_receipt_id`；经旧版路径建立、只写 `receipt_id` 的历史检验
+  记录不构成质量判定证据，此类收货只能由库存 / 估值 / 成本证据证明。方向为 fail closed。
+- **观察（本轮未修，不在 R2 授权范围）**：OUTSOURCE 通知**创建**路径的容量越界抛普通
+  `HttpError(409)`（序列化后 `code='BUSINESS_RULE_BLOCKED'`），**确认**路径使用精确
+  `RECEIPT_NOTICE_CAPACITY_EXCEEDED`；两处错误码不一致，留待下一工作包裁定。
+- MC-REQ-11 的 **403 拒绝审计**在全应用范围仍未实现（由 `M1C-WP-5` 处理）。
+
+**边界**：本轮未修改已批准的 Requirement / Active Design，未连接或修改项目数据库，
+未执行 Migration，未运行 MySQL / HEAVY / 浏览器 / 业务 Gate，未 Push / Merge / Tag /
+Release / Deploy。**R2 完成后 HARD STOP**，等待独立审查与下一工作包授权。
+
+---
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
