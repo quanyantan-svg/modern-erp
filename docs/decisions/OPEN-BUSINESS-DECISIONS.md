@@ -10,10 +10,10 @@
 > §26.33.14（源 `solution.md §26.33` @ `912fd76700ff6f3ad1509eec4c9e2241c1830265`）。
 > §1.4 的处置依据是 **`M1-SRD-01` 首期范围重定基线决定**
 > [`docs/decisions/m1-core-scope-rebaseline-20261102.md`](./m1-core-scope-rebaseline-20261102.md)
-> 与 **M1-Core 候选 Design**
-> [`docs/reviews/m1/procurement-outsourcing-m1-core-design.md`](../reviews/m1/procurement-outsourcing-m1-core-design.md)。
-> 该候选设计**尚未获得** `Design PASS`；本表引用它只用于登记**技术处置**与**开放状态**，
-> **不**因此把任何政策记为已批准，**不**构成 Acceptance / Freeze。
+> 与 **M1-Core Active Design**
+> [`docs/design/procurement-outsourcing-m1-core.md`](../design/procurement-outsourcing-m1-core.md)。
+> 该设计已签发 `M1_CORE_DESIGN_PASS`；`A-P01` 与 `M1-P-03` 的当前状态见 §1.4，
+> 其余开放/延期政策不因 Design PASS 自动获批，且 Implementation 仍未授权。
 
 ## 1. Procurement & Outsourcing —— M1 集中业务决策登记
 
@@ -95,7 +95,7 @@ G-5（UAT-14 旧 oracle 与 V21 合同冲突）的处置动作已由 `document.m
 
 > 本节只登记**处置与状态**，不复制 Requirement / Design 正文。
 > 规范正文：[`docs/requirements/procurement-outsourcing.md`](../requirements/procurement-outsourcing.md) §31.13
-> 与 [`docs/reviews/m1/procurement-outsourcing-m1-core-design.md`](../reviews/m1/procurement-outsourcing-m1-core-design.md)。
+> 与 [`docs/design/procurement-outsourcing-m1-core.md`](../design/procurement-outsourcing-m1-core.md)。
 >
 > **状态含义**（M1-Core 首期专用于表达"首期范围已收敛、但业务政策尚未签字"这一中间态）：
 >
@@ -125,10 +125,10 @@ G-5（UAT-14 旧 oracle 与 V21 合同冲突）的处置动作已由 `document.m
 
 | ID | 建议的 Core 限定规则 | 影响与首期行为 | 状态 | 签字点 |
 |---|---|---|---|---|
-| `A-P01` | **唯一权威通知模型 = 复用 `receipt_notices` + `receipt_notice_items` + 行级来源表**，不新建第二套委外完成通知表、不建立第二收货引擎；由 `receipt_notices.business_type` 判别标准采购与委外 | §31.12.3 `A-REQ-06`（**已批准**）本已要求 Design 提出**唯一**权威模型并说明历史兼容与 SQLite/MySQL 对等；`A-REQ-06` 与本节 `A-P01` 行均把该项定性为**物理模型设计冲突**、裁定权属 Procurement Design | `DESIGN_TECHNICAL_ACCEPTED` | **不阻塞**任何工作包。业务所有者在 §31.13 Requirement 验收时**一次性确认**，**不另设独立签字项**（避免重复业务审批） |
+| `A-P01` | **唯一权威通知模型 = 复用 `receipt_notices` + `receipt_notice_items` + 行级来源表**，不新建第二套委外完成通知表、不建立第二收货引擎；由 `receipt_notices.business_type` 判别标准采购与委外 | 裁定权仍属 Procurement Design；业务所有者已于 2026-11-02 在 M1-Core Requirement Acceptance 中正式确认该唯一模型 | `DESIGN_TECHNICAL_ACCEPTED`（Owner 已确认） | **不阻塞**任何工作包；该确认只覆盖 M1-Core，不改变 M1 全范围历史登记 |
 | `A-P02` | **保留**多 PO 来源、行级部分转换与累计容量上限；首期**不开放**复杂拒收重开（拒收→重开→再转换状态机）与自动再转换；LOT/SERIAL **只能**来自可验证的实物或来源身份，**不得凭空继承** | 已批准部分（multi-PO、质量门禁、行级容量守恒）**不受影响**；新增的拒绝边界使首期行为确定。首期对"拒收重开"类请求一律 409 且零业务副作用 | `CORE_LIMITED_PENDING_OWNER` | **受限行为**，**不阻塞**多 PO 与行级部分转换主链；签字**只在放宽**该收缩时需要 |
 | `M1-P-02` | **区分两层**：① **已批准**部分 = OUT-09 每单位用量/订单总量快照 + OUT-08 BOM 消费规则 → "每单位用量 vs 订单总量"主歧义**已闭合**；② **未裁定**部分 = 损耗（scrap）是否计入倒冲基数、BOM 计量单位 ↔ 物料清单 `unit` 换算系数。首期采用**严格支持范围**：① 有明确 BOM 来源（approved / effective / `purpose=OUTSOURCE` / business-date appropriate）与物料行身份；② 单位一致，或存在**已批准且可证明**的换算；③ **不支持的损耗/换算组合一律 fail closed**，不得生成倒冲数量或成本；④ **不得自行创造新的损耗公式**，不得用跨仓全局平均价代替材料成本 | 首期倒冲在"受支持组合"内产出正确增量；落在受支持范围外时 409 `OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED` 且零副作用。**收紧不需要签字** | `CORE_LIMITED_PENDING_OWNER` | 是否**放宽**支持范围（接受损耗计入某一口径、接受某类换算系数）。**主歧义不需要重新签字**（已由已批准规则闭合） |
-| `M1-P-03` | **最小权限矩阵**：委外业务操作（订单、发退补料、完工通知、收货录入）与**收货生效**、**IQC**、**加工费正式过账**分属不同权限；**委外业务角色不得持有加工费正式过账权**；**不得因现有 `OUTSOURCING_MANAGE` 权限过宽就保留财务越权路径** | ① `SUPPLIER_BILL_MANAGE` 的注册与“RBAC 只认该权限”的门禁收紧不依赖本项签字；`admin` 可经 all-permissions 持有，但不得绕过委外来源级 Business Policy Guard；② **收货生效的最低安全授权 = 既有的 `OUTSOURCING_RECEIVING_MANAGE`**（已注册于 `server/db.js:276`），移除 `OUTSOURCING_MANAGE` 回退；不新增权限、不授予任何普通角色；③ 普通业务角色现状不持有 `OUTSOURCING_*`，该收紧不削弱其既有能力 | `CORE_LIMITED_PENDING_OWNER` | 授予矩阵：是否设立**独立**委外业务角色；`OUTSOURCING_RECEIVING_MANAGE` 授予给谁（**直接决定 `M1C-G02` 能否取得正向证据**）；`SUPPLIER_BILL_MANAGE` 是否授予 `role-accounting` 以外的既有角色。**不阻塞**代码实施 |
+| `M1-P-03` | **已批准最小权限矩阵**：委外业务员（建议技术 ID `role-outsourcing`）持有 `OUTSOURCING_MANAGE`、`OUTSOURCING_MATERIAL_EXECUTE`；委外收货员（建议技术 ID `role-outsourcing-receiving`）只持有 `OUTSOURCING_RECEIVING_MANAGE`；现有 `role-warehouse` 持有 `IQC_MANAGE`；现有 `role-accounting` 持有 `SUPPLIER_BILL_MANAGE` 且仅用于普通采购；`admin` 保留 all-permissions | 收货录入/生效只认 `OUTSOURCING_RECEIVING_MANAGE`；业务员、收货员、质检和财务职责强制分离；委外来源账单即使通过 RBAC 仍由独立 Business Policy Guard 拒绝，管理员无豁免 | `APPROVED`（2026-11-02） | 角色与授予须由后续 Implementation 创建/配置；本次批准**不**等于已实施，也不授权 Implementation |
 | `T-11` | **原始含义 = 通知转换后取消的来源容量语义**：① **不得未经证明自动恢复来源容量** —— 转换已用数量（`converted_quantity`）保持累计且单调不减，取消**不**恢复通知来源容量，重新转换 fail closed；② 该语义**不含**"零交期政策" | 首期一律 fail closed，**收紧不需要签字**；**受限行为**，**不阻塞**多 PO 与行级部分转换主链 | `CORE_LIMITED_PENDING_OWNER` | 是否在后续工作包**允许**已取消转换的来源量再次转换（若允许，必须新增独立不可变 conversion reversal 事实与反向上限；首期保持拒绝） |
 | 交期上界（**独立于 `T-11`**） | **无有效交期**、**多交期归属不明**、**历史容量无法证明** → 一律明确拒绝（409），**不得以省略参数绕过上界**；交期容量由**可追溯的交期消费事实**判定；交期上界**只**适用于 `STANDARD_PURCHASE` 通知（委外通知无供料 PO 行交期） | 首期一律 fail closed，**收紧不需要签字** | `CORE_LIMITED_PENDING_OWNER` | 是否在后续工作包**开放**零有效交期场景下的转换路径（首期保持拒绝）。**该项不是 `T-11`** |
 
@@ -157,8 +157,8 @@ G-5（UAT-14 旧 oracle 与 V21 合同冲突）的处置动作已由 `document.m
 | 委外收货**表头 + 明细**原子创建、零空明细、来源可达 | 无 | **可独立推进** |
 | 委外发料 / 补料 / 退料写 canonical 库存 + 跟踪 + 估值 | 无 | **可独立推进** |
 | 合法增量倒冲（受支持组合）与成品入库 | `M1-P-02`（**仅放宽**需签字；收紧不需要） | **可独立推进**（按严格支持范围 fail closed） |
-| 委外收货**生效**（两段式：建待检 → 确认库存效力）与质量门禁 | **代码**：无；**执行主体**：`M1-P-03` 的授予矩阵 | **可独立推进**（代码实施）。**可取证**需 `M1-P-03` 先决定 `OUTSOURCING_RECEIVING_MANAGE` 的授予对象，否则 `M1C-G02` 只能取得拒绝路径证据 |
-| 权限分离（`SUPPLIER_BILL_MANAGE` 注册 + 单权限门禁收紧 + 收货生效只认 `OUTSOURCING_RECEIVING_MANAGE`） | `M1-P-03`（**仅授予矩阵**需签字） | **可独立推进** |
+| 委外收货**生效**（两段式：建待检 → 确认库存效力）与质量门禁 | `M1-P-03` 已批准；Implementation 仍未授权 | 政策不再阻塞；实施后必须由委外收货员取得正向证据，管理员不得替代 |
+| 权限分离（`SUPPLIER_BILL_MANAGE` 注册 + 单权限门禁收紧 + 收货生效只认 `OUTSOURCING_RECEIVING_MANAGE`） | `M1-P-03` 已批准 | 政策就绪；仍须独立 Implementation 授权后落地 |
 | 历史数据 fail-closed / 只读 / 隔离 | 无（`SRD-03` 已批准） | **可独立推进** |
 | 移动端有限修复 | 无（`SRD-02` 已批准） | **可独立推进** |
 | 采购**通知转换**（多 PO、部分转换、容量分域、交期绑定） | `A-P01`（**Design 技术接受**）+ `A-P02`（**受限行为**）+ `T-11`（**受限行为**） | **可独立推进**（`A-P01` 不再要求 Owner 重复审批；`A-P02` / `T-11` / 交期上界均按 fail closed 受限行为实施，**不阻塞**多 PO 与行级部分转换主链） |
@@ -174,7 +174,7 @@ G-5（UAT-14 旧 oracle 与 V21 合同冲突）的处置动作已由 `document.m
   两者**同时有效**：全范围口径继续有效以支撑后续工作包，首期口径决定 M1-Core 的实施边界。
 - 本节**不**构成任何 Capability 的 `COVERED`，也**不**构成 Acceptance / Freeze / Release Readiness。
   M1-Core 的 7 个 Gate 状态见
-  [`docs/reviews/m1/procurement-outsourcing-m1-core-design.md`](../reviews/m1/procurement-outsourcing-m1-core-design.md) §13。
+  [`docs/design/procurement-outsourcing-m1-core.md`](../design/procurement-outsourcing-m1-core.md) §13。
 
 
 

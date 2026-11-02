@@ -4,7 +4,7 @@
 > Owner：Platform
 > 权威来源：本文件 —— 全局架构与 Design 合同；各 Domain Design 正文见 [`docs/design/`](./docs/design/)，本文件 §0 为导航入口
 > 来源：§1–§20 保留在本文件（编号与内容未变）；原有已形成的 Domain Design 正文按 G0 迁入
-> `docs/design/`，新增的 M1 `§26.33` 候选设计单独保存在 `docs/reviews/`，不构成 Active Design
+> `docs/design/`；M1 全范围 `§26.33` 候选保存在 `docs/reviews/`，M1-Core 首期 Active Design 单独保存在 `docs/design/`
 
 ## 0. 文档导航与迁移映射
 
@@ -22,6 +22,7 @@
 | Manufacturing & Quality | [`docs/design/manufacturing-quality.md`](docs/design/manufacturing-quality.md) | §24 |
 | Planning | [`docs/design/planning.md`](docs/design/planning.md) | §25 |
 | Procurement & Outsourcing | [`docs/design/procurement-outsourcing.md`](docs/design/procurement-outsourcing.md) | §26 |
+| Procurement & Outsourcing（M1-Core 首期） | [`docs/design/procurement-outsourcing-m1-core.md`](docs/design/procurement-outsourcing-m1-core.md) | §31.13 对应有界后继设计；`M1_CORE_DESIGN_PASS` |
 | Inventory & Warehouse | [`docs/design/inventory-warehouse.md`](docs/design/inventory-warehouse.md) | §27 |
 | Finance Operations | [`docs/design/finance-operations.md`](docs/design/finance-operations.md) | §28.0–§28.29 |
 | Sales & Customer | [`docs/design/sales-customer/README.md`](docs/design/sales-customer/README.md) | §29 + §30 + Wave 8/9/11 基线 |
@@ -41,15 +42,14 @@
 **不授权** Implementation；`§26.33` 深引用仍然有效，只是目标文件为该待审文件而非 `docs/design/`。
 见 [`docs/status/PROJECT_STATUS.md`](docs/status/PROJECT_STATUS.md) §36.3 / §36.7。
 
-`M1-Core` 首期候选设计是**第二个**待审例外：依业务所有者 2026-11-02 批准的 `M1-SRD-01`
+`M1-Core` 首期设计依业务所有者 2026-11-02 批准的 `M1-SRD-01`
 （首期范围重定基线，见 [`docs/decisions/m1-core-scope-rebaseline-20261102.md`](docs/decisions/m1-core-scope-rebaseline-20261102.md)），
-M1-Core 的有界后继设计位于
-[`docs/reviews/m1/procurement-outsourcing-m1-core-design.md`](docs/reviews/m1/procurement-outsourcing-m1-core-design.md)。
-它与上一份 `§26.33` 候选**并列有效、职责不同**：前者是 **M1 全范围**候选（C / D 组延期部分与历史结论的载体，**不被改写**），
-后者是 **M1-Core 首期**候选（覆盖首期 A / B / U / T 部分，定义 7 个 `M1C-Gxx` Gate）。
-两者**均未获 `Design PASS`**，**均不构成** Current Active Design，**均不授权** Implementation；
-`docs/design/procurement-outsourcing.md` §26 仍是**唯一** Active 的 Procurement & Outsourcing Design 正文。
-旧 13 Gate → 新 7 Gate 的逐项处置映射见该候选设计 §13.2；
+M1-Core 的有界后继设计已提升为
+[`docs/design/procurement-outsourcing-m1-core.md`](docs/design/procurement-outsourcing-m1-core.md)，
+并签发 `M1_CORE_DESIGN_PASS`。M1 全范围 `§26.33` 候选仍承担 C / D 延期与历史追溯，
+没有整体获得批准；原 `docs/design/procurement-outsourcing.md` §26 继续作为 Domain 基线。
+三者范围明确，不构成重复 Active 正文。Implementation 仍为 `NOT_AUTHORIZED`；
+旧 13 Gate → 新 7 Gate 的逐项处置映射见 M1-Core Active Design §13.2；
 当前项目状态见 [`docs/status/PROJECT_STATUS.md`](docs/status/PROJECT_STATUS.md) §37。
 
 `solution.md` 原有两个 `## 21.`（重复编号）已消解：`21. 当前设计状态` 是 2026-10-06 的**过期状态快照**，

@@ -604,12 +604,13 @@ T-REQ-03：错误断言精确验证 status + error code/message + 状态不变�
 
 ---
 
-### 31.13 M1-Core 采购与委外首期 Requirement（2026-11-02；**待业务所有者批准**）
+### 31.13 M1-Core 采购与委外首期 Requirement（2026-11-02；**已批准**）
 
 > **阶段与授权**：业务所有者于 2026-11-02 批准 `M1-SRD-01`（首期范围重定基线，见
 > [`docs/decisions/m1-core-scope-rebaseline-20261102.md`](../decisions/m1-core-scope-rebaseline-20261102.md)），
-> 授权在本节完成 **M1-Core 首期**的 Requirement 修订。本节是 **REQUIREMENT**，不是 DESIGN /
-> IMPLEMENTATION / ACCEPTANCE / FREEZE，**不**签发任何 Capability 的 `COVERED`，
+> 授权在本节完成 **M1-Core 首期**的 Requirement 修订。业务所有者于 2026-11-02 完成正式验收，
+> Acceptance ID = `M1_CORE_REQUIREMENT_ACCEPTANCE_PASS`。本节是 **REQUIREMENT**，不是 IMPLEMENTATION /
+> CAPABILITY ACCEPTANCE / FREEZE，**不**签发任何 Capability 的 `COVERED`，
 > **不**授权 Implementation、Migration 执行、数据库写入或重置、MySQL Gate 运行、
 > Git 写操作、发布或部署。
 >
@@ -804,8 +805,9 @@ T-REQ-03：错误断言精确验证 status + error code/message + 状态不变�
   **首期不得**为此新增独立权限（新增权限属角色授予矩阵裁定范围），**不得**擅自把既有权限授予任何角色。
 - 委外业务角色**不得**持有加工费正式过账权；**不得**因现有 `OUTSOURCING_MANAGE` 权限过宽
   就保留财务越权路径。
-- 加工费正式过账必须通过适用的 `SUPPLIER_BILL_MANAGE` 权限检查。该权限未向普通业务角色授予，
-  但 `role-admin` 可经 all-permissions 持有；因此“普通角色未获授予”**不能**证明管理员不能过账。
+- 加工费正式过账必须通过适用的 `SUPPLIER_BILL_MANAGE` 权限检查。该权限按已批准矩阵只显式授予
+  `role-accounting`（普通采购），不得授予委外业务员或其他普通业务角色；`role-admin` 可经
+  all-permissions 持有，因此 RBAC 通过**不能**证明委外来源账单可以过账。
   无论角色及权限如何，`MC-REQ-15` 的来源级 Business Policy Guard 都是独立的第二层门禁：
   未批准政策下的委外来源账单不得正式过账或匹配，管理员也无豁免。
 - 全部授权判定在**后端**；前端隐藏不构成授权。
@@ -925,11 +927,10 @@ T-REQ-03：错误断言精确验证 status + error code/message + 状态不变�
   零有效交期三项均按**受限行为** fail closed，**不阻塞**多 PO 与行级部分转换主链）、
   委外收货明细与两段式生效、发退补料的 canonical Writer、增量倒冲与成品入库、
   权限门禁收紧、历史 fail-closed、移动端有限修复。
-- **仍需业务所有者裁定的只剩两处，且均**不阻塞**首期代码实施**：
-  - `M1-P-03` 角色授予矩阵 —— 只影响**谁**能执行，**不**影响**代码能否实施**；
-    其中"收货生效"所需的 `OUTSOURCING_RECEIVING_MANAGE` 授予决策直接决定
-    委外收货**完整正向 Gate** 能否取得正向证据（见 §31.13.5 的 `M1C-G02` 前置条件）。
-  - `M1-P-02` —— **仅在希望放宽支持范围时**需要签字。
+- `M1-P-03` 角色授予矩阵已由业务所有者于 2026-11-02 批准；它不再构成政策阻塞。
+  Implementation 必须创建/配置获批角色，并由**委外收货员**取得 `M1C-G02` 正向证据；
+  管理员不得替代职责分离正向证据。
+- `M1-P-02` 仍仅在希望**放宽**严格支持范围时需要签字；首期继续 fail closed。
 - **不得**把"完成委外收货 Schema"当作"开始修订发退补料权威 Writer"的全局阻塞；
   **不得**把 UI 修复或并发证据留到最后才补。
 
@@ -939,28 +940,28 @@ T-REQ-03：错误断言精确验证 status + error code/message + 状态不变�
 
 | ID | 首期适用结论 | 状态 | 首期行为 |
 |---|---|---|---|
-| `A-P01` | 唯一权威通知模型 = 复用 `receipt_notices` + `receipt_notice_items` + 行级来源表；**不新建**第二套委外完成通知表 | `DESIGN_TECHNICAL_ACCEPTED` | §31.12.3 `A-REQ-06` 已把该项定性为**物理模型设计冲突**、其裁定权属 Procurement Design；本轮由候选 Design 承担该裁定并记录技术接受，**不另设业务所有者重复审批**。业务所有者在 §31.13 Requirement 验收时**一次性确认**即可 |
+| `A-P01` | 唯一权威通知模型 = 复用 `receipt_notices` + `receipt_notice_items` + 行级来源表；**不新建**第二套委外完成通知表 | `DESIGN_TECHNICAL_ACCEPTED`（Owner 已确认） | 裁定权仍属 Procurement Design；业务所有者已于 2026-11-02 在本节 Requirement Acceptance 中正式确认该唯一模型，不与 M1 全范围历史登记混淆 |
 | `A-P02` | 保留多 PO / 行级部分转换 / 累计容量上限；首期**不开放**复杂拒收重开与自动再转换；LOT/SERIAL 只继承可验证身份 | `CORE_LIMITED_PENDING_OWNER` | **受限行为**：拒收重开与自动再转换类请求一律 409 且零副作用。**不阻塞**多 PO 与行级部分转换主链；签字只在**放宽**该收缩时需要 |
 | `M1-P-02` | 主歧义（每单位用量 vs 订单总量）**已由**已批准的 OUT-09 / OUT-08 规则闭合；损耗计入与单位换算仍待裁定 | `CORE_LIMITED_PENDING_OWNER` | 严格支持范围外 fail closed（409 `OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED`）；**仅放宽时**需签字 |
-| `M1-P-03` | 最小权限矩阵；业务 / 生效 / IQC / 正式过账分离 | `CORE_LIMITED_PENDING_OWNER` | `SUPPLIER_BILL_MANAGE` 注册与单权限门禁收紧**可先落地**；"收货生效"只认 `OUTSOURCING_RECEIVING_MANAGE`。**授予矩阵**待签字，且**不阻塞**代码实施；它决定 `M1C-G02` 能否取得正向证据 |
+| `M1-P-03` | 最小权限矩阵：委外业务员 = `OUTSOURCING_MANAGE` + `OUTSOURCING_MATERIAL_EXECUTE`；委外收货员 = `OUTSOURCING_RECEIVING_MANAGE`；质检人员（`role-warehouse`）= `IQC_MANAGE`；财务人员（`role-accounting`）= `SUPPLIER_BILL_MANAGE`（仅普通采购）；`admin` 保留 all-permissions 但无来源级政策豁免 | `APPROVED` | 业务、收货、IQC、正式过账严格分离；收货录入与生效只认 `OUTSOURCING_RECEIVING_MANAGE`，不得以 `OUTSOURCING_MANAGE` 回退；角色与授予仍待 Implementation 落地，本轮未修改权限种子 |
 | `T-11` | **原始含义 = 通知转换后取消的来源容量语义**：`converted_quantity` 为历史累计事实、单调不减；取消**不**恢复通知来源容量；重新转换 fail closed | `CORE_LIMITED_PENDING_OWNER` | **受限行为**：按上述 fail closed 语义实现，**不阻塞**主链。**不得**把 `T-11` 改写为"零交期政策"——零有效交期属**交期上界**的独立技术合同，见 `MC-REQ-02` |
 | `B-P01` / `B-P02` | WIP 成本携带 / 差异审核生效 | `DEFERRED_PENDING_POLICY` | 见 `MC-REQ-15` |
 | `C-P01..C-P04` | 加工费确认 / 科目 / 红冲 / GL 边界 | `DEFERRED_PENDING_POLICY` | 见 `MC-REQ-15`（含草稿创建与正式过账的边界） |
 | `D-P01` / `D-P02` / `M1-P-04` | VMI 结算 / 价格 / 关期容差 | `DEFERRED_PENDING_POLICY` | 见 `MC-REQ-15` |
 
-> **签字点只剩两处**：`M1-P-03` 的角色授予矩阵，与 `M1-P-02` 的**放宽方向**（仅在希望放宽时）。
-> `A-P01` 已由 Design 技术接受；`A-P02` 与 `T-11` 的**收紧方向**按受限行为直接实施，
+> `M1-P-03` 已于 2026-11-02 获批；剩余签字点只涉及 `M1-P-02` 的**放宽方向**（仅在希望放宽时）。
+> `A-P01` 保持 Design 技术接受且已获 Owner 正式确认；`A-P02` 与 `T-11` 的**收紧方向**按受限行为直接实施，
 > **不阻塞** `M1C-WP-1` / `M1C-G01`，**不**阻塞任何首期工作包的代码实施。
 > 状态词 `DESIGN_TECHNICAL_ACCEPTED` 的定义见
 > [`docs/decisions/OPEN-BUSINESS-DECISIONS.md`](../decisions/OPEN-BUSINESS-DECISIONS.md) §1.4；
-> 它**不是**业务所有者批准，**不**等于 Implementation 许可。
+> `DESIGN_TECHNICAL_ACCEPTED` 仍表示裁定权属于 Design；本次 Owner 确认另行登记，二者均**不**等于 Implementation 许可。
 
 #### 31.13.5 首期验收 Gate（M1C-G01 … M1C-G07；全部 `NOT_RUN`）
 
 | Gate | 业务断言（必要条件；**不得**以单个 HTTP 2xx 代替） | 证据层 |
 |---|---|---|
 | `M1C-G01` | 采购通知可达；`createReceiptNotice()`（或其同事务私有来源 helper）原子创建标准采购表头、明细与已验证来源行，并显式初始化 `converted_quantity=0`；多 PO `sourceAllocations` 输入逐项验证且只为 `STANDARD_PURCHASE` 写来源行；转换模块不创建来源行；新建后可部分转换且累计量正确增长；重放不重置、不重复扣减；历史 NULL 行被拒绝且历史数据零改写；多 PO 行级来源成立，且累计容量上界**按通知 `business_type` 分别适用**（`STANDARD_PURCHASE` = 通知行 × 采购订单行 × 交期；`OUTSOURCE` = 通知行 × 委外订单剩余可收量；**不**把委外订单容量强加于普通采购）；无通知的直接 PO → 采购入库合法；容量与交期不可绕过 | HTTP + SQLite/MySQL |
-| `M1C-G02` | 委外正式收货**明细**原子可达（≥1 行、非空）；来源链逐行可追；IQC 从正式明细可达并可完成 PASS/WAIVED；建待检与生效分离；失败时**业务**零副作用 + 拒绝审计恰好 1 条。**前置条件**：`M1-P-03` 须先决定 `OUTSOURCING_RECEIVING_MANAGE` 的授予对象，否则"收货生效"正向路径**无法取得正向证据**（代码实施本身不被阻塞） | HTTP + Quality + Inventory |
+| `M1C-G02` | 委外正式收货**明细**原子可达（≥1 行、非空）；来源链逐行可追；IQC 从正式明细可达并可完成 PASS/WAIVED；建待检与生效分离；失败时**业务**零副作用 + 拒绝审计恰好 1 条。`M1-P-03` 政策前置已获批；Implementation 必须创建/配置委外收货员，并由该角色以 `OUTSOURCING_RECEIVING_MANAGE` 取得正向证据，管理员不得替代该职责分离证据 | HTTP + Quality + Inventory |
 | `M1C-G03` | 发料/退料/补料沿 canonical 仓位写**真实**库存、跟踪与估值；企业所有权不变；内部仓与 WIP 仓数量与流水可对账；重放不产生第二次动作；失败时**业务**零副作用 + 拒绝审计恰好 1 条 | HTTP + Inventory/Valuation snapshots |
 | `M1C-G04` | 增量倒冲公式正确；材料成本来自 canonical 池分摊（**非**全局平均价）；成品经唯一 Writer 入企业仓；重复确认与并发不双扣/双收 | HTTP + Valuation snapshots |
 | `M1C-G05` | 两个受影响移动工作面无 `api.get/post` TypeError；320/390/430/680 宽度交互成功；服务端 RBAC 生效；**不**含视觉体系重做 | Browser |
@@ -987,16 +988,17 @@ PRE-A / PRE-B / PRE-C 基于真实目标数据的结果；只对明确一致身�
 - **M1-Core 包级 Acceptance ≠ M1 全域 Closure Acceptance**；M1 全域 Closure 仍以 §31.12.9 的
   13 个 Gate 为准。
 
-#### 31.13.6 Requirement 阶段状态与 HARD STOP
+#### 31.13.6 Requirement 验收状态与 Implementation HARD STOP
 
-- 本节状态：**`PENDING_APPROVAL`**（待业务所有者批准）。**未**签发任何 Acceptance 标识。
+- 本节状态：**`APPROVED`**。业务所有者于 2026-11-02 正式签发
+  **`M1_CORE_REQUIREMENT_ACCEPTANCE_PASS`**，覆盖 `MC-REQ-01..MC-REQ-15`。
 - §31.12 的 `M1_REQUIREMENT_ACCEPTANCE_PASS`（2026-10-31）**只**覆盖 §31.12 的历史文本，
   **不**自动授予本节任何 PASS，也不构成对本节的批准。
 - 本节**不**签发任何 Capability 的 `COVERED`，**不**构成 Domain Acceptance / Freeze / Release Readiness；
   `PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY` 状态**不变**。
-- **下一阶段**：M1-Core 候选 Design 见
-  [`docs/reviews/m1/procurement-outsourcing-m1-core-design.md`](../reviews/m1/procurement-outsourcing-m1-core-design.md)；
-  按 `AGENTS.md §4.3`，Design 完成后**必须 HARD STOP**。
+- **Design**：M1-Core 已批准的 Active Design 见
+  [`docs/design/procurement-outsourcing-m1-core.md`](../design/procurement-outsourcing-m1-core.md)，
+  Design ID = `M1_CORE_DESIGN_PASS`；该状态仍**不授权** Implementation。
 - **本节明确未授权**：Implementation、Migration 执行、数据库连接/重置/修改、MySQL Gate 运行、
   Git push / merge / tag / release / deploy。
 - 原 `G-1..G-5` 与 §31.12.2 登记的 `M1-N01/N03/N04/N11` 保持开放；

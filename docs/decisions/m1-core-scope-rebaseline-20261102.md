@@ -8,7 +8,7 @@
 > 本文件**不复制** Requirement / Design 正文，也不构成第二份项目级状态登记表。
 > 当前项目状态：[`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md)
 > 相关规范正文：[`docs/requirements/procurement-outsourcing.md`](../requirements/procurement-outsourcing.md) §31.13（M1-Core Requirement）、
-> [`docs/reviews/m1/procurement-outsourcing-m1-core-design.md`](../reviews/m1/procurement-outsourcing-m1-core-design.md)（M1-Core 候选 Design）
+> [`docs/design/procurement-outsourcing-m1-core.md`](../design/procurement-outsourcing-m1-core.md)（M1-Core Active Design）
 
 ## 1. 决定与授权来源
 
@@ -66,7 +66,7 @@
 | 维度 | 旧（M1 全范围） | 新（M1-Core 首期） | 关系 |
 |---|---|---|---|
 | Requirement | `docs/requirements/procurement-outsourcing.md` §31.12（A/B/C/D 四组 + 13 Gate） | 同文件 §31.13（M1-Core 精简合同 + 7 Gate） | §31.12 **保留为历史批准合同**，其**首期当前效力**由 §31.13 取代；历史批准事实 `M1_REQUIREMENT_ACCEPTANCE_PASS`（2026-10-31）保持不变 |
-| Design | `docs/reviews/m1/procurement-outsourcing-critical-chain-design.md`（源 `solution.md §26.33`，R1→R4-6-R2） | `docs/reviews/m1/procurement-outsourcing-m1-core-design.md` | 旧候选设计**保留原样、不被改写**；其 A/B/U/T 部分被新候选设计**取代为 M1-Core 合同**，其 C/D 部分（含 WP-7 / WP-8 的政策阻塞子项）**延期** |
+| Design | `docs/reviews/m1/procurement-outsourcing-critical-chain-design.md`（源 `solution.md §26.33`，R1→R4-6-R2） | `docs/design/procurement-outsourcing-m1-core.md` | 旧候选设计**保留原样、不被改写**；其 A/B/U/T 首期结论由 M1-Core Active Design 承接，其 C/D 部分（含 WP-7 / WP-8 的政策阻塞子项）继续延期 |
 | Gate | 13 个（`execution_status` 13/13 `NOT_RUN`） | 7 个（`M1C-G01..M1C-G07`，全部 `NOT_RUN`） | 旧 13 个 Gate 的**逐项处置映射**见新候选 Design；旧 Gate **不得**伪造 PASS |
 | 业务政策 | 12 项开放 + `A-P01` 独立待追认 | 见 `OPEN-BUSINESS-DECISIONS.md` §1.4 | 三项范围决定为 `APPROVED_SCOPE_DECISION`；其余按 Core 限定 / 延期 / 待裁定分别登记 |
 
@@ -121,3 +121,12 @@ M1-Core 候选 Design 修订 → Gate 集合重构 → 文档校验与本地提�
 - 本决定生效后，M1-Core 的 Requirement 与 Design 状态分别为：
   Requirement = `PENDING_APPROVAL`；Design = `PENDING_APPROVAL` / `PENDING_REVIEW`，
   `Design PASS` = `NOT_ISSUED`，`Implementation` = `NOT_AUTHORIZED`。
+
+## 10. 2026-11-02 Acceptance 与 Promotion 后续登记
+
+- §1–§9 记录范围重定基线作出时的事实，历史措辞不改写；其“当前状态”由本节日期化取代。
+- M1-Core Requirement 已签发 `M1_CORE_REQUIREMENT_ACCEPTANCE_PASS`，状态 `APPROVED`。
+- M1-Core Design 已签发 `M1_CORE_DESIGN_PASS`，并提升到
+  [`docs/design/procurement-outsourcing-m1-core.md`](../design/procurement-outsourcing-m1-core.md)。
+- `A-P01` 保持 `DESIGN_TECHNICAL_ACCEPTED`，且业务所有者已在 Requirement Acceptance 中正式确认。
+- `M1-P-03` 已批准；角色与权限种子尚未实施。Implementation 仍为 `NOT_AUTHORIZED`。
