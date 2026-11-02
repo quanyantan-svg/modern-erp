@@ -728,6 +728,38 @@ Procurement Domain Acceptance 或 Release Readiness。原 Domain Design §26 继
 继续承担 C/D 延期与历史追溯，未整体获批。本轮未修改生产代码、schema、migration、权限种子或测试，
 未连接数据库，未运行 MySQL/FULL/HEAVY/浏览器/业务 Gate，未 Push/Merge/Tag/Release/Deploy。
 
+> **后续状态**：`M1C-WP-0` 已于同日获独立 Implementation 授权并交付实施，见 §37.13。
+> 本节表格记录的是本节事件当时的快照。
+
+---
+
+### 37.13 M1-Core `M1C-WP-0` 实施交付（2026-11-02）
+
+**业务所有者决定**：正式批准 M1-Core 进入 Implementation，本次授权**仅限 `M1C-WP-0`**；
+`M-15` 历史身份规范化、Migration 执行、数据库连接及修改、MySQL Gate 与
+Push / Merge / Tag / Release / Deploy 均未授权。实施依据 Active Design
+[`docs/design/procurement-outsourcing-m1-core.md`](../design/procurement-outsourcing-m1-core.md)。
+
+| 对象 | 当前状态 |
+|---|---|
+| `M1C-WP-0` | `IMPLEMENTED`；最小 migration 集、`SOURCE_TYPES` 注册、`SUPPLIER_BILL_MANAGE` 注册与 `M1-P-03` 角色种子均已落地 |
+| `M1-P-03` 角色与权限种子 | 已实施（`role-outsourcing` / `role-outsourcing-receiving`；`SUPPLIER_BILL_MANAGE` 只授予 `role-accounting`）；**两个委外角色当前无任何用户绑定** |
+| `M-15` 历史身份规范化 | 未执行；仍需独立 Migration 授权 |
+| Migration 实测 / MySQL | 未执行；本次 DDL 只在测试临时库中随既有建库链路跑通 |
+| `M1C-G01..M1C-G07` | 7/7 `NOT_RUN` |
+| M1-Core Requirement / Design | 保持 `APPROVED` / `ACTIVE`，本次未修改 |
+| Procurement Domain Acceptance | **未通过**；`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY` 不变 |
+
+**门禁证据**：`pnpm test:fast` 506/506、`pnpm test`（FULL）3110/3110、`pnpm build`、
+`git diff --check`、`node scripts/docs/check-doc-consistency.mjs`（current 模式）全部通过。
+
+**边界**：WP-0 交付后 Implementation HARD STOP，等待下一工作包授权。本次未修改已批准的
+Requirement / Design，未连接或修改项目数据库，未运行 MySQL / HEAVY / 浏览器 / 业务 Gate，
+未 Push / Merge / Tag / Release / Deploy。
+
+**未解决矛盾**：委外角色种子的工作包归属，以及 `OUTSOURCING_MANAGE` 过宽带来的暂时性 SoD 敞口，
+须由业务所有者裁定；详见当天 `log/2026-11-02.md` 的 `M1C-WP0-IMPL-20261102` 节。
+
 ---
 
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」

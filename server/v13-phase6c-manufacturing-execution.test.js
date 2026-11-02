@@ -32,9 +32,9 @@ after(async () => { await new Promise((done) => server.close(done)); handle.clea
 
 let orderId; let operations;
 describe('V1.3 Phase 6C manufacturing execution, yield, capacity and analytical cost', () => {
-  test('schema, five roles and production approval family remain canonical', () => {
+  test('schema, canonical role set and production approval family remain canonical', () => {
     for (const table of ['production_order_operations','production_operation_reports','production_operation_report_reversals','production_cost_baselines','production_cost_summaries']) assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table), table);
-    assert.equal(db.prepare('SELECT COUNT(*) n FROM roles').get().n, 5);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM roles').get().n, 7);
     assert.deepEqual(APPROVAL_DOCUMENT_TYPES, ['SALES_ORDER','PURCHASE_ORDER','INVENTORY_CHECK','ACCOUNTING_VOUCHER','PURCHASE_REQUISITION','PRODUCTION_ORDER']);
   });
 

@@ -130,7 +130,8 @@ describe('navigation state and regression contracts', () => {
     // Cleanup removed CRM_VIEW, CRM_MANAGE, PROJECT_VIEW,
     // PROJECT_MANAGE (110). Batch A adds six bounded Sales permissions.
     // Wave 10 adds CREDIT_EVALUATE and CREDIT_SPECIAL_APPROVE (226).
-    assert.equal(PERMISSIONS.length, 226);
+    // M1-Core M-17 adds SUPPLIER_BILL_MANAGE (227).
+    assert.equal(PERMISSIONS.length, 227);
     assert.equal(PERMISSIONS.filter(([code]) => code === 'CREDIT_VIEW').length, 1);
     assert.equal(PERMISSIONS.filter(([code]) => code === 'CREDIT_MANAGE').length, 1);
     assert.equal(PERMISSIONS.filter(([code]) => code === 'CREDIT_EVALUATE').length, 1);

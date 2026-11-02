@@ -672,7 +672,142 @@ export function migrateProcurementOutsourcingSchema(db) {
       FOREIGN KEY (creator_id) REFERENCES users(id),
       CHECK(business_status IN ('PREVIEW','ALLOCATED','APPLIED','CANCELLED'))
     );
+
+    CREATE TABLE IF NOT EXISTS receipt_notice_item_sources (
+      id TEXT PRIMARY KEY,
+      notice_item_id TEXT NOT NULL,
+      purchase_order_item_id TEXT NOT NULL,
+      delivery_schedule_id TEXT,
+      allocated_quantity REAL NOT NULL CHECK(allocated_quantity > 0),
+      converted_quantity REAL,
+      source_trace_json TEXT NOT NULL DEFAULT '{}',
+      business_date TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (notice_item_id) REFERENCES receipt_notice_items(id),
+      FOREIGN KEY (purchase_order_item_id) REFERENCES purchase_order_items(id),
+      FOREIGN KEY (delivery_schedule_id) REFERENCES purchase_order_delivery_schedules(id),
+      UNIQUE(notice_item_id, purchase_order_item_id),
+      CHECK(converted_quantity IS NULL OR (converted_quantity >= 0 AND converted_quantity <= allocated_quantity))
+    );
+    CREATE INDEX IF NOT EXISTS idx_receipt_notice_item_sources_notice
+      ON receipt_notice_item_sources(notice_item_id, id);
+    CREATE INDEX IF NOT EXISTS idx_receipt_notice_item_sources_capacity
+      ON receipt_notice_item_sources(purchase_order_item_id, delivery_schedule_id, id);
+
+    CREATE TABLE IF NOT EXISTS schedule_consumption_effects (
+      id TEXT PRIMARY KEY,
+      purchase_order_item_id TEXT NOT NULL,
+      delivery_schedule_id TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      source_item_id TEXT NOT NULL,
+      business_event_type TEXT NOT NULL,
+      business_event_id TEXT NOT NULL,
+      business_event_item_id TEXT NOT NULL,
+      signed_quantity REAL NOT NULL CHECK(signed_quantity <> 0),
+      reverses_effect_id TEXT,
+      reverses_effect_key TEXT NOT NULL,
+      effect_state TEXT NOT NULL DEFAULT 'EFFECTIVE' CHECK(effect_state IN ('EFFECTIVE','VOIDED')),
+      idempotency_key TEXT NOT NULL UNIQUE,
+      request_fingerprint TEXT NOT NULL,
+      business_date TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (purchase_order_item_id) REFERENCES purchase_order_items(id),
+      FOREIGN KEY (delivery_schedule_id) REFERENCES purchase_order_delivery_schedules(id),
+      FOREIGN KEY (reverses_effect_id) REFERENCES schedule_consumption_effects(id),
+      UNIQUE(business_event_type, business_event_id, business_event_item_id, reverses_effect_key),
+      CHECK((signed_quantity > 0 AND reverses_effect_id IS NULL AND reverses_effect_key = '')
+         OR (signed_quantity < 0 AND reverses_effect_id IS NOT NULL AND reverses_effect_key <> ''))
+    );
+    CREATE INDEX IF NOT EXISTS idx_schedule_consumption_effects_capacity
+      ON schedule_consumption_effects(purchase_order_item_id, delivery_schedule_id, effect_state, id);
+    CREATE INDEX IF NOT EXISTS idx_schedule_consumption_effects_reversal
+      ON schedule_consumption_effects(reverses_effect_id, effect_state, id);
+
+    CREATE TABLE IF NOT EXISTS outsourcing_wip_identity_effects (
+      id TEXT PRIMARY KEY,
+      material_list_id TEXT NOT NULL,
+      identity_key TEXT NOT NULL,
+      identity_type TEXT NOT NULL CHECK(identity_type IN ('LOT','SERIAL','NONE')),
+      lot_id TEXT,
+      serial_id TEXT,
+      effect_direction TEXT NOT NULL CHECK(effect_direction IN ('SUPPLY','CONSUME')),
+      signed_quantity REAL NOT NULL,
+      event_type TEXT NOT NULL CHECK(event_type IN ('ISSUE','SUPPLEMENT','TRANSFER_IN','RETURN','BACKFLUSH','TRANSFER_OUT')),
+      business_event_id TEXT NOT NULL,
+      business_event_item_id TEXT NOT NULL,
+      source_effect_id TEXT,
+      business_date TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      request_fingerprint TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (material_list_id) REFERENCES outsourcing_material_list(id),
+      FOREIGN KEY (source_effect_id) REFERENCES outsourcing_wip_identity_effects(id),
+      UNIQUE(event_type, business_event_id, business_event_item_id, identity_key),
+      CHECK((identity_type='LOT' AND lot_id IS NOT NULL AND serial_id IS NULL)
+         OR (identity_type='SERIAL' AND serial_id IS NOT NULL AND lot_id IS NULL)
+         OR (identity_type='NONE' AND lot_id IS NULL AND serial_id IS NULL)),
+      CHECK((effect_direction='SUPPLY' AND signed_quantity > 0)
+         OR (effect_direction='CONSUME' AND signed_quantity < 0))
+    );
+    CREATE INDEX IF NOT EXISTS idx_outsourcing_wip_identity_effects_balance
+      ON outsourcing_wip_identity_effects(material_list_id, identity_key, created_at, id);
+
+    CREATE TABLE IF NOT EXISTS outsourcing_wip_identity_effect_allocations (
+      id TEXT PRIMARY KEY,
+      effect_id TEXT NOT NULL,
+      source_supply_effect_id TEXT NOT NULL,
+      allocation_kind TEXT NOT NULL CHECK(allocation_kind IN ('CONSUMPTION','TRANSFER_ORIGIN')),
+      allocated_quantity REAL NOT NULL CHECK(allocated_quantity > 0),
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (effect_id) REFERENCES outsourcing_wip_identity_effects(id),
+      FOREIGN KEY (source_supply_effect_id) REFERENCES outsourcing_wip_identity_effects(id),
+      UNIQUE(effect_id, source_supply_effect_id, allocation_kind)
+    );
+    CREATE INDEX IF NOT EXISTS idx_outsourcing_wip_allocations_source
+      ON outsourcing_wip_identity_effect_allocations(source_supply_effect_id, effect_id);
+
+    CREATE TABLE IF NOT EXISTS outsourcing_wip_identity_balances (
+      material_list_id TEXT NOT NULL,
+      identity_key TEXT NOT NULL,
+      identity_type TEXT NOT NULL CHECK(identity_type IN ('LOT','SERIAL','NONE')),
+      lot_id TEXT,
+      serial_id TEXT,
+      evidence_state TEXT NOT NULL CHECK(evidence_state IN ('TRACKED','QUANTITY_ONLY')),
+      supplied_quantity REAL NOT NULL DEFAULT 0 CHECK(supplied_quantity >= 0),
+      consumed_quantity REAL NOT NULL DEFAULT 0 CHECK(consumed_quantity >= 0),
+      available_quantity REAL NOT NULL DEFAULT 0 CHECK(available_quantity >= 0),
+      last_effect_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(material_list_id, identity_key),
+      FOREIGN KEY (material_list_id) REFERENCES outsourcing_material_list(id),
+      FOREIGN KEY (last_effect_id) REFERENCES outsourcing_wip_identity_effects(id),
+      CHECK((identity_type='LOT' AND lot_id IS NOT NULL AND serial_id IS NULL AND evidence_state='TRACKED')
+         OR (identity_type='SERIAL' AND serial_id IS NOT NULL AND lot_id IS NULL AND evidence_state='TRACKED')
+         OR (identity_type='NONE' AND lot_id IS NULL AND serial_id IS NULL AND evidence_state='QUANTITY_ONLY')),
+      CHECK(available_quantity = supplied_quantity - consumed_quantity)
+    );
   `);
+
+  // M1C-WP-0 is schema-only: these additive columns never infer or backfill
+  // historical business facts. NULL remains the fail-closed legacy state.
+  safeAddColumn(db, 'purchase_receipts', 'source_notice_id', 'source_notice_id TEXT');
+  safeAddColumn(db, 'purchase_receipt_items', 'source_notice_item_source_id', 'source_notice_item_source_id TEXT');
+  safeAddColumn(db, 'purchase_receipt_items', 'delivery_schedule_id', 'delivery_schedule_id TEXT');
+  safeAddColumn(db, 'outsourcing_receipts', 'warehouse_id', 'warehouse_id TEXT');
+  safeAddColumn(db, 'outsourcing_receipts', 'source_notice_id', 'source_notice_id TEXT');
+  safeAddColumn(db, 'outsourcing_receipts', 'business_date', 'business_date TEXT');
+  safeAddColumn(db, 'outsourcing_receipts', 'version', 'version INTEGER NOT NULL DEFAULT 0');
+  safeAddColumn(db, 'outsourcing_receipt_items', 'delivery_schedule_id', 'delivery_schedule_id TEXT');
+  safeAddColumn(db, 'outsourcing_receipt_items', 'lot_id', 'lot_id TEXT');
+  safeAddColumn(db, 'outsourcing_receipt_items', 'serial_id', 'serial_id TEXT');
+  safeAddColumn(db, 'outsourcing_receipt_items', 'unit_code', "unit_code TEXT NOT NULL DEFAULT 'EA'");
+  safeAddColumn(db, 'outsourcing_receipt_items', 'processing_po_item_id', 'processing_po_item_id TEXT');
+  safeAddColumn(db, 'outsourcing_receipt_items', 'source_notice_item_source_id', 'source_notice_item_source_id TEXT');
+  safeAddColumn(db, 'outsourcing_material_list', 'source_warehouse_id', 'source_warehouse_id TEXT');
+  safeAddColumn(db, 'outsourcing_material_list', 'legacy_unverified_wip_quantity', 'legacy_unverified_wip_quantity REAL');
+  safeAddColumn(db, 'outsourcing_material_list', 'identity_evidence_state', "identity_evidence_state TEXT NOT NULL DEFAULT 'NONE'");
 
   // Item-level commercial source for Supplier Bill (extending canonical supplier_bill_items).
   safeAddColumn(db, 'supplier_bill_items', 'commercial_source_type', "commercial_source_type TEXT");

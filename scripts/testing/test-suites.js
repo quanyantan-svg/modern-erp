@@ -182,6 +182,9 @@ const FULL = [
   'server/sales-customer-batch-a.test.js',
 
   // ----- Procurement & Outsourcing Domain — Wave A foundation -----
+  // M1-Core WP-0 source/schema/role contract. Static only: it never opens a
+  // database and does not execute the migration whose source it verifies.
+  'server/m1c-wp0-infrastructure.test.js',
   'server/procurement-parameters.test.js',
   'server/procurement-profiles.test.js',
   'server/buyers.test.js',
@@ -648,6 +651,8 @@ const FULL = [
 //
 // Invariant: every file in FAST must also be present in FULL.
 const FAST = [
+  // M1-Core WP-0 static infrastructure contract; no DB, MySQL or migration execution.
+  'server/m1c-wp0-infrastructure.test.js',
   // W7 F2 pure retry-admission parser and injected monotonic-clock contract.
   'server/sales-gate-retry-admission.test.js',
   'server/mysql-disposable-target-guard.test.js',

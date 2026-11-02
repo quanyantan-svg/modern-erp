@@ -1,6 +1,6 @@
 // V1.3 Phase 1 — Process Integrity Foundations
 //
-// Additive schema for the canonical five-role + money + date +
+// Additive schema for the canonical role + money + date +
 // commercial contract. All new columns are either TEXT with a default
 // of '' or nullable TEXT. No historical dates are fabricated; legacy
 // rows are simply not subject to the new submission invariants, which
@@ -21,13 +21,17 @@
 //     Workflow timestamps are a read-only compatibility fallback only
 //     for legacy rows where both V1.3 business-date columns are null.
 //
-// V1.3 Phase 1 also reconciles the canonical five role-permission
+// V1.3 Phase 1 also reconciles the canonical role-permission
 // contracts on legacy DBs: rows that should NOT be on a role are
 // removed (e.g. role-sales losing PURCHASE_RECEIPTS_MANAGE) and rows
 // that SHOULD be on a role are added (e.g. role-reviewer gaining
 // INVENTORY_CHECK_APPROVE). The reconciliation is idempotent across
 // multiple createDatabase opens and never removes a permission that
 // admin inherits from all-permissions.
+//
+// M1-Core M-17 extends the reconciled set with the approved outsourcing
+// roles (role-outsourcing / role-outsourcing-receiving) and the
+// SUPPLIER_BILL_MANAGE grant to role-accounting.
 
 const V13_DESIRED_ROLE_PERMISSIONS = {
   'role-sales': [
@@ -69,11 +73,18 @@ const V13_DESIRED_ROLE_PERMISSIONS = {
     'AR_VIEW', 'COLLECTION_MANAGE',
     'AP_VIEW', 'PAYMENT_MANAGE',
     'SALES_DISCOUNT_MANAGE', 'PURCHASE_DISCOUNT_MANAGE',
+    'SUPPLIER_BILL_MANAGE',
+  ],
+  'role-outsourcing': [
+    'OUTSOURCING_MANAGE', 'OUTSOURCING_MATERIAL_EXECUTE',
+  ],
+  'role-outsourcing-receiving': [
+    'OUTSOURCING_RECEIVING_MANAGE',
   ],
 };
 
 function reconcileV13RolePermissions(db) {
-  // Only reconcile the four non-admin roles; admin inherits every
+  // Reconcile every canonical non-admin role; admin inherits every
   // registered permission via all-permissions in seed() and is
   // therefore authoritative by definition.
   const knownCodes = new Set(
@@ -146,7 +157,7 @@ export function migrateV13Phase1Contracts(db) {
       ON purchase_orders(expected_delivery_date);
   `);
 
-  // Reconcile the four non-admin canonical role contracts so a legacy
-  // DB opened after V1.3 deployment is fully on the new five-role model.
+  // Reconcile every non-admin canonical role contract so a legacy
+  // DB opened after V1.3 deployment is fully on the current role model.
   reconcileV13RolePermissions(db);
 }
