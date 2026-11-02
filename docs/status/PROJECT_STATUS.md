@@ -762,6 +762,36 @@ Requirement / Design，未连接或修改项目数据库，未运行 MySQL / HEA
 
 ---
 
+### 37.14 M1C-WP0-R1 安全修复与静态合同补齐（2026-11-02）
+
+**业务所有者决定**：批准 `M1C-WP0-R1` 作为 M1C-WP-0 独立验收前的限定修复，依据
+`WP0_INDEPENDENT_READ_ONLY_REVIEW_COMPLETE`。不改变已批准的 Requirement / Active Design /
+`M1-P-03`，不代表 WP-1～WP-7 获得实施许可。
+
+| 对象 | 当前状态 |
+|---|---|
+| `M1C-WP0-R1` | `IMPLEMENTED`，等待独立验收；7 个 Gate 仍 `NOT_RUN` |
+| 委外加工费来源级 Guard | 已实施（`MC-REQ-15` / §9.4）：委外来源账单的正式过账与匹配一律 409 `OUTSOURCING_GL_POLICY_NOT_APPROVED`，管理员无豁免，零 AP/凭证/成本证据写入，拒绝审计恰好一条 |
+| 加工费正式过账 RBAC | 只认 `SUPPLIER_BILL_MANAGE`；草稿创建保留原定权限语义 |
+| 收货生效权限 | 只认 `OUTSOURCING_RECEIVING_MANAGE`（`OUTSOURCING_MANAGE` 回退已移除）；收货录入与材料执行未受影响 |
+| 委外角色种子 | 已按 §2.3 / §8.1.3 移出 WP-0；角色注册表回到规范 5 角色，待 WP-2 授权后实施 |
+| WP-0 Schema parity | 已补齐离线双端成员集合断言（列/类型族/NULL/default/PK/UNIQUE/索引/FK/CHECK + 增量路径）；真实 MySQL 接受性仍 `NOT_RUN` |
+| `M-15` / Migration 实测 / MySQL Gate | 未执行 |
+| `M1C-G01..M1C-G07` | 7/7 `NOT_RUN` |
+| Procurement Domain Acceptance | **未通过**；`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY` 不变 |
+
+**门禁证据**：`pnpm test:fast` 510/510、`pnpm test`（FULL）3138/3138、`pnpm build`、
+`git diff --check`、文档一致性 current 模式全部通过。
+
+**遗留**：MC-REQ-11 要求的 **403 拒绝审计**在全应用范围仍未实现（`server/lib/http.js` 的
+`allow()` / `allowAny()` 不写审计），补齐需独立授权。
+
+**边界**：本轮未修改已批准的 Requirement / Design，未连接或修改项目数据库，未运行 MySQL /
+HEAVY / 浏览器 / 业务 Gate，未 Push / Merge / Tag / Release / Deploy。详见当天
+`log/2026-11-02.md` 的 `M1C-WP0-R1-IMPL-20261102` 节。
+
+---
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
