@@ -18,7 +18,8 @@
 - 决策状态只允许：`PENDING`（待裁定）/ `RATIFICATION_PENDING`（待业务所有者追认）/ `APPROVED` / `REJECTED` / `DEFERRED`；
   M1-Core 首期另启用 `APPROVED_SCOPE_DECISION`（已批准的范围决定本身）/
   `CORE_LIMITED_PENDING_OWNER`（首期限定规则已提出、待业务所有者签字）/
-  `DEFERRED_PENDING_POLICY`（延期且待政策裁定）—— 三者均**不**等于 Implementation 许可；
+  `DESIGN_TECHNICAL_ACCEPTED`（该项裁定权属 Design，已由候选 Design 技术接受；**非**业务政策、无需另行追认）/
+  `DEFERRED_PENDING_POLICY`（延期且待政策裁定）—— 以上均**不**等于 Implementation 许可；
 - 决策被裁定后，结论写入规范来源，本目录改状态并保留指针；
 - 业务政策未裁定前，其下游 Implementation 必须 **fail closed**，不得按假设实现；
 - 不得在本目录追加执行报告或测试流水。

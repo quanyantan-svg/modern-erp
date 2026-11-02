@@ -549,17 +549,27 @@ M1_CORE_REBASELINE_READY_FOR_INDEPENDENT_REVIEW
 | 类别 | 条目 | 状态 |
 |---|---|---|
 | 已批准的范围决定 | `SRD-01` / `SRD-02` / `SRD-03` | `APPROVED_SCOPE_DECISION` |
-| Core 限定规则（**待 Owner 签字**） | `A-P02`、`M1-P-02`、`M1-P-03`、`T-11` | `CORE_LIMITED_PENDING_OWNER` |
-| 待 Owner 追认 | `A-P01` | `OWNER_RATIFICATION_PENDING` |
+| **Design 技术接受**（非业务政策，无需另行追认） | `A-P01` | `DESIGN_TECHNICAL_ACCEPTED` |
+| Core 限定规则（**收紧方向可直接实施**；签字只在**放宽**时需要） | `A-P02`、`M1-P-02`、`M1-P-03`、`T-11`、交期上界 | `CORE_LIMITED_PENDING_OWNER` |
 | 延期（待政策裁定） | `B-P01`、`B-P02`、`C-P01..C-P04`、`D-P01`、`D-P02`、`M1-P-04` | `DEFERRED_PENDING_POLICY` |
 
 登记与逐项影响见
 [`docs/decisions/OPEN-BUSINESS-DECISIONS.md`](../decisions/OPEN-BUSINESS-DECISIONS.md) §1.4。
 
-**首期需业务所有者签字的具体裁定共 5 处**：`A-P01`（物理模型追认）、`A-P02`（拒收重开边界）、
-`T-11`（零交期路径）、`M1-P-03`（角色授予矩阵）、`M1-P-02`（**仅在希望放宽支持范围时**）。
-其中 `A-P01` / `A-P02` / `T-11` 共同阻塞 `M1C-WP-1` / `M1C-G01`；
-其余六个 Core 工作包**不依赖**这三项。
+**首期需业务所有者签字的具体裁定由 5 处收敛为 2 处**：
+`M1-P-03`（角色**授予矩阵**）与 `M1-P-02`（**仅在希望放宽支持范围时**）。
+
+- `A-P01`（通知物理模型）已由候选 Design **技术接受** —— §31.12.3 `A-REQ-06` 与 `A-P01` 行
+  均把该项定性为**物理模型设计冲突**、裁定权属 Procurement Design；业务所有者在 §31.13
+  Requirement 验收时**一次性确认**即可，**不另设独立签字项**。
+- `A-P02`（复杂拒收重开与自动再转换）、`T-11`（**通知转换后取消的来源容量语义**）与
+  **交期上界**（零有效交期 / 多交期不明 / 历史不可证）均按**受限行为** fail closed 实施，
+  **不阻塞** `M1C-WP-1` / `M1C-G01`，也**不阻塞**任何首期工作包的代码实施。
+  `T-11` **不是**"零交期政策"，两者已在政策登记中**拆分**。
+- `M1-P-03` **不阻塞**代码实施，但**直接决定** `M1C-G02` 的**正向**收货生效断言能否取得证据：
+  收货生效的最低安全授权是既有的 `OUTSOURCING_RECEIVING_MANAGE`，当前**无任何角色**持有
+  （仅 `admin` 经 all-permissions 继承）⇒ 未决前 `M1C-G02` 只能取得拒绝路径证据，
+  `execution_status` 必须保持 `NOT_RUN`。
 
 ### 37.6 本轮明确未发生的事项
 
@@ -575,19 +585,22 @@ M1_CORE_REBASELINE_READY_FOR_INDEPENDENT_REVIEW
 ### 37.7 下一步建议
 
 1. **业务所有者独立审查** M1-Core Requirement（§31.13）与候选 Design
-   （`docs/reviews/m1/procurement-outsourcing-m1-core-design.md`），并裁定 §37.5 的 5 处签字项。
+   （`docs/reviews/m1/procurement-outsourcing-m1-core-design.md`），并裁定 §37.5 的 **2 处**签字项
+   （`M1-P-03` 授予矩阵、`M1-P-02` 仅在放宽时）。
 2. 审查通过后**单独**执行 **Active Design Promotion**（把 M1-Core 正文移入 `docs/design/`），
    并把旧候选设计标注为**已取代**或移入 `docs/archive/`。
-3. **下一个 Implementation 工作包建议**：`M1C-WP-0`（基础设施：migration 骨架、parity 断言、
-   `SOURCE_TYPES` 注册、`SUPPLIER_BILL_MANAGE` 权限注册、锁序与事务守卫）——
-   它是其余六个工作包的共同前置，且**不被**任何待签政策阻塞。
-   其后按依赖并行推进 `M1C-WP-2`（委外收货明细）、`M1C-WP-3`（发退补料权威 Writer）、
-   `M1C-WP-4`（增量倒冲与成品入库）、`M1C-WP-5`（拒绝边界与权限分离）、`M1C-WP-6`（移动端有限修复）；
-   `M1C-WP-1`（采购通知转换）在 `A-P01` / `A-P02` / `T-11` 追认后进入。
+3. **下一个 Implementation 工作包建议**：`M1C-WP-0`（基础设施：**最小 migration 集**
+   `M-01..M-07 / M-15 / M-17` + parity 断言 + `SOURCE_TYPES` 注册 +
+   `SUPPLIER_BILL_MANAGE` 权限注册 + 锁序与事务守卫）——
+   它是其余工作包的共同前置，且**不被**任何待签政策阻塞。
+   其后按依赖并行推进 `M1C-WP-1`（采购通知转换，**不再被** `A-P01` / `A-P02` / `T-11` 阻塞）、
+   `M1C-WP-2`（委外收货明细）、`M1C-WP-3`（发退补料权威 Writer）、
+   `M1C-WP-4`（增量倒冲与成品入库）、`M1C-WP-5`（拒绝边界与权限分离）、`M1C-WP-6`（移动端有限修复）。
 4. Implementation 的启动仍**必须**取得业务所有者的**单独**明确授权（`AGENTS.md §4.4`）；
    MySQL destructive Gate 另需**独立 disposable 数据库**与**逐次**明确授权。
 5. `M1-Core` 的验收以 7 个 `M1C-Gxx` Gate 为准；`M1C-G07` 需要真实 MySQL 8 证据，
-   在取得授权前**不得**声称通过。
+   在取得授权前**不得**声称通过；`M1C-G02` 的**正向**收货生效断言在 `M1-P-03` 裁定前
+   **不得**标记通过。
 
 ### 37.8 交付锚点
 
@@ -603,6 +616,38 @@ M1_CORE_REBASELINE_READY_FOR_INDEPENDENT_REVIEW
 **边界**：本地交付提交**不等于** M1-Core Requirement 验收、**不等于** Design PASS、
 **不等于** Domain Acceptance / Freeze / Release Readiness，也**不授权**任何 Implementation。
 本轮**未运行**任何 FULL / HEAVY / MySQL / 浏览器 Gate，**不声称**通过。
+
+### 37.9 M1-Core 独立审查问题定点修正（`M1C-IR2-FIX`，2026-11-02）
+
+```text
+M1C_IR2_FIX_READY_FOR_REVIEW
+```
+
+本节是 §37 的**日期化增量登记**，只记录本轮定点修正的**范围与状态**；
+规范正文在 §31.13 与候选 Design，本节**不复制**正文。
+本节**不**签发任何 Acceptance / Freeze / `Design PASS`，**不**授权 Implementation。
+
+**修正的 8 项问题**（逐项差异见本轮交付报告）：
+
+| # | 问题 | 修正落点 |
+|---|---|---|
+| 1 | 采购通知转换的容量合同未按业务类型分域 | §31.13 `MC-REQ-02`；候选 Design §5.1 / §5.2 / §9.1 `QTY-2` / §13.1 `M1C-G01` |
+| 2 | 延期财务的防绕过未落到来源级、未覆盖共享入口 | §31.13 `MC-REQ-15`；候选 Design §9.4 / §14 `RISK-4` / §13.1 `M1C-G06` |
+| 3 | `M1C-WP-1` 阻塞划分不当；`T-11` 原始含义被改写 | §31.13.3 / §31.13.4；候选 Design §2.2 / §2.3 / §15.1；本节 §37.5 |
+| 4 | 加工费草稿创建与正式 POST 的边界自相矛盾 | §31.13 `MC-REQ-15`；候选 Design §7 / §9.4 |
+| 5 | 未核对既有权限；未区分"可实施"与"可取证" | §31.13 `MC-REQ-10`；候选 Design §8.1 / §14 `RISK-7` / §15.2 |
+| 6 | `M1C-WP-0` 纳入非首期必要的历史迁移与高风险历史修复 | 候选 Design §4.1 / §4.2 / §4.4 / §10 / §13.1 |
+| 7 | `RISK-3` 现状事实错误（误称已使用 `receiveValue(value_cents=0)`） | 候选 Design §14 `RISK-3`（区分 CURRENT / TARGET） |
+| 8 | Gate 的"审计全零"与 `MC-REQ-11` 的拒绝审计义务矛盾 | §31.13 `MC-REQ-11` / §31.13.5；候选 Design §9.2 / §9.3 / §13.3 |
+
+**Gate 状态**：7 个 `M1C-Gxx` 仍**全部 `NOT_RUN`**（7/7），**无任何 PASS**；
+旧 13 Gate 仍 13/13 `NOT_RUN`；`G-1..G-5`、Release Blockers、
+`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY` 状态**均未改变**。
+
+**本轮明确未发生**：未修改任何 `src/` / `server/` 生产代码、schema、migration、API、权限实现
+或业务测试；未连接 / 重置 / 修改任何数据库；未运行任何 MySQL / 浏览器 / 业务测试 / build；
+未签发 Requirement 验收 / Design PASS / Acceptance / Freeze / Release Readiness；
+未执行 Active Design Promotion；未 Push / Merge / Tag / Release / Deploy。
 
 ---
 
