@@ -886,7 +886,7 @@ Release / Deploy。**WP-1 完成后 HARD STOP**，等待独立审查与下一工
 | `M1C-G01..M1C-G07` | **7/7 `NOT_RUN`**；本轮**未**执行任何 Gate |
 | `M-15` / Migration 实测 / MySQL Gate | `DEFERRED` / `NOT_RUN` / `NOT_RUN` |
 | Procurement Domain Acceptance | **NOT_ISSUED**；`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY` 不变 |
-| Release / Deploy | **NOT_AUTHORIZED**；本轮**未** Push |
+| Release / Deploy | **NOT_AUTHORIZED**；本轮**未** Push（该批提交已在 `M1C-WP1-R1-PUSH-20261102` 轮次推送） |
 
 **缺陷复现**：新增 `server/m1c-wp1-r1-schedule-patch.test.js`（A–G 共 7 例，登记入 FULL）。
 **修复前 7 例中 6 例失败**：PATCH 改数量后净交期消费仍为旧值；PATCH 后取消只产生 1 条
@@ -929,7 +929,7 @@ Release / Deploy。**R1 完成后 HARD STOP**，等待独立审查与下一工�
 | `M1C-G01..M1C-G07` | **7/7 `NOT_RUN`**；本轮**未**执行任何 Gate |
 | `M-15` / Migration 实测 / MySQL Gate | `DEFERRED` / `NOT_RUN` / `NOT_RUN` |
 | Procurement Domain Acceptance | **NOT_ISSUED**；`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY` 不变 |
-| Release / Deploy | **NOT_AUTHORIZED**；本轮**未** Push |
+| Release / Deploy | **NOT_AUTHORIZED**；本轮**未** Push（该批 2 个提交已于 §37.20 双远端推送） |
 
 **缺陷复现**：新增 `server/m1c-wp1-r2-outsourcing-receipt-effect-evidence.test.js`
 （A–I 共 10 例，登记入 FULL）。**修复前 10 例中 6 例失败**（`PENDING` / `DRAFT` /
@@ -981,7 +981,7 @@ Release / Deploy。**R2 完成后 HARD STOP**，等待独立审查与下一工�
 | `M1C-G01..M1C-G07` | **7/7 `NOT_RUN`**；本轮**未**执行任何 Gate |
 | `M-15` / Migration 实测 / MySQL Gate | `DEFERRED` / `NOT_RUN` / `NOT_RUN` |
 | Procurement Domain Acceptance | **NOT_ISSUED**；`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY` 不变 |
-| Release / Deploy / Push | **NOT_AUTHORIZED**；本轮**未** Push / Merge / Rebase / Reset / Amend / Tag / Release / Deploy |
+| Release / Deploy / Push | **NOT_AUTHORIZED**；本轮**未** Push / Merge / Rebase / Reset / Amend / Tag / Release / Deploy（该批 2 个提交已于 §37.20 双远端推送） |
 
 **门禁证据**：WP-1 focused **25/25**、R2 focused **10/10**、R1 focused **7/7**、委外相关回归
 **44/44**、`pnpm test:fast` **510/510**、`pnpm test`（FULL）**3180/3180**、`pnpm build`、
@@ -992,11 +992,48 @@ Release / Deploy。**R2 完成后 HARD STOP**，等待独立审查与下一工�
   无库存 / 估值 / 成本流水的历史收货仍被判为已生效）；旧列 `receipt_id` 的检验记录未被采信。
   本轮**未**触碰 R2 的历史质量证据策略。
 - MC-REQ-11 的 **403 拒绝审计**在全应用范围仍未实现（由 `M1C-WP-5` 处理）。
-- 两端远端分支 HEAD 仍为 `173c8fc23a22d852bed2aa21270638604c005868`，本地新增提交**未 Push**。
+- 两端远端分支 HEAD 在本轮结束时仍为 `173c8fc23a22d852bed2aa21270638604c005868`，本地新增提交当轮**未 Push**（该批提交已于 §37.20 双远端推送）。
 
 **边界**：本轮未修改已批准的 Requirement / Active Design，未连接或修改项目数据库，
 未执行 Migration，未运行 MySQL / HEAVY / 浏览器 / 业务 Gate，未 Push / Merge / Tag /
 Release / Deploy，未进入 WP-2～WP-6。**完成后 HARD STOP**，等待审查与下一工作包授权。
+
+---
+
+### 37.20 M1-Core `M1C-WP1-R2` 与 `FINAL-CLOSEOUT` 双远端推送（2026-11-02）
+
+**业务所有者决定**：本轮指令「将这两次的更改都提交到两个远端」构成 AGENTS.md §11.5 的
+**显式 Push 授权**。授权范围**仅限**当前工作分支的正常快进推送，覆盖本轮两次交付
+（`M1C-WP1-R2`、`M1C-WP1-FINAL-CLOSEOUT`）共 4 个提交。
+
+| 对象 | 当前状态 |
+|---|---|
+| 推送范围 | 仅分支 `work/m1-core-rebaseline-20261102`，快进 `173c8fc..793a875`，**两端一致** |
+| 两端分支 HEAD | `github` 与 `origin` 均为 `793a8753744e3f46770df70cf096f8693962f9b5`；`--left-right --count` 两端均 `0 0` |
+| 推送内容 | `c013b8d` R2 修复 · `a7fbe45` R2 交付登记 · `99f0bc7` 错误码收口修复 · `793a875` 错误码收口交付登记 |
+| Tag 保护 | 使用**显式 refspec + `--no-tags`**，只写分支 ref；推送后复核两端 tag 集合**未变**（GitHub 仍 3 个、Gitee 仍 29 个），**未新增 / 移动 / 删除任何 tag** |
+| 两端 `master` | 均保持 `759d7216c7546ffa00a147f603c4e8852aada991` **未变**；**未 Merge** |
+| Git 历史 | 纯快进，**未 Force Push / Rebase / Reset / Amend / 改写历史** |
+| `package.json` version | `1.6.2` **未变** |
+| Release / Deploy / Migration | **NOT_AUTHORIZED**；本轮**未**执行 |
+| `M1C-G01..M1C-G07` | **7/7 `NOT_RUN`**；本轮**未**执行任何 Gate |
+
+**门禁证据**：WP-1 focused **25/25**、R2 focused **10/10**、R1 focused **7/7**、委外相关回归
+**44/44**、`pnpm test:fast` **510/510**、`pnpm test`（FULL）**3180/3180**、`pnpm build`、
+`git diff --check`、文档一致性 current 模式（N1 / N3–N9 全部 PASS，N2 已退役）全部通过。
+
+**遗留 / 未解决矛盾**：
+- **两端 release tag 集合仍不一致（既有差异，本轮未处理）**：GitHub 3 个
+  （`v1.6.0` / `v1.6.1` / `v1.6.2`），Gitee 29 个。补齐属 **Tag 写操作**，需单独授权。
+- **R2 的残余边界不变**：质量判定不等于库存效力；旧列 `receipt_id` 的检验记录未被采信。
+- MC-REQ-11 的 **403 拒绝审计**在全应用范围仍未实现（由 `M1C-WP-5` 处理）。
+- **未签发** WP-1 Implementation PASS；未签发 Domain Acceptance、Capability Freeze、
+  Manual Closure 或 Release Readiness。
+
+**边界**：本轮只做 Git 交付与交付登记，未修改已批准的 Requirement / Active Design，
+未连接或修改项目数据库，未执行 Migration，未运行 MySQL / HEAVY / 浏览器 / 业务 Gate，
+未 Merge / Tag / Release / Deploy，未进入 WP-2～WP-6。**HARD STOP**，等待独立审查与下一
+工作包授权。
 
 ---
 
