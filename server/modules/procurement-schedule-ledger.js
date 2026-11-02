@@ -41,6 +41,20 @@ export function findScheduleEffect(db, idempotencyKey) {
   return db.prepare('SELECT * FROM schedule_consumption_effects WHERE idempotency_key=?').get(idempotencyKey) || null;
 }
 
+/**
+ * The positive effects of one business event that are not reversed yet.
+ *
+ * An effect stays EFFECTIVE forever: a release is a NEW negative effect, not
+ * a mutation. "Not reversed yet" is therefore derived from the existence of a
+ * reversal, never from the state column.
+ */
+export function listOpenScheduleEffects(db, { businessEventType, businessEventId }) {
+  return db.prepare(`SELECT e.* FROM schedule_consumption_effects e
+    WHERE e.business_event_type=? AND e.business_event_id=? AND e.reverses_effect_key='' AND e.effect_state='EFFECTIVE'
+      AND NOT EXISTS (SELECT 1 FROM schedule_consumption_effects r WHERE r.reverses_effect_id=e.id AND r.effect_state='EFFECTIVE')
+    ORDER BY e.created_at, e.id`).all(businessEventType, businessEventId);
+}
+
 function insertEffect(db, effect) {
   db.prepare(`INSERT INTO schedule_consumption_effects(
       id,purchase_order_item_id,delivery_schedule_id,source_type,source_item_id,
@@ -102,6 +116,13 @@ export function recordScheduleConsumptionReversal(db, {
   const original = db.prepare('SELECT * FROM schedule_consumption_effects WHERE id=?').get(reversesEffectId);
   if (!original) throw new HttpError(409, '交期消费冲销缺少原始消费事实');
   if (original.effect_state !== 'EFFECTIVE') throw new HttpError(409, '交期消费冲销的原始消费事实已失效');
+  // A release is idempotent per original effect: a repeated cancel or a
+  // repeated rebinding must never release the same consumption twice.
+  const alreadyReversed = db.prepare(`SELECT * FROM schedule_consumption_effects
+    WHERE reverses_effect_id=? AND effect_state='EFFECTIVE'`).get(original.id);
+  if (alreadyReversed) {
+    return { id: alreadyReversed.id, idempotencyKey: alreadyReversed.idempotency_key, replayed: true };
+  }
   const reversesEffectKey = `REVERSAL:${original.id}`;
   const idempotencyKey = scheduleEffectIdempotencyKey(businessEventType, businessEventId, businessEventItemId, reversesEffectKey);
   const fingerprint = requestFingerprint({

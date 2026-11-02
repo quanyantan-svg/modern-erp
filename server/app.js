@@ -51,6 +51,7 @@ import {
 } from './modules/logistics-core.js';
 import {
   cancelPurchaseReceiptCore, confirmPurchaseReceiptCore, createPurchaseReceiptCore,
+  updatePurchaseReceiptCore,
 } from './modules/purchase-receipt-engine.js';
 import { auditBusinessRejection, NOTICE_ERROR_CODES } from './modules/procurement-notice-capacity.js';
 import {
@@ -5398,32 +5399,15 @@ function getPurchaseReceipt(db, res, actor, receiptId) {
 
 async function updatePurchaseReceipt(db, req, res, actor, receiptId) {
   allow(actor, 'PURCHASE_RECEIPTS_MANAGE');
-  const current = db.prepare('SELECT * FROM purchase_receipts WHERE id=?').get(receiptId);
-  if (!current) throw new HttpError(404, '采购入库单不存在');
-  if (current.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以修改');
-  // A receipt converted from a receipt notice is written by the conversion
-  // writer: its lines carry the notice source row and the delivery schedule
-  // reservation, and both are immutable facts. Editing the draft would drop
-  // that provenance and desynchronise the accumulated converted quantity.
-  if (current.source_notice_id) throw new HttpError(409, '由收料通知转换的采购入库单不可修改；转换后的来源容量不随取消恢复');
   const body = await readJson(req);
-  if (body.purchaseOrderId !== undefined && body.purchaseOrderId !== current.purchase_order_id) throw new HttpError(409, '采购订单来源不可修改');
-  if (body.supplierId !== undefined && body.supplierId !== current.supplier_id) throw new HttpError(409, '来源供应商不可修改');
-  requireActiveReference(db, 'warehouses', body.warehouseId, '仓库');
-  const input = normalizeSourcedLogisticsItems(db, body.items, { sourceTable: 'purchase_order_items', sourceHeaderColumn: 'order_id', sourceHeaderId: current.purchase_order_id, sourceIdCamel: 'purchaseOrderItemId', sourceIdSnake: 'purchase_order_item_id' });
-  assertRemainingQuantity(db, input, { itemTable: 'purchase_receipt_items', sourceColumn: 'purchase_order_item_id', headerTable: 'purchase_receipts', headerForeignKey: 'receipt_id' }, '收货');
-  assertImmutableSourceItems(db, 'purchase_receipt_items', 'receipt_id', receiptId, 'purchase_order_item_id', input.items);
-  const now = new Date().toISOString();
-  transaction(db, () => {
-    db.prepare('UPDATE purchase_receipts SET warehouse_id=?,receipt_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
-      .run(body.warehouseId, normalizeDocumentDate(body.receiptDate || current.receipt_date, '收货日期'), optionalText(body.remark, 500), input.totalCents, now, receiptId);
-    db.prepare("DELETE FROM logistics_quality_policy_snapshots WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").run(receiptId);
-    db.prepare("DELETE FROM tracked_source_allocations WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").run(receiptId);
-    replaceLogisticsItems(db, 'purchase_receipt_items', 'receipt_id', receiptId, input.items, 'purchase_order_item_id');
-    configureTrackedDraftLines(db, { sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId, itemTable: 'purchase_receipt_items', foreignKey: 'receipt_id', rawItems: body.items, businessDate: body.receiptDate || current.receipt_date });
-    audit(db, actor.id, 'UPDATE', 'PURCHASE_RECEIPT', receiptId, '修改采购入库 ' + current.receipt_no);
-  });
-  return send(res, 200, { ok: true, id: receiptId, receiptNo: current.receipt_no, totalCents: input.totalCents });
+  let updated = null;
+  try {
+    updated = transaction(db, () => updatePurchaseReceiptCore(db, actor, receiptId, body));
+  } catch (error) {
+    auditBusinessRejection(db, actor, { entityType: 'PURCHASE_RECEIPT', entityId: receiptId, action: '修改采购入库' }, error, { onlyCodes: Object.values(NOTICE_ERROR_CODES) });
+    throw error;
+  }
+  return send(res, 200, { ok: true, id: updated.receiptId, receiptNo: updated.receiptNo, totalCents: updated.totalCents });
 }
 
 async function confirmPurchaseReceipt(db, req, res, actor, receiptId) {

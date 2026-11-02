@@ -26,14 +26,18 @@ import { autoBillReceipt } from './commercial-golive.js';
 import { assertQualityGate } from './quality-gates.js';
 import { saveIdempotency } from './financial-controls.js';
 import {
-  authoritativeLogisticsTotal, configureTrackedDraftLines, normalizeDocumentDate,
-  normalizeSourcedLogisticsItems, replaceLogisticsItems, requireActiveReference,
+  assertImmutableSourceItems, authoritativeLogisticsTotal, configureTrackedDraftLines,
+  normalizeDocumentDate, normalizeSourcedLogisticsItems, replaceLogisticsItems,
+  requireActiveReference,
 } from './logistics-core.js';
 import {
   NOTICE_ERROR_CODES, noticeBusinessError, resolveDeliveryScheduleBinding,
   resolveDeliveryScheduleCapacity, resolvePurchaseOrderLineCapacity,
 } from './procurement-notice-capacity.js';
-import { recordScheduleConsumption, recordScheduleConsumptionReversal, SCHEDULE_EFFECT_BUSINESS_EVENT_TYPE } from './procurement-schedule-ledger.js';
+import {
+  listOpenScheduleEffects, recordScheduleConsumption, recordScheduleConsumptionReversal,
+  SCHEDULE_EFFECT_BUSINESS_EVENT_TYPE,
+} from './procurement-schedule-ledger.js';
 
 const EPSILON = 1e-9;
 
@@ -240,6 +244,16 @@ export function confirmPurchaseReceiptCore(db, actor, receiptId, { idempotencyKe
       throw noticeBusinessError(NOTICE_ERROR_CODES.CAPACITY_EXCEEDED, '收货数量超过采购订单剩余可收数量');
     }
   }
+  // The delivery schedule bound is re-checked as well: the consumption ledger
+  // already carries this receipt's own reservation, so the aggregate
+  // consumption of the schedule must still fit its ceiling.
+  for (const scheduleId of new Set(authoritative.items.map((item) => item.delivery_schedule_id).filter(Boolean))) {
+    const capacity = resolveDeliveryScheduleCapacity(db, scheduleId);
+    if (!capacity) throw noticeBusinessError(NOTICE_ERROR_CODES.SCHEDULE_UNPROVEN, '交期不存在，无法证明交期容量');
+    if (capacity.usedQuantity > capacity.capacityQuantity + EPSILON) {
+      throw noticeBusinessError(NOTICE_ERROR_CODES.CAPACITY_EXCEEDED, '收货数量超过交期与容差剩余容量');
+    }
+  }
   for (const item of authoritative.items) {
     const sourceItem = db.prepare('SELECT * FROM purchase_order_items WHERE id=? AND order_id=?').get(item.purchase_order_item_id, po.id);
     if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '入库明细与采购订单来源不一致');
@@ -276,27 +290,29 @@ export function confirmPurchaseReceiptCore(db, actor, receiptId, { idempotencyKe
  * Cancel a draft purchase receipt. The schedule reservation it holds is
  * released with a signed reversal effect; the original effect is never
  * mutated.
+ *
+ * Every positive effect of the receipt that is not reversed yet is released,
+ * so a receipt whose lines were rebound also releases the superseded
+ * reservation instead of leaving it behind.
  */
 export function cancelPurchaseReceiptCore(db, actor, receiptId) {
   const receipt = db.prepare('SELECT * FROM purchase_receipts WHERE id=?').get(receiptId);
   if (!receipt) throw new HttpError(404, '采购入库单不存在');
   if (receipt.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以取消');
   const now = new Date().toISOString();
-  const items = db.prepare('SELECT * FROM purchase_receipt_items WHERE receipt_id=? ORDER BY line_no').all(receiptId);
-  for (const item of items) {
-    if (!item.delivery_schedule_id) continue;
-    const effect = db.prepare(`SELECT * FROM schedule_consumption_effects
-      WHERE business_event_type=? AND business_event_id=? AND business_event_item_id=? AND reverses_effect_key=''`)
-      .get(SCHEDULE_EFFECT_BUSINESS_EVENT_TYPE, receiptId, item.id);
-    if (!effect) continue;
+  const openEffects = listOpenScheduleEffects(db, {
+    businessEventType: SCHEDULE_EFFECT_BUSINESS_EVENT_TYPE,
+    businessEventId: receiptId,
+  });
+  for (const effect of openEffects) {
     recordScheduleConsumptionReversal(db, {
-      purchaseOrderItemId: item.purchase_order_item_id,
-      deliveryScheduleId: item.delivery_schedule_id,
-      sourceType: 'PURCHASE_RECEIPT',
-      sourceItemId: item.id,
+      purchaseOrderItemId: effect.purchase_order_item_id,
+      deliveryScheduleId: effect.delivery_schedule_id,
+      sourceType: effect.source_type,
+      sourceItemId: effect.source_item_id,
       businessEventType: 'PURCHASE_RECEIPT_CANCEL',
       businessEventId: receiptId,
-      businessEventItemId: item.id,
+      businessEventItemId: effect.business_event_item_id,
       signedQuantity: Number(effect.signed_quantity),
       reversesEffectId: effect.id,
       businessDate: receipt.receipt_date,
@@ -305,4 +321,126 @@ export function cancelPurchaseReceiptCore(db, actor, receiptId) {
   db.prepare("UPDATE purchase_receipts SET status='CANCELLED', updated_at=? WHERE id=?").run(now, receiptId);
   audit(db, actor.id, 'CANCEL', 'PURCHASE_RECEIPT', receiptId, '取消采购入库 ' + receipt.receipt_no);
   return { receiptId, status: 'CANCELLED' };
+}
+
+/**
+ * Update a draft purchase receipt.
+ *
+ * The draft edit rebinds the delivery schedule consumption atomically:
+ * the positive effects of the previous lines are released with immutable
+ * negative effects, the lines are rebuilt through the canonical writer, and
+ * the new lines register their own positive effects — all inside the
+ * caller's transaction. A failure rolls the whole rebinding back, so there
+ * is never a state in which the old reservation is released but the new one
+ * is missing.
+ */
+export function updatePurchaseReceiptCore(db, actor, receiptId, body) {
+  const current = db.prepare('SELECT * FROM purchase_receipts WHERE id=?').get(receiptId);
+  if (!current) throw new HttpError(404, '采购入库单不存在');
+  if (current.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以修改');
+  // A receipt converted from a receipt notice is written by the conversion
+  // writer: its lines carry the notice source row and the delivery schedule
+  // reservation, and both are immutable facts. Editing the draft would drop
+  // that provenance and desynchronise the accumulated converted quantity.
+  if (current.source_notice_id) throw new HttpError(409, '由收料通知转换的采购入库单不可修改；转换后的来源容量不随取消恢复');
+  if (body.purchaseOrderId !== undefined && body.purchaseOrderId !== current.purchase_order_id) throw new HttpError(409, '采购订单来源不可修改');
+  if (body.supplierId !== undefined && body.supplierId !== current.supplier_id) throw new HttpError(409, '来源供应商不可修改');
+  requireActiveReference(db, 'warehouses', body.warehouseId, '仓库');
+
+  const now = new Date().toISOString();
+  const businessDate = normalizeDocumentDate(body.receiptDate || current.receipt_date, '收货日期');
+
+  // 1. Re-read the authoritative state: the previous lines, their schedule
+  //    bindings and the effects that are still open.
+  const openEffects = listOpenScheduleEffects(db, {
+    businessEventType: SCHEDULE_EFFECT_BUSINESS_EVENT_TYPE,
+    businessEventId: receiptId,
+  });
+  const ownReservedBySchedule = new Map();
+  for (const effect of openEffects) {
+    ownReservedBySchedule.set(effect.delivery_schedule_id, (ownReservedBySchedule.get(effect.delivery_schedule_id) || 0) + Number(effect.signed_quantity));
+  }
+
+  // 2. Normalize the requested lines and bind their delivery schedules.
+  const input = normalizeSourcedLogisticsItems(db, body.items, {
+    sourceTable: 'purchase_order_items', sourceHeaderColumn: 'order_id', sourceHeaderId: current.purchase_order_id,
+    sourceIdCamel: 'purchaseOrderItemId', sourceIdSnake: 'purchase_order_item_id',
+  });
+  assertImmutableSourceItems(db, 'purchase_receipt_items', 'receipt_id', receiptId, 'purchase_order_item_id', input.items);
+  const bound = bindDeliverySchedules(db, input.items, body.items);
+
+  // 3. Validate the new lines against the canonical capacity resolvers. The
+  //    order line bound counts the other receipt sources and the other
+  //    receipts; the schedule bound counts the whole consumption ledger and
+  //    the schedule's own notice reservations, minus the consumption this
+  //    receipt itself currently holds (it is about to be released).
+  const perOrderLine = new Map();
+  for (const item of bound) {
+    perOrderLine.set(item.sourceItemId, (perOrderLine.get(item.sourceItemId) || 0) + Number(item.quantity));
+  }
+  for (const [orderItemId, quantity] of perOrderLine) {
+    assertPurchaseOrderLineRemaining(db, orderItemId, quantity, 0);
+  }
+  assertScheduleCapacity(db, bound, ownReservedBySchedule);
+
+  // 4. Release the previous consumption with immutable negative effects.
+  for (const effect of openEffects) {
+    recordScheduleConsumptionReversal(db, {
+      purchaseOrderItemId: effect.purchase_order_item_id,
+      deliveryScheduleId: effect.delivery_schedule_id,
+      sourceType: effect.source_type,
+      sourceItemId: effect.source_item_id,
+      businessEventType: 'PURCHASE_RECEIPT_UPDATE',
+      businessEventId: receiptId,
+      businessEventItemId: effect.business_event_item_id,
+      signedQuantity: Number(effect.signed_quantity),
+      reversesEffectId: effect.id,
+      businessDate,
+    });
+  }
+
+  // 5. Rebuild the lines through the canonical writer and refresh the
+  //    quality policy and tracking snapshots.
+  db.prepare('UPDATE purchase_receipts SET warehouse_id=?,receipt_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
+    .run(body.warehouseId, businessDate, optionalText(body.remark, 500), input.totalCents, now, receiptId);
+  db.prepare("DELETE FROM logistics_quality_policy_snapshots WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").run(receiptId);
+  db.prepare("DELETE FROM tracked_source_allocations WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").run(receiptId);
+  const insertedItems = replaceLogisticsItems(db, 'purchase_receipt_items', 'receipt_id', receiptId, bound, 'purchase_order_item_id');
+  configureTrackedDraftLines(db, {
+    sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId, itemTable: 'purchase_receipt_items',
+    foreignKey: 'receipt_id', rawItems: body.items, businessDate,
+  });
+
+  // 6. Register the consumption of the rebuilt lines.
+  for (const item of insertedItems) {
+    if (!item.deliveryScheduleId) continue;
+    recordScheduleConsumption(db, {
+      purchaseOrderItemId: item.sourceItemId,
+      deliveryScheduleId: item.deliveryScheduleId,
+      sourceType: 'PURCHASE_RECEIPT',
+      sourceItemId: item.id,
+      businessEventType: SCHEDULE_EFFECT_BUSINESS_EVENT_TYPE,
+      businessEventId: receiptId,
+      businessEventItemId: item.id,
+      signedQuantity: Number(item.quantity),
+      businessDate,
+    });
+  }
+
+  // 7. For every schedule the receipt binds, its signed ledger must equal the
+  //    quantity of the rebuilt lines that consume that schedule.
+  const boundBySchedule = new Map();
+  for (const item of insertedItems) {
+    if (!item.deliveryScheduleId) continue;
+    boundBySchedule.set(item.deliveryScheduleId, (boundBySchedule.get(item.deliveryScheduleId) || 0) + Number(item.quantity));
+  }
+  for (const [scheduleId, quantity] of boundBySchedule) {
+    const net = db.prepare(`SELECT COALESCE(SUM(signed_quantity),0) q FROM schedule_consumption_effects
+      WHERE business_event_id=? AND delivery_schedule_id=? AND effect_state='EFFECTIVE'`).get(receiptId, scheduleId);
+    if (Math.abs(Number(net?.q || 0) - quantity) > EPSILON) {
+      throw noticeBusinessError(NOTICE_ERROR_CODES.CAPACITY_EXCEEDED, '交期消费台账与采购入库单数量不一致');
+    }
+  }
+  audit(db, actor.id, 'UPDATE', 'PURCHASE_RECEIPT', receiptId, '修改采购入库 ' + current.receipt_no);
+  return { receiptId, receiptNo: current.receipt_no, totalCents: input.totalCents };
 }
