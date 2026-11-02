@@ -185,6 +185,10 @@ const FULL = [
   // M1-Core WP-0 source/schema/role contract. Static only: it never opens a
   // database and does not execute the migration whose source it verifies.
   'server/m1c-wp0-infrastructure.test.js',
+  // M1C-WP0-R1 schema parity contract: drives the production SQLite→MySQL DDL
+  // translation offline with a recording mock adapter. It never connects to
+  // MySQL and never claims a dynamic parity Gate PASS.
+  'server/m1c-wp0-schema-parity.test.js',
   // M1C-WP0-R1 focused regression for the outsourcing GL source-level policy
   // guard and the receiving-effect permission isolation. One disposable
   // isolated SQLite file per run.
