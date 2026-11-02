@@ -663,6 +663,27 @@ M1C_IR2_FIX_READY_FOR_REVIEW
 **不等于** Domain Acceptance / Freeze / Release Readiness，也**不授权**任何 Implementation。
 本轮**未运行**任何 FULL / HEAVY / MySQL / 浏览器 Gate，**不声称**通过。
 
+### 37.10 三项技术合同收尾修正（`M1C-TC1`，2026-11-02）
+
+**授权与范围**：依据 `M1C-IR2-FIX` 独立审查结论，仅完成三项文档合同收尾；未修改生产代码、
+schema、migration、权限种子、业务测试或 UI，未连接数据库，未运行 Gate。
+
+| 项 | 文档修正结论 | 实施 / Gate 状态 |
+|---|---|---|
+| `TC-01` | “首期零历史回填”精确限定为零历史业务事实重建、零不可证明补记；`M-15` 仅可在未来取得独立 Migration 授权后，对已有明确一致身份字段做确定性技术规范化，不改变数量、归属、库存、估值、来源或状态 | **仅合同修正**；`M-15` 未执行，PRE 未运行 |
+| `TC-02` | 数据库默认继续为 `converted_quantity NULL = 未证明`；权威生产 Writer 首次创建且同事务验证的新来源行显式写 0，重试不得重置非零累计量，历史 NULL 不得改写 | **仅合同修正**；`M1C-G01` 仍 `NOT_RUN` |
+| `TC-03` | 普通角色未获授予不等于管理员无权限；管理员可经 all-permissions 持有权限，但 RBAC 之后仍受独立来源级 Business Policy Guard 约束，委外来源账单返回 409，未授权主体保持 403 | **仅合同修正**；`M1C-G06` 仍 `NOT_RUN` |
+
+**保持不变**：三项 `SRD-01/02/03`、15 项 Requirement 结构、`M1C-WP-0..7`、
+`M1C-G01..G07`（7/7 `NOT_RUN`）、旧 13 Gate（13/13 `NOT_RUN`）、历史 Requirement PASS、
+`M1-P-02` 严格支持范围、`M1-P-03` 待业务所有者裁定、`A-P01` 技术接受边界、当前 Active Design、
+全部 Domain Acceptance / Freeze / Release 状态及 `PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY`。
+
+**Review 结论（文档层）**：TC-01/02/03 的 Requirement ↔ 候选 Design ↔ Gate 表述已收敛；
+没有把修正描述为已实施、已测试或 Gate PASS。是否通过最终审查仍由业务所有者决定，
+且本节不签发 `M1_CORE_REQUIREMENT_ACCEPTANCE_PASS`、`M1_CORE_DESIGN_PASS` 或
+`IMPLEMENTATION_AUTHORIZED`。
+
 ---
 
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」

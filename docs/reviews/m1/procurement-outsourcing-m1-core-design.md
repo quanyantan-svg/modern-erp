@@ -29,6 +29,9 @@
 >   "可实施 ≠ 可取证"（§8.1）；⑥`M1C-WP-0` 最小 migration 集收敛（§4.1、§4.2）；
 >   ⑦`RISK-3` 现状事实修正（§14）；⑧零副作用域与拒绝审计边界（§9.2）。
 >   本轮**未**修改任何实现代码、schema、migration 或测试；7 个 Gate 仍全部 `NOT_RUN`。
+> - 本轮（`M1C-TC1`，2026-11-02）：三项技术合同收尾 —— ①`M-15` 技术性身份键规范化与
+>   历史业务回填边界；②新建通知来源行显式初始化 `converted_quantity=0`；③管理员
+>   all-permissions 不能绕过委外来源级会计政策门禁。仅修改文档；未实施或运行任何 Gate。
 
 ## 1. 位置、与旧候选设计的关系
 
@@ -73,7 +76,7 @@ VMI 结算、委外 AP/GL 自动过账、历史会计补偿（`M1-SRD-01` §2.2�
 M1C-WP-0  基础设施
   ├ migration 骨架 + parity 断言
   ├ SOURCE_TYPES 注册（OUTSOURCING_SUPPLEMENT / OUTSOURCING_BACKFLUSH）
-  ├ SUPPLIER_BILL_MANAGE 权限注册（不授予任何角色）
+  ├ SUPPLIER_BILL_MANAGE 权限注册（不向普通业务角色显式授予；admin 继承不构成政策豁免）
   └ 锁顺序文档化 + 统一事务守卫
        │
        ├──┬──────────────┬──────────────┬──────────────┬──────────────┐
@@ -150,15 +153,15 @@ M1C-WP-0  基础设施
 
 | 编号 | 对象 | 内容 | 端 |
 |---|---|---|---|
-| `M-01` | `receipt_notice_item_sources` | **新表**（**schema only，零历史回填**）：行级已解析来源（通知行 ↔ 采购订单行 ↔ 交期 ↔ 已分配数量 ↔ 已转换数量）；`converted_quantity` **默认 NULL = 未证明**，**不得**以 `DEFAULT 0` 冒充"已证明未转换" | 双端 |
+| `M-01` | `receipt_notice_item_sources` | **新表**（**schema only，零历史回填**）：行级已解析来源（通知行 ↔ 采购订单行 ↔ 交期 ↔ 已分配数量 ↔ 已转换数量）；数据库默认保持 `converted_quantity NULL`（历史或来源未证明）；权威生产 Writer 首次创建且在同一事务完成全部来源验证的新行时，必须**显式写入 0**，表示“该新行创建时尚未转换”。不得以 `DEFAULT 0`、批量回填或 `COALESCE` 把历史未知量变成容量 | 双端 |
 | `M-02` | `purchase_receipts` | `+ source_notice_id TEXT` | 双端 |
 | `M-03` | `purchase_receipt_items` / `outsourcing_receipt_items` / `schedule_consumption_effects` | 收货行增通知来源与交期；新增**不可变有符号交期消费台账**（正向 + 负向 effect），唯一键 `(business_event_type, business_event_id, business_event_item_id, reverses_effect_key)`；**零历史回填** | 双端 |
 | `M-04` | `outsourcing_receipts` | `+ warehouse_id` / `+ source_notice_id` / `+ business_date` / `+ version INTEGER NOT NULL DEFAULT 0` | 双端 |
 | `M-05` | `outsourcing_receipt_items` | `+ lot_id` / `+ serial_id` / `+ unit_code TEXT NOT NULL DEFAULT 'EA'` / `+ processing_po_item_id` / `+ source_notice_item_source_id` | 双端 |
 | `M-06` | `outsourcing_material_list` | `+ source_warehouse_id TEXT NULL`（NULL = 历史不可证 ⇒ 运行期 409）/ `+ legacy_unverified_wip_quantity REAL NULL`（**NULL = 未证明**，**禁止** `NOT NULL DEFAULT 0`）/ `+ identity_evidence_state TEXT NOT NULL DEFAULT 'NONE'`；**零历史回填** | 双端 |
 | `M-07` | 三张 WIP 身份层**新表**（effects / allocations / balances） | 纯 additive **新表**，**零历史回填**（历史行数必为 0）；是 `INV-WIP-4` / `INV-WIP-5` / `SRC-1` 的 canonical 证据层载体 | 双端 |
-| `M-15` | `tracked_inventory_movements` | `+ identity_key TEXT NOT NULL DEFAULT ''` + 委外身份部分唯一索引；**五步顺序**：PRE-A → 加列 → 回填 → PRE-B/PRE-C → 建索引；任一 PRE 不通过**中止迁移** | 双端 |
-| `M-17` | `permissions` / `role_permissions` | `+ SUPPLIER_BILL_MANAGE`（**只注册，不授予任何角色**；必须与 `V13_DESIRED_ROLE_PERMISSIONS` 同步，否则每次启动被剥离） | 双端 |
+| `M-15` | `tracked_inventory_movements` | `+ identity_key TEXT NOT NULL DEFAULT ''` + 委外身份部分唯一索引；**五步顺序**：PRE-A → 加列 → **确定性技术规范化** → PRE-B/PRE-C → 建索引；任一 PRE 不通过**中止迁移**。此处不是历史业务回填，范围与授权见 §4.4 | 双端 |
+| `M-17` | `permissions` / `role_permissions` | `+ SUPPLIER_BILL_MANAGE`（只注册，不向普通业务角色显式授予；`admin` 可经 all-permissions 继承但无政策豁免；必须与 `V13_DESIRED_ROLE_PERMISSIONS` 同步，否则每次启动被剥离） | 双端 |
 
 **代码级、无 migration**：`SOURCE_TYPES`（`server/lib/inventory-mutation.js`）新增
 `OUTSOURCING_SUPPLEMENT` 与 `OUTSOURCING_BACKFLUSH` 两个字面量。
@@ -189,13 +192,23 @@ M1C-WP-0  基础设施
 ### 4.4 迁移纪律
 
 - 全部 **additive**；不 DROP 历史表；不重建既有表；两引擎语义对等；**idempotent**。
-- **首期不做任何历史回填**（§4.2）：新增表与新增列对历史行一律为 **NULL / 未证明**，
-  **不得**以 `DEFAULT 0` 冒充"已证明未转换"，**不得**推定任何历史来源或历史身份。
-- 回填**只填空、不覆盖**，**不写 0 冒充"已证明未转换"**；不可证明的一律写 NULL。
+- **首期不做任何历史业务事实重建或不可证明的历史补记**（§4.2）：新增表与业务事实列对历史行
+  一律为 **NULL / 未证明**，不得以 `DEFAULT 0` 冒充“已证明未转换”，不得推定历史来源、
+  WIP、LOT/SERIAL、库存、估值、成本或会计事实。
+- 唯一有条件例外是 `M-15` 的**技术性身份键规范化**，且本轮**不执行**：未来必须另获独立
+  Migration 授权，且只可把已有、明确、一致的身份字段规范化为 `LOT:<lot_id>`、
+  `SERIAL:<serial_id>`；仅当产品与该行保存字段能证明其为非跟踪物料时才可写 `NONE`。
+  LOT/SERIAL 身份缺失、策略冲突、身份字段冲突、来源行缺失、规范化后撞键或来源关系无法证明时，
+  一律停止，不得推断，也不得把身份不明的 LOT/SERIAL 强制转换为 `NONE`。
+- `M-15` 不改变历史业务数量、归属、库存效果、估值、来源项或单据状态；仅支持现有严格跟踪事实的
+  去重与唯一性约束，**不等于**恢复或证明历史 WIP 的可用量。
 - MySQL DDL 自动提交 ⇒ 每个中间状态**幂等可重放**；失败重跑**不得**重复写、**不得**删历史。
 - `M-15` 的 PRE 检查**不通过时中止迁移**并报告行数，**不得**删流水、**不得**臆造 `source_item_id`。
   PRE 检查的范围**仅限**身份键可判定性（是否存在可确定的 `identity_key`、是否存在会撞键的历史流水），
   **不**包含任何历史修复或历史改写动作。
+- PRE-A / PRE-B / PRE-C 必须读取真实目标数据，不能凭静态推断宣称通过；不得覆盖已有非空身份。
+  SQLite / MySQL 的规范化结果与唯一性语义必须对等；MySQL DDL 自动提交造成的部分完成状态必须
+  可识别、可安全重试。唯一索引未确立或 PRE 未通过时，相关委外跟踪写入继续 fail closed。
 
 ## 5. 唯一 Writer 合同
 
@@ -208,6 +221,9 @@ M1C-WP-0  基础设施
 - 转换由**新建**的 `procurement-notice-conversion.js` **唯一**拥有；
   它**调用**既有 `createPurchaseReceipt` / `confirmPurchaseReceipt`，**不重写**采购入库引擎。
 - 转换必须由服务端校验 `business_type`、supplier、订单/订单行、warehouse、quantity、UOM、状态。
+- 新来源行必须由该权威 Writer 在**首次创建**时、与来源关系及容量验证处于**同一事务**地显式写入
+  `converted_quantity=0`。创建失败整体回滚；幂等重试只复用既有事实，不得把非零累计量重置为 0。
+  历史或混合来源行保持 NULL 并 fail closed，不得靠时间字段猜测“新行”。
 - **容量不变式**（修正现状 E-06，作用域 = `OUTSOURCE` 通知行）：比较总量**必须包含**本次待确认的数量，
   并按"通知全量 − 已转换量"口径避免与已收货量重复扣减。现状 `confirmReceiptNotice`
   （`server/modules/procurement-receiving.js:186-211`）在 `OUTSOURCE` 分支以仅汇总 `CONFIRMED`
@@ -276,7 +292,7 @@ M1C-WP-0  基础设施
 
 | 动作 | 事务内必须重读并锁定的权威事实 | 幂等键 |
 |---|---|---|
-| 通知创建 / 确认 / 取消 | 通知行 + 来源行容量 | `(operation_type, document_id, idempotency_key)` |
+| 通知创建 / 确认 / 取消 | 通知行 + 来源行容量；新来源行与显式初始 0 原子创建 | `(operation_type, document_id, idempotency_key)` |
 | 通知 → 入库转换 | 通知行 + **按 `business_type` 分域**的容量来源（`STANDARD_PURCHASE` = 供料 PO 行 + 交期行；`OUTSOURCE` = 委外订单行） | 同上 |
 | 采购入库确认 | 采购订单行 + 交期行 + 库存位 | 同上 |
 | 委外收货创建（表头 + 明细） | 委外订单行 + 加工费 PO 行 + 库存位 | 同上 |
@@ -344,7 +360,7 @@ M1C-WP-0  基础设施
 | `OUTSOURCING_RECEIVING_MANAGE` | `server/db.js:276`（"管理委外收货与退货"） | 委外**收货**域 | 同上：**无任何角色**持有；仅 `admin` |
 | `OUTSOURCING_MATERIAL_EXECUTE` | `server/db.js:274` | 委外材料执行（与 `OUTSOURCING_MANAGE` 并列） | 同上：无角色持有 |
 | `IQC_VIEW` / `IQC_MANAGE` | `server/db.js` 权限表 | 质检判定 | `role-warehouse` 持有（见 `server/db.js` 种子） |
-| `SUPPLIER_BILL_MANAGE` | **尚未注册**（`M-17` 补） | 加工费正式过账 | 首期**不授予任何角色** |
+| `SUPPLIER_BILL_MANAGE` | **尚未注册**（`M-17` 补） | 加工费正式过账 | 首期不向普通业务角色显式授予；注册后 `admin` 可经 all-permissions 持有，但无政策豁免 |
 
 现状 `RECEIVE_PERMISSIONS = ['OUTSOURCING_RECEIVING_MANAGE', 'OUTSOURCING_MANAGE']`
 （`server/modules/outsourcing-finance.js:13`、`server/modules/outsourcing.js:9`）⇒ 现状
@@ -364,7 +380,7 @@ M1C-WP-0  基础设施
 | **委外收货生效**（产生成品库存效力） | **仅 `OUTSOURCING_RECEIVING_MANAGE`** | **收紧**：移除 `OUTSOURCING_MANAGE` 回退 |
 | IQC 判定 | 既有 IQC 权限（`IQC_MANAGE`） | 不变 |
 | 委外加工费账单**草稿创建** | 沿用既有财务动作判定（`SUPPLIER_BILL_MANAGE` 或 `OUTSOURCING_MANAGE`） | 不变；**不新增、不放宽**任何权限 |
-| 加工费**正式过账** | **仅 `SUPPLIER_BILL_MANAGE`**（单权限） | **收紧**：移除 `OUTSOURCING_MANAGE` 回退；`M-17` 注册，**首期不授予任何角色 ⇒ 无人可过账（fail closed）** |
+| 加工费**正式过账** | RBAC 层仅认 `SUPPLIER_BILL_MANAGE`；其后仍必须通过独立来源级 Business Policy Guard | **收紧**：移除 `OUTSOURCING_MANAGE` 回退；`M-17` 注册且首期不向普通业务角色授予。`admin` 可经 all-permissions 持有，但委外来源账单仍由 Policy Guard 拒绝 |
 
 #### 8.1.3 边界纪律
 
@@ -372,8 +388,8 @@ M1C-WP-0  基础设施
   该权限**已注册**，语义已覆盖"管理委外收货与退货"，**无需**新增权限。
 - **不得**为收货生效另立新权限（如"独立收货生效权限"）—— 新增权限属 `M1-P-03` 授予矩阵裁定范围，
   且会**扩大**权限面。
-- **不得擅自扩大角色权限**：本轮**不**把 `OUTSOURCING_RECEIVING_MANAGE` 授予任何角色，
-  **不**把 `SUPPLIER_BILL_MANAGE` 授予任何角色。
+- **不得擅自扩大角色权限**：本轮不向任何普通业务角色显式授予
+  `OUTSOURCING_RECEIVING_MANAGE` 或 `SUPPLIER_BILL_MANAGE`；`admin` 的 all-permissions 继承事实不变。
 - 该收紧**不削弱任何既有角色能力**：核对结果显示，除 `admin`（all-permissions）外，
   **没有任何角色**持有 `OUTSOURCING_*`，因此移除 `OUTSOURCING_MANAGE` 回退**不改变**任何角色的可达性。
 - **可实施 ≠ 可取证**：`M1C-WP-2` 的**代码实施**不被任何待签政策阻塞；
@@ -385,8 +401,8 @@ M1C-WP-0  基础设施
 
 - 委外**业务**角色**不得**持有加工费**正式过账**权。
 - **不得**因现有 `OUTSOURCING_MANAGE` 权限过宽就保留财务越权路径（收货生效与加工费过账两处均收紧）。
-- `SUPPLIER_BILL_MANAGE` 的**注册**与"过账必须单权限持有"的**门禁收紧**不依赖 `M1-P-03` 签字，
-  可先落地（无人持有即无人能过账 = fail closed）；**授予矩阵**需 Owner 签字。
+- `SUPPLIER_BILL_MANAGE` 的**注册**与“RBAC 只认该权限”的门禁收紧不依赖 `M1-P-03` 签字，
+  可先落地；**授予矩阵**需 Owner 签字。管理员 all-permissions 不构成会计政策豁免。
 - 授权判定全部在**后端**；前端隐藏不构成授权。
 
 ## 9. 不变量、错误与零副作用
@@ -462,6 +478,11 @@ M1C-WP-0  基础设施
 `supplier_bill_items.commercial_source_type = 'OUTSOURCING_RECEIPT_ITEM'`，
 即为**委外加工费账单**，其**正式过账**与**匹配**一律拒绝（409 `OUTSOURCING_GL_POLICY_NOT_APPROVED`）。
 
+**两层门禁顺序**：先执行适用的身份与 RBAC 检查；未授权主体仍返回 403，且不得读取账单来源。
+对已通过权限检查的请求再执行 Business Policy Guard。普通业务用户、财务用户、经 all-permissions
+持有权限的管理员、内部函数调用与共享入口均不得绕过；管理员和持有财务权限的主体命中委外来源后
+同样返回 409。403/409 的拒绝审计分别遵守 §9.2，且业务事实均逐字段零变化。
+
 **必须覆盖的入口（逐个列出，不得遗漏）**：
 
 | 入口 | 位置 | 首期处置 | 普通采购账单是否受影响 |
@@ -498,7 +519,8 @@ M1C-WP-0  基础设施
 | 历史委外收货的 `business_status='CONFIRMED'` | **不**无条件映射为"已生效"；按可核查证据（库存流水 / 估值流水 / 质量判定 / 成本证据 / 来源明细）判定为"已生效已确认"或"历史未证实"；后者**不开放**新账单与新退货能力，**不改写**历史 |
 | 历史 WIP 无 `lot_id` / `serial_id` 列 | 历史身份**不可证** ⇒ 证据层历史行数必为 0；**不得**编造身份分区、**不得**按比例分摊、**不得**推定 LOT/SERIAL |
 | 历史 WIP 残差 | **首期不回填**（§4.2）：历史行 `legacy_unverified_wip_quantity` 保持 **NULL = 未证明** ⇒ 落入"历史不可验证"隔离桶，该行**不可**被新的转出或倒冲消费；残差回填属历史治理工作包 |
-| 历史转换量 | `converted_quantity` 保持 **NULL = 未证明**（新列默认 NULL，首期无回填）；该行**不提供**可转换容量（保守预留）；任何路径**不得**把 NULL 自动改成 0 |
+| 历史转换量 | `converted_quantity` 保持 **NULL = 未证明**（数据库默认 NULL，首期无回填）；该行**不提供**可转换容量（保守预留）；任何路径不得把 NULL 自动改成 0。只有权威生产 Writer 在同一事务首次创建并验证的新来源行才显式初始化 0 |
+| M-15 技术性身份键 | **不属于历史业务事实重建**，但本轮仍不执行。未来仅凭已有明确一致字段确定性生成 `LOT:<lot_id>` / `SERIAL:<serial_id>` / 可证明非跟踪的 `NONE`；不明、冲突或撞键即停止。不得由此证明历史 WIP 可用量 |
 | 历史通知行的 PO 归属 | **首期不回填**：历史通知行**无来源行** ⇒ 转换路径 fail closed（409 `RECEIPT_NOTICE_SOURCE_CAPACITY_UNKNOWN`）；**不推定任何 PO 关联** |
 | 历史来源仓 | **首期不回填**：`source_warehouse_id` 保持 **NULL** ⇒ 运行期 409 fail closed |
 | 处置方式 | 只允许 **只读 / 隔离 / fail closed**；大规模治理与会计补偿**延期** |
@@ -535,13 +557,18 @@ M1C-WP-0  基础设施
 
 | Gate | 前置数据创建方式 | 证据层 | 成功断言 | 拒绝断言 | 零副作用断言 | `execution_status` |
 |---|---|---|---|---|---|---|
-| `M1C-G01` | L1：多 PO 收料通知 → 转换 → 采购入库；另建无通知的直接 PO → 采购入库路径 | HTTP + SQLite/MySQL | 通知与来源行由生产 API 可达；行级多 PO 来源成立；部分转换成立，且累计容量上界**按通知 `business_type` 分别适用**（`STANDARD_PURCHASE` = 通知行 × 采购订单行 × 交期；`OUTSOURCE` = 通知行 × 委外订单剩余可收量；**不**把委外订单容量强加于普通采购）；交期消费进入不可变台账；直接路径仍合法 | 容量越界 409（**分别**按两类上界验证）；交期不可判定 409；委外订单剩余不可证明 409；转换后重转 409；明细产品与 PO 行不匹配 409 | 拒绝时收货 / 库存 / 估值 / 通知 / 交期台账**逐字段零变化** + 拒绝审计恰好 1 条 | `NOT_RUN` |
+| `M1C-G01` | L1：多 PO 收料通知 → 转换 → 采购入库；另建无通知的直接 PO → 采购入库路径 | HTTP + SQLite/MySQL | 通知与来源行由生产 API 可达；合法新来源行显式初始 0；新建后部分转换成立且累计量正确增长；重放不重置、不重复扣减；行级多 PO 来源成立；容量上界**按通知 `business_type` 分别适用**（`STANDARD_PURCHASE` = 通知行 × 采购订单行 × 交期；`OUTSOURCE` = 通知行 × 委外订单剩余可收量）；交期消费进入不可变台账；直接路径仍合法 | 历史 NULL 行拒绝且历史数据零改写；容量越界 409（分别按两类验证）；交期不可判定 409；委外订单剩余不可证明 409；转换后重转 409；明细产品与 PO 行不匹配 409 | 拒绝时收货 / 库存 / 估值 / 通知 / 来源累计量 / 交期台账**逐字段零变化** + 拒绝审计恰好 1 条 | `NOT_RUN` |
 | `M1C-G02` | L1：委外订单 → 完工通知 → 待检收货（带明细）→ IQC → 生效 | HTTP + Quality + Inventory | 表头与 **≥1 条明细**原子落库；明细非空且逐行来源可追；IQC 从**正式明细**可达并可完成 PASS / WAIVED；建待检与确认效力**分离**；生效后成品与成本证据一致。**前置条件**：`M1-P-03` 须先决定 `OUTSOURCING_RECEIVING_MANAGE` 的授予对象 —— 未决前**只能**取得拒绝路径证据，**正向**生效断言**不得**标记通过 | 缺明细 / 空明细 400；来源不匹配 409；质量门禁未过 409；`OUTSOURCING_MANAGE` 单独持有时执行生效 → 403（收货生效**只**认 `OUTSOURCING_RECEIVING_MANAGE`） | 拒绝时收货 / IQC / 库存 / 估值 / 成本证据**逐字段零变化** + 拒绝审计恰好 1 条 | `NOT_RUN` |
 | `M1C-G03` | L1：物料行 → 发料 / 补料 / 退料 | HTTP + Inventory / Valuation snapshots | 沿 canonical 仓位写**真实**物理库存、跟踪与估值；企业所有权不变；内部仓与 WIP 仓数量与流水可对账；多物料行与 SERIAL 拆分各自成键，实际腿数 == 预期腿数 | 缺 WIP 仓 409；库存不足 409；UOM 不符 409；撞键 409 `INVENTORY_MUTATION_UNEXPECTED_REPLAY`；重放幂等 | 拒绝时业务单据 / 库存 / 跟踪 / 估值 / 身份层**逐字段零变化** + 拒绝审计恰好 1 条 | `NOT_RUN` |
 | `M1C-G04` | L1：发料 → 分批完工 → 生效 | HTTP + Valuation snapshots | 增量倒冲公式正确；材料成本来自 canonical 位置口径分摊（**非**全局平均价）；成品经唯一 Writer 入企业仓；OUT-21 成本证据 = 实际倒冲材料账面价值 + 加工费 | 增量 < 0 或 > 可用净供应 409；基数不受支持 409 `OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED`；重复确认不双扣 / 双收 | 重复 / 并发时零重复扣减、零重复入库 | `NOT_RUN` |
 | `M1C-G05` | 无（浏览器） | Browser | 两个工作面无 `api.get/post` TypeError；320 / 390 / 430 / 680 四宽度交互成功；服务端 RBAC 生效；**不含**视觉体系重做 | 无权用户访问 → 页面级处理 + 服务端 403 | — | `NOT_RUN` |
-| `M1C-G06` | L1：委外加工费**草稿创建** / 委外加工费**过账（委外专用 + 共享入口）** / VMI 结算与物权释放 / 倒冲差异生效 / 跨单 WIP 成本携带 / 成品退货；**外加**普通采购账单的共享过账与匹配（防误伤回归） | HTTP + Finance + Inventory snapshots | 上述危险写入**一律服务端拒绝**（精确 status + error code）；委外业务角色**不可**正式过账；`SUPPLIER_BILL_MANAGE` 未授予即无人能过账；**委外加工费账单的草稿创建允许且停留在 `DRAFT`**（零 AP / 凭证 / 分录 / 成本证据刷新）；**普通采购账单经同一共享入口仍合法** | 逐项断言 409 + 精确 error code；**必须**在真实共享入口 `POST /api/supplier-bills/:id/post`（委外来源账单）与 `POST /api/supplier-bills/:id/match` 上断言；同一入口对普通采购账单**必须**成功 | **零** AP open item / 凭证 / 分录 / 库存位 / 结算行 / 账单 `status` / 账单 `grni_cents` / 账单 `variance_cents` / 成本证据写入（逐字段零变化）+ 拒绝审计恰好 1 条 | `NOT_RUN` |
+| `M1C-G06` | L1：委外加工费**草稿创建** / 委外加工费**过账（委外专用 + 共享入口）** / VMI 结算与物权释放 / 倒冲差异生效 / 跨单 WIP 成本携带 / 成品退货；**外加**普通采购账单的共享过账与匹配（防误伤回归） | HTTP + Finance + Inventory snapshots | 危险写入服务端拒绝（精确 status + error code）；管理员与持有财务权限的主体通过 RBAC 后仍由来源级 Policy Guard 返回 409；委外业务角色按 RBAC→Policy 顺序正确拒绝；委外草稿创建允许且停留 `DRAFT`；普通采购账单经同一共享入口仍合法 | 管理员过账委外来源账单 → 409；持财务权限主体 → 409；未授权主体 → 403 且不泄露来源；委外来源账单在真实共享 post / match 入口均 → 409；普通采购账单同入口成功 | **零** AP open item / 凭证 / 分录 / 库存位 / 结算行 / 账单 `status` / 账单 `grni_cents` / 账单 `variance_cents` / 成本证据写入（逐字段零变化）+ 拒绝审计恰好 1 条 | `NOT_RUN` |
 | `M1C-G07` | L1：全部 Core 业务对象经生产 API 造数 | HTTP + Real MySQL 8 concurrency | 生产 API 端到端**无手写 SQL 造数**；SQLite / MySQL 行为对等；Core 关键 mutation 的**真实 Handler** 并发：一方成功 / 另一方合规拒绝，**零重复写入、零部分副作用** | 每项并发必须断言**拒绝方**的权威库存 / 收货行 / 交期台账前后快照逐字段一致 | 拒绝方快照逐字段相同（不得只断言数量） | `NOT_RUN` |
+
+**`TC-01 / M-15` 共享 Gate 前置**：它不是第 8 个 Gate，不改变 7-Gate 结构；在未来独立 Migration
+获授权并执行后，`M1C-G03` / `M1C-G04` / `M1C-G07` 必须取得 PRE-A / PRE-B / PRE-C 的真实数据证据、
+三类允许身份键的确定性映射、不可判定与撞键样本的停止/零改写证据、SQLite/MySQL 对等证据，
+以及唯一索引未建立时相关委外跟踪写入 fail closed 的证据。本轮未运行，Gate 状态不变。
 
 **Core 并发场景选取（`M1C-G07`）** —— 按首期实际 mutation 选取**真实 Handler**，
 **不再强制**原 11 项全量完成：
@@ -616,7 +643,7 @@ M1C-WP-0  基础设施
 | `RISK-4` | **CURRENT**：`postProcessingFeeBill`（`server/modules/outsourcing-finance.js:221-243`）**无** source-aware 会计政策门禁、**无**期间守卫、**不**产生 GL，但**会**把账单置 `POSTED`、经 `ensurePayableSource` 产生 AP payable、并刷新成本证据 —— 即**现状委外加工费可以正式过账**；`server/` 全仓库 `outsourcing_accounting_polic*` **零命中**。**共享入口无显式来源判定**：`postSupplierBill`（`server/modules/commercial-golive.js:303`）与 `/api/supplier-bills/:id/post`（`:725`）、`/match`（`:726`）**均不按 `supplier_bill_items.commercial_source_type` 判定**；`postSupplierBill` 对委外账单返回的 409 来自 `supplierBillRecognitionSources` 内连接 `purchase_receipts` 的**偶然**失败，而 `matchSupplierBill` 会**改写**账单 `status` 与 `variance_cents` | 首期按**来源级**判定（§9.4）：委外来源账单的**过账与匹配**在委外专用入口与**共享**入口一律 409 `OUTSOURCING_GL_POLICY_NOT_APPROVED`；**草稿创建允许**且停留在 `DRAFT`；普通采购账单**不受影响** | `NOT_IMPLEMENTED`（拒绝路径亦待实施） |
 | `RISK-5` | VMI 的消耗与物权转移对同一 SUPPLIER 位存在**双扣路径**（`server/modules/procurement-vmi.js`，两者均在事务外读 `business_status`）；结算触发模型未裁定；`server/` 中 `randomUUID()` 用于 4 处业务 ID 生成 | 首期 VMI 结算 / 物权释放 / 账单交接一律拒绝且零副作用；**不**推导触发模型 | `NOT_IMPLEMENTED`（拒绝路径亦待实施） |
 | `RISK-6` | `src/pages/outsourcing.jsx`（5 处）与 `src/pages/sourcing-pricing.jsx`（5 处）调用 `api.get` / `api.post`；`src/api.js:21` 的 `api` 是**函数**，`api.get` / `api.post` **不存在** ⇒ 两页运行时 TypeError | 改为 `api(path, { method, body })`；不扩展 `api` 对象（§12） | `NOT_IMPLEMENTED` |
-| `RISK-7` | **CURRENT**：`confirmOutsourcingReceipt`（`server/modules/outsourcing-finance.js:77`）与 `createOutsourcingReceipt`（`server/modules/outsourcing.js:345`）**共用** `RECEIVE_PERMISSIONS = ['OUTSOURCING_RECEIVING_MANAGE','OUTSOURCING_MANAGE']`（`:13` / `:9`）⇒ 委外**业务操作**权限 `OUTSOURCING_MANAGE` **可自行使收货生效**；同理 `FINANCE_PERMISSIONS = ['SUPPLIER_BILL_MANAGE','OUTSOURCING_MANAGE']`（`server/modules/outsourcing-finance.js:14`）⇒ 委外业务角色**可**执行加工费过账。二者均与 `MC-REQ-10` 冲突。**授权矩阵现状**：`V13_DESIRED_ROLE_PERMISSIONS`（`server/migrations/v13-phase1-contracts.js:32`）与 `server/db.js` 种子中**无任何角色**持有 `OUTSOURCING_*`，仅 `admin` 经 all-permissions 继承 | 收货生效**只**认 `OUTSOURCING_RECEIVING_MANAGE`（移除 `OUTSOURCING_MANAGE` 回退）；加工费过账**只**认 `SUPPLIER_BILL_MANAGE`（`M-17` 注册，首期不授予任何角色）。**不新增权限、不授予任何角色**（§8.1） | `NOT_IMPLEMENTED`（门禁收紧亦待实施） |
+| `RISK-7` | **CURRENT**：`confirmOutsourcingReceipt`（`server/modules/outsourcing-finance.js:77`）与 `createOutsourcingReceipt`（`server/modules/outsourcing.js:345`）**共用** `RECEIVE_PERMISSIONS = ['OUTSOURCING_RECEIVING_MANAGE','OUTSOURCING_MANAGE']`（`:13` / `:9`）⇒ 委外**业务操作**权限 `OUTSOURCING_MANAGE` **可自行使收货生效**；同理 `FINANCE_PERMISSIONS = ['SUPPLIER_BILL_MANAGE','OUTSOURCING_MANAGE']`（`server/modules/outsourcing-finance.js:14`）⇒ 委外业务角色**可**执行加工费过账。二者均与 `MC-REQ-10` 冲突。**授权矩阵现状**：`V13_DESIRED_ROLE_PERMISSIONS`（`server/migrations/v13-phase1-contracts.js:32`）与 `server/db.js` 种子中普通角色不持有 `OUTSOURCING_*`，仅 `admin` 经 all-permissions 继承 | 收货生效只认 `OUTSOURCING_RECEIVING_MANAGE`；加工费过账 RBAC 只认 `SUPPLIER_BILL_MANAGE`，其后独立来源级 Policy Guard 对管理员同样生效；不新增权限、不向普通业务角色显式授予（§8.1 / §9.4） | `NOT_IMPLEMENTED`（两层门禁均待实施） |
 
 **本节明确不把任何上述现状缺陷写成已修复。**
 
@@ -637,7 +664,7 @@ M1C-WP-0  基础设施
 
 | ID | 签字内容 | 阻塞的工作包 / Gate | 不签字的后果 |
 |---|---|---|---|
-| `M1-P-03` | 角色**授予矩阵**：是否设立独立委外业务角色；`OUTSOURCING_RECEIVING_MANAGE` 授予给谁（`OUTSOURCING_RECEIVING_MANAGE` 是收货生效的唯一权限）；`SUPPLIER_BILL_MANAGE` 的授予范围 | **不阻塞** `M1C-WP-2` / `M1C-WP-5` 的**代码实施**；阻塞 `M1C-G02` 的**正向**收货生效断言，以及 `M1C-G06` 中"无人可过账"以外的角色化用例 | 无任何角色持有 `OUTSOURCING_RECEIVING_MANAGE` ⇒ 除 `admin` 外无人可执行收货生效 ⇒ `M1C-G02` 只能取得拒绝路径证据，**正向**断言无法取得证据，`execution_status` 必须保持 `NOT_RUN` |
+| `M1-P-03` | 角色**授予矩阵**：是否设立独立委外业务角色；`OUTSOURCING_RECEIVING_MANAGE` 授予给谁（`OUTSOURCING_RECEIVING_MANAGE` 是收货生效的唯一权限）；`SUPPLIER_BILL_MANAGE` 的授予范围 | **不阻塞** `M1C-WP-2` / `M1C-WP-5` 的**代码实施**；阻塞 `M1C-G02` 的**正向**收货生效断言；不阻塞 `M1C-G06` 对管理员与现有财务权限主体的来源级防绕过验证 | 普通角色无人持有 `OUTSOURCING_RECEIVING_MANAGE` ⇒ 除 `admin` 外无人可执行收货生效 ⇒ `M1C-G02` 只能取得拒绝路径证据，**正向**断言无法取得证据，`execution_status` 必须保持 `NOT_RUN` |
 | `M1-P-02` | **仅在希望放宽支持范围时**需要签字（损耗计入口径 / 单位换算系数）；收紧方向不需要 | 不阻塞 `M1C-G04`（按严格支持范围 fail closed） | 按严格支持范围执行（首期 fail closed） |
 
 > **首期不再存在"因待签政策而整体无法实施"的工作包。**
@@ -649,14 +676,16 @@ M1C-WP-0  基础设施
    但"收货生效"正向路径需要至少一个持有 `OUTSOURCING_RECEIVING_MANAGE` 的主体，
    而该主体由 `M1-P-03` 决定。**在该决定作出前，`M1C-G02` 不得被标记通过**（只能记录拒绝路径证据）。
    这是**有意区分的两件事**，不是缺陷。
-2. **"无人能过账"与"无人能收货生效"是两个中间态**：加工费过账需要 `SUPPLIER_BILL_MANAGE`
-   （首期不授予任何角色）；收货生效需要 `OUTSOURCING_RECEIVING_MANAGE`（当前也无角色持有）。
-   两者都是**有意的 fail closed**，但**只有前者**是本 Design 的直接裁定结果，
-   后者取决于 `M1-P-03`。Review 时必须分别确认，不可混为一谈。
+2. **“普通角色未获授予”不等于“无人能过账”**：加工费过账 RBAC 层需要
+   `SUPPLIER_BILL_MANAGE`，普通业务角色首期不获授予，但 `admin` 可经 all-permissions 持有；
+   委外来源账单仍由独立 Business Policy Guard 拒绝。收货生效需要
+   `OUTSOURCING_RECEIVING_MANAGE`，其普通角色授予对象取决于 `M1-P-03`。Review 时必须把
+   权限授予与来源级政策门禁分别确认，不可混为一谈。
 3. **Core 收敛 vs 全域 Closure**：7 个 Core Gate 通过**不**等于 §31 的 54 项 Capability 处置闭合，
    也不等于 Procurement & Outsourcing 的 Domain Acceptance。
-4. **`M1-P-03` 的两段性**：门禁收紧可先落地，授予矩阵需签字 —— 首期可能出现
-   "**无人能过账**"的中间态。这是**有意的 fail closed**，不是缺陷。
+4. **`M1-P-03` 的两段性**：RBAC 门禁收紧可先落地，普通角色授予矩阵需签字；管理员可能经
+   all-permissions 持有权限，但仍被来源级 Business Policy Guard 拒绝。这个“两层均 fail closed”
+   的中间态是有意设计，不是管理员豁免。
 5. **历史隔离的业务影响规模未知**：历史 WIP 残差、历史转换量、历史来源行、历史收货效力缺口的
    影响行数**未实测**。首期**不做任何历史回填**（§4.2），一律 fail closed 执行，
    **可能**造成部分历史订单不可继续；该规模的评估属**独立授权**的历史对账，不在首期。
@@ -670,7 +699,7 @@ M1C-WP-0  基础设施
 | 维度 | 方案 |
 |---|---|
 | Schema | 全部 additive；**不** DROP、不重建既有表。回滚 = 停止新代码路径 + 保留新增列/表（无害） |
-| 数据回填 | **首期零历史回填**（§4.2）：历史行的新增列一律 NULL = 未证明，被运行期 fail closed 拦截。回滚**不**需要反向数据迁移 |
+| 数据回填 | **首期零历史业务事实重建、零不可证明补记**（§4.2）。历史业务事实列保持 NULL = 未证明并 fail closed。`M-15` 技术性身份键规范化须另获独立 Migration 授权；本轮不执行，故无反向数据迁移 |
 | 行为 | 新能力以**新 handler / 新语义**落地；既有直接 PO → 采购入库路径**保持可用**，不因通知转换未实施而中断；既有普通采购账单路径**保持可用**，不因委外来源级拒绝而中断 |
 | 旧候选设计 | 旧文件**保持原样**；本 Design 获批并完成 Active Design Promotion 后，旧文件移入 `docs/archive/` 或标注为**已取代** |
 | 迁移重试 | 每个中间状态幂等可重放；失败重跑不重复写、不删历史 |

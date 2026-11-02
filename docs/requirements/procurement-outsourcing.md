@@ -688,6 +688,13 @@ T-REQ-03：错误断言精确验证 status + error code/message + 状态不变�
     因此加工费 PO 行与其交期**均不构成**收货容量上界；
   - 两类共同适用的第五个必要条件：**供应商与仓库相容性**（不相容即拒绝）。
 - 转换已用数量与剩余量**必须**可查询、可审计、可追溯，且**累计单调不减**。
+- `receipt_notice_item_sources.converted_quantity` 的数据库默认值继续为 **NULL**：
+  NULL 只表示历史或来源尚未证明的累计转换量，**不得**以 `NOT NULL DEFAULT 0`、批量回填或
+  `COALESCE(converted_quantity, 0)` 把历史未知量变成可用容量。
+- 权威生产 API 在**首次创建**一条已完整验证的新通知来源行时，必须在创建该行的**同一权威事务**内
+  显式写入 `converted_quantity = 0`。该 0 只证明“这条新来源行创建时尚未发生转换”，
+  不是对历史记录的推断。创建失败不得留下半成品来源行；重试不得把已有非零累计量重置为 0，
+  也不得以 `created_at`、当前日期或其他模糊条件把历史行认作新行。
 - **`STANDARD_PURCHASE`** 通知无有效交期、多交期归属不明或历史容量无法证明 → 明确拒绝（fail closed）；
   **`OUTSOURCE`** 通知的累计合格收货量不可证明 → 同样明确拒绝；
   **不得**以省略参数的方式绕过上界。
@@ -780,8 +787,10 @@ T-REQ-03：错误断言精确验证 status + error code/message + 状态不变�
   **首期不得**为此新增独立权限（新增权限属角色授予矩阵裁定范围），**不得**擅自把既有权限授予任何角色。
 - 委外业务角色**不得**持有加工费正式过账权；**不得**因现有 `OUTSOURCING_MANAGE` 权限过宽
   就保留财务越权路径。
-- 加工费正式过账必须**单权限**持有 `SUPPLIER_BILL_MANAGE`；该权限**尚未授予任何角色**时，
-  无人能过账（属 fail closed，不得绕过）。
+- 加工费正式过账必须通过适用的 `SUPPLIER_BILL_MANAGE` 权限检查。该权限未向普通业务角色授予，
+  但 `role-admin` 可经 all-permissions 持有；因此“普通角色未获授予”**不能**证明管理员不能过账。
+  无论角色及权限如何，`MC-REQ-15` 的来源级 Business Policy Guard 都是独立的第二层门禁：
+  未批准政策下的委外来源账单不得正式过账或匹配，管理员也无豁免。
 - 全部授权判定在**后端**；前端隐藏不构成授权。
 
 ##### MC-REQ-11 审计
@@ -813,6 +822,11 @@ T-REQ-03：错误断言精确验证 status + error code/message + 状态不变�
   后者**不开放**新的账单与退货能力，且**不改写**历史记录。
 - 历史 WIP **没有**身份证据时，一律留在"历史不可验证"隔离桶内，
   **不得**被新的转出或倒冲动作消费；**不得**按比例分摊、**不得**推定 LOT/SERIAL。
+- “首期零历史回填”精确定义为：**零历史业务事实重建、零不可证明的历史补记**。唯一有条件例外是
+  `M-15` 的技术性身份键规范化：后续仅在取得**独立 Migration 授权**后，才可对已存在且身份字段
+  明确、一致、可验证的 `tracked_inventory_movements` 生成确定性 `identity_key`，用于现有严格跟踪事实的
+  去重与唯一性约束。该规范化不得改变历史业务数量、归属、库存效果、估值、来源项或单据状态，
+  不等于恢复或证明历史 WIP 可用量；身份不明或冲突的 LOT/SERIAL 记录不得被强制写成 `NONE`。
 - 处置方式只允许：**只读 / 隔离 / fail closed**。大规模历史治理与会计补偿**延期**。
 
 ##### MC-REQ-13 SQLite / MySQL 8 兼容
@@ -822,6 +836,9 @@ T-REQ-03：错误断言精确验证 status + error code/message + 状态不变�
   或"生成列摘要"这类单引擎行为。
 - 锁语义必须两引擎都有等价实现（行锁 / 立即写事务），不得只在单引擎下正确。
 - DDL 自动提交的引擎上，migration 必须**按已完成步骤可重放**，并规定部分完成后的重试语义。
+- `M-15` 必须保持 `PRE-A → 加列 → 确定性规范化 → PRE-B / PRE-C → 建唯一索引` 顺序；
+  PRE 检查读取真实目标数据，失败即停止且不自动修复。不得删除历史流水、伪造 `source_item_id`、
+  覆盖已有非空身份；唯一索引未确立或 PRE 未通过时，相关委外跟踪写入继续 fail closed。
 
 ##### MC-REQ-14 移动端有限修复
 
@@ -838,6 +855,10 @@ T-REQ-03：错误断言精确验证 status + error code/message + 状态不变�
 - **委外加工费正式过账**（`C-P01..C-P04` 未裁定）必须 **fail closed**：
   返回 409 `OUTSOURCING_GL_POLICY_NOT_APPROVED`，账单保持 `DRAFT`，
   **零 AP open item、零凭证、零分录、零成本证据刷新**。
+- 门禁顺序固定为：先执行适用的身份与 RBAC 检查；未授权主体仍按既有合同返回 403，避免泄露账单来源；
+  对已通过权限检查的请求，再执行独立的来源级 Business Policy Guard。只要任一账单行来源为
+  `OUTSOURCING_RECEIPT_ITEM`，普通业务用户、财务用户、管理员、内部函数和共享入口均返回
+  409 `OUTSOURCING_GL_POLICY_NOT_APPROVED`。不得仅凭 `ADMIN` 或 `SUPPLIER_BILL_MANAGE` 绕过。
 - **拒绝必须落在来源级，且覆盖共享入口**（**不得**只在委外专用入口拒绝）：
   - 判定依据是**账单行的商业来源**，不是路由、不是操作人、也不是账单级单一列：
     一张 `supplier_bills` 账单只要存在任一 `supplier_bill_items.commercial_source_type
@@ -905,13 +926,19 @@ T-REQ-03：错误断言精确验证 status + error code/message + 状态不变�
 
 | Gate | 业务断言（必要条件；**不得**以单个 HTTP 2xx 代替） | 证据层 |
 |---|---|---|
-| `M1C-G01` | 采购通知可达；多 PO 行级来源；部分转换成立，且累计容量上界**按通知 `business_type` 分别适用**（`STANDARD_PURCHASE` = 通知行 × 采购订单行 × 交期；`OUTSOURCE` = 通知行 × 委外订单剩余可收量；**不**把委外订单容量强加于普通采购）；无通知的直接 PO → 采购入库合法；容量与交期不可绕过 | HTTP + SQLite/MySQL |
+| `M1C-G01` | 采购通知可达；新建合法来源行由权威 Writer 在同一事务显式初始化 `converted_quantity=0`；新建后可部分转换且累计量正确增长；重放不重置、不重复扣减；历史 NULL 行被拒绝且历史数据零改写；多 PO 行级来源成立，且累计容量上界**按通知 `business_type` 分别适用**（`STANDARD_PURCHASE` = 通知行 × 采购订单行 × 交期；`OUTSOURCE` = 通知行 × 委外订单剩余可收量；**不**把委外订单容量强加于普通采购）；无通知的直接 PO → 采购入库合法；容量与交期不可绕过 | HTTP + SQLite/MySQL |
 | `M1C-G02` | 委外正式收货**明细**原子可达（≥1 行、非空）；来源链逐行可追；IQC 从正式明细可达并可完成 PASS/WAIVED；建待检与生效分离；失败时**业务**零副作用 + 拒绝审计恰好 1 条。**前置条件**：`M1-P-03` 须先决定 `OUTSOURCING_RECEIVING_MANAGE` 的授予对象，否则"收货生效"正向路径**无法取得正向证据**（代码实施本身不被阻塞） | HTTP + Quality + Inventory |
 | `M1C-G03` | 发料/退料/补料沿 canonical 仓位写**真实**库存、跟踪与估值；企业所有权不变；内部仓与 WIP 仓数量与流水可对账；重放不产生第二次动作；失败时**业务**零副作用 + 拒绝审计恰好 1 条 | HTTP + Inventory/Valuation snapshots |
 | `M1C-G04` | 增量倒冲公式正确；材料成本来自 canonical 池分摊（**非**全局平均价）；成品经唯一 Writer 入企业仓；重复确认与并发不双扣/双收 | HTTP + Valuation snapshots |
 | `M1C-G05` | 两个受影响移动工作面无 `api.get/post` TypeError；320/390/430/680 宽度交互成功；服务端 RBAC 生效；**不**含视觉体系重做 | Browser |
-| `M1C-G06` | 延期财务/VMI 危险写入**服务端拒绝**（精确 status + error code），且拒绝**必须覆盖共享入口**：委外加工费账单经 `POST /api/supplier-bills/:id/post` 亦被拒，共享匹配入口亦被拒；**同时**普通采购账单经同一共享入口**仍然合法**（防误伤回归）；业务事实**零** AP/GL/凭证/分录/库存位/结算行/账单/成本证据写入 + 拒绝审计恰好 1 条；权限分离（业务角色不可正式过账） | HTTP + Finance + Inventory snapshots |
+| `M1C-G06` | 延期财务/VMI 危险写入**服务端拒绝**（精确 status + error code），且拒绝**必须覆盖共享入口**：管理员与持有财务权限的主体对委外来源账单过账均在通过适用权限检查后返回 409，业务零副作用；未授权委外业务角色按 RBAC→Policy 顺序正确拒绝；委外加工费账单经 `POST /api/supplier-bills/:id/post` 及共享匹配入口均被拒绝；**同时**普通采购账单经同一共享入口**仍然合法**（防误伤回归）；业务事实**零** AP/GL/凭证/分录/库存位/结算行/账单/成本证据写入 + 拒绝审计恰好 1 条 | HTTP + Finance + Inventory snapshots |
 | `M1C-G07` | 生产 API 端到端（无手写 SQL 造数）；SQLite/MySQL 对等；Core 关键 mutation 的**真实 Handler** 并发：一方成功 / 另一方合规拒绝，零重复写入、零部分副作用 | HTTP + Real MySQL 8 concurrency |
+
+**`TC-01 / M-15` 共享 Gate 前置**：`M-15` 不是独立业务 Gate，但它是依赖严格跟踪唯一性的
+`M1C-G03` / `M1C-G04` / `M1C-G07` 的基础设施前置。未来获独立 Migration 授权后，Gate 取证必须包含：
+PRE-A / PRE-B / PRE-C 基于真实目标数据的结果；只对明确一致身份生成允许的三类键；不明、冲突、
+缺来源或撞键时停止且业务数据零改写；SQLite/MySQL 结果对等；唯一索引未建立时相关写入 fail closed。
+本轮未运行 PRE、未执行规范化、未建立索引，上述 Gate 仍全部 `NOT_RUN`。
 
 **Gate 规则**：
 
