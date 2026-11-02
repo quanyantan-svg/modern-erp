@@ -695,6 +695,23 @@ T-REQ-03：错误断言精确验证 status + error code/message + 状态不变�
   显式写入 `converted_quantity = 0`。该 0 只证明“这条新来源行创建时尚未发生转换”，
   不是对历史记录的推断。创建失败不得留下半成品来源行；重试不得把已有非零累计量重置为 0，
   也不得以 `created_at`、当前日期或其他模糊条件把历史行认作新行。
+- **标准采购通知来源行的唯一生产 Writer** 是
+  `server/modules/procurement-receiving.js::createReceiptNotice()`，或由该函数在**同一权威事务**内调用的
+  明确、私有、专用来源分配 helper。该 Writer 必须原子完成通知表头、通知明细、已验证 PO 行来源分配
+  与来源行初始 0；任一校验或写入失败时整体回滚。未来的
+  `server/modules/procurement-notice-conversion.js` **只读既有来源行并累计转换量**，不得创建来源行，
+  也不得在重试时把非零累计量重置为 0。
+- **多 PO 输入合同（`NEW_DESIGN_TARGET`，不是当前已实现 API）**：在保留当前单 PO
+  `purchaseOrderId + items[].purchaseOrderItemId` 兼容输入的同时，标准采购通知行以
+  `items[].sourceAllocations[]` 显式提交多来源分配；每项包含
+  `purchaseOrderItemId`、可选 `deliveryScheduleId` 与正数 `allocatedQuantity`。
+  Writer 必须验证 PO 行真实存在、所属订单为 `APPROVED + STANDARD_PURCHASE`、供应商一致、产品与通知行一致、
+  同一通知行内 PO 行不重复、分配量之和等于通知行数量；交期存在时必须属于该 PO 行，零个有效交期、
+  多交期未显式指定或历史容量不可证明均 fail closed。表头 `purchaseOrderId` 仅作兼容派生提示，
+  不得作为多 PO 来源权威；转换与容量判断只认行级来源集合。
+- `receipt_notice_item_sources` **只承载 `STANDARD_PURCHASE` 的已解析供料 PO 来源关系**。
+  `OUTSOURCE` 继续通过“委外订单 → 加工费 PO → 委外完工通知 → 委外收货明细”追溯，
+  不创建标准采购来源行，不得为复用该表而改变委外来源语义。
 - **`STANDARD_PURCHASE`** 通知无有效交期、多交期归属不明或历史容量无法证明 → 明确拒绝（fail closed）；
   **`OUTSOURCE`** 通知的累计合格收货量不可证明 → 同样明确拒绝；
   **不得**以省略参数的方式绕过上界。
@@ -827,6 +844,20 @@ T-REQ-03：错误断言精确验证 status + error code/message + 状态不变�
   明确、一致、可验证的 `tracked_inventory_movements` 生成确定性 `identity_key`，用于现有严格跟踪事实的
   去重与唯一性约束。该规范化不得改变历史业务数量、归属、库存效果、估值、来源项或单据状态，
   不等于恢复或证明历史 WIP 可用量；身份不明或冲突的 LOT/SERIAL 记录不得被强制写成 `NONE`。
+- `M-15` 的产品跟踪权威是 `tracked_inventory_movements.product_id → products.tracking_policy`；
+  合法值沿用现有 `NONE / LOT / SERIAL`，不得虚构替代字段。确定性映射只允许：
+
+  | `products.tracking_policy` | 历史身份字段 | 允许的 `identity_key` |
+  |---|---|---|
+  | `LOT` | 有效且唯一的 `lot_id`，`serial_id` 为空 | `LOT:<lot_id>` |
+  | `SERIAL` | 有效且唯一的 `serial_id`，`lot_id` 为空 | `SERIAL:<serial_id>` |
+  | `NONE` | `lot_id`、`serial_id` 均为空 | `NONE` |
+  | `LOT` 缺 `lot_id`；`SERIAL` 缺 `serial_id`；`NONE` 携带任一身份；双身份并存；策略或来源不可证明 | 任意 | **FAIL，停止迁移** |
+
+  旧候选 Design §26.33.12 `M-15 STEP-3` 的无条件 `ELSE 'NONE'`，以及旧 PRE-B
+  “两种身份字段均为空即为 `NONE`”的规则，**对 M1-Core 已被本合同取代**；不得据其实施。
+  PRE-B 必须联合验证产品策略、历史 `lot_id/serial_id` 与生成后的 `identity_key`，
+  不得把身份不明记录自动归类为非跟踪物料。
 - 处置方式只允许：**只读 / 隔离 / fail closed**。大规模历史治理与会计补偿**延期**。
 
 ##### MC-REQ-13 SQLite / MySQL 8 兼容
@@ -855,10 +886,12 @@ T-REQ-03：错误断言精确验证 status + error code/message + 状态不变�
 - **委外加工费正式过账**（`C-P01..C-P04` 未裁定）必须 **fail closed**：
   返回 409 `OUTSOURCING_GL_POLICY_NOT_APPROVED`，账单保持 `DRAFT`，
   **零 AP open item、零凭证、零分录、零成本证据刷新**。
-- 门禁顺序固定为：先执行适用的身份与 RBAC 检查；未授权主体仍按既有合同返回 403，避免泄露账单来源；
-  对已通过权限检查的请求，再执行独立的来源级 Business Policy Guard。只要任一账单行来源为
-  `OUTSOURCING_RECEIPT_ITEM`，普通业务用户、财务用户、管理员、内部函数和共享入口均返回
-  409 `OUTSOURCING_GL_POLICY_NOT_APPROVED`。不得仅凭 `ADMIN` 或 `SUPPLIER_BILL_MANAGE` 绕过。
+- 门禁顺序固定为：HTTP 入口先执行适用的身份与 RBAC 检查；未授权主体按既有合同返回 403，
+  且在授权检查前不得读取或泄露账单来源。对已通过权限检查的请求，再执行独立的来源级
+  Business Policy Guard；只要任一账单行来源为 `OUTSOURCING_RECEIPT_ITEM`，普通业务用户、
+  财务用户与管理员均返回 409 `OUTSOURCING_GL_POLICY_NOT_APPROVED`。内部服务调用必须调用同一
+  业务 Guard、不得绕过，但无需伪装成 HTTP 403/409，必须保持项目既有错误传播与异常处理合同。
+  不得仅凭 `ADMIN` 或 `SUPPLIER_BILL_MANAGE` 绕过。
 - **拒绝必须落在来源级，且覆盖共享入口**（**不得**只在委外专用入口拒绝）：
   - 判定依据是**账单行的商业来源**，不是路由、不是操作人、也不是账单级单一列：
     一张 `supplier_bills` 账单只要存在任一 `supplier_bill_items.commercial_source_type
@@ -926,12 +959,12 @@ T-REQ-03：错误断言精确验证 status + error code/message + 状态不变�
 
 | Gate | 业务断言（必要条件；**不得**以单个 HTTP 2xx 代替） | 证据层 |
 |---|---|---|
-| `M1C-G01` | 采购通知可达；新建合法来源行由权威 Writer 在同一事务显式初始化 `converted_quantity=0`；新建后可部分转换且累计量正确增长；重放不重置、不重复扣减；历史 NULL 行被拒绝且历史数据零改写；多 PO 行级来源成立，且累计容量上界**按通知 `business_type` 分别适用**（`STANDARD_PURCHASE` = 通知行 × 采购订单行 × 交期；`OUTSOURCE` = 通知行 × 委外订单剩余可收量；**不**把委外订单容量强加于普通采购）；无通知的直接 PO → 采购入库合法；容量与交期不可绕过 | HTTP + SQLite/MySQL |
+| `M1C-G01` | 采购通知可达；`createReceiptNotice()`（或其同事务私有来源 helper）原子创建标准采购表头、明细与已验证来源行，并显式初始化 `converted_quantity=0`；多 PO `sourceAllocations` 输入逐项验证且只为 `STANDARD_PURCHASE` 写来源行；转换模块不创建来源行；新建后可部分转换且累计量正确增长；重放不重置、不重复扣减；历史 NULL 行被拒绝且历史数据零改写；多 PO 行级来源成立，且累计容量上界**按通知 `business_type` 分别适用**（`STANDARD_PURCHASE` = 通知行 × 采购订单行 × 交期；`OUTSOURCE` = 通知行 × 委外订单剩余可收量；**不**把委外订单容量强加于普通采购）；无通知的直接 PO → 采购入库合法；容量与交期不可绕过 | HTTP + SQLite/MySQL |
 | `M1C-G02` | 委外正式收货**明细**原子可达（≥1 行、非空）；来源链逐行可追；IQC 从正式明细可达并可完成 PASS/WAIVED；建待检与生效分离；失败时**业务**零副作用 + 拒绝审计恰好 1 条。**前置条件**：`M1-P-03` 须先决定 `OUTSOURCING_RECEIVING_MANAGE` 的授予对象，否则"收货生效"正向路径**无法取得正向证据**（代码实施本身不被阻塞） | HTTP + Quality + Inventory |
 | `M1C-G03` | 发料/退料/补料沿 canonical 仓位写**真实**库存、跟踪与估值；企业所有权不变；内部仓与 WIP 仓数量与流水可对账；重放不产生第二次动作；失败时**业务**零副作用 + 拒绝审计恰好 1 条 | HTTP + Inventory/Valuation snapshots |
 | `M1C-G04` | 增量倒冲公式正确；材料成本来自 canonical 池分摊（**非**全局平均价）；成品经唯一 Writer 入企业仓；重复确认与并发不双扣/双收 | HTTP + Valuation snapshots |
 | `M1C-G05` | 两个受影响移动工作面无 `api.get/post` TypeError；320/390/430/680 宽度交互成功；服务端 RBAC 生效；**不**含视觉体系重做 | Browser |
-| `M1C-G06` | 延期财务/VMI 危险写入**服务端拒绝**（精确 status + error code），且拒绝**必须覆盖共享入口**：管理员与持有财务权限的主体对委外来源账单过账均在通过适用权限检查后返回 409，业务零副作用；未授权委外业务角色按 RBAC→Policy 顺序正确拒绝；委外加工费账单经 `POST /api/supplier-bills/:id/post` 及共享匹配入口均被拒绝；**同时**普通采购账单经同一共享入口**仍然合法**（防误伤回归）；业务事实**零** AP/GL/凭证/分录/库存位/结算行/账单/成本证据写入 + 拒绝审计恰好 1 条 | HTTP + Finance + Inventory snapshots |
+| `M1C-G06` | 延期财务/VMI 危险写入**服务端拒绝**（HTTP 精确 status + error code；内部服务保持既有异常传播合同），且拒绝**必须覆盖专用入口、共享 POST/MATCH 与自动开票内部调用链**：管理员与持有财务权限的主体对委外来源账单过账均在通过适用权限检查后返回 409，业务零副作用；未授权委外业务角色在读取来源前返回 403；内部服务调用同一来源级 Guard 且不得绕过；**同时**普通采购账单的创建、匹配与过账仍然合法（防误伤回归）；业务事实**零** AP/GL/凭证/分录/库存位/结算行/账单/成本证据写入 + 拒绝审计恰好 1 条 | HTTP + Finance + Inventory snapshots |
 | `M1C-G07` | 生产 API 端到端（无手写 SQL 造数）；SQLite/MySQL 对等；Core 关键 mutation 的**真实 Handler** 并发：一方成功 / 另一方合规拒绝，零重复写入、零部分副作用 | HTTP + Real MySQL 8 concurrency |
 
 **`TC-01 / M-15` 共享 Gate 前置**：`M-15` 不是独立业务 Gate，但它是依赖严格跟踪唯一性的

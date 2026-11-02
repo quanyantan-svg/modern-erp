@@ -684,6 +684,24 @@ schema、migration、权限种子、业务测试或 UI，未连接数据库，�
 且本节不签发 `M1_CORE_REQUIREMENT_ACCEPTANCE_PASS`、`M1_CORE_DESIGN_PASS` 或
 `IMPLEMENTATION_AUTHORIZED`。
 
+### 37.11 最终技术合同修正与交付审查（`M1C-TC1-RV1`，2026-11-02）
+
+**授权与范围**：业务所有者授权对 TC-01/02/03 做最后一轮文档定点修正，并确认
+`APPLY_GUIDE.md` 已过时、批准永久删除。该删除已包含在基线提交 `b8f3c6e` 中，本轮不恢复、
+不重复删除、不重写历史；README 的有效操作指引已按事实收口。
+
+| 项 | RV1 收敛结论 | 实施 / Gate 状态 |
+|---|---|---|
+| `TC-01` | `M-15` 只认真实 `products.tracking_policy` 与历史身份字段的严格映射；旧候选 Design 的无条件 `ELSE 'NONE'` 和“两身份为空即 NONE”对 M1-Core 明确失效；PRE-B 必须联合验证产品策略、历史身份和生成键 | 文档合同修正；未执行 M-15，未获 Migration 授权；`M1C-G03/G04/G07` 仍 `NOT_RUN` |
+| `TC-02` | `createReceiptNotice()`（或其同事务私有 helper）是标准采购来源行唯一生产 Writer；多 PO `sourceAllocations` 明确标为 `NEW_DESIGN_TARGET`，与现有单 PO合同兼容；转换模块只消费来源行并累计转换量；OUTSOURCE 不复用标准采购来源表 | 文档合同修正；未修改 API/代码/schema；`M1C-G01` 仍 `NOT_RUN` |
+| `TC-03` | HTTP 固定 RBAC 403 → 来源级 Policy 409；内部服务必须调用同一 Guard，但保持既有异常传播合同，不伪装 HTTP 状态；专用/共享 POST、共享 MATCH、自动开票内部链均受保护，普通采购保持合法 | 文档合同修正；未运行 Gate；`M1C-G06` 仍 `NOT_RUN` |
+
+**状态边界**：`M1C-G01..G07` 仍 7/7 `NOT_RUN`，旧 13 Gate 状态不变；`M1-P-03`、
+`M1-P-02`、`A-P01`、Active Design、Domain Acceptance、Freeze、Release Readiness 均不变。
+本轮未修改生产代码、schema、migration、权限种子或业务测试；未连接数据库，未运行 MySQL、FULL、
+HEAVY、浏览器 Gate 或 build；未签发 Requirement/Design PASS 或 Implementation 授权；未 Push、Merge、
+Tag、Release、Deploy。交付仍等待业务所有者独立审查。
+
 ---
 
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」

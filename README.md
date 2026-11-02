@@ -332,7 +332,7 @@ Sales & Customer Batch A 的独立浏览器验收脚本（需要本机 Edge、�
 | Claude Code 入口 | [CLAUDE.md](./CLAUDE.md) |
 
 `AGENTS.md` 是唯一权威的治理政策；`CLAUDE.md` 只引用它，不维护第二套规则。
-`APPLY_GUIDE.md` 不是 canonical 文档，仅可用于一次性恢复/应用说明；恢复完成后可以删除。
+`APPLY_GUIDE.md` 已由业务所有者于 2026-11-02 明确批准永久删除并完成提交；项目不再读取、恢复或依赖该文件。
 
 ## 当前开发主线
 
