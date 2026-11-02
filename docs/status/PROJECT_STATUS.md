@@ -866,6 +866,50 @@ Release / Deploy。**WP-1 完成后 HARD STOP**，等待独立审查与下一工
 
 ---
 
+### 37.17 M1-Core `M1C-WP1-R1` 交期台账与采购入库草稿 PATCH 一致性修复（2026-11-02）
+
+**业务所有者决定**：独立代码审查发现 P1 缺陷（WP-1 新交期台账与既有直接采购入库 PATCH
+路径之间的一致性缺陷，当前状态 `M1C_WP1_INDEPENDENT_REVIEW_HOLD_P1_SCHEDULE_PATCH`），
+批准一次**严格限定范围**的 `M1C-WP1-R1` 修复。修复范围**仅限**该一致性缺陷。
+
+| 对象 | 当前状态 |
+|---|---|
+| `M1C-WP1-R1` | `IMPLEMENTED`，**等待独立审查**；`M1C-WP-1` 的 Implementation PASS **未**签发 |
+| 原 P1 缺陷 | PATCH 重建明细（明细身份改变）后，既不冲销旧正向 Effect、也不登记新 Effect → 台账与单据数量、明细身份脱节，且取消可能冲销失败 |
+| 修复方式 | 事务内**原子重新绑定**：重读旧明细与未冲销 Effect → canonical 容量解析器复核 → 旧 Effect 写入不可变负向冲销 → 唯一 Writer 重建明细与质量 / 跟踪快照 → 新明细登记新的正向 Effect → 校验按交期分组的台账净额等于重建数量；任一失败整体回滚 |
+| 冲销幂等 | `recordScheduleConsumptionReversal()` 按**原始 Effect** 幂等：已冲销的 Effect 不会被二次释放 |
+| 取消释放范围 | `cancelPurchaseReceiptCore()` 释放该入库单**全部**尚未冲销的正向 Effect，PATCH 之后取消也能完整释放容量 |
+| 确认容量复核 | `confirmPurchaseReceiptCore()` 补齐**交期容量**复核，聚合消费不得越过交期上限 |
+| 直接 PO 草稿编辑能力 | **保留**：既有 `PATCH /api/purchase-receipts/:id` 仍然可用（响应合同不变），仅改为原子重新绑定 |
+| 由收料通知转换的入库单 | 仍**禁止** PATCH（来源行与交期预留为不可变事实） |
+| 拒绝审计 | PATCH 的业务门禁拒绝**恰好 1 条**且在业务事务之外提交；400 格式错误不写审计 |
+| `M1C-G01..M1C-G07` | **7/7 `NOT_RUN`**；本轮**未**执行任何 Gate |
+| `M-15` / Migration 实测 / MySQL Gate | `DEFERRED` / `NOT_RUN` / `NOT_RUN` |
+| Procurement Domain Acceptance | **NOT_ISSUED**；`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY` 不变 |
+| Release / Deploy | **NOT_AUTHORIZED**；本轮**未** Push |
+
+**缺陷复现**：新增 `server/m1c-wp1-r1-schedule-patch.test.js`（A–G 共 7 例，登记入 FULL）。
+**修复前 7 例中 6 例失败**：PATCH 改数量后净交期消费仍为旧值；PATCH 后取消只产生 1 条
+负向 Effect；数量不变的 PATCH 仍留下孤立正向占用；PATCH 完全未被容量拒绝（可用陈旧台账
+突破交期上限）。
+
+**独立发现（仅报告，本轮未修）**：`resolveOutsourcingOrderCapacity()` 把「存在 IQC 记录」
+当作委外历史收货的效力证据，未区分「存在质检记录」与「已完成有效质量判定」；尚未完成的
+检验记录也会让历史收货被判定为「已生效已确认」，而非 Active Design §10 / `MC-REQ-12`
+要求的「历史未证实 → fail closed」。建议后续收紧为「已完成且结果有效（PASS / WAIVED）的
+质量判定」。另：采购**退货**路径不参与交期台账（退货不释放交期预留），影响方向为保守
+（可用容量偏小），属既有能力、不在 WP-1 / R1 范围。
+
+**门禁证据**：`pnpm test:fast` 510/510、`pnpm test`（FULL）3170/3170、`pnpm build`、
+`git diff --check`、文档一致性 current 模式（N1 / N3–N9 全部 PASS，N2 已退役）全部通过。
+新增 focused 套件 `server/m1c-wp1-r1-schedule-patch.test.js`（A–G 共 7 例，登记入 FULL）。
+
+**边界**：本轮未修改已批准的 Requirement / Active Design，未连接或修改项目数据库，
+未执行 Migration，未运行 MySQL / HEAVY / 浏览器 / 业务 Gate，未 Push / Merge / Tag /
+Release / Deploy。**R1 完成后 HARD STOP**，等待独立审查与下一工作包授权。
+
+---
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
