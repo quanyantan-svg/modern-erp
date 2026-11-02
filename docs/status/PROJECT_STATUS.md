@@ -792,6 +792,35 @@ HEAVY / 浏览器 / 业务 Gate，未 Push / Merge / Tag / Release / Deploy。�
 
 ---
 
+### 37.15 M1C-WP-0 / WP0-R1 Implementation 验收登记（2026-11-02）
+
+**业务所有者决定**：将已通过独立审查的 `M1C-WP-0` Implementation 正式登记为 PASS；
+本次验收锚点 `e032fa01ad35379c33726a038ef05c55267f216e`，验收范围**仅限 `M1C-WP-0` 与
+`M1C-WP0-R1`**。同一次决定正式授权 `M1C-WP-1` 进入 Implementation。
+
+| 对象 | 当前状态 |
+|---|---|
+| `M1C-WP-0` | `IMPLEMENTED` + **Implementation PASS**（锚点 `e032fa01ad35379c33726a038ef05c55267f216e`） |
+| `M1C-WP0-R1` | `IMPLEMENTED` + **Implementation PASS**（同上锚点） |
+| 验收覆盖范围 | **仅**：最小 migration 集、`SOURCE_TYPES` 注册、`SUPPLIER_BILL_MANAGE` 注册与 `M1-P-03` 角色种子收口、委外加工费**来源级**拒绝守卫、收货生效权限隔离、双端 Schema parity **静态**断言 |
+| `M1C-G01..M1C-G07` | **7/7 `NOT_RUN`**；本次验收**不**签发任何 Gate PASS |
+| `M-15` 历史身份规范化 | **DEFERRED**；仍需独立 Migration 授权，本轮未执行，PRE 未运行 |
+| MySQL Gate | **NOT_RUN**；真实 MySQL 接受性未取得，WP-0 parity 断言仍为离线静态断言 |
+| Migration 实测 | **NOT_RUN**；本次 DDL 只在测试临时库中随既有建库链路跑通 |
+| Procurement Domain Acceptance | **NOT_ISSUED**；`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY` 不变 |
+| Release / Deploy | **NOT_AUTHORIZED**；未 Push / Merge / Tag / Release / Deploy |
+| Capability Freeze / Manual Closure | 未签发；§31.12.9 的旧 13 Gate 仍 **13/13 `NOT_RUN`** |
+
+**明确边界**：本条 PASS **不是**整个 M1-Core 的 PASS，也不是 `M1C-G01`～`M1C-G07` 中任何一个
+Gate 的 PASS。M1-Core 包级 Acceptance 仍以 7 个 `M1C-Gxx` Gate 为准；M1 全范围 Closure 仍以
+§31.12.9 的 13 个 Gate 为准。
+
+**遗留**：MC-REQ-11 的 **403 拒绝审计**在全应用范围仍未实现（`server/lib/http.js` 的
+`allow()` / `allowAny()` 不写审计），补齐由 `M1C-WP-5` 统一处理；在取得完整证据前，
+不得声明相关正式 Gate 已满足全部拒绝审计合同。
+
+---
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
