@@ -821,6 +821,51 @@ Gate 的 PASS。M1-Core 包级 Acceptance 仍以 7 个 `M1C-Gxx` Gate 为准；M
 
 ---
 
+### 37.16 M1-Core `M1C-WP-1` 实施交付（2026-11-02）
+
+**业务所有者决定**：正式授权 `M1C-WP-1` 进入 Implementation，授权范围**仅限** Active Design
+§2.3 / §5.1 / §5.2 / §6 / §7 / §9 / §13.1 的 WP-1 内容；`M1C-WP-2..WP-7` 未获授权。
+
+| 对象 | 当前状态 |
+|---|---|
+| `M1C-WP-1` | `IMPLEMENTED`，**等待独立审查**；对应 Gate `M1C-G01` 的 `execution_status` 仍 `NOT_RUN` |
+| 行级来源 Writer | `createReceiptNotice()` 是标准采购来源行的**唯一**生产 Writer：同一事务写表头 / 明细 / 已验证来源行，新来源行**显式** `converted_quantity=0` |
+| 多 PO 输入 | `items[].sourceAllocations[]`（`purchaseOrderItemId` + 可选 `deliveryScheduleId` + `allocatedQuantity`）；兼容单 PO 输入归一化为同一权威来源模型；与旧字段表达冲突事实时拒绝 |
+| 分域容量解析 | `STANDARD_PURCHASE` = 通知行 × 供料 PO 行 × 交期与容差；`OUTSOURCE` = 通知行 × 委外订单剩余可收量；`confirmReceiptNotice()` 与转换流程**共用**同一实现，两类不得互相套用 |
+| E-06 修复 | 委外通知确认的容量口径已修复：本次待确认数量计入**一次且仅一次**（原实现以仅汇总 `CONFIRMED` 的值减去仍是 `DRAFT` 的本通知数量，导致本次数量完全未进入上限比较） |
+| 转换模块 | `server/modules/procurement-notice-conversion.js`（唯一 owner）+ `POST /api/receipt-notices/:id/convert`；只读既有来源行、复用既有采购入库引擎、来源累计量与转换成功同处一个权威事务 |
+| 交期消费台账 | `schedule_consumption_effects` 是交期容量的**唯一**权威来源；正向消费与负向冲销分离；旧累计字段 `received_quantity` 在首期不写入，避免双重扣减 |
+| 直接 PO → 采购入库 | 保持合法；其 IQC / 跟踪 / 估值 / AP / 凭证副作用无回归；草稿入库单的容量仍在确认时封顶 |
+| 拒绝审计 | WP-1 自有的 409 业务门禁拒绝**恰好 1 条**且在业务事务之外提交；400 格式错误不写审计 |
+| `M1C-G01..M1C-G07` | **7/7 `NOT_RUN`**；本轮**未**执行任何 Gate，`M1C-G01` 仅达到 READY_FOR_GATE |
+| `M-15` / Migration 实测 / MySQL Gate | `DEFERRED` / `NOT_RUN` / `NOT_RUN` |
+| Procurement Domain Acceptance | **NOT_ISSUED**；`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY` 不变 |
+| Release / Deploy | **NOT_AUTHORIZED** |
+
+**门禁证据**：`pnpm test:fast` 510/510、`pnpm test`（FULL）见本轮交付报告、`pnpm build`、
+`git diff --check`、文档一致性 current 模式全部通过。新增 focused 套件
+`server/m1c-wp1-procurement-notice-conversion.test.js`（25 例，登记入 FULL）。
+
+**首期范围内的关键实现决定**（详见当天 `log/2026-11-02.md` 的 `M1C-WP1-IMPL-20261102` 节）：
+交期台账为交期容量唯一权威来源；交期消费 effect 在入库单创建时登记、取消草稿时以负向
+effect 冲销；转换产生**草稿**采购入库单（默认来料检验规则要求入库单先存在并完成 IQC 判定，
+库存 / 估值 / 财务效力仍在既有确认环节产生）；由收料通知转换的入库单禁止 `PATCH`；
+转换要求显式 `Idempotency-Key`；标准采购通知必须携带可证明的交期（`MC-REQ-02` 的明确后果）。
+
+**遗留 / 未解决矛盾**：
+- MC-REQ-11 的 **403 拒绝审计**在全应用范围仍未实现（由 `M1C-WP-5` 处理）；在取得完整证据前，
+  不得声明相关正式 Gate 已满足全部拒绝审计合同。
+- `M1C-G01` 的正向证据要求生产 API 造数、SQLite / MySQL 对等与并发 Handler 证据，
+  本轮**未**运行，也**未**取得真实 MySQL 证据。
+- 采购入库单的 `PATCH`（草稿改单）仍沿用既有的宽松剩余量口径，仅对**由收料通知转换而来**
+  的入库单整体拒绝；该路径的收紧不在 WP-1 授权范围内。
+
+**边界**：本轮未修改已批准的 Requirement / Active Design，未连接或修改项目数据库，
+未执行 Migration，未运行 MySQL / HEAVY / 浏览器 / 业务 Gate，未 Push / Merge / Tag /
+Release / Deploy。**WP-1 完成后 HARD STOP**，等待独立审查与下一工作包授权。
+
+---
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
