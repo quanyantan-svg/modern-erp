@@ -96,28 +96,28 @@ describe('Procurement Wave H/I closure: outsourcing receipt, processing fee bill
       lines: [{ outsourcingReceiptItemId: 'ori-1', quantity: 30, unitPriceCents: 500 }],
     });
     assert.equal(overBill.status, 409, JSON.stringify(overBill.data));
-    // Post one bill → AP opens
+    // 正式过账：委外来源账单一律被来源级业务策略拒绝（MC-REQ-15），且零副作用
     const post = await fixture.request('POST', `/api/procurement/outsourcing/processing-fee-bills/${billA.data.id}/post`, fixture.tokens.admin);
-    assert.equal(post.status, 200);
-    const ap = fixture.db.prepare("SELECT amount_cents FROM account_payables WHERE source_id=?").get(billA.data.id);
-    assert.equal(ap.amount_cents, 15000);
+    assert.equal(post.status, 409);
+    assert.equal(post.data.code, 'OUTSOURCING_GL_POLICY_NOT_APPROVED');
+    assert.equal(fixture.db.prepare("SELECT COUNT(*) n FROM account_payables WHERE source_id=?").get(billA.data.id).n, 0,
+      '委外加工费过账不得产生 AP open item');
+    assert.equal(fixture.db.prepare('SELECT status FROM supplier_bills WHERE id=?').get(billA.data.id).status, 'DRAFT');
     const provisional = fixture.db.prepare('SELECT * FROM outsourcing_cost_evidences WHERE outsourcing_receipt_id=?').get(r1.data.id);
-    assert.equal(provisional.processing_fee_actual_cents, 15000);
-    assert.equal(provisional.variance_cents, -45000);
-    assert.equal(provisional.basis_status, 'PROVISIONAL');
-    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/processing-fee-bills/${billB.data.id}/post`, fixture.tokens.admin)).status, 200);
-    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/processing-fee-bills/${billC.data.id}/post`, fixture.tokens.admin)).status, 200);
+    assert.ok(!provisional || provisional.processing_fee_actual_cents === null, '过账被拒不得刷新成本证据');
+    assert.ok(!provisional || provisional.basis_status !== 'FINAL', '过账被拒不得把成本证据推进到 FINAL');
+    for (const billId of [billB.data.id, billC.data.id]) {
+      const rejected = await fixture.request('POST', `/api/procurement/outsourcing/processing-fee-bills/${billId}/post`, fixture.tokens.admin);
+      assert.equal(rejected.status, 409);
+      assert.equal(rejected.data.code, 'OUTSOURCING_GL_POLICY_NOT_APPROVED');
+    }
     const finalEvidence = fixture.db.prepare('SELECT * FROM outsourcing_cost_evidences WHERE outsourcing_receipt_id=?').get(r1.data.id);
-    assert.equal(finalEvidence.material_consumed_value_cents, fixture.db.prepare('SELECT backflush_material_value_cents n FROM outsourcing_receipts WHERE id=?').get(r1.data.id).n);
-    assert.equal(finalEvidence.processing_fee_provisional_cents, 60000);
-    assert.equal(finalEvidence.processing_fee_actual_cents, 50000);
-    assert.equal(finalEvidence.variance_cents, -10000);
-    assert.equal(finalEvidence.basis_status, 'FINAL');
+    assert.ok(!finalEvidence || finalEvidence.processing_fee_actual_cents === null, '过账被拒不得刷新成本证据');
+    assert.ok(!finalEvidence || finalEvidence.basis_status !== 'FINAL');
     const report = await fixture.request('GET', '/api/reports/outsourcing/execution', fixture.tokens.admin);
     const reportRow = report.data.report.find((entry) => entry.orderId === orderId);
-    assert.equal(reportRow.processingFeeActualCents, 50000);
-    assert.equal(reportRow.processingFeeVarianceCents, -10000);
-    assert.equal(reportRow.costEvidenceStatus, 'PROVISIONAL', 'second receipt remains provisional');
+    assert.equal(reportRow.processingFeeActualCents, 0);
+    assert.equal(reportRow.costEvidenceStatus, 'PROVISIONAL');
   });
 
   test('OUT-22 Finished Return: source confirmed receipt + inventory reversal + LOT/SERIAL provenance', async () => {
@@ -148,7 +148,7 @@ describe('Procurement Wave H/I closure: outsourcing receipt, processing fee bill
     assert.equal(overRet.status, 409);
   });
 
-  test('OUT-22 billed finished return: canonical supplier credit reduces AP and preserves trace', async () => {
+  test('OUT-22 委外加工费过账被拒时，完工退货保持未计费分支且零 AP 信用', async () => {
     await qualifyOutsourceSupplier();
     const orderId = await createReleasedOrderWithMaterial();
     const matId = fixture.db.prepare('SELECT id FROM outsourcing_material_list WHERE order_id=?').get(orderId).id;
@@ -162,34 +162,29 @@ describe('Procurement Wave H/I closure: outsourcing receipt, processing fee bill
     const receiptItemId = `ori-billed-return-${receipt.data.id}`;
     fixture.db.prepare(`INSERT INTO outsourcing_receipt_items(id,receipt_id,product_id,quantity,unit_price_cents,line_no)
       VALUES(?,?,?,10,1000,1)`).run(receiptItemId, receipt.data.id, 'product-001');
+    // 草稿登记仍然合法（MC-REQ-15 只拒绝正式过账与匹配）
     const bill = await fixture.request('POST', '/api/procurement/outsourcing/processing-fee-bills', fixture.tokens.admin, {
       supplierId: 'supplier-001', supplierInvoiceNo: `INV-${receipt.data.id}`, billDate: isoDate(0),
       idempotencyKey: `bill-${receipt.data.id}`,
       lines: [{ outsourcingReceiptItemId: receiptItemId, quantity: 10, unitPriceCents: 1000 }],
     });
     assert.equal(bill.status, 201, bill.data.error);
-    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/processing-fee-bills/${bill.data.id}/post`, fixture.tokens.admin)).status, 200);
-    const payableBefore = fixture.db.prepare("SELECT id,open_amount_cents FROM account_payables WHERE source_type='SUPPLIER_BILL' AND source_id=?").get(bill.data.id);
-    assert.equal(payableBefore.open_amount_cents, 10000);
+    // 正式过账被来源级业务策略拒绝，且零 AP open item
+    const post = await fixture.request('POST', `/api/procurement/outsourcing/processing-fee-bills/${bill.data.id}/post`, fixture.tokens.admin);
+    assert.equal(post.status, 409);
+    assert.equal(post.data.code, 'OUTSOURCING_GL_POLICY_NOT_APPROVED');
+    assert.equal(fixture.db.prepare("SELECT COUNT(*) n FROM account_payables WHERE source_type='SUPPLIER_BILL' AND source_id=?").get(bill.data.id).n, 0);
+    // 该收货因此仍未计费：完工退货走未计费分支，零 AP 信用
     const ret = await fixture.request('POST', '/api/procurement/outsourcing/finished-returns', fixture.tokens.admin, {
       outsourcingReceiptId: receipt.data.id, quantity: 4, returnDate: isoDate(0),
     });
     assert.equal(ret.status, 201, ret.data.error);
-    assert.equal(ret.data.commercialState, 'BILLED_CREDIT_POSTED');
-    assert.equal(ret.data.commercialCreditCents, 4000);
-    const trace = fixture.db.prepare('SELECT * FROM outsourcing_finished_return_credits WHERE return_id=?').get(ret.data.id);
-    assert.equal(trace.supplier_bill_id, bill.data.id);
-    assert.equal(trace.billed_quantity, 4);
-    assert.equal(trace.credit_cents, 4000);
-    const note = fixture.db.prepare("SELECT * FROM commercial_credit_notes WHERE id=? AND side='AP' AND status='POSTED'").get(trace.commercial_credit_note_id);
-    assert.equal(note.gross_cents, 4000);
-    const adjustment = fixture.db.prepare("SELECT * FROM financial_credit_adjustments WHERE source_type='SUPPLIER_CREDIT_NOTE' AND source_id=? AND side='AP'").get(note.id);
-    assert.equal(adjustment.amount_cents, 4000);
-    const payableAfter = fixture.db.prepare('SELECT open_amount_cents FROM account_payables WHERE id=?').get(payableBefore.id);
-    assert.equal(payableAfter.open_amount_cents, 6000);
+    assert.equal(ret.data.commercialState, 'UNBILLED_NO_AP_CREDIT');
+    assert.equal(ret.data.commercialCreditCents, 0);
+    assert.equal(fixture.db.prepare("SELECT COUNT(*) n FROM financial_credit_adjustments WHERE source_type='SUPPLIER_CREDIT_NOTE'").get().n, 0);
     const evidence = fixture.db.prepare('SELECT * FROM outsourcing_cost_evidences WHERE outsourcing_receipt_id=?').get(receipt.data.id);
-    assert.equal(evidence.processing_fee_actual_cents, 6000);
-    assert.equal(evidence.basis_status, 'FINAL');
+    assert.equal(evidence.processing_fee_actual_cents, null);
+    assert.equal(evidence.basis_status, 'PROVISIONAL');
   });
 
   test('OUT-23 difference allocation: preview → apply with quantity conservation', async () => {

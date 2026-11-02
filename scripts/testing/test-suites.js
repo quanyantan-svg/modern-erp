@@ -185,6 +185,10 @@ const FULL = [
   // M1-Core WP-0 source/schema/role contract. Static only: it never opens a
   // database and does not execute the migration whose source it verifies.
   'server/m1c-wp0-infrastructure.test.js',
+  // M1C-WP0-R1 focused regression for the outsourcing GL source-level policy
+  // guard and the receiving-effect permission isolation. One disposable
+  // isolated SQLite file per run.
+  'server/m1c-outsourcing-gl-policy-guard.test.js',
   'server/procurement-parameters.test.js',
   'server/procurement-profiles.test.js',
   'server/buyers.test.js',

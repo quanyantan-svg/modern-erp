@@ -8,14 +8,23 @@ import { createCommercialCreditNote } from './commercial-golive.js';
 import { backflushMaterial } from './outsourcing.js';
 import { ensurePayableSource } from './settlement-core.js';
 import { deriveQualityState } from './quality-gates.js';
+import { assertSupplierBillGlPostable } from './outsourcing-gl-policy.js';
 import { adjustInventory } from '../lib/stock.js';
 
 const RECEIVE_PERMISSIONS = ['OUTSOURCING_RECEIVING_MANAGE', 'OUTSOURCING_MANAGE'];
 const FINANCE_PERMISSIONS = ['SUPPLIER_BILL_MANAGE', 'OUTSOURCING_MANAGE'];
 const MATERIAL_PERMISSIONS = ['OUTSOURCING_MATERIAL_EXECUTE', 'OUTSOURCING_MANAGE'];
+// 收货生效只认收货管理权限：委外业务操作权限不得自行使收货生效
+// （MC-REQ-10；Active Design §8.1.2 收紧项，M1C-WP0-R1）。
+const RECEIVE_EFFECT_PERMISSIONS = ['OUTSOURCING_RECEIVING_MANAGE'];
+// 加工费正式过账只认过账权限：委外业务操作权限不得持有加工费正式过账权
+// （MC-REQ-10；Active Design §8.1.2）。
+const POSTING_PERMISSIONS = ['SUPPLIER_BILL_MANAGE'];
 
 function assertReceivingPermission(actor) { allowAny(actor, RECEIVE_PERMISSIONS); }
+function assertReceiveEffectPermission(actor) { allowAny(actor, RECEIVE_EFFECT_PERMISSIONS); }
 function assertFinancePermission(actor) { allowAny(actor, FINANCE_PERMISSIONS); }
+function assertPostingPermission(actor) { allowAny(actor, POSTING_PERMISSIONS); }
 function assertMaterialPermission(actor) { allowAny(actor, MATERIAL_PERMISSIONS); }
 function assertScanPermission(actor) { allowAny(actor, ['PROCUREMENT_SCAN_EXECUTE', 'PURCHASE_RECEIPTS_MANAGE']); }
 
@@ -74,7 +83,7 @@ function refreshOutsourcingCostEvidence(db, receiptId, calculatedAt = new Date()
  *   9. audit
  */
 export async function confirmOutsourcingReceipt(db, req, res, actor, receiptId) {
-  assertReceivingPermission(actor);
+  assertReceiveEffectPermission(actor);
   const receipt = db.prepare('SELECT * FROM outsourcing_receipts WHERE id=?').get(receiptId);
   if (!receipt) throw new HttpError(404, '委外收货不存在');
   if (receipt.business_status !== 'CONFIRMED') throw new HttpError(409, '该收货已生效');
@@ -219,13 +228,13 @@ export async function createProcessingFeeBill(db, req, res, actor) {
 }
 
 export async function postProcessingFeeBill(db, req, res, actor, billId) {
-  assertFinancePermission(actor);
+  assertPostingPermission(actor);
   const bill = db.prepare('SELECT * FROM supplier_bills WHERE id=?').get(billId);
   if (!bill) throw new HttpError(404, '账单不存在');
+  // 来源级 Business Policy Guard（MC-REQ-15 / Active Design §9.4）：委外来源
+  // 账单的正式过账一律拒绝，且拒绝发生在任何状态、AP、凭证与成本证据写入之前。
+  assertSupplierBillGlPostable(db, billId, actor.id, 'POST_PROCESSING_FEE_BILL');
   if (bill.status !== 'DRAFT') throw new HttpError(409, '只有草稿可过账');
-  if (!bill.commercial_source_type && !db.prepare('SELECT 1 FROM supplier_bill_items WHERE bill_id=? AND commercial_source_type=? LIMIT 1').get(billId, 'OUTSOURCING_RECEIPT_ITEM')) {
-    // Not necessarily a processing-fee bill; allow generic posting.
-  }
   const now = new Date().toISOString();
   transaction(db, () => {
     db.prepare("UPDATE supplier_bills SET status='POSTED', posted_by=?, posted_at=? WHERE id=?").run(actor.id, now, billId);

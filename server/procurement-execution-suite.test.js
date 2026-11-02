@@ -150,13 +150,13 @@ describe('SEPARATE default runtime proof + Processing Fee AP execution + Wave H 
     });
     assert.equal(billD.status, 409, JSON.stringify(billD.data));
     assert.match(billD.data.error || '', /可计费|超出|exceeded|Billable/i);
-    // Post Bill A → AP opens
+    // Post Bill A → 委外来源账单的正式过账被来源级业务策略拒绝（MC-REQ-15），且零 AP
     const post = await fix.request('POST', `/api/procurement/outsourcing/processing-fee-bills/${billA.data.id}/post`, fix.tokens.admin);
-    assert.equal(post.status, 200);
-    const ap = fix.db.prepare("SELECT amount_cents, supplier_id, source_id FROM account_payables WHERE source_id=?").get(billA.data.id);
-    assert.ok(ap, 'canonical AP must exist after posting');
-    assert.equal(ap.amount_cents, 3000);
-    assert.equal(ap.supplier_id, 'supplier-001');
+    assert.equal(post.status, 409);
+    assert.equal(post.data.code, 'OUTSOURCING_GL_POLICY_NOT_APPROVED');
+    const ap = fix.db.prepare("SELECT COUNT(*) n FROM account_payables WHERE source_id=?").get(billA.data.id);
+    assert.equal(ap.n, 0, '委外加工费过账不得产生 AP open item');
+    assert.equal(fix.db.prepare('SELECT status FROM supplier_bills WHERE id=?').get(billA.data.id).status, 'DRAFT');
   });
 
   test('One bill → multiple Outsourcing Receipts (multi-receipt): commercial_source_type per item', async () => {
