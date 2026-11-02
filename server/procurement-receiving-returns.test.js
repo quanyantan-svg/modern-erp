@@ -28,6 +28,12 @@ describe('Procurement Wave D receiving notice and return branch plan', () => {
   test('Receipt Notice is independent business doc with no inventory/valuation/GRNI/AP side effect', async () => {
     const orderId = await approveOrder();
     const itemId = fixture.db.prepare('SELECT id FROM purchase_order_items WHERE order_id=?').get(orderId).id;
+    // M1-Core WP-1: a standard purchase notice carries a provable delivery
+    // schedule for every allocated order line.
+    const schedule = await fixture.request('POST', `/api/purchase-orders/${orderId}/delivery-schedules`, fixture.tokens.admin, {
+      orderItemId: itemId, plannedQuantity: 5, plannedDate: isoDate(7), upperTolerancePct: 0, lowerTolerancePct: 0,
+    });
+    assert.equal(schedule.status, 201, schedule.data.error);
     const notice = await fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, {
       purchaseOrderId: orderId, supplierId: 'supplier-001', warehouseId: 'warehouse-001',
       noticeDate: isoDate(0), items: [{ purchaseOrderItemId: itemId, productId: 'product-001', quantity: 5 }],

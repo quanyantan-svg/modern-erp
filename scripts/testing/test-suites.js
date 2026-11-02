@@ -193,6 +193,14 @@ const FULL = [
   // guard and the receiving-effect permission isolation. One disposable
   // isolated SQLite file per run.
   'server/m1c-outsourcing-gl-policy-guard.test.js',
+  // M1C-WP-1 focused regression for the receipt notice line level source
+  // writer, the business-type scoped capacity resolution, the notice to
+  // purchase receipt conversion and the delivery schedule consumption
+  // ledger. Every positive case drives the production HTTP API; the only
+  // direct SQL is the legacy unproven-source fixture. It is deliberately NOT
+  // registered in FAST: each case owns a disposable temp SQLite and runs the
+  // real migration chain.
+  'server/m1c-wp1-procurement-notice-conversion.test.js',
   'server/procurement-parameters.test.js',
   'server/procurement-profiles.test.js',
   'server/buyers.test.js',

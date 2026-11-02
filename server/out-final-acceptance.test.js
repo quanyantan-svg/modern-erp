@@ -266,22 +266,35 @@ describe('OUT-05/17/18 final acceptance — Planning Handoff / Completion Receip
     });
 
     test('G. STANDARD notice → Outsourcing Receipt scan blocked', async () => {
-      // We need an APPROVED STANDARD PO first.
-      let po = fixture.db.prepare(`SELECT id FROM purchase_orders WHERE business_type='STANDARD_PURCHASE' AND status='APPROVED' LIMIT 1`).get();
-      if (!po) {
+      // We need an APPROVED STANDARD PO with an order line first: M1-Core
+      // WP-1 makes the line level purchase order source and its delivery
+      // schedule the authoritative provenance of a standard purchase notice.
+      let orderItem = fixture.db.prepare(`SELECT poi.id, poi.product_id, poi.order_id, poi.quantity FROM purchase_order_items poi
+        JOIN purchase_orders po ON po.id = poi.order_id
+        WHERE po.business_type='STANDARD_PURCHASE' AND po.status='APPROVED' LIMIT 1`).get();
+      if (!orderItem) {
         fixture.db.prepare(`INSERT INTO purchase_orders(id,order_no,business_type,status,supplier_id,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`)
           .run('po-std-test', 'PO-ST', 'STANDARD_PURCHASE', 'APPROVED', 'supplier-001', 'user-admin', isoDate(0), isoDate(0));
-        po = { id: 'po-std-test' };
+        fixture.db.prepare(`INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,1)`)
+          .run('po-std-test-i', 'po-std-test', 'product-001', 10, 1000, 10000);
+        orderItem = { id: 'po-std-test-i', product_id: 'product-001', order_id: 'po-std-test', quantity: 10 };
+      }
+      const schedules = fixture.db.prepare('SELECT id FROM purchase_order_delivery_schedules WHERE order_item_id=?').all(orderItem.id);
+      if (!schedules.length) {
+        const schedule = await fixture.request('POST', `/api/purchase-orders/${orderItem.order_id}/delivery-schedules`, fixture.tokens.admin, {
+          orderItemId: orderItem.id, plannedQuantity: orderItem.quantity, plannedDate: isoDate(7), upperTolerancePct: 0, lowerTolerancePct: 0,
+        });
+        assert.equal(schedule.status, 201, schedule.data.error);
       }
       const notice = await fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, {
-        businessType: 'STANDARD_PURCHASE', purchaseOrderId: po.id,
+        businessType: 'STANDARD_PURCHASE', purchaseOrderId: orderItem.order_id,
         warehouseId: 'warehouse-001', noticeDate: isoDate(0),
-        items: [{ productId: 'product-001', quantity: 5, purchaseOrderItemId: null }],
+        items: [{ productId: orderItem.product_id, quantity: 5, purchaseOrderItemId: orderItem.id }],
       });
-      assert.equal(notice.status, 201);
+      assert.equal(notice.status, 201, notice.data.error);
       const scan = await fixture.request('POST', '/api/procurement/scan', fixture.tokens.admin, {
         sourceType: 'RECEIPT_NOTICE', sourceId: notice.data.id, targetBusinessType: 'OUTSOURCE',
-        productId: 'product-001', warehouseId: 'warehouse-001',
+        productId: orderItem.product_id, warehouseId: 'warehouse-001',
       });
       assert.equal(scan.status, 409, JSON.stringify(scan.data));
     });
