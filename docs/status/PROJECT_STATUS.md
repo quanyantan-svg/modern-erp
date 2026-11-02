@@ -842,9 +842,9 @@ Gate 的 PASS。M1-Core 包级 Acceptance 仍以 7 个 `M1C-Gxx` Gate 为准；M
 | Procurement Domain Acceptance | **NOT_ISSUED**；`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY` 不变 |
 | Release / Deploy | **NOT_AUTHORIZED** |
 
-**门禁证据**：`pnpm test:fast` 510/510、`pnpm test`（FULL）见本轮交付报告、`pnpm build`、
-`git diff --check`、文档一致性 current 模式全部通过。新增 focused 套件
-`server/m1c-wp1-procurement-notice-conversion.test.js`（25 例，登记入 FULL）。
+**门禁证据**：`pnpm test:fast` 510/510、`pnpm test`（FULL）3163/3163、`pnpm build`、
+`git diff --check`、文档一致性 current 模式（N1 / N3–N9 全部 PASS，N2 已退役）全部通过。
+新增 focused 套件 `server/m1c-wp1-procurement-notice-conversion.test.js`（25 例，登记入 FULL）。
 
 **首期范围内的关键实现决定**（详见当天 `log/2026-11-02.md` 的 `M1C-WP1-IMPL-20261102` 节）：
 交期台账为交期容量唯一权威来源；交期消费 effect 在入库单创建时登记、取消草稿时以负向
