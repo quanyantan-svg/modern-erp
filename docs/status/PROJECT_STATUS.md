@@ -649,6 +649,20 @@ M1C_IR2_FIX_READY_FOR_REVIEW
 未签发 Requirement 验收 / Design PASS / Acceptance / Freeze / Release Readiness；
 未执行 Active Design Promotion；未 Push / Merge / Tag / Release / Deploy。
 
+**交付锚点**：
+
+| 项 | 值 |
+|---|---|
+| 工作分支 | `work/m1-core-rebaseline-20261102`（自 `master` @ `759d7216c7546ffa00a147f603c4e8852aada991` 新建） |
+| 交付提交 | `6150daddb4c739b1a77b4a1faa2e5632d19c4f80`（`docs(erp): M1-Core 独立审查问题定点修正（容量分域、来源级防绕过、阻塞划分、权限与迁移收敛）`） |
+| 变更范围 | 6 个文件，+504 / −148 行（`docs/requirements/procurement-outsourcing.md`、`docs/reviews/m1/procurement-outsourcing-m1-core-design.md`、`docs/decisions/OPEN-BUSINESS-DECISIONS.md`、`docs/decisions/README.md`、`docs/status/PROJECT_STATUS.md`、`log/2026-11-02.md`）；**未修改任何 `src/` / `server/` 生产代码、schema、migration、API、权限实现或业务测试** |
+| 完整性校验 | `check-doc-consistency.mjs --mode current`：**N1 / N3–N9 PASS，N2 `RETIRED`（未记为 PASS）**；`--mode migration`：**C1–C6 全部 PASS**；`git diff --check`：exit 0 |
+| 远端状态 | **未** Push / Merge / Tag / Release / Deploy；本分支**未**推送 |
+
+**边界**：该本地交付提交**不等于** M1-Core Requirement 验收、**不等于** Design PASS、
+**不等于** Domain Acceptance / Freeze / Release Readiness，也**不授权**任何 Implementation。
+本轮**未运行**任何 FULL / HEAVY / MySQL / 浏览器 Gate，**不声称**通过。
+
 ---
 
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
