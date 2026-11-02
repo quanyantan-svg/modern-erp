@@ -14,7 +14,7 @@
 | [`master-engineering.md`](./master-engineering.md) | Master & Engineering | `document.md` §28 | Requirement 完成；实现完成；**未见独立 Domain-Level Acceptance** |
 | [`manufacturing-quality.md`](./manufacturing-quality.md) | Manufacturing & Quality | `document.md` §29 | Requirement 完成；实现完成；**未见独立 Domain-Level Acceptance** |
 | [`planning.md`](./planning.md) | Planning | `document.md` §30 | Requirement 完成；**有明确用户 Freeze** |
-| [`procurement-outsourcing.md`](./procurement-outsourcing.md) | Procurement & Outsourcing | `document.md` §31 | Requirement 完成；**Acceptance `NOT READY`，不得 Freeze**；§31.12 M1 全范围整改 Requirement **已验收**（`M1_REQUIREMENT_ACCEPTANCE_PASS`，2026-10-31，历史合同保留）；**§31.13 M1-Core 首期 Requirement 待批准**（依 `M1-SRD-01`，2026-11-02） |
+| [`procurement-outsourcing.md`](./procurement-outsourcing.md) | Procurement & Outsourcing | `document.md` §31 | Requirement 完成；Domain Acceptance 仍 `NOT READY`；§31.12 M1 全范围历史 Requirement 已验收（`M1_REQUIREMENT_ACCEPTANCE_PASS`）；§31.13 M1-Core 首期 Requirement 已批准（`M1_CORE_REQUIREMENT_ACCEPTANCE_PASS`，2026-11-02），Implementation 未授权 |
 | [`inventory-warehouse.md`](./inventory-warehouse.md) | Inventory & Warehouse | `document.md` §32 | Requirement 完成；实现 Partial；**未见独立 Domain-Level Acceptance** |
 | [`finance-operations.md`](./finance-operations.md) | Finance Operations | `document.md` §33 | Requirement 完成；实现完成；**未见独立 Domain-Level Acceptance** |
 | [`sales-customer/`](./sales-customer/) | Sales & Customer | `document.md` §34 + Wave 8/9/10/11 修订 | Requirement 完成；部分能力冻结；整域**明确未冻结** |

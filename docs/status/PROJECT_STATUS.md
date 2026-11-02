@@ -702,6 +702,32 @@ schema、migration、权限种子、业务测试或 UI，未连接数据库，�
 HEAVY、浏览器 Gate 或 build；未签发 Requirement/Design PASS 或 Implementation 授权；未 Push、Merge、
 Tag、Release、Deploy。交付仍等待业务所有者独立审查。
 
+### 37.12 M1-Core Requirement / Design Acceptance 与 Active Design Promotion（2026-11-02）
+
+**业务所有者决定**：正式签发 `M1_CORE_REQUIREMENT_ACCEPTANCE_PASS` 与
+`M1_CORE_DESIGN_PASS`；确认 `A-P01` 唯一通知模型，批准 `M1-P-03` 最小角色矩阵。
+Promotion 锚点为 `95aca4d60b3a168bea2355e12829bb67af18f500`；正式证据见
+[`docs/acceptance/m1-core-requirement-design-acceptance-20261102.md`](../acceptance/m1-core-requirement-design-acceptance-20261102.md)。
+
+| 对象 | 当前状态 |
+|---|---|
+| M1-Core Requirement | `APPROVED` / `M1_CORE_REQUIREMENT_ACCEPTANCE_PASS` |
+| M1-Core Design | `ACTIVE` / `M1_CORE_DESIGN_PASS`；路径 `docs/design/procurement-outsourcing-m1-core.md` |
+| `A-P01` | `DESIGN_TECHNICAL_ACCEPTED`；业务所有者已在 Requirement Acceptance 中确认 |
+| `M1-P-03` | `APPROVED`；角色与权限种子尚未实施 |
+| `M1-P-02` | 严格支持范围继续 fail closed；仅放宽时待裁定 |
+| `A-P02` / `T-11` | 继续受限行为 |
+| B/C/D 延期政策 | `DEFERRED_PENDING_POLICY` |
+| `M1C-G01..M1C-G07` | 7/7 `NOT_RUN`，无 PASS |
+| M1 全范围旧 13 Gate | 保持原状态（13/13 `NOT_RUN`） |
+| Procurement Domain Acceptance | **未通过**；`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY` 不变 |
+| Implementation | `NOT_AUTHORIZED`；不得自动启动 `M1C-WP-0` |
+
+**边界**：M1-Core 文档合同验收不等于 Implementation、Capability Freeze、Manual Closure、
+Procurement Domain Acceptance 或 Release Readiness。原 Domain Design §26 继续保留；旧 M1 全范围候选
+继续承担 C/D 延期与历史追溯，未整体获批。本轮未修改生产代码、schema、migration、权限种子或测试，
+未连接数据库，未运行 MySQL/FULL/HEAVY/浏览器/业务 Gate，未 Push/Merge/Tag/Release/Deploy。
+
 ---
 
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
