@@ -201,6 +201,15 @@ const FULL = [
   // registered in FAST: each case owns a disposable temp SQLite and runs the
   // real migration chain.
   'server/m1c-wp1-procurement-notice-conversion.test.js',
+  // M1C-WP1-R1 focused regression for the delivery schedule consumption
+  // ledger and the direct purchase receipt draft PATCH path. It proves the
+  // P1 defect first (the PATCH left the schedule consumption describing the
+  // previous lines) and then the atomic rebinding: the superseded positive
+  // effect is released with an immutable negative effect, the rebuilt lines
+  // register their own effect, and both capacity bounds are re-checked
+  // against the aggregate state. It is deliberately NOT registered in FAST:
+  // each case owns a disposable temp SQLite and drives the real HTTP API.
+  'server/m1c-wp1-r1-schedule-patch.test.js',
   'server/procurement-parameters.test.js',
   'server/procurement-profiles.test.js',
   'server/buyers.test.js',
