@@ -22,6 +22,7 @@
 import { HttpError } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
 import { confirmedQuantity } from './logistics-core.js';
+import { deriveQualityState } from './quality-gates.js';
 import { scheduleConsumedQuantity } from './procurement-schedule-ledger.js';
 
 export const NOTICE_ERROR_CODES = Object.freeze({
@@ -219,13 +220,34 @@ export function resolveNoticeItemCapacity(db, noticeItemId) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Whether a historical outsourcing receipt carries a completed, effective
+ * quality decision.
+ *
+ * The existence of an IQC record proves nothing: `iqc_inspections.status`
+ * defaults to PENDING and `result` stays NULL until the inspection is
+ * completed, so a merely created inspection would make an unproven historical
+ * receipt look "已生效已确认". Only a completed inspection whose result is
+ * PASS / WAIVED is a quality decision, and it must still satisfy the
+ * canonical effective quality gate state. Every other shape — DRAFT, PENDING,
+ * CANCELLED or a completed FAIL — is "历史未证实" and fails closed.
+ */
+function hasEffectiveQualityDecision(db, outsourcingReceiptId) {
+  const decision = db.prepare(`SELECT id FROM iqc_inspections
+    WHERE outsourcing_receipt_id=? AND status='COMPLETED' AND result IN ('PASS','WAIVED')
+    ORDER BY created_at DESC, id DESC LIMIT 1`).get(outsourcingReceiptId);
+  if (!decision) return false;
+  const state = deriveQualityState(db, 'IQC', outsourcingReceiptId, 'OUTSOURCING_RECEIPT');
+  return state.code === 'PASS' || state.code === 'WAIVED';
+}
+
+/**
  * Outsourcing order remaining receivable quantity.
  *
  * A historical outsourcing receipt only counts as received capacity when its
- * effect is provable (inventory transaction, valuation movement, quality
- * decision or cost evidence). An unprovable receipt makes the whole remaining
- * capacity unprovable, which fails closed instead of assuming an effect that
- * history never proved (Active Design §10).
+ * effect is provable (inventory transaction, valuation movement, cost
+ * evidence or a completed quality decision). An unprovable receipt makes the
+ * whole remaining capacity unprovable, which fails closed instead of
+ * assuming an effect that history never proved (Active Design §10).
  */
 export function resolveOutsourcingOrderCapacity(db, outsourcingOrderId) {
   const order = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(outsourcingOrderId);
@@ -235,11 +257,11 @@ export function resolveOutsourcingOrderCapacity(db, outsourcingOrderId) {
   let confirmedReceiptQuantity = 0;
   const unprovenReceiptIds = [];
   for (const receipt of receipts) {
-    const evidence = db.prepare(`SELECT 1 FROM inventory_transactions WHERE source_type='OUTSOURCING_RECEIPT' AND source_id=? LIMIT 1`).get(receipt.id)
+    const evidenceProven = db.prepare(`SELECT 1 FROM inventory_transactions WHERE source_type='OUTSOURCING_RECEIPT' AND source_id=? LIMIT 1`).get(receipt.id)
       || db.prepare(`SELECT 1 FROM inventory_valuation_movements WHERE source_type='OUTSOURCING_RECEIPT' AND source_id=? LIMIT 1`).get(receipt.id)
       || db.prepare('SELECT 1 FROM outsourcing_cost_evidences WHERE outsourcing_receipt_id=? LIMIT 1').get(receipt.id)
-      || db.prepare('SELECT 1 FROM iqc_inspections WHERE outsourcing_receipt_id=? LIMIT 1').get(receipt.id);
-    if (!evidence) {
+      || hasEffectiveQualityDecision(db, receipt.id);
+    if (!evidenceProven) {
       unprovenReceiptIds.push(receipt.id);
       continue;
     }

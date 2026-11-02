@@ -210,6 +210,14 @@ const FULL = [
   // against the aggregate state. It is deliberately NOT registered in FAST:
   // each case owns a disposable temp SQLite and drives the real HTTP API.
   'server/m1c-wp1-r1-schedule-patch.test.js',
+  // M1C-WP1-R2 focused regression for the fail-closed effect evidence of a
+  // historical outsourcing receipt. It proves the defect first (an unfinished
+  // or failed quality record used to make an unproven receipt look effective)
+  // and then the tightened evidence: only a completed PASS / WAIVED quality
+  // decision counts, while real inventory / valuation / cost evidence is never
+  // misjudged as unknown. It is deliberately NOT registered in FAST: each case
+  // owns a disposable temp SQLite and drives the real HTTP API.
+  'server/m1c-wp1-r2-outsourcing-receipt-effect-evidence.test.js',
   'server/procurement-parameters.test.js',
   'server/procurement-profiles.test.js',
   'server/buyers.test.js',
