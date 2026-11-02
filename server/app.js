@@ -44,6 +44,16 @@ import {
 } from './modules/lookups.js';
 import { listApprovals } from './modules/approvals.js';
 import {
+  assertImmutableSourceItems, assertRemainingQuantity, authoritativeLogisticsTotal,
+  configureTrackedDocumentLines, configureTrackedDraftLines, confirmedQuantity, fulfillmentState,
+  normalizeDocumentDate, normalizeSourcedLogisticsItems, replaceLogisticsItems,
+  requireActiveReference, sourceLineId,
+} from './modules/logistics-core.js';
+import {
+  cancelPurchaseReceiptCore, confirmPurchaseReceiptCore, createPurchaseReceiptCore,
+} from './modules/purchase-receipt-engine.js';
+import { auditBusinessRejection, NOTICE_ERROR_CODES } from './modules/procurement-notice-capacity.js';
+import {
   activatePlanningForecast, cancelPlanningForecast, cancelMrpRun,
   createMrpRun, createPlanningForecast, executeMrpRun, getMrpRun,
   getPlanningForecast, listMrpRuns, listPlanningForecasts,
@@ -4176,141 +4186,6 @@ function normalizeWarehouseItems(db, items) {
   return { items: normalized, totalCents };
 }
 
-function requireActiveReference(db, table, referenceId, label) {
-  if (!referenceId || !db.prepare(`SELECT 1 FROM ${table} WHERE id=? AND active=1`).get(referenceId)) throw new HttpError(400, `请选择有效${label}`);
-}
-
-function normalizeDocumentDate(value, label) {
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(value + 'T00:00:00Z'))) throw new HttpError(400, `${label}不正确`);
-  return value;
-}
-
-function replaceLogisticsItems(db, table, foreignKey, documentId, items, sourceColumn = null) {
-  db.prepare(`DELETE FROM ${table} WHERE ${foreignKey}=?`).run(documentId);
-  const hasUomSnapshot = db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name='document_uom_code'`).get(table);
-  const uomColumns = hasUomSnapshot
-    ? ',document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den'
-    : '';
-  const columns = sourceColumn
-    ? `id,${foreignKey},product_id,quantity,unit_price_cents,amount_cents,line_no,${sourceColumn}${uomColumns}`
-    : `id,${foreignKey},product_id,quantity,unit_price_cents,amount_cents,line_no${uomColumns}`;
-  const placeholderCount = 7 + (sourceColumn ? 1 : 0) + (hasUomSnapshot ? 7 : 0);
-  const statement = db.prepare(`INSERT INTO ${table}(${columns}) VALUES(${Array(placeholderCount).fill('?').join(',')})`);
-  for (const item of items) {
-    const values = [id(), documentId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo];
-    if (sourceColumn) values.push(item.sourceItemId);
-    if (hasUomSnapshot) values.push(item.documentUomCode, item.documentQuantityNumerator, item.documentQuantityDenominator,
-      item.conversionNumerator, item.conversionDenominator, item.baseQuantityNumerator, item.baseQuantityDenominator);
-    statement.run(...values);
-  }
-}
-
-function configureTrackedDraftLines(db, { sourceType, sourceId, itemTable, foreignKey, rawItems, businessDate }) {
-  const persisted = db.prepare(`SELECT * FROM ${itemTable} WHERE ${foreignKey}=? ORDER BY line_no,id`).all(sourceId);
-  for (const [index, item] of persisted.entries()) {
-    freezeQualityPolicy(db, { sourceType, sourceId, sourceItemId: item.id, productId: item.product_id, businessDate });
-    saveTrackedAllocations(db, {
-      sourceType, sourceId, sourceItemId: item.id, productId: item.product_id, quantity: item.quantity,
-      allocations: rawItems?.[index]?.trackingAllocations || rawItems?.[index]?.tracking_allocations || [],
-    });
-  }
-}
-
-function configureTrackedDocumentLines(db, { sourceType, sourceId, itemTable, foreignKey, rawItems }) {
-  const persisted = db.prepare(`SELECT * FROM ${itemTable} WHERE ${foreignKey}=? ORDER BY line_no,id`).all(sourceId);
-  for (const [index, item] of persisted.entries()) saveTrackedAllocations(db, {
-    sourceType, sourceId, sourceItemId: item.id, productId: item.product_id, quantity: item.quantity,
-    allocations: rawItems?.[index]?.trackingAllocations || rawItems?.[index]?.tracking_allocations || [],
-  });
-}
-
-function sourceLineId(item, camel, snake) {
-  return item?.[camel] ?? item?.[snake] ?? item?.sourceItemId ?? item?.source_item_id ?? null;
-}
-
-function normalizeSourcedLogisticsItems(db, items, {
-  sourceTable, sourceHeaderColumn, sourceHeaderId, sourceIdCamel, sourceIdSnake, useSourceAmountRatio = false,
-}) {
-  if (!Array.isArray(items) || items.length === 0) throw new HttpError(400, '请添加来源明细');
-  const sourceStmt = db.prepare(`SELECT id,product_id,quantity,unit_price_cents,amount_cents,document_uom_code,document_quantity_num,
-    document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den
-    FROM ${sourceTable} WHERE id=? AND ${sourceHeaderColumn}=?`);
-  let totalCents = 0;
-  const seen = new Set();
-  const normalized = items.map((item, index) => {
-    const itemId = sourceLineId(item, sourceIdCamel, sourceIdSnake);
-    if (!itemId || seen.has(itemId)) throw new HttpError(400, `第 ${index + 1} 行来源明细无效或重复`);
-    seen.add(itemId);
-    const source = sourceStmt.get(itemId, sourceHeaderId);
-    if (!source) throw new HttpError(400, `第 ${index + 1} 行来源明细不属于来源单据`);
-    if (item.productId !== undefined && item.productId !== source.product_id) throw new HttpError(400, `第 ${index + 1} 行货品与来源不一致`);
-    if (item.unitPriceCents !== undefined && item.unitPriceCents !== null && item.unitPriceCents !== '' && Number(item.unitPriceCents) !== source.unit_price_cents) {
-      throw new HttpError(400, `第 ${index + 1} 行单价与来源商业价格不一致`);
-    }
-    const quantity = Number(item.quantity);
-    if (!Number.isSafeInteger(quantity) || quantity <= 0) throw new HttpError(400, `第 ${index + 1} 行数量必须为正整数`);
-    const conversionNumerator = Number(source.conversion_numerator || 1);
-    const conversionDenominator = Number(source.conversion_denominator || 1);
-    const documentQuantity = rational(BigInt(quantity) * BigInt(conversionDenominator), conversionNumerator);
-    const baseQuantity = rational(quantity, 1);
-    const amountCents = useSourceAmountRatio
-      ? roundRational(BigInt(source.amount_cents) * BigInt(quantity) * 1_000_000n, BigInt(Math.round(Number(source.quantity) * 1_000_000)))
-      : roundRational(BigInt(documentQuantity.num) * BigInt(source.unit_price_cents), documentQuantity.den);
-    totalCents += amountCents;
-    if (!Number.isSafeInteger(totalCents)) throw new HttpError(400, '单据金额超出安全范围');
-    return { sourceItemId: source.id, productId: source.product_id, quantity, unitPriceCents: source.unit_price_cents, amountCents, lineNo: index + 1,
-      sourceQuantity: Number(source.quantity), documentUomCode: source.document_uom_code,
-      documentQuantityNumerator: documentQuantity.num, documentQuantityDenominator: documentQuantity.den,
-      conversionNumerator, conversionDenominator, baseQuantityNumerator: baseQuantity.num, baseQuantityDenominator: baseQuantity.den };
-  });
-  return { items: normalized, totalCents };
-}
-
-function assertImmutableSourceItems(db, table, foreignKey, documentId, sourceColumn, items) {
-  const stored = db.prepare(`SELECT ${sourceColumn} id FROM ${table} WHERE ${foreignKey}=? ORDER BY line_no`).all(documentId).map((row) => row.id);
-  const incoming = items.map((item) => item.sourceItemId);
-  if (stored.length !== incoming.length || stored.some((value, index) => value !== incoming[index])) {
-    throw new HttpError(409, '来源明细不可修改；请取消草稿后重新创建');
-  }
-}
-
-function confirmedQuantity(db, { itemTable, sourceColumn, headerTable, headerForeignKey, status = 'CONFIRMED' }, sourceItemId, excludeHeaderId = null) {
-  let sql = `SELECT COALESCE(SUM(i.quantity),0) quantity FROM ${itemTable} i JOIN ${headerTable} h ON h.id=i.${headerForeignKey} WHERE i.${sourceColumn}=? AND h.status=?`;
-  const params = [sourceItemId, status];
-  if (excludeHeaderId) { sql += ' AND h.id<>?'; params.push(excludeHeaderId); }
-  return Number(db.prepare(sql).get(...params).quantity);
-}
-
-function assertRemainingQuantity(db, input, quantityConfig, label) {
-  for (const item of input.items) {
-    const already = confirmedQuantity(db, quantityConfig, item.sourceItemId);
-    if (already + item.quantity > item.sourceQuantity) throw new HttpError(409, `${label}数量超过来源剩余可执行数量`);
-  }
-}
-
-function fulfillmentState(executed, sourceQuantity, labels) {
-  if (executed <= 0) return labels[0];
-  return executed >= sourceQuantity ? labels[2] : labels[1];
-}
-
-function authoritativeLogisticsTotal(db, table, foreignKey, documentId, { preserveAmount = false } = {}) {
-  const items = db.prepare(`SELECT * FROM ${table} WHERE ${foreignKey}=? ORDER BY line_no`).all(documentId);
-  if (!items.length) throw new HttpError(409, '单据没有明细，无法确认');
-  let totalCents = 0;
-  for (const item of items) {
-    const quantity = Number(item.quantity);
-    const unitPriceCents = Number(item.unit_price_cents);
-    if (!Number.isSafeInteger(quantity) || quantity <= 0 || !Number.isSafeInteger(unitPriceCents) || unitPriceCents < 0) throw new HttpError(409, '单据明细数量或单价不正确');
-    const amountCents = preserveAmount ? Number(item.amount_cents) : quantity * unitPriceCents;
-    if (!Number.isSafeInteger(amountCents) || amountCents < 0) throw new HttpError(409, '单据明细金额不正确');
-    if (Number(item.amount_cents) !== amountCents) db.prepare(`UPDATE ${table} SET amount_cents=? WHERE id=?`).run(amountCents, item.id);
-    item.amount_cents = amountCents;
-    totalCents += amountCents;
-    if (!Number.isSafeInteger(totalCents)) throw new HttpError(409, '单据金额超出安全范围');
-  }
-  return { items, totalCents };
-}
-
 const INVENTORY_CONTROL_REVERSAL = Object.freeze({
   INVENTORY_ADJUSTMENT: { table: 'inventory_adjustments', status: 'CONFIRMED', permission: 'INVENTORY_ADJUSTMENT_MANAGE', voucherSourceType: 'INVENTORY_ADJUSTMENT' },
   INVENTORY_SCRAP: { table: 'inventory_scraps', status: 'CONFIRMED', permission: 'INVENTORY_SCRAP_MANAGE', voucherSourceType: 'INVENTORY_SCRAP' },
@@ -5475,29 +5350,17 @@ async function createPurchaseReceipt(db, req, res, actor) {
   const body = await readJson(req);
   const { purchaseOrderId, supplierId, warehouseId, remark, items } = body;
   const billingMode = body.billingMode || getActiveParameters(db).defaultReceiptBillingMode;
-  if (!['SEPARATE','AUTO_BILL','LEGACY_DIRECT'].includes(billingMode)) throw new HttpError(400, '无效采购计费模式');
-  const receiptDate = normalizeDocumentDate(body?.receiptDate || new Date().toISOString().slice(0, 10), '收货日期');
-  if (!purchaseOrderId) throw new HttpError(400, '正常采购收货必须选择已审批采购订单');
-  const source = db.prepare("SELECT * FROM purchase_orders WHERE id=?").get(purchaseOrderId);
-  if (!source) throw new HttpError(400, '采购订单不存在');
-  if (source.status !== 'APPROVED') throw new HttpError(409, '只有已审批采购订单可以收货');
-  if (supplierId !== undefined && supplierId !== source.supplier_id) throw new HttpError(400, '供应商与采购订单不一致');
-  requireActiveReference(db, 'warehouses', warehouseId, '仓库');
-  const input = normalizeSourcedLogisticsItems(db, items, { sourceTable: 'purchase_order_items', sourceHeaderColumn: 'order_id', sourceHeaderId: purchaseOrderId, sourceIdCamel: 'purchaseOrderItemId', sourceIdSnake: 'purchase_order_item_id' });
-  assertRemainingQuantity(db, input, { itemTable: 'purchase_receipt_items', sourceColumn: 'purchase_order_item_id', headerTable: 'purchase_receipts', headerForeignKey: 'receipt_id' }, '收货');
-  const receiptId = id();
-  const now = new Date().toISOString();
-  const receiptNo = 'PR' + Date.now().toString().slice(-10);
-  transaction(db, () => {
-    db.prepare('INSERT INTO purchase_receipts(id,receipt_no,purchase_order_id,supplier_id,warehouse_id,handler_id,status,total_cents,receipt_date,remark,creator_id,created_at,updated_at,billing_mode) VALUES(?,?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?,?)').run(receiptId, receiptNo, purchaseOrderId, source.supplier_id, warehouseId, actor.id, input.totalCents, receiptDate, optionalText(remark, 500), actor.id, now, now, billingMode);
-    setSourceRecognitionPolicy(db, { side: 'AP', sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId,
-      recognitionMode: billingMode === 'LEGACY_DIRECT' ? RECOGNITION_MODES.DIRECT : RECOGNITION_MODES.PROVISIONAL,
-      effectiveDate: receiptDate, actorId: actor.id });
-    replaceLogisticsItems(db, 'purchase_receipt_items', 'receipt_id', receiptId, input.items, 'purchase_order_item_id');
-    configureTrackedDraftLines(db, { sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId, itemTable: 'purchase_receipt_items', foreignKey: 'receipt_id', rawItems: items, businessDate: receiptDate });
-    audit(db, actor.id, 'CREATE', 'PURCHASE_RECEIPT', receiptId, '创建采购入库单 ' + receiptNo);
-  });
-  return send(res, 201, { id: receiptId, receiptNo });
+  const receiptDate = body?.receiptDate || new Date().toISOString().slice(0, 10);
+  let created = null;
+  try {
+    created = transaction(db, () => createPurchaseReceiptCore(db, actor, {
+      purchaseOrderId, supplierId, warehouseId, remark, items, receiptDate, billingMode,
+    }));
+  } catch (error) {
+    auditBusinessRejection(db, actor, { entityType: 'PURCHASE_ORDER', entityId: purchaseOrderId, action: '创建采购入库' }, error, { onlyCodes: Object.values(NOTICE_ERROR_CODES) });
+    throw error;
+  }
+  return send(res, 201, { id: created.receiptId, receiptNo: created.receiptNo });
 }
 
 function getPurchaseReceipt(db, res, actor, receiptId) {
@@ -5531,6 +5394,11 @@ async function updatePurchaseReceipt(db, req, res, actor, receiptId) {
   const current = db.prepare('SELECT * FROM purchase_receipts WHERE id=?').get(receiptId);
   if (!current) throw new HttpError(404, '采购入库单不存在');
   if (current.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以修改');
+  // A receipt converted from a receipt notice is written by the conversion
+  // writer: its lines carry the notice source row and the delivery schedule
+  // reservation, and both are immutable facts. Editing the draft would drop
+  // that provenance and desynchronise the accumulated converted quantity.
+  if (current.source_notice_id) throw new HttpError(409, '由收料通知转换的采购入库单不可修改；转换后的来源容量不随取消恢复');
   const body = await readJson(req);
   if (body.purchaseOrderId !== undefined && body.purchaseOrderId !== current.purchase_order_id) throw new HttpError(409, '采购订单来源不可修改');
   if (body.supplierId !== undefined && body.supplierId !== current.supplier_id) throw new HttpError(409, '来源供应商不可修改');
@@ -5557,63 +5425,22 @@ async function confirmPurchaseReceipt(db, req, res, actor, receiptId) {
   if (!receipt) throw new HttpError(404, '采购入库单不存在');
   const body = await readJson(req);
   const action = body.action;
-  const now = new Date().toISOString();
   if (action === 'confirm') {
     const key = String(req.headers['idempotency-key'] || body.idempotencyKey || `document-${receiptId}`); const fingerprint = requestFingerprint({ action });
     const replay = idempotencyReplay(db, 'PURCHASE_RECEIPT_CONFIRM', receiptId, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
-    transaction(db, () => {
-      const locked = db.prepare('SELECT * FROM purchase_receipts WHERE id=?').get(receiptId);
-      if (locked.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以确认');
-      if (!locked.purchase_order_id) throw new HttpError(409, '旧版无来源采购入库不可确认，请使用库存调整单');
-      const po = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(locked.purchase_order_id);
-      if (!po || po.status !== 'APPROVED') throw new HttpError(409, '来源采购订单不存在或未审批');
-      if (locked.supplier_id !== po.supplier_id) throw new HttpError(409, '入库供应商与来源采购订单不一致');
-      assertQualityGate(db, 'IQC', receiptId);
-      assertFinancialPeriodsOpen(db, locked.receipt_date);
-      const authoritative = authoritativeLogisticsTotal(db, 'purchase_receipt_items', 'receipt_id', receiptId);
-      const inventoryEntries=[];
-      for (const item of authoritative.items) {
-        const sourceItem = db.prepare('SELECT * FROM purchase_order_items WHERE id=? AND order_id=?').get(item.purchase_order_item_id, po.id);
-        if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '入库明细与采购订单来源不一致');
-        const already = confirmedQuantity(db, { itemTable: 'purchase_receipt_items', sourceColumn: 'purchase_order_item_id', headerTable: 'purchase_receipts', headerForeignKey: 'receipt_id' }, sourceItem.id, receiptId);
-        if (already + Number(item.quantity) > Number(sourceItem.quantity)) throw new HttpError(409, '收货数量超过采购订单剩余可收数量');
-        // Inventory, valuation and inventory_transactions always use base
-        // UOM quantity; document UOM / price stay on the document line.
-        // Legacy / seed rows that pre-date Phase 6E may not have base
-        // snapshots filled; fall back to the document quantity, which by
-        // Phase 0 contract equals the base quantity when no conversion is
-        // configured.
-        const baseQuantity = (item.base_quantity_num != null && Number(item.base_quantity_num) > 0)
-          ? Number(item.base_quantity_num) / Number(item.base_quantity_den || 1)
-          : Number(item.quantity);
-        postTrackedMovement(db, { sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId, sourceItemId: item.id, productId: item.product_id, warehouseId: receipt.warehouse_id, quantity: baseQuantity, direction: 'IN', businessDate: locked.receipt_date });
-        const balance = adjustInventory(db, receipt.warehouse_id, item.product_id, baseQuantity, now);
-        const transactionId=id();
-        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,\'IN\',?,\'PURCHASE_RECEIPT\',?,?,?,?,?,?)').run(transactionId, receipt.warehouse_id, item.product_id, baseQuantity, balance, receiptId, receipt.receipt_no, '采购入库', actor.id, now, locked.receipt_date);
-        receiveSourceValue(db,{ businessDate:locked.receipt_date,productId:item.product_id,warehouseId:receipt.warehouse_id,quantity:baseQuantity,valueCents:Number(item.amount_cents),movementType:'PURCHASE_RECEIPT',sourceType:'PURCHASE_RECEIPT',sourceId:receiptId,sourceItemId:item.id,inventoryTransactionId:transactionId,valuationBasis:'APPROVED_PO_PRICE' });
-        inventoryEntries.push({role:inventoryAccountRole(db,item.product_id),direction:'DEBIT',amountCents:Number(item.amount_cents),summary:'采购入库 '+receipt.receipt_no});
-      }
-      db.prepare('UPDATE purchase_receipts SET total_cents=?,status=\'CONFIRMED\', confirmed_at=?, confirmed_by=?, updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, receiptId);
-      const recognition = recognizeFinanceExposure(db, {
-        side: 'AP', source: { sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId, sourceNo: receipt.receipt_no },
-        invoice: null, amountCents: authoritative.totalCents, businessDate: locked.receipt_date,
-        partyId: receipt.supplier_id, paymentTermsDays: po.payment_terms_days,
-        actorId: actor.id, createdAt: receipt.created_at,
-      });
-      if (recognition.recognitionMode === RECOGNITION_MODES.DIRECT) {
-        const supplierName = db.prepare('SELECT name FROM suppliers WHERE id = ?').get(receipt.supplier_id)?.name || '';
-        createSystemVoucher(db,{sourceType:'PURCHASE_RECEIPT',sourceId:receiptId,businessDate:locked.receipt_date,actorId:actor.id,entries:[...inventoryEntries,{role:'ACCOUNTS_PAYABLE',direction:'CREDIT',amountCents:authoritative.totalCents,summary:'采购入库 '+receipt.receipt_no+' '+supplierName}]});
-      } else {
-        createSystemVoucher(db,{sourceType:'PURCHASE_RECEIPT',sourceId:receiptId,businessDate:locked.receipt_date,actorId:actor.id,entries:[...inventoryEntries,{role:'GRNI',direction:'CREDIT',amountCents:authoritative.totalCents,summary:'采购收货 GRNI '+receipt.receipt_no}]});
-        if (locked.billing_mode === 'AUTO_BILL') autoBillReceipt(db, receiptId, actor.id, `AUTO_BILL:${receiptId}`);
-      }
-      saveIdempotency(db, 'PURCHASE_RECEIPT_CONFIRM', receiptId, key, fingerprint, { ok: true, id: receiptId, status: 'CONFIRMED' });
-      audit(db, actor.id, 'CONFIRM', 'PURCHASE_RECEIPT', receiptId, '确认采购入库 ' + receipt.receipt_no);
-    });
+    try {
+      transaction(db, () => confirmPurchaseReceiptCore(db, actor, receiptId, { idempotencyKey: key, fingerprint }));
+    } catch (error) {
+      auditBusinessRejection(db, actor, { entityType: 'PURCHASE_RECEIPT', entityId: receiptId, action: '确认采购入库' }, error, { onlyCodes: Object.values(NOTICE_ERROR_CODES) });
+      throw error;
+    }
   } else if (action === 'cancel') {
-    if (receipt.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以取消');
-    db.prepare('UPDATE purchase_receipts SET status=\'CANCELLED\', updated_at=? WHERE id=?').run(now, receiptId);
-    audit(db, actor.id, 'CANCEL', 'PURCHASE_RECEIPT', receiptId, '取消采购入库 ' + receipt.receipt_no);
+    try {
+      transaction(db, () => cancelPurchaseReceiptCore(db, actor, receiptId));
+    } catch (error) {
+      auditBusinessRejection(db, actor, { entityType: 'PURCHASE_RECEIPT', entityId: receiptId, action: '取消采购入库' }, error, { onlyCodes: Object.values(NOTICE_ERROR_CODES) });
+      throw error;
+    }
   } else throw new HttpError(400, '无效操作');
   return send(res, 200, { ok: true });
 }
