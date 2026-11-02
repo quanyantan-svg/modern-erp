@@ -11,8 +11,16 @@
 ## 目录
 
 | 路径 | Domain | 候选类型 | 状态 | 权威来源 |
-|---|---|---|---|---|
-| [`m1/procurement-outsourcing-critical-chain-design.md`](./m1/procurement-outsourcing-critical-chain-design.md) | Procurement & Outsourcing | Design（候选） | `PENDING_APPROVAL` / `PENDING_REVIEW` | 无 —— 源 `solution.md §26.33` @ `912fd76700ff6f3ad1509eec4c9e2241c1830265` |
+|---|---|---|---|
+| [`m1/procurement-outsourcing-critical-chain-design.md`](./m1/procurement-outsourcing-critical-chain-design.md) | Procurement & Outsourcing | Design（候选，**M1 全范围**；源 `solution.md §26.33`） | `PENDING_APPROVAL` / `PENDING_REVIEW` | 无 —— 源 `solution.md §26.33` @ `912fd76700ff6f3ad1509eec4c9e2241c1830265` |
+| [`m1/procurement-outsourcing-m1-core-design.md`](./m1/procurement-outsourcing-m1-core-design.md) | Procurement & Outsourcing | Design（候选，**M1-Core 首期**；依 `M1-SRD-01` 重定基线） | `PENDING_APPROVAL` / `PENDING_REVIEW` | 无 —— 来源设计 `912fd76700ff6f3ad1509eec4c9e2241c1830265` + 范围决定 `M1-SRD-01`（2026-11-02） |
+
+> 两个 M1 候选**并列有效、职责不同**：
+> 上表第一份是 **M1 全范围**候选设计（C / D 组延期部分与历史结论的载体，**不被改写**）；
+> 第二份是 **M1-Core 首期**候选设计（有界后继，覆盖首期 A / B / U / T 部分并定义 7 个 `M1C-Gxx` Gate）。
+> 二者**均未获 `Design PASS`**，**均不构成** Current Active Contract。
+> 旧 13 Gate → 新 7 Gate 的逐项处置映射见
+> [`m1/procurement-outsourcing-m1-core-design.md`](./m1/procurement-outsourcing-m1-core-design.md) §13.2。
 
 ## 规则
 

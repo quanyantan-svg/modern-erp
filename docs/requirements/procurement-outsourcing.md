@@ -12,6 +12,12 @@
 >
 > Design 见 `solution.md §26`（待用户 PASS 后展开）；本阶段不进入 Design / Implementation。
 >
+> **（2026-11-02 范围重定基线提示）** 本文件当前含两个 M1 相关章节：§31.12（**M1 全范围**，
+> 2026-10-31 已验收 `M1_REQUIREMENT_ACCEPTANCE_PASS`）与 §31.13（**M1-Core 首期**，
+> 依 `M1-SRD-01` 重定基线，**待业务所有者批准**）。§31.12 **保留为历史批准合同**，
+> 其历史批准事实不变；**首期（M1-Core）的当前有效合同是 §31.13**。
+> 范围决定见 [`docs/decisions/m1-core-scope-rebaseline-20261102.md`](../decisions/m1-core-scope-rebaseline-20261102.md)。
+>
 > 已知 Audit Normalization（用户最终确认）：
 > - PRC-08 = PARTIAL → ENHANCE；
 > - PRC-12 = PARTIAL → ENHANCE；
@@ -422,6 +428,24 @@ dependency 不进入 capability disposition 计数；它仅是 acceptance depend
 
 ### 31.12 M1 采购与委外关键断链统一整改 Requirement（2026-10-31；业务所有者已验收 `M1_REQUIREMENT_ACCEPTANCE_PASS`）
 
+> **（2026-11-02 日期化 supersession —— 首期当前效力）**
+> 业务所有者于 2026-11-02 批准 `M1-SRD-01`（首期范围重定基线），
+> 据此 **M1-Core 首期的当前有效 Requirement 改为 §31.13**。
+> 本节的处置方式：
+> - **本节正文整体保留**，一字不删；它是 **M1 全范围（A/B/C/D 四组 + 13 个 Gate）的历史批准合同**，
+>   其 2026-10-31 的验收事实 `M1_REQUIREMENT_ACCEPTANCE_PASS` **保持不变**，不被本提示改写或撤销；
+> - **首期（M1-Core）的验收条件以 §31.13 及其 7 个 `M1C-Gxx` Gate 为准**；本节的 13 个 Gate
+>   继续作为 **M1 全域 Closure** 的验收合同，不再作为首期的阻塞项；
+> - 本节 §31.12.3–§31.12.6 中 **C 组（加工费/GL）与 D 组（VMI 结算）** 的业务合同**整体延期**，
+>   其首期安全边界改由 §31.13 `MC-REQ-15` 规定（危险写入必须拒绝且零副作用）；
+> - 本节 §31.12.2 的 Gap 与 Coverage 登记、§31.12.7 的 U/T 组条款、§31.12.9 的 Gate 定义
+>   **全部继续有效**，作为 M1 全域 Closure 的依据；其首期适用部分由 §31.13 逐条承接或显式延期；
+> - 本节 §31.12.8 的十项集中业务决策**状态不变**；其首期处置见
+>   [`docs/decisions/OPEN-BUSINESS-DECISIONS.md`](../decisions/OPEN-BUSINESS-DECISIONS.md) §1.4。
+>
+> 追溯路径：本节原节号 `document.md §31.12`，源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`
+> （`docs(m1): approve procurement and outsourcing requirement`）；迁移映射见
+> [`docs/status/MIGRATION-MAP.md`](../status/MIGRATION-MAP.md)。
 > **阶段与授权**：用户已接受《M1 Procurement & Outsourcing Critical Chain Audit Report》的有限勘误，并明确授权将已确认 Gap 和四组业务决策统一整理进入 **REQUIREMENT**。本节仅为业务 Requirement 修订，不构成 DESIGN / IMPLEMENTATION / ACCEPTANCE / FREEZE 或 Git 远端写入授权。依据：`document.md §22.1 / §22.21 / §31.1–31.11 / §35.8`、`solution.md §26`、M1 审计报告及 M1-AE 有限勘误；远端基线 `master@498d50143c1bd54f0d71447e5477872775910a81`。
 >
 > **证据纪律**：手册语义取自业务审查方提供的 B3101 / B3121 摘要及已批准 §22/§31，不得声称 Claude/Codex 可直接读取原 Word 手册。M1 原报告中的临时 SQLite 运行结果是“原审计执行者报告的证据”，本节不冒称重新执行；未运行的 MySQL / 浏览器验收均为 `NOT_RUN`。原 §31.11 的历史证据与 `NOT READY` 状态保持原样。
@@ -577,5 +601,288 @@ T-REQ-03：错误断言精确验证 status + error code/message + 状态不变�
 - **当前总体状态**：`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY`。原 `G-1..G-5`、独立 UI/VMI/证据 Gap 保持开放；本阶段不签发 `COVERED`、Acceptance、Freeze、Release Readiness。
 - **Requirement 阶段结束标识**：`M1_REQUIREMENT_ACCEPTANCE_PASS`（2026-10-31 业务所有者批准）。该标识**只**覆盖本节 Requirement 文本的验收，不覆盖任何 Capability 的 `COVERED`、Domain Acceptance、Freeze 或 Release Readiness。
 - **后续授权**：业务所有者已授权进入 **M1 Design**（`AGENTS.md §4.3`），Design 唯一允许修改 `solution.md` 与 M1 相关章节及当天日志，并在完成后 HARD STOP。**仍未授权** Implementation、Migration 执行、MySQL 写入/重置、Git commit/push/merge/tag、发布、部署；§31.12.9 全部 13 个 Gate 仍为 `NOT_RUN`。
+
+---
+
+### 31.13 M1-Core 采购与委外首期 Requirement（2026-11-02；**待业务所有者批准**）
+
+> **阶段与授权**：业务所有者于 2026-11-02 批准 `M1-SRD-01`（首期范围重定基线，见
+> [`docs/decisions/m1-core-scope-rebaseline-20261102.md`](../decisions/m1-core-scope-rebaseline-20261102.md)），
+> 授权在本节完成 **M1-Core 首期**的 Requirement 修订。本节是 **REQUIREMENT**，不是 DESIGN /
+> IMPLEMENTATION / ACCEPTANCE / FREEZE，**不**签发任何 Capability 的 `COVERED`，
+> **不**授权 Implementation、Migration 执行、数据库写入或重置、MySQL Gate 运行、
+> Git 写操作、发布或部署。
+>
+> **本节与 §31.12 的关系**：§31.12 是 M1 全范围的历史批准合同，其正文与验收事实**保持不变**；
+> 本节是 **M1-Core 首期**的当前有效 Requirement，两者**并行有效**、各司其职：
+> §31.12 继续作为 M1 全域 Closure 的依据，本节决定首期（M1-Core）的验收条件。
+> **M1-Core 包级 Acceptance ≠ Procurement & Outsourcing 全域 Closure Acceptance。**
+>
+> **上游依据**：`document.md §22.1 / §22.21 / §31.1–§31.12 / §35.8`、`solution.md §26`、
+> §31.12 全部业务合同、M1 审计报告与 M1-AE 有限勘误、M1 候选设计（源 `solution.md §26.33`），
+> 以及 `M1-SRD-01` 的三项范围决定。基线 `master` @ `759d7216c7546ffa00a147f603c4e8852aada991`。
+>
+> **证据纪律**：本节全部函数名、表名、列名与现状判断来自对生产源码的逐处核对；
+> **不存在**于源码的接口一律标注为"不存在（本次需新建）"，不得以文档既有措辞冒充实现。
+> 本节**未运行**任何测试、MySQL 或浏览器；§31.13.5 的 7 个 Gate 全部为 `NOT_RUN`。
+
+#### 31.13.1 首期范围与不变量继承
+
+**IN SCOPE（首期核心能力链）**：
+
+1. 采购侧：采购收料通知、采购订单来源转换、IQC、采购入库；
+2. 委外物料侧：委外订单、BOM 用料、发料、退料、补料、Supplier WIP；
+3. 委外完工侧：委外完工通知、正式收货明细、质量门禁、合法增量倒冲、成品入库；
+4. 横切能力：必要的 canonical Inventory / Tracking / Valuation、数量守恒、来源追溯、事务、
+   幂等、权限与审计。
+
+**OUT OF SCOPE（首期不包含，延期）**：高级跨订单/跨期 WIP、复杂倒冲差异审批、VMI 结算、
+委外 AP/GL 自动过账、历史会计补偿。
+
+**继承且不得删除的全局不变量**（本节**不**因收缩范围而放弃其中任何一条）：
+
+| # | 不变量 | 来源 |
+|---|---|---|
+| INV-1 | Domain Owner 边界不变：物理库存真相、LOT/SERIAL、唯一权威 Mutation 与估值余额属 Inventory；IQC 判定属 Quality；Supplier Bill / AP / 暂估属 Finance；GL / 凭证 / 期间属 Accounting。**不得**新建第二 AP、第二估值账、第二收货引擎 | §31.12.1 |
+| INV-2 | 委外材料**全过程属于企业**；Supplier WIP 是**物理/保管位置**，不是物权变更；**不得**复用 VMI ownership semantics | §31.2 / §31.3.3 OUT-14 |
+| INV-3 | 委外材料执行、倒冲、LOT/SERIAL **必须**复用 Inventory 唯一权威 Writer；**不得**裸 `UPDATE` 库存余额、**不得**硬编码仓库、**不得**只写库存流水而不更新价值余额 | §31.12.4 / §31.9.10 |
+| INV-4 | 委外成本证据 = **实际倒冲消耗材料的账面价值 + 加工费**；**排除**发出未耗用、已退回、仍留在 Supplier WIP 的材料 | §31.2 / OUT-21 |
+| INV-5 | OUT-08 BOM 消费规则（approved / effective / `purpose=OUTSOURCE` / business-date appropriate；**禁止** `ACTIVE LIMIT 1`）与 OUT-09 用料清单快照规则（每单位用量 + 订单总量；Release 后不回写历史；额外材料走 Supplement）**继续有效** | §31.3.3 |
+| INV-6 | 通知单**不**改变库存、估值、GRNI 或 AP；"建待检单据"与"确认库存效力"是**不同动作** | §31.2 / §31.12.3 A-REQ-04 |
+| INV-7 | schema 改动**全部 additive**；不 DROP 历史表、不做 destructive rewrite、不 retroactive rewrite 历史已批准 PO / Receipt / Bill / AP；SQLite + MySQL 8 schema parity；migration idempotent | §31.6 / §31.8.B |
+| INV-8 | 全部 Procurement / Outsourcing mutation **后端 fail closed**；前端 hidden 不等于 authorization；关键 mutation 写 audit | §31.8.C |
+| INV-9 | `STANDARD_PURCHASE` / `OUTSOURCE_PROCESSING` 语义隔离；`OUTSOURCE_PROCESSING` PO **不得**承载企业供料物料行 | §31.2 / §31.12.3 |
+| INV-10 | 历史事实**不得**伪造；GET/CHECK **不得**静默修复历史；不可证明的数据**不得**推算、自动补记或默认归零（`SRD-03`） | §31.12.2 / `SRD-03` |
+| INV-11 | `receipt_notices` 与 `outsourcing_receipts` 的**来源关系**必须可追溯；`business_type` 不得被客户端字段绕过 | §31.12.3 A-REQ-02 |
+| INV-12 | 幂等：同一业务动作重放**不得**产生第二次库存、成本、通知数量或容量占用；错误必须**精确**返回 status + error code，**不得**用宽松区间掩盖 | §31.12.7 T-REQ-03 |
+
+#### 31.13.2 核心业务合同
+
+##### MC-REQ-01 业务单据的生产 API 可达性
+
+- 委外收货草稿/待检事实**必须**可由**生产 API**创建，且必须包含**一条或多条非空、合法**的产品/数量明细；
+  每行指向委外订单、适用的加工费 PO 行/完成通知来源，以及必要的产品 / UOM / LOT/SERIAL / 仓库身份。
+- 表头与明细**原子创建**，失败时**零副作用**；总数量必须等于明细之和。
+- **不得**依赖测试私有 SQL `INSERT` 制造下游可达条件。直接 `INSERT` 生产路径不存在的表
+  （当前 `outsourcing_receipt_items` **无生产写入方**）即视为不达标。
+- 采购侧对称要求：采购收料通知**必须**可由生产 API 创建并包含行级来源；
+  采购入库**必须**可由生产 API 从订单或通知来源创建。
+
+##### MC-REQ-02 采购收料通知、来源转换与多 PO 容量
+
+- 转换必须由**服务端**验证 `business_type`、supplier、订单/订单行、warehouse、quantity、UOM 与状态；
+  **不同业务类型强制拒绝**，**不得**凭客户端字段绕过。
+- 一张标准采购通知**可**关联**多个**同供应商、兼容仓库/业务类型的采购订单**明细来源**；
+  **不得**被单值 `purchase_order_id` 结构限制。
+- 支持**部分转换**与重复收货；累计转换/已确认数量**不得**超过：通知行剩余 × 有效订单行剩余 ×
+  交期/容差剩余 × 委外订单剩余可收量 —— 四重上界**同时**成立。
+- 转换已用数量与剩余量**必须**可查询、可审计、可追溯，且**累计单调不减**。
+- **无有效交期、多交期归属不明、历史容量无法证明** → 明确拒绝（fail closed）；
+  **不得**以省略参数的方式绕过上界。
+- **已转换的通知，其来源容量不得未经证明自动恢复**：取消不恢复通知来源容量；
+  任何重新转换在无不可变转换冲销台账前一律拒绝。
+- 无通知的**直接订单 → 采购入库**仍是合法既有路径，**不得**被强制取消。
+- LOT/SERIAL **只能**继承自可验证的实物或来源身份；**不得凭空继承**。
+
+##### MC-REQ-03 委外订单与 BOM 用料
+
+- 委外订单**必须**消费符合 INV-5 的 OUTSOURCE BOM，**禁止** `ACTIVE LIMIT 1` 选择器。
+- 委外订单必须保存/确认时形成**用料清单快照**：BOM/版本、组件、**每单位用量**、损耗、**订单总量**；
+  Release 后 master BOM 改变**不**回写历史；额外材料走**补料**。
+- 快照必须同时承载每单位用量与订单总量（订单总量 = 每单位用量 × 订单数量）；
+  倒冲基数取**订单总量**口径，preview 与 apply **必须**使用同一口径。
+
+##### MC-REQ-04 发料 / 退料 / 补料与 Supplier WIP 真实库存
+
+- Issue / Supplement / Return 的**有效业务状态**与仓位 Mutation、跟踪、库存流水必须**原子一致**。
+- 发料 = 企业仓 → 供应商 WIP 仓；退料 = 供应商 WIP 仓 → 企业仓；补料与发料同一链路。
+- 仓库**必须**由已验证的 supplier profile / 订单上下文解析，**不接受**任意客户端
+  `fromWarehouseId` / `toWarehouseId` 越权指定。
+- **不得**因业务计数器变化而凭空产生库存：当前"计数器更新"不等于"权威库存写入"，
+  首期必须真正经由 canonical Writer 写物理库存、跟踪与估值。
+- 缺失 WIP 仓库、库存不足、不相容 tracking、无权限或数量非法 → **fail closed**；
+  业务单据、库存、估值、审计**不得**出现部分成功。
+- 数量要求有限、正数、合法 UOM；**约束**累计已发、已退、已补、可用 WIP、可倒冲数量；
+  重放**不得**产生第二次动作。
+
+##### MC-REQ-05 委外完工通知、正式收货明细与质量门禁
+
+- 委外完工通知行**必须**可生成委外收货行；来源链（委外订单 → 加工费 PO → 完工通知 → 收货明细）
+  **必须**逐行可追溯。
+- 采购/委外入库在**应检验场景**必须由权威 Quality 判定 `PASS` 或 `WAIVED` 才能形成**库存效力**；
+  不合格或未检时**不得**进入可用库存/成本。
+- "**建待检收货**"与"**确认库存效力**"是**两个不同动作**：先产生待检收货表头明细供 IQC 读取，
+  再由确认动作产生库存效力。
+- 重复确认与并发转换**不得**重复计入库存、成本或通知数量。
+
+##### MC-REQ-06 合法增量倒冲与真实材料成本
+
+- 按委外订单用料清单行与**累计合格收货量**计算**增量**倒冲；
+  只消耗**该订单**对应可追溯 WIP，**不得**越额、**不得**跨订单、**不得**跨 LOT/SERIAL、
+  **不得**跨 UOM 静默取料。
+- 增量倒冲**只**对本次**正增量**产生一条物理 OUT 腿与一条 OUT 跟踪腿；
+  **无** IN 腿、**无**成品价值确认；**不得**重扣既有累计倒冲。
+- 材料成本**必须**来自 canonical 估值账（位置口径分摊），**禁止**跨仓全局平均价；
+  估值 Movement 与 Balance **必须**双写并对账。
+- **严格支持范围**（首期，见 §31.13.4 的 `M1-P-02`）：
+  1. 有明确 BOM 来源与物料行身份；
+  2. 单位一致，或存在**已批准且可证明**的换算；
+  3. **不支持的损耗/换算组合一律 fail closed**，**不得**生成倒冲数量或成本；
+  4. **不得自行创造新的损耗公式**。
+- 材料实耗价值与加工费暂估、正式账单金额与差异**必须**分别记录并可追溯。
+
+##### MC-REQ-07 成品入库
+
+- 只有通过质量与其他入库门禁的委外收货才形成**企业仓成品库存事实**。
+- 成品入库**必须**经唯一权威 Inventory Writer 进入企业仓，**禁止**硬编码仓库、
+  **禁止**裸插值变动表但不更新价值余额。
+- 成品**不得**通过 VMI 式物权转移建模；Supplier WIP 仅为来源/位置上下文。
+
+##### MC-REQ-08 数量守恒与来源追溯
+
+- 按产品、仓库、owner、库存状态、批/序列号及订单相关身份追踪；
+  发/退/补/倒冲每一步**必须**证明总物理数量守恒，或存在**明确的合法增减来源**。
+- 每个物理腿**必须**携带：来源类型、业务事件 ID、业务事件项 ID、腿序号、身份键
+  （五字段 Mutation Key），使**同一事件内的多个物料行与身份子腿互不撞键**。
+- **非预期重放必须被硬断言拒绝**，**不得**静默丢弃后续物理腿。
+- 每笔业务记录**必须**可追溯到：采购订单行 / 委外订单行 / 加工费 PO 行 / 通知行 / 收货明细 / 库存流水。
+
+##### MC-REQ-09 事务边界与幂等
+
+- 通知创建、确认、转换、收货确认、发料/补料/退料、倒冲、成品入库，
+  必须在**单一权威事务**内**重读并锁定**必要的来源与数量容量。
+- 幂等 scope 固定为 `(operation_type, document_id, idempotency_key)` 三元组，与 canonical
+  财务幂等存储与唯一键**一致**；创建类 API 使用请求期 scope。
+- 幂等键与物理腿 Mutation Key **必须**严格分离；外部幂等键**不得**直接充当物理腿键。
+- 容量检查**必须**在事务内以**权威口径**比较：比较总量**必须包含**本次待确认的数量，
+  并**净除**已转换量，避免与已收货量重复扣减。
+
+##### MC-REQ-10 权限与职责分离
+
+- 委外**业务操作**（订单、发退补料、完工通知、收货录入）、**收货生效**、**IQC**、
+  **加工费正式过账**必须分属**不同权限**。
+- 委外业务角色**不得**持有加工费正式过账权；**不得**因现有 `OUTSOURCING_MANAGE` 权限过宽
+  就保留财务越权路径。
+- 加工费正式过账必须**单权限**持有 `SUPPLIER_BILL_MANAGE`；该权限**尚未授予任何角色**时，
+  无人能过账（属 fail closed，不得绕过）。
+- 全部授权判定在**后端**；前端隐藏不构成授权。
+
+##### MC-REQ-11 审计
+
+- 关键 mutation **必须**写 audit：通知创建/确认/取消/转换、收料、发料/补料/退料、倒冲、
+  收货创建/生效、成品入库、被拒绝的权限与容量失败。
+- 审计**必须**记录业务单据标识与来源身份，使库存、成本与业务单据三者可互相回溯。
+- 审计 schema 的结构化增强（`business_date` / `request_id` / before-after）**不在首期范围**
+  （属 Platform / Finance 域独立授权），首期**不得**因此跳过 audit 写入。
+
+##### MC-REQ-12 历史数据隔离与 fail-closed
+
+- **只**使用真实可证明的历史来源、数量、身份与成本事实；**不可证明**的数据
+  **不得**推算、**不得**自动补记、**不得**默认归零。
+- 历史委外收货的效力**不得**无条件映射为"已生效"：必须按**可核查证据**
+  （库存流水 / 估值流水 / 质量判定 / 成本证据 / 来源明细）判定为"已生效已确认"或"历史未证实"；
+  后者**不开放**新的账单与退货能力，且**不改写**历史记录。
+- 历史 WIP **没有**身份证据时，一律留在"历史不可验证"隔离桶内，
+  **不得**被新的转出或倒冲动作消费；**不得**按比例分摊、**不得**推定 LOT/SERIAL。
+- 处置方式只允许：**只读 / 隔离 / fail closed**。大规模历史治理与会计补偿**延期**。
+
+##### MC-REQ-13 SQLite / MySQL 8 兼容
+
+- 新增表 / 列 / 索引**全部 additive**，两引擎**语义对等**；migration **idempotent**。
+- 唯一性与去重必须使用**两引擎等价**的机制：不得依赖"NULL 在 UNIQUE 索引中互异"
+  或"生成列摘要"这类单引擎行为。
+- 锁语义必须两引擎都有等价实现（行锁 / 立即写事务），不得只在单引擎下正确。
+- DDL 自动提交的引擎上，migration 必须**按已完成步骤可重放**，并规定部分完成后的重试语义。
+
+##### MC-REQ-14 移动端有限修复
+
+- 采购寻源与委外**现有工作面**必须能正确调用项目统一的 `api(path, options)` 接口
+  及对应后端权限/路由；**不得**调用不存在的导出。
+- 必须通过**真实浏览器**检查入口、列表/详情/提交与错误展示；宽度 320 / 390 / 430 / 680。
+- **只**修复已发现的可执行性缺陷与基本交互错误；**不**重做 MobileShell、导航或视觉体系。
+- 首期**不**交付完整现场移动工作流（另立工作包）。
+- 修复**不得**改变业务术语、API 合同、权限、状态机、Approval/Confirm/Post/Reverse 语义、
+  source/downstream 关系或库存/会计事实。
+
+##### MC-REQ-15 延期财务与 VMI 危险写入的拒绝边界
+
+- **委外加工费正式过账**（`C-P01..C-P04` 未裁定）必须 **fail closed**：
+  返回 409 `OUTSOURCING_GL_POLICY_NOT_APPROVED`，账单保持 `DRAFT`，
+  **零 AP open item、零凭证、零分录、零成本证据刷新**。
+- **VMI 结算 / 物权释放 / 账单交接**（`D-P01` / `D-P02` 未裁定）必须 **fail closed**：
+  **零库存位变化、零期间与结算行、零账单、零审计业务写入**。
+- **倒冲差异单据的审核生效路径**（`B-P02` 未裁定）必须 **fail closed**：
+  差异**只提供只读 preview**，任何"审核后生效"写入一律拒绝。
+- **跨单 WIP 成本携带**（`B-P01` 未裁定）必须 fail closed：`cost_cents` 保持 NULL、
+  `cost_state='UNVERIFIED_COST'`；**不得**以假定平均价生成不可逆历史账务。
+- 上述拒绝**必须**由**服务端**执行并有**零副作用**断言；**不得**以简单隐藏 UI 代替
+  服务端拒绝与零副作用验证。
+
+#### 31.13.3 依赖与不可强依赖
+
+- **可并行独立推进**：采购**直接**入库路径与 IQC、委外收货明细与两段式生效、
+  发退补料的 canonical Writer、增量倒冲与成品入库、权限门禁收紧、历史 fail-closed、
+  移动端有限修复。
+- **需先取得追认/签字**：采购**通知转换**路径（`A-P01` 物理模型追认 + `A-P02` 拒收重开边界
+  + `T-11` 零交期路径确认）。
+- **不得**把"完成委外收货 Schema"当作"开始修订发退补料权威 Writer"的全局阻塞；
+  **不得**把 UI 修复或并发证据留到最后才补。
+
+#### 31.13.4 政策处置与待业务所有者签字项
+
+完整登记见 [`docs/decisions/OPEN-BUSINESS-DECISIONS.md`](../decisions/OPEN-BUSINESS-DECISIONS.md) §1.4。本节只登记**首期适用结论**：
+
+| ID | 首期适用结论 | 状态 | 首期行为 |
+|---|---|---|---|
+| `A-P01` | 唯一权威通知模型 = 复用 `receipt_notices` + `receipt_notice_items` + 行级来源表；**不新建**第二套委外完成通知表 | `OWNER_RATIFICATION_PENDING` | 追认前，通知转换路径**不得进入 Implementation**；其余 Core 子项不受阻 |
+| `A-P02` | 保留多 PO / 行级部分转换 / 累计容量上限；首期**不开放**复杂拒收重开与自动再转换；LOT/SERIAL 只继承可验证身份 | `CORE_LIMITED_PENDING_OWNER` | 拒收重开类请求 409 且零副作用 |
+| `M1-P-02` | 主歧义（每单位用量 vs 订单总量）**已由**已批准的 OUT-09 / OUT-08 规则闭合；损耗计入与单位换算仍待裁定 | `CORE_LIMITED_PENDING_OWNER` | 严格支持范围外 fail closed（409 `OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED`） |
+| `M1-P-03` | 最小权限矩阵；业务 / 生效 / IQC / 正式过账分离 | `CORE_LIMITED_PENDING_OWNER` | `SUPPLIER_BILL_MANAGE` 注册与单权限门禁收紧**可先落地**；授予矩阵待签字 |
+| `T-11` | 转换容量不自动恢复；零交期 / 多交期不明 / 历史不可证一律拒绝 | `CORE_LIMITED_PENDING_OWNER` | 一律 fail closed，不省略参数绕过 |
+| `B-P01` / `B-P02` | WIP 成本携带 / 差异审核生效 | `DEFERRED_PENDING_POLICY` | 见 `MC-REQ-15` |
+| `C-P01..C-P04` | 加工费确认 / 科目 / 红冲 / GL 边界 | `DEFERRED_PENDING_POLICY` | 见 `MC-REQ-15` |
+| `D-P01` / `D-P02` / `M1-P-04` | VMI 结算 / 价格 / 关期容差 | `DEFERRED_PENDING_POLICY` | 见 `MC-REQ-15` |
+
+> **签字点仅三处**：`A-P01` 的物理模型追认、`A-P02` 的"首期不开放复杂拒收重开与自动再转换"确认、
+> `M1-P-03` 的角色授予矩阵。`M1-P-02` 与 `T-11` 的**收紧方向不需要签字**（首期一律 fail closed）；
+> 若业务所有者希望**放宽**支持范围，则需另行签字。
+
+#### 31.13.5 首期验收 Gate（M1C-G01 … M1C-G07；全部 `NOT_RUN`）
+
+| Gate | 业务断言（必要条件；**不得**以单个 HTTP 2xx 代替） | 证据层 |
+|---|---|---|
+| `M1C-G01` | 采购通知可达；多 PO 行级来源；部分转换与累计容量四重上界同时成立；无通知的直接 PO → 采购入库合法；容量与交期不可绕过 | HTTP + SQLite/MySQL |
+| `M1C-G02` | 委外正式收货**明细**原子可达（≥1 行、非空）；来源链逐行可追；IQC 从正式明细可达并可完成 PASS/WAIVED；建待检与生效分离；失败时库存/成本零副作用 | HTTP + Quality + Inventory |
+| `M1C-G03` | 发料/退料/补料沿 canonical 仓位写**真实**库存、跟踪与估值；企业所有权不变；内部仓与 WIP 仓数量与流水可对账；重放不产生第二次动作 | HTTP + Inventory/Valuation snapshots |
+| `M1C-G04` | 增量倒冲公式正确；材料成本来自 canonical 池分摊（**非**全局平均价）；成品经唯一 Writer 入企业仓；重复确认与并发不双扣/双收 | HTTP + Valuation snapshots |
+| `M1C-G05` | 两个受影响移动工作面无 `api.get/post` TypeError；320/390/430/680 宽度交互成功；服务端 RBAC 生效；**不**含视觉体系重做 | Browser |
+| `M1C-G06` | 延期财务/VMI 危险写入**服务端拒绝**（精确 status + error code）；**零** AP/GL/凭证/分录/库存位/结算行/账单写入；权限分离（业务角色不可正式过账） | HTTP + Finance + Inventory snapshots |
+| `M1C-G07` | 生产 API 端到端（无手写 SQL 造数）；SQLite/MySQL 对等；Core 关键 mutation 的**真实 Handler** 并发：一方成功 / 另一方合规拒绝，零重复写入、零部分副作用 | HTTP + Real MySQL 8 concurrency |
+
+**Gate 规则**：
+
+- 7 个 Gate 的 `execution_status` **全部为 `NOT_RUN`**；**无任何 PASS**。
+- 任一 Gate `NOT_RUN` / `FAIL`、以手工 SQL 造数替代业务可达性、或以延期能力的未裁定状态冒充通过，
+  都**不得**签发对应能力的 `COVERED`。
+- MySQL destructive Gate 仍**必须**使用独立 disposable 数据库并取得**逐次**明确授权；
+  本轮**未运行**、**不授权**运行。
+- `M1C-G07` **不强制**原 11 项 MySQL 竞态全量完成；按 Core 实际 mutation 选取必要的**真实 Handler** 竞态。
+- **M1-Core 包级 Acceptance ≠ M1 全域 Closure Acceptance**；M1 全域 Closure 仍以 §31.12.9 的
+  13 个 Gate 为准。
+
+#### 31.13.6 Requirement 阶段状态与 HARD STOP
+
+- 本节状态：**`PENDING_APPROVAL`**（待业务所有者批准）。**未**签发任何 Acceptance 标识。
+- §31.12 的 `M1_REQUIREMENT_ACCEPTANCE_PASS`（2026-10-31）**只**覆盖 §31.12 的历史文本，
+  **不**自动授予本节任何 PASS，也不构成对本节的批准。
+- 本节**不**签发任何 Capability 的 `COVERED`，**不**构成 Domain Acceptance / Freeze / Release Readiness；
+  `PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY` 状态**不变**。
+- **下一阶段**：M1-Core 候选 Design 见
+  [`docs/reviews/m1/procurement-outsourcing-m1-core-design.md`](../reviews/m1/procurement-outsourcing-m1-core-design.md)；
+  按 `AGENTS.md §4.3`，Design 完成后**必须 HARD STOP**。
+- **本节明确未授权**：Implementation、Migration 执行、数据库连接/重置/修改、MySQL Gate 运行、
+  Git push / merge / tag / release / deploy。
+- 原 `G-1..G-5` 与 §31.12.2 登记的 `M1-N01/N03/N04/N11` 保持开放；
+  其中被 §31.13 承接的子项**以 §31.13.5 的 Gate 为关闭依据**，未承接的保持开放。
 
 ---

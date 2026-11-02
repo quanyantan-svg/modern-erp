@@ -41,6 +41,17 @@
 **不授权** Implementation；`§26.33` 深引用仍然有效，只是目标文件为该待审文件而非 `docs/design/`。
 见 [`docs/status/PROJECT_STATUS.md`](docs/status/PROJECT_STATUS.md) §36.3 / §36.7。
 
+`M1-Core` 首期候选设计是**第二个**待审例外：依业务所有者 2026-11-02 批准的 `M1-SRD-01`
+（首期范围重定基线，见 [`docs/decisions/m1-core-scope-rebaseline-20261102.md`](docs/decisions/m1-core-scope-rebaseline-20261102.md)），
+M1-Core 的有界后继设计位于
+[`docs/reviews/m1/procurement-outsourcing-m1-core-design.md`](docs/reviews/m1/procurement-outsourcing-m1-core-design.md)。
+它与上一份 `§26.33` 候选**并列有效、职责不同**：前者是 **M1 全范围**候选（C / D 组延期部分与历史结论的载体，**不被改写**），
+后者是 **M1-Core 首期**候选（覆盖首期 A / B / U / T 部分，定义 7 个 `M1C-Gxx` Gate）。
+两者**均未获 `Design PASS`**，**均不构成** Current Active Design，**均不授权** Implementation；
+`docs/design/procurement-outsourcing.md` §26 仍是**唯一** Active 的 Procurement & Outsourcing Design 正文。
+旧 13 Gate → 新 7 Gate 的逐项处置映射见该候选设计 §13.2；
+当前项目状态见 [`docs/status/PROJECT_STATUS.md`](docs/status/PROJECT_STATUS.md) §37。
+
 `solution.md` 原有两个 `## 21.`（重复编号）已消解：`21. 当前设计状态` 是 2026-10-06 的**过期状态快照**，
 已移入 `docs/archive/status/solution-md-design-status-2026-10-06.md`；`21. Core Scope Cleanup Implementation Design`
 保留 `§21` 编号并迁入 `docs/design/core-scope-cleanup.md`。

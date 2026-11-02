@@ -8,6 +8,10 @@
 > §1.1 – §1.3 的处置依据是 **M1 候选设计**
 > [`docs/reviews/m1/procurement-outsourcing-critical-chain-design.md`](../reviews/m1/procurement-outsourcing-critical-chain-design.md)
 > §26.33.14（源 `solution.md §26.33` @ `912fd76700ff6f3ad1509eec4c9e2241c1830265`）。
+> §1.4 的处置依据是 **`M1-SRD-01` 首期范围重定基线决定**
+> [`docs/decisions/m1-core-scope-rebaseline-20261102.md`](./m1-core-scope-rebaseline-20261102.md)
+> 与 **M1-Core 候选 Design**
+> [`docs/reviews/m1/procurement-outsourcing-m1-core-design.md`](../reviews/m1/procurement-outsourcing-m1-core-design.md)。
 > 该候选设计**尚未获得** `Design PASS`；本表引用它只用于登记**技术处置**与**开放状态**，
 > **不**因此把任何政策记为已批准，**不**构成 Acceptance / Freeze。
 
@@ -86,6 +90,88 @@
 **本节不改变 §1 十项政策的任何状态，也不构成任何 Capability 的 `COVERED` 或任何 Acceptance / Freeze。**
 G-5（UAT-14 旧 oracle 与 V21 合同冲突）的处置动作已由 `document.md §31.12.6`（D-REQ-03）**批准**，
 它是 **Implementation 内的已批准纠正动作**，**不是**业务政策待决项（见 §3）。
+
+### 1.4 M1-Core 首期政策处置（2026-11-02，依据 `M1-SRD-01`）
+
+> 本节只登记**处置与状态**，不复制 Requirement / Design 正文。
+> 规范正文：[`docs/requirements/procurement-outsourcing.md`](../requirements/procurement-outsourcing.md) §31.13
+> 与 [`docs/reviews/m1/procurement-outsourcing-m1-core-design.md`](../reviews/m1/procurement-outsourcing-m1-core-design.md)。
+>
+> **状态含义**（M1-Core 首期专用于表达"首期范围已收敛、但业务政策尚未签字"这一中间态）：
+>
+> | 状态 | 含义 | 是否需要业务所有者签字 |
+> |---|---|---|
+> | `APPROVED_SCOPE_DECISION` | 范围决定本身已批准（SRD-01 / SRD-02 / SRD-03） | 否（已签） |
+> | `CORE_LIMITED_PENDING_OWNER` | 已提出**首期限定规则**建议；首期按该建议 fail closed，**放宽**支持范围需签字 | **是**（仅放宽需签；收紧/拒绝不需要） |
+> | `OWNER_RATIFICATION_PENDING` | 已有技术方案，缺业务所有者对**该方案**的追认 | **是** |
+> | `DEFERRED_PENDING_POLICY` | 延期且待政策裁定；首期**必须**拒绝其危险写入且零副作用 | 延期后需要 |
+>
+> **三种状态都不等于 Implementation 许可**，也都不等于该政策的业务内容已获批准。
+
+#### 1.4.1 已批准的范围决定（`APPROVED_SCOPE_DECISION`）
+
+| ID | 内容 | 状态 | 首期效力 |
+|---|---|---|---|
+| `SRD-01` | M1-Core 首期范围：采购通知/来源转换/IQC/采购入库；委外订单/BOM 用料/发退补料/Supplier WIP；委外完工通知/正式收货明细/质量门禁/合法增量倒冲/成品入库；必要的 canonical Inventory/Tracking/Valuation、数量守恒、来源追溯、事务、幂等、权限与审计 | `APPROVED_SCOPE_DECISION` | 界定 §31.13 的 IN SCOPE |
+| `SRD-02` | 移动端阶段划分：首期只修现有工作面的 API 调用、基本交互错误、权限与错误展示，维持 `U-REQ-01` 的有限目标；完整现场移动工作流另立工作包 | `APPROVED_SCOPE_DECISION` | 界定 §31.13 `MC-REQ-13` 与 `M1C-G05` |
+| `SRD-03` | 历史数据证据策略：只用真实可证明事实；不可证明数据不得推算/自动补记/默认归零；保留历史证据，只读、隔离或 fail closed | `APPROVED_SCOPE_DECISION` | 界定 §31.13 `MC-REQ-11` |
+
+#### 1.4.2 Core 限定规则建议（`CORE_LIMITED_PENDING_OWNER` / `OWNER_RATIFICATION_PENDING`）
+
+> **共性规则**：以下每一条的**收紧方向**（拒绝、fail closed、不生成错误数据）在首期**直接可实施**，
+> 不需要额外签字；**需要签字的只是"是否放宽支持范围"或"是否追认具体技术选择"**。
+> 首期一律按最保守方向执行。
+
+| ID | 建议的 Core 限定规则 | 影响与首期行为 | 状态 | 签字点 |
+|---|---|---|---|---|
+| `A-P01` | **唯一权威通知模型 = 复用 `receipt_notices` + `receipt_notice_items` + 行级来源表**，不新建第二套委外完成通知表、不建立第二收货引擎；由 `receipt_notices.business_type` 判别标准采购与委外 | §31.12.3 A-REQ-06（**已批准**）本已要求 Design 提出**唯一**权威模型并说明历史兼容与 SQLite/MySQL 对等；本项的技术选择已由 M1-Core 候选 Design 给出，但**尚未获 Owner 追认** | `OWNER_RATIFICATION_PENDING` | 追认该物理模型选择。**不追认则通知转换路径（`M1C-G01` 的转换段）不得进入 Implementation**；委外收货明细、IQC、发退补料、倒冲、成品入库**不依赖**本项 |
+| `A-P02` | **保留**多 PO 来源、行级部分转换与累计容量上限；首期**不开放**复杂拒收重开（拒收→重开→再转换状态机）与自动再转换；LOT/SERIAL **只能**来自可验证的实物或来源身份，**不得凭空继承** | 已批准部分（multi-PO、质量门禁、行级容量守恒）**不受影响**；新增的拒绝边界使首期行为确定。首期对"拒收重开"类请求一律 409 且零副作用 | `CORE_LIMITED_PENDING_OWNER` | 是否接受"首期不开放复杂拒收重开与自动再转换"这一收缩（签字即确认该边界） |
+| `M1-P-02` | **区分两层**：① **已批准**部分 = OUT-09 每单位用量/订单总量快照 + OUT-08 BOM 消费规则 → "每单位用量 vs 订单总量"主歧义**已闭合**；② **未裁定**部分 = 损耗（scrap）是否计入倒冲基数、BOM 计量单位 ↔ 物料清单 `unit` 换算系数。首期采用**严格支持范围**：① 有明确 BOM 来源（approved / effective / `purpose=OUTSOURCE` / business-date appropriate）与物料行身份；② 单位一致，或存在**已批准且可证明**的换算；③ **不支持的损耗/换算组合一律 fail closed**，不得生成倒冲数量或成本；④ **不得自行创造新的损耗公式**，不得用跨仓全局平均价代替材料成本 | 首期倒冲在"受支持组合"内产出正确增量；落在受支持范围外时 409 `OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED` 且零副作用。**收紧不需要签字** | `CORE_LIMITED_PENDING_OWNER` | 是否**放宽**支持范围（接受损耗计入某一口径、接受某类换算系数）。**主歧义不需要重新签字**（已由已批准规则闭合） |
+| `M1-P-03` | **最小权限矩阵**：委外业务操作（订单、发退补料、完工通知、收货录入）与**收货生效**、**IQC**、**加工费正式过账**分属不同权限；**委外业务角色不得持有加工费正式过账权**；**不得因现有 `OUTSOURCING_MANAGE` 权限过宽就保留财务越权路径** | ① `SUPPLIER_BILL_MANAGE` 的**注册**与"过账必须单权限持有"的**门禁收紧**（无人持有即无人能过账 = fail closed）**不依赖**本项签字，可先落地；② 过账另需 `role-accounting` 映射与采购角色分离 | `CORE_LIMITED_PENDING_OWNER` | 是否设立**独立**委外业务角色、该角色持有哪些 `OUTSOURCING_*` 权限、`SUPPLIER_BILL_MANAGE` 是否授予 `role-accounting` 以外的既有角色 |
+| `T-11`（含交期边界） | ① **不得未经证明自动恢复来源容量**：转换已用数量保持累计且单调，取消不恢复通知来源容量，重新转换 fail closed；② **无有效交期**、**多交期归属不明**、**历史容量无法证明** → 一律明确拒绝（409），**不得以省略参数绕过上界**；③ 交期容量由**可追溯的交期消费事实**判定 | 首期一律 fail closed，**收紧不需要签字**。首期**不开放**零交期转换路径 | `CORE_LIMITED_PENDING_OWNER` | 是否在后续工作包**开放**零有效交期场景下的转换路径（首期保持拒绝） |
+
+#### 1.4.3 延期政策（`DEFERRED_PENDING_POLICY`）
+
+> 依 `M1-SRD-01` §2.2，下列能力移出 M1-Core 首期验收范围。**延期不是业务政策通过，也不是 Implementation 许可。**
+> 每条在首期都必须有**服务端拒绝规则 + 零副作用**；不得以"暂未实现"为由保留可写路径。
+
+| ID | 内容 | 首期边界（必须 fail closed） | 状态 |
+|---|---|---|---|
+| `B-P01` | 跨订单/跨期 Supplier WIP 价值携带（源账面价值、价差、转移时点、期间锁） | 委外 WIP **数量**归属守恒仍属首期（`M1C-G03`）；跨单 WIP **成本携带**延期 ⇒ `cost_cents` 保持 NULL、`cost_state='UNVERIFIED_COST'`，**不得**以假定平均价生成不可逆历史账务 | `DEFERRED_PENDING_POLICY` |
+| `B-P02` | 倒冲差异生成单据后的审核人、退补单撤销/冲销状态 | 首期**不开放**倒冲差异单据的生效路径；差异只提供**只读 preview**，任何"审核后生效"类写入一律 409 且零副作用 | `DEFERRED_PENDING_POLICY` |
+| `C-P01` | 加工费在收货/暂估/正式过账各时点的金额确认；GRNI 产生与冲回 | 委外加工费**正式过账**必须拒绝（409 `OUTSOURCING_GL_POLICY_NOT_APPROVED`），账单保持 DRAFT，**零 AP / 零 GL / 零凭证 / 零分录** | `DEFERRED_PENDING_POLICY` |
+| `C-P02` | 加工费会计科目/资本化、价差与税务 | 同 `C-P01`；首期**不得**产生任何加工费会计分录 | `DEFERRED_PENDING_POLICY` |
+| `C-P03` | 过账后红冲/贷项与历史无原始凭证数据的处理 | 首期**不得**创建无原始委外凭证对应的采购贷项/红冲凭证；相关路径一律拒绝且零副作用 | `DEFERRED_PENDING_POLICY` |
+| `C-P04` | Accounting 未 Domain Closure 时委外 Source→Canonical Voucher 的有界接入边界 | 首期**不接入**任何委外专用 GL 路径；不得新建委外专用第二 GL | `DEFERRED_PENDING_POLICY` |
+| `D-P01` | VMI 结算窗口、消耗与物权转移的前后顺序、可结算数量口径 | VMI **结算/物权释放**写入一律拒绝且零副作用；不得凭空推导统一触发模式 | `DEFERRED_PENDING_POLICY` |
+| `D-P02` | VMI 物权释放数量的协议价格、税、账单日期、部分结算规则 | 同 `D-P01`；VMI 账单交接一律拒绝 | `DEFERRED_PENDING_POLICY` |
+| `M1-P-04` | VMI 调整量的关期容差 | 随 VMI 结算整体延期，首期**不适用**（容差不进入首期合同） | `DEFERRED_PENDING_POLICY` |
+
+#### 1.4.4 需签字项与不依赖签字项（首期 Core 子项独立性）
+
+| Core 子项 | 依赖的政策 | 首期可推进性 |
+|---|---|---|
+| 采购入库**直接**路径（PO → Purchase Receipt，无通知）、IQC 读取正式收货明细 | 无（依赖 `A-P01` 的只有**通知转换**路径） | **可独立推进** |
+| 委外收货**表头 + 明细**原子创建、零空明细、来源可达 | 无 | **可独立推进** |
+| 委外发料 / 补料 / 退料写 canonical 库存 + 跟踪 + 估值 | 无 | **可独立推进** |
+| 合法增量倒冲（受支持组合）与成品入库 | `M1-P-02`（**仅放宽**需签字；收紧不需要） | **可独立推进**（按严格支持范围 fail closed） |
+| 委外收货**生效**（两段式：建待检 → 确认库存效力）与质量门禁 | 无 | **可独立推进** |
+| 权限分离（`SUPPLIER_BILL_MANAGE` 注册 + 单权限门禁收紧） | `M1-P-03`（**仅授予矩阵**需签字） | **可独立推进** |
+| 历史数据 fail-closed / 只读 / 隔离 | 无（`SRD-03` 已批准） | **可独立推进** |
+| 移动端有限修复 | 无（`SRD-02` 已批准） | **可独立推进** |
+| 采购**通知转换**（多 PO、部分转换、容量、交期绑定） | `A-P01`（物理模型追认）+ `A-P02`（拒收重开边界确认）+ `T-11`（零交期路径确认） | **需签字**后方可进入 Implementation |
+
+> **重要**：本节**不**签发任何 Implementation 授权。上述"可独立推进"仅表示**该子项不被上述待签政策阻塞**，
+> 其实际实施仍需 Requirement 验收 + Design PASS + 独立的 Implementation 授权。
+
+#### 1.4.5 本节与既有登记的关系
+
+- 本节**不改变** §1.1 – §1.3 的任何历史结论；`M1-F-05..M1-F-12` 的处置类别与转交对象**保持原样**。
+- §1.1 – §1.3 描述的是 **M1 全范围**下的处置；§1.4 描述的是 **M1-Core 首期**下的处置。
+  两者**同时有效**：全范围口径继续有效以支撑后续工作包，首期口径决定 M1-Core 的实施边界。
+- 本节**不**构成任何 Capability 的 `COVERED`，也**不**构成 Acceptance / Freeze / Release Readiness。
+  M1-Core 的 7 个 Gate 状态见
+  [`docs/reviews/m1/procurement-outsourcing-m1-core-design.md`](../reviews/m1/procurement-outsourcing-m1-core-design.md) §13。
 
 
 

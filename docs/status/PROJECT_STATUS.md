@@ -485,6 +485,112 @@ M1_A2_N2_RETIRED_AND_WORKTREE_FIX_READY
 
 ---
 
+## 37. M1-Core 范围重定基线状态（2026-11-02）
+
+```text
+M1_CORE_REBASELINE_READY_FOR_INDEPENDENT_REVIEW
+```
+
+### 37.1 本节定位与边界
+
+本节是 `M1-SRD-01` 范围重定基线在**项目状态表**中的**唯一增量登记**。
+
+- 本节**不修改、不删除** §35 / §36 的任何历史结论；凡与 §35、§36 冲突，按**日期化 supersession** 处理。
+- 本节**不是** Acceptance，也**不签发**任何 Acceptance / Freeze 标识。
+- 本节**不关闭** §35.8 的 G-1…G-5、§35.9 的全部 Release Blockers、§36.5 列出的开放事项，
+  **不**升级任何 Domain 的冻结层级，**不**改变 `PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY`。
+- 规范正文不在本节：本节的 Requirement / Design / Gate / 政策条目**只**给指针与状态。
+
+### 37.2 已批准的范围决定（`APPROVED_SCOPE_DECISION`）
+
+| ID | 内容 | 授权来源 | 日期 | 登记位置 |
+|---|---|---|---|---|
+| `SRD-01` | M1-Core 首期范围：采购通知/来源转换/IQC/采购入库；委外订单/BOM 用料/发退补料/Supplier WIP；委外完工通知/正式收货明细/质量门禁/合法增量倒冲/成品入库；必要的 canonical Inventory/Tracking/Valuation、数量守恒、来源追溯、事务、幂等、权限与审计。**延期**：高级跨订单/跨期 WIP、复杂倒冲差异审批、VMI 结算、委外 AP/GL 自动过账、历史会计补偿 | 业务所有者 | 2026-11-02 | [`docs/decisions/m1-core-scope-rebaseline-20261102.md`](../decisions/m1-core-scope-rebaseline-20261102.md) §2 |
+| `SRD-02` | 移动端阶段划分：首期只修现有工作面的 API 调用、基本交互错误、权限与错误展示，维持 `U-REQ-01` 的有限目标；完整现场移动工作流另立工作包；不重做 MobileShell / 导航 / 视觉体系 | 业务所有者 | 2026-11-02 | 同上 §3 |
+| `SRD-03` | 历史数据证据策略：只用真实可证明的历史来源、数量、身份与成本事实；不可证明数据不得推算、自动补记或默认归零；保留历史证据，只读 / 隔离 / fail closed；大规模治理与会计补偿延期 | 业务所有者 | 2026-11-02 | 同上 §4 |
+
+**三项范围决定已批准，不等于任何业务政策已批准，也不等于 Implementation 许可。**
+
+### 37.3 Requirement 与 Design 的当前状态
+
+| 对象 | 位置 | 状态 | 说明 |
+|---|---|---|---|
+| M1 全范围 Requirement | [`docs/requirements/procurement-outsourcing.md`](../requirements/procurement-outsourcing.md) §31.12 | **历史批准合同，保留不变** | 2026-10-31 的 `M1_REQUIREMENT_ACCEPTANCE_PASS` 仍是历史事实；首期当前效力由 §31.13 取代 |
+| **M1-Core 首期 Requirement** | 同文件 **§31.13** | **`PENDING_APPROVAL`**（待业务所有者批准） | 覆盖 `MC-REQ-01..15`；含 12 条继承不变量；新批准**不自动**继承旧 `M1_REQUIREMENT_ACCEPTANCE_PASS` |
+| M1 全范围候选 Design | [`docs/reviews/m1/procurement-outsourcing-critical-chain-design.md`](../reviews/m1/procurement-outsourcing-critical-chain-design.md) | `PENDING_APPROVAL` / `PENDING_REVIEW` | **保持原样、未被改写**；C / D 组延期部分与历史结论的载体 |
+| **M1-Core 首期候选 Design** | [`docs/reviews/m1/procurement-outsourcing-m1-core-design.md`](../reviews/m1/procurement-outsourcing-m1-core-design.md) | `PENDING_APPROVAL` / `PENDING_REVIEW`；`Design PASS` = `NOT_ISSUED`；`Implementation` = `NOT_AUTHORIZED` | 有界后继设计：`M1C-WP-0..WP-7`、首期最小 migration 集、API 矩阵、RBAC/SoD、错误与零副作用、历史 fail-closed、SQLite/MySQL 相容 |
+| Active Procurement & Outsourcing Design | [`docs/design/procurement-outsourcing.md`](../design/procurement-outsourcing.md) §26 | `ACTIVE` | **仍是唯一 Active Design 正文**；**Active Design Promotion 未执行** |
+
+**两个 M1 候选并列有效、职责不同**；M1-Core 获批后才需要单独执行 Active Design Promotion。
+
+### 37.4 M1-Core Gate（7 个）与旧 13 Gate 的处置
+
+新 Gate：`M1C-G01` … `M1C-G07`，`execution_status` **7/7 `NOT_RUN`**，**无任何 PASS**。
+逐项处置映射（旧 13 Gate → 新 Gate / `DEFERRED` / `SUPERSEDED`）见
+[`docs/reviews/m1/procurement-outsourcing-m1-core-design.md`](../reviews/m1/procurement-outsourcing-m1-core-design.md) §13.2。
+
+| 旧 Gate | 处置摘要 |
+|---|---|
+| `M1-GA01` / `M1-GA03` | 吸收 → `M1C-G02`（委外收货明细 + 两段式生效 + IQC） |
+| `M1-GA02` | 吸收 → `M1C-G01`（采购通知 + 多 PO + 容量 + 直接入库） |
+| `M1-GB01` | 吸收 → `M1C-G03`（发退补料真实库存 / 跟踪 / 估值） |
+| `M1-GB02` | 吸收 → `M1C-G04`（增量倒冲 + 真实材料成本 + 成品入库） |
+| `M1-GU01` | 吸收 → `M1C-G05`（移动端有限修复） |
+| `M1-GB03` / `M1-GC01` / `M1-GC02` / `M1-GD01` / `M1-GD02` | **DEFERRED** → 其"危险写入必须安全拒绝且零副作用"部分由 `M1C-G06` 承接 |
+| `M1-GT01` | **SUPERSEDED（缩减）** → `M1C-G07` 的 `CR-01..CR-08`（按首期实际 mutation 选取真实 Handler；核心链的真实库存 / 事务 / 幂等 / 并发验证**未被删除**） |
+| `M1-GT02` | **拆分** → UAT-14 oracle 纠正（§31.12.6 D-REQ-03 的**已批准义务**）由 `M1C-G07` 承接；`OWNER_CHANGE` 独立 Handler Gate 与 UAT-20 随 VMI 结算 **DEFERRED** |
+
+**旧 13 Gate 的状态不变**：`execution_status` 13/13 `NOT_RUN`、`readiness_status` 9 `NOT_RUN` + 4 `BLOCKED`；
+**无任何旧 Gate 被伪造 PASS**。旧 13 Gate 继续作为 **M1 全域 Closure** 的验收合同；
+**M1-Core 包级 Acceptance ≠ M1 全域 Closure Acceptance ≠ Domain Acceptance**。
+
+### 37.5 政策状态
+
+| 类别 | 条目 | 状态 |
+|---|---|---|
+| 已批准的范围决定 | `SRD-01` / `SRD-02` / `SRD-03` | `APPROVED_SCOPE_DECISION` |
+| Core 限定规则（**待 Owner 签字**） | `A-P02`、`M1-P-02`、`M1-P-03`、`T-11` | `CORE_LIMITED_PENDING_OWNER` |
+| 待 Owner 追认 | `A-P01` | `OWNER_RATIFICATION_PENDING` |
+| 延期（待政策裁定） | `B-P01`、`B-P02`、`C-P01..C-P04`、`D-P01`、`D-P02`、`M1-P-04` | `DEFERRED_PENDING_POLICY` |
+
+登记与逐项影响见
+[`docs/decisions/OPEN-BUSINESS-DECISIONS.md`](../decisions/OPEN-BUSINESS-DECISIONS.md) §1.4。
+
+**首期需业务所有者签字的具体裁定共 5 处**：`A-P01`（物理模型追认）、`A-P02`（拒收重开边界）、
+`T-11`（零交期路径）、`M1-P-03`（角色授予矩阵）、`M1-P-02`（**仅在希望放宽支持范围时**）。
+其中 `A-P01` / `A-P02` / `T-11` 共同阻塞 `M1C-WP-1` / `M1C-G01`；
+其余六个 Core 工作包**不依赖**这三项。
+
+### 37.6 本轮明确未发生的事项
+
+- **未**修改任何 `src/` / `server/` 生产代码、schema、migration、API、权限、状态机或业务测试；
+- **未**连接、重置、迁移或修改任何数据库；**未**运行任何 MySQL / 浏览器 / 业务测试 / build；
+- **未**签发 Requirement 验收、Design PASS、Domain Acceptance、Capability Freeze、Release Readiness；
+- **未**执行 Active Design Promotion；`docs/design/procurement-outsourcing.md` §26 仍是唯一 Active Design；
+- **未**关闭 G-1…G-5、`M1-N01/N03/N04/N11` 或任何 Release Blocker；
+- **未**把任何延期能力、任何旧 Gate、任何历史缺陷写成已修复或已通过；
+- **未** Push / Merge / Tag / Release / Deploy；**未**改写 Git 历史；
+- **未**移动、删除或重建任何 release tag。
+
+### 37.7 下一步建议
+
+1. **业务所有者独立审查** M1-Core Requirement（§31.13）与候选 Design
+   （`docs/reviews/m1/procurement-outsourcing-m1-core-design.md`），并裁定 §37.5 的 5 处签字项。
+2. 审查通过后**单独**执行 **Active Design Promotion**（把 M1-Core 正文移入 `docs/design/`），
+   并把旧候选设计标注为**已取代**或移入 `docs/archive/`。
+3. **下一个 Implementation 工作包建议**：`M1C-WP-0`（基础设施：migration 骨架、parity 断言、
+   `SOURCE_TYPES` 注册、`SUPPLIER_BILL_MANAGE` 权限注册、锁序与事务守卫）——
+   它是其余六个工作包的共同前置，且**不被**任何待签政策阻塞。
+   其后按依赖并行推进 `M1C-WP-2`（委外收货明细）、`M1C-WP-3`（发退补料权威 Writer）、
+   `M1C-WP-4`（增量倒冲与成品入库）、`M1C-WP-5`（拒绝边界与权限分离）、`M1C-WP-6`（移动端有限修复）；
+   `M1C-WP-1`（采购通知转换）在 `A-P01` / `A-P02` / `T-11` 追认后进入。
+4. Implementation 的启动仍**必须**取得业务所有者的**单独**明确授权（`AGENTS.md §4.4`）；
+   MySQL destructive Gate 另需**独立 disposable 数据库**与**逐次**明确授权。
+5. `M1-Core` 的验收以 7 个 `M1C-Gxx` Gate 为准；`M1C-G07` 需要真实 MySQL 8 证据，
+   在取得授权前**不得**声称通过。
+
+---
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。

@@ -5,6 +5,18 @@
 > 权威来源：`solution.md` §26
 > 来源：`solution.md` §26（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
 
+> **（2026-11-02 提示 —— 本文件仍是唯一 Active Design）**
+> 业务所有者于 2026-11-02 批准 `M1-SRD-01`，据此 M1 的**首期**范围被重定基线。
+> 本文件 §26 **保持为唯一 Active 的 Procurement & Outsourcing Design 正文，不被改写**。
+> M1-Core 首期的**候选设计**保存在待审区
+> [`docs/reviews/m1/procurement-outsourcing-m1-core-design.md`](../reviews/m1/procurement-outsourcing-m1-core-design.md)
+> （`PENDING_APPROVAL` / `PENDING_REVIEW`，`Design PASS` **未签发**，**不构成** Current Active Contract）；
+> M1 全范围的候选设计保存在
+> [`docs/reviews/m1/procurement-outsourcing-critical-chain-design.md`](../reviews/m1/procurement-outsourcing-critical-chain-design.md)。
+> 范围决定见
+> [`docs/decisions/m1-core-scope-rebaseline-20261102.md`](../decisions/m1-core-scope-rebaseline-20261102.md)；
+> 当前项目状态见 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §37。
+
 ## 26. Procurement & Outsourcing Domain Technical Design
 
 > 本节固化 Procurement & Outsourcing Domain Closure 的 Design 阶段成果。Requirement 见 `document.md §31`；Audit 见本次会话的 `PROCUREMENT & OUTSOURCING DOMAIN FINAL AUDIT REPORT` + Correction Pass。Manual Evidence Baseline 来自上游已批准的 B3101 / B3121 + B3104 / B3105 / B3106 / B3108 / B3109 / B3119 / B3120。

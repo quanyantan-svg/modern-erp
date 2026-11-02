@@ -10,11 +10,15 @@
 | 文件 | 内容 | 状态 |
 |---|---|---|
 | [`OPEN-BUSINESS-DECISIONS.md`](./OPEN-BUSINESS-DECISIONS.md) | 尚未裁定的业务政策与设计决策登记 | `ACTIVE` |
+| [`m1-core-scope-rebaseline-20261102.md`](./m1-core-scope-rebaseline-20261102.md) | `M1-SRD-01` —— M1 首期范围重定基线决定（SRD-01 / SRD-02 / SRD-03） | `APPROVED`（仅三项范围决定；不含任何 Implementation 授权） |
 
 ## 登记规则
 
 - 一条决策**只有一个规范来源**。本目录指向它，不复制它；
 - 决策状态只允许：`PENDING`（待裁定）/ `RATIFICATION_PENDING`（待业务所有者追认）/ `APPROVED` / `REJECTED` / `DEFERRED`；
+  M1-Core 首期另启用 `APPROVED_SCOPE_DECISION`（已批准的范围决定本身）/
+  `CORE_LIMITED_PENDING_OWNER`（首期限定规则已提出、待业务所有者签字）/
+  `DEFERRED_PENDING_POLICY`（延期且待政策裁定）—— 三者均**不**等于 Implementation 许可；
 - 决策被裁定后，结论写入规范来源，本目录改状态并保留指针；
 - 业务政策未裁定前，其下游 Implementation 必须 **fail closed**，不得按假设实现；
 - 不得在本目录追加执行报告或测试流水。

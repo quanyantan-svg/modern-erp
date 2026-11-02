@@ -23,7 +23,7 @@
 | Master & Engineering | [`docs/requirements/master-engineering.md`](docs/requirements/master-engineering.md) | §28 |
 | Manufacturing & Quality | [`docs/requirements/manufacturing-quality.md`](docs/requirements/manufacturing-quality.md) | §29 |
 | Planning | [`docs/requirements/planning.md`](docs/requirements/planning.md) | §30 |
-| Procurement & Outsourcing | [`docs/requirements/procurement-outsourcing.md`](docs/requirements/procurement-outsourcing.md) | §31 |
+| Procurement & Outsourcing | [`docs/requirements/procurement-outsourcing.md`](docs/requirements/procurement-outsourcing.md) | §31（§31.12 = M1 全范围历史批准合同；**§31.13 = M1-Core 首期，待批准**） |
 | Inventory & Warehouse | [`docs/requirements/inventory-warehouse.md`](docs/requirements/inventory-warehouse.md) | §32 |
 | Finance Operations | [`docs/requirements/finance-operations.md`](docs/requirements/finance-operations.md) | §33 |
 | Sales & Customer | [`docs/requirements/sales-customer/README.md`](docs/requirements/sales-customer/README.md) | §34 + Wave 8/9/10/11 修订 |
