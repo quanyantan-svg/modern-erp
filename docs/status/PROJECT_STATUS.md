@@ -962,6 +962,44 @@ Release / Deploy。**R2 完成后 HARD STOP**，等待独立审查与下一工�
 
 ---
 
+### 37.19 M1-Core `M1C-WP1-FINAL-CLOSEOUT` OUTSOURCE 通知容量拒绝错误码收口（2026-11-02）
+
+**业务所有者决定**：WP-1 范围内最后一项明确的错误码合同偏差 —— OUTSOURCE 通知**创建**时
+容量越界抛普通 `HttpError(409)`，错误码不是 Active Design §9.3 规定的
+`RECEIPT_NOTICE_CAPACITY_EXCEEDED`。业务所有者批准一次**最小**修复（仅错误码收口 +
+回归测试，不含功能扩展）。
+
+| 对象 | 当前状态 |
+|---|---|
+| `M1C-WP1-FINAL-CLOSEOUT` | `IMPLEMENTED`，**等待审查**；`M1C-WP-1` 的 Implementation PASS **未**签发 |
+| 修复提交 | `99f0bc7b9e74c99293ca78ba51145c6b880f479b`（`fix(erp): 收口 OUTSOURCE 通知创建容量越界的精确错误码`） |
+| 缺陷 | `server/modules/procurement-receiving.js::createReceiptNotice()` 的 OUTSOURCE 容量越界分支抛普通 `HttpError(409)`，序列化后 `code='BUSINESS_RULE_BLOCKED'` |
+| 修复 | 改为项目既有标准业务错误构造 `noticeBusinessError(NOTICE_ERROR_CODES.CAPACITY_EXCEEDED, ...)`；数量计算、事务边界、历史 fail-closed 行为与错误消息语义**全部不变** |
+| 两类拒绝不混淆 | `RECEIPT_NOTICE_OUTSOURCING_CAPACITY_UNPROVEN`（历史效力不可证明）与 `RECEIPT_NOTICE_CAPACITY_EXCEEDED`（容量越界）仍是两个互不混淆的拒绝类别 |
+| 已有测试覆盖 | 创建路径的精确码此前**无覆盖**（WP-1 B2 只断言 409）→ 在既有 WP-1 文件补充精确码 + 逐表零副作用 + 审计条数与 detail 断言；R2 文件的 `notEqual` 收紧为精确 `equal`；STANDARD_PURCHASE 的容量 / 交期错误码断言未改动 |
+| 缺陷复现 | 先补断言后修复：以 `git stash` 只回退实现，WP-1 focused **25 例中 1 例失败**（`expected 'RECEIPT_NOTICE_CAPACITY_EXCEEDED'` / `actual 'BUSINESS_RULE_BLOCKED'`） |
+| `M1C-G01..M1C-G07` | **7/7 `NOT_RUN`**；本轮**未**执行任何 Gate |
+| `M-15` / Migration 实测 / MySQL Gate | `DEFERRED` / `NOT_RUN` / `NOT_RUN` |
+| Procurement Domain Acceptance | **NOT_ISSUED**；`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY` 不变 |
+| Release / Deploy / Push | **NOT_AUTHORIZED**；本轮**未** Push / Merge / Rebase / Reset / Amend / Tag / Release / Deploy |
+
+**门禁证据**：WP-1 focused **25/25**、R2 focused **10/10**、R1 focused **7/7**、委外相关回归
+**44/44**、`pnpm test:fast` **510/510**、`pnpm test`（FULL）**3180/3180**、`pnpm build`、
+`git diff --check`、文档一致性 current 模式（N1 / N3–N9 全部 PASS，N2 已退役）全部通过。
+
+**遗留 / 未解决矛盾**：
+- **R2 的残余边界不变**：质量判定不等于库存效力（仅有已完成 `PASS` / `WAIVED` 检验记录、
+  无库存 / 估值 / 成本流水的历史收货仍被判为已生效）；旧列 `receipt_id` 的检验记录未被采信。
+  本轮**未**触碰 R2 的历史质量证据策略。
+- MC-REQ-11 的 **403 拒绝审计**在全应用范围仍未实现（由 `M1C-WP-5` 处理）。
+- 两端远端分支 HEAD 仍为 `173c8fc23a22d852bed2aa21270638604c005868`，本地新增提交**未 Push**。
+
+**边界**：本轮未修改已批准的 Requirement / Active Design，未连接或修改项目数据库，
+未执行 Migration，未运行 MySQL / HEAVY / 浏览器 / 业务 Gate，未 Push / Merge / Tag /
+Release / Deploy，未进入 WP-2～WP-6。**完成后 HARD STOP**，等待审查与下一工作包授权。
+
+---
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
