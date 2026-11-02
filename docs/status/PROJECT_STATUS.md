@@ -1037,6 +1037,25 @@ Release / Deploy，未进入 WP-2～WP-6。**完成后 HARD STOP**，等待审�
 
 ---
 
+### 37.21 M1-Core `M1C-WP-1` Implementation 验收登记（2026-11-02）
+
+业务所有者于 2026-11-02 在本轮指令中正式签发 `M1C_WP1_IMPLEMENTATION_PASS`。验收证据见
+[`docs/acceptance/m1-core-wp1-implementation-acceptance-20261102.md`](../acceptance/m1-core-wp1-implementation-acceptance-20261102.md)。
+
+| 项 | 当前状态 |
+|---|---|
+| 验收范围 | 仅 `M1C-WP-1` Implementation |
+| 功能收口锚点 | `793a8753744e3f46770df70cf096f8693962f9b5` |
+| 登记前实际分支锚点 | `a5847fbdb23a26199ab2854221559e8b68907fcb` |
+| 远端分支 | GitHub / Gitee 的 `work/m1-core-rebaseline-20261102` 均为 `a5847fbdb23a26199ab2854221559e8b68907fcb` |
+| 已有证据 | WP1 25/25、R2 10/10、R1 7/7、委外相关 44/44、FAST 510/510、FULL 3180/3180、Build / diff-check / 文档一致性通过 |
+| `M1C-G01` | `NOT_RUN`；本登记**不**签发 Gate PASS |
+| 更高层验收 | 未签发 Capability Freeze、Domain Acceptance、Manual Closure、Release Readiness |
+| 未执行 | MySQL / HEAVY / 浏览器 Gate、数据库连接或修改、Migration、Push / Merge / Tag / Release / Deploy |
+
+`M-15` 保持 `DEFERRED`。本登记只确认既有 WP1 Implementation 交付，不改写 Requirement / Active Design，
+不改变 R2 残余边界，也不替代后续独立 Gate 验收。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
