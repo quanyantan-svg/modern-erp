@@ -335,6 +335,7 @@ import {
   getReceiptNotice,
   listReceiptNotices,
 } from './modules/procurement-receiving.js';
+import { convertReceiptNoticeToReceipts } from './modules/procurement-notice-conversion.js';
 import {
   createReturnRequest,
   listReturnRequests,
@@ -964,6 +965,12 @@ ownedRouteTable.register({
   path: /^\/api\/receipt-notices\/([^/]+)\/cancel$/,
   handler: ({ db, res, actor, params }) => cancelReceiptNotice(db, res, actor, params[0]),
   owner: 'server/modules/procurement-receiving.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/receipt-notices\/([^/]+)\/convert$/,
+  handler: ({ db, req, res, actor, params }) => convertReceiptNoticeToReceipts(db, req, res, actor, params[0]),
+  owner: 'server/modules/procurement-notice-conversion.js',
 });
 ownedRouteTable.register({
   method: 'GET',
