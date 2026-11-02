@@ -290,7 +290,10 @@ export async function createReceiptNotice(db, req, res, actor) {
         const newNoticeQty = body.items.reduce((acc, item) => acc + Number(item.quantity || 0), 0);
         const open = capacity.orderQuantity - alreadyReceipted;
         if (activeNotified + newNoticeQty > open + EPSILON) {
-          throw new HttpError(409, `完工通知数量超过委外订单剩余可收量：订单可收 ${open}、已通知 ${activeNotified}、本次 ${newNoticeQty}`);
+          throw noticeBusinessError(
+            NOTICE_ERROR_CODES.CAPACITY_EXCEEDED,
+            `完工通知数量超过委外订单剩余可收量：订单可收 ${open}、已通知 ${activeNotified}、本次 ${newNoticeQty}`,
+          );
         }
       }
 

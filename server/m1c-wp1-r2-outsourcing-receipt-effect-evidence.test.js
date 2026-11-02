@@ -178,7 +178,7 @@ describe('M1C-WP1-R2 — outsourcing historical receipt effect evidence fails cl
 
       const over = await createOutsourceNotice(orderId, 1);
       assert.equal(over.status, 409, JSON.stringify(over.data));
-      assert.notEqual(over.data.code, 'RECEIPT_NOTICE_OUTSOURCING_CAPACITY_UNPROVEN',
+      assert.equal(over.data.code, 'RECEIPT_NOTICE_CAPACITY_EXCEEDED',
         'a proven receipt is a capacity bound, never an unproven history');
     });
   });
@@ -206,7 +206,7 @@ describe('M1C-WP1-R2 — outsourcing historical receipt effect evidence fails cl
 
       const over = await createOutsourceNotice(orderId, 1);
       assert.equal(over.status, 409, JSON.stringify(over.data));
-      assert.notEqual(over.data.code, 'RECEIPT_NOTICE_OUTSOURCING_CAPACITY_UNPROVEN',
+      assert.equal(over.data.code, 'RECEIPT_NOTICE_CAPACITY_EXCEEDED',
         'real inventory and cost evidence are never misjudged as unknown');
     });
 
@@ -225,7 +225,7 @@ describe('M1C-WP1-R2 — outsourcing historical receipt effect evidence fails cl
 
       const over = await createOutsourceNotice(orderId, 70);
       assert.equal(over.status, 409, JSON.stringify(over.data));
-      assert.notEqual(over.data.code, 'RECEIPT_NOTICE_OUTSOURCING_CAPACITY_UNPROVEN',
+      assert.equal(over.data.code, 'RECEIPT_NOTICE_CAPACITY_EXCEEDED',
         'a real valuation movement is a proven effect, never an unproven history');
 
       const within = await createOutsourceNotice(orderId, 60);

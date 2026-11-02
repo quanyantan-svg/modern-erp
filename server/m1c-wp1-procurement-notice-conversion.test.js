@@ -310,22 +310,39 @@ describe('M1C-WP-1 — receipt notice sources, business-type scoped capacity and
       assert.equal(receipt.status, 201, receipt.data.error);
       await fixture.request('POST', `/api/procurement/outsourcing/receipts/${receipt.data.id}/confirm`, fixture.tokens.admin);
 
+      const before = businessSnapshot();
       const rejected = await fixture.request('POST', `/api/receipt-notices/${notice.data.id}/confirm`, fixture.tokens.admin);
       assert.equal(rejected.status, 409, JSON.stringify(rejected.data));
       assert.equal(rejected.data.code, 'RECEIPT_NOTICE_CAPACITY_EXCEEDED');
       assert.equal(rejectAudits('RECEIPT_NOTICE', notice.data.id), 1, 'exactly one rejection audit');
       const row = fixture.db.prepare('SELECT status FROM receipt_notices WHERE id=?').get(notice.data.id);
       assert.equal(row.status, 'DRAFT', 'a rejected confirmation keeps the notice untouched');
+      const after = businessSnapshot();
+      for (const table of Object.keys(before)) {
+        assert.equal(after[table], before[table], `${table} must stay untouched when the notice confirmation fails`);
+      }
     });
 
     test('B2 an outsourcing notice capacity never uses a purchase order line capacity and the reverse holds as well', async () => {
       await qualifyOutsourceSupplier();
       const orderId = await createReleasedOutsourcingOrder(10);
+      const before = businessSnapshot();
+      const auditsBefore = fixture.db.prepare("SELECT id FROM audit_logs WHERE action='REJECT'").all().map((row) => row.id);
       const over = await fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, {
         businessType: 'OUTSOURCE', outsourcingOrderId: orderId, warehouseId: 'warehouse-001',
         noticeDate: isoDate(0), items: [{ productId: 'product-001', quantity: 11 }],
       });
       assert.equal(over.status, 409, 'the outsourcing order capacity is the only bound of an outsourcing notice');
+      assert.equal(over.data.code, 'RECEIPT_NOTICE_CAPACITY_EXCEEDED');
+
+      const after = businessSnapshot();
+      for (const table of Object.keys(before)) {
+        assert.equal(after[table], before[table], `${table} must stay untouched when the notice creation fails`);
+      }
+      const addedAudits = fixture.db.prepare("SELECT id, detail FROM audit_logs WHERE action='REJECT'").all()
+        .filter((row) => !auditsBefore.includes(row.id));
+      assert.equal(addedAudits.length, 1, 'exactly one rejection audit');
+      assert.match(addedAudits[0].detail, /RECEIPT_NOTICE_CAPACITY_EXCEEDED/, 'the rejection audit records the exact error code');
 
       const within = await fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, {
         businessType: 'OUTSOURCE', outsourcingOrderId: orderId, warehouseId: 'warehouse-001',
