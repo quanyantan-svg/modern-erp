@@ -30,7 +30,7 @@ describe('V1.3 Phase 6A financial and transaction controls', () => {
 
   test('schema is additive, durable, and keeps the canonical role set', () => {
     for (const table of ['settlement_unapplied_balances', 'balance_applications', 'financial_refunds', 'financial_write_offs', 'return_reversals', 'settlement_account_movements', 'idempotency_records', 'period_reopen_history']) assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table), table);
-    assert.equal(db.prepare('SELECT COUNT(*) n FROM roles').get().n, 7);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM roles').get().n, 5);
   });
 
   test('explicit customer cash prepayment creates no fake AR and applies to a later AR without cash movement', async () => {

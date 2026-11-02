@@ -28,7 +28,7 @@ describe('V1.2 release registries', () => {
     assert.equal(Object.keys(LIFECYCLE_ENTITIES).length, 25);
 
     const db = createDatabase(join(tempDir, 'registry.db'));
-    assert.equal(db.prepare('SELECT COUNT(*) count FROM roles').get().count, 7);
+    assert.equal(db.prepare('SELECT COUNT(*) count FROM roles').get().count, 5);
     assert.equal(db.prepare("SELECT COUNT(*) count FROM role_permissions WHERE role_id='role-admin'").get().count, 227);
     assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
@@ -40,7 +40,7 @@ describe('V1.2 release registries', () => {
     createDatabase(path).close();
     const reopened = createDatabase(path);
     assert.equal(reopened.prepare('SELECT COUNT(*) count FROM permissions').get().count, 227);
-    assert.equal(reopened.prepare('SELECT COUNT(*) count FROM roles').get().count, 7);
+    assert.equal(reopened.prepare('SELECT COUNT(*) count FROM roles').get().count, 5);
     assert.equal(reopened.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual(reopened.prepare('PRAGMA foreign_key_check').all(), []);
     reopened.close();

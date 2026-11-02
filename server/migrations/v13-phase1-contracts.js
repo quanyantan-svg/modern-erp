@@ -29,9 +29,12 @@
 // multiple createDatabase opens and never removes a permission that
 // admin inherits from all-permissions.
 //
-// M1-Core M-17 extends the reconciled set with the approved outsourcing
-// roles (role-outsourcing / role-outsourcing-receiving) and the
-// SUPPLIER_BILL_MANAGE grant to role-accounting.
+// M1-Core M-17 extends the reconciled set with the SUPPLIER_BILL_MANAGE
+// grant to role-accounting. The M1-P-03 outsourcing roles
+// (role-outsourcing / role-outsourcing-receiving) are NOT part of
+// M1C-WP-0: Active Design §2.3 assigns the 委外收货员 creation to
+// M1C-WP-2 and §8.1.3 marks both technical IDs as pending role
+// definitions, so M1C-WP0-R1 removed them from the WP-0 seed.
 
 const V13_DESIRED_ROLE_PERMISSIONS = {
   'role-sales': [
@@ -74,12 +77,6 @@ const V13_DESIRED_ROLE_PERMISSIONS = {
     'AP_VIEW', 'PAYMENT_MANAGE',
     'SALES_DISCOUNT_MANAGE', 'PURCHASE_DISCOUNT_MANAGE',
     'SUPPLIER_BILL_MANAGE',
-  ],
-  'role-outsourcing': [
-    'OUTSOURCING_MANAGE', 'OUTSOURCING_MATERIAL_EXECUTE',
-  ],
-  'role-outsourcing-receiving': [
-    'OUTSOURCING_RECEIVING_MANAGE',
   ],
 };
 

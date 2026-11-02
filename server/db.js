@@ -1754,8 +1754,9 @@ function seedSchema(db) {
     ['role-reviewer', 'REVIEWER', '销售主管', '查看并审核销售订单、采购订单和库存', 1],
     ['role-warehouse', 'WAREHOUSE', '仓库管理员', '管理仓库和库存', 1],
     ['role-accounting', 'ACCOUNTING', '财务专员', '查看财务凭证和业务单据', 1],
-    ['role-outsourcing', 'OUTSOURCING', '委外业务员', '管理委外订单并执行委外材料业务', 1],
-    ['role-outsourcing-receiving', 'OUTSOURCING_RECEIVING', '委外收货员', '录入并生效委外收货', 1],
+    // M1-P-03 的委外业务员与委外收货员角色不属于 M1C-WP-0：Active Design §2.3
+    // 把“创建/配置委外收货员”归入 M1C-WP-2，§8.1.3 把这两个技术 ID 标为
+    // “待实施角色定义”。M1C-WP0-R1 已将其移出 WP-0，待 WP-2 授权后实施。
   ];
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles(id, code, name, description, system_role, created_at) VALUES (?, ?, ?, ?, ?, ?)');
   for (const role of roles) insertRole.run(...role, now);
@@ -1764,8 +1765,6 @@ function seedSchema(db) {
   const rolePermissions = {
     'role-admin': all,
     'role-accounting': ['DASHBOARD_VIEW', 'ACCOUNTING_VIEW', 'VOUCHER_SUBMIT', 'REPORT_VIEW', 'ORDERS_VIEW', 'PURCHASE_ORDERS_VIEW', 'CASH_JOURNALS_VIEW', 'CASH_JOURNALS_MANAGE', 'BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE', 'BILLS_VIEW', 'BILLS_MANAGE', 'FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE', 'AR_VIEW', 'COLLECTION_MANAGE', 'AP_VIEW', 'PAYMENT_MANAGE', 'SALES_DISCOUNT_MANAGE', 'PURCHASE_DISCOUNT_MANAGE', 'SUPPLIER_BILL_MANAGE', 'FINANCE_RECOGNITION_POLICY_VIEW', 'FINANCE_RECOGNITION_POLICY_MANAGE', 'FINANCE_AR_VIEW', 'FINANCE_AP_VIEW', 'FINANCE_INVOICE_VIEW', 'FINANCE_INVOICE_MANAGE', 'FINANCE_TREASURY_VIEW', 'FINANCE_TREASURY_MANAGE', 'FINANCE_SETTLEMENT_ACCOUNT_VIEW', 'FINANCE_SETTLEMENT_ACCOUNT_MANAGE', 'FINANCE_TRANSFER_MANAGE', 'FINANCE_WRITE_OFF_MANAGE', 'FINANCE_BAD_DEBT_MANAGE', 'FINANCE_NOTES_MANAGE', 'FINANCE_PAYMENT_REQUEST_MANAGE', 'FINANCE_CASH_COUNT_MANAGE', 'FINANCE_BANK_STATEMENT_IMPORT', 'FINANCE_RECONCILE_MANAGE', 'FINANCE_CLOSE_VIEW', 'FINANCE_CLOSE_MANAGE', 'CREDIT_VIEW'],
-    'role-outsourcing': ['OUTSOURCING_MANAGE', 'OUTSOURCING_MATERIAL_EXECUTE'],
-    'role-outsourcing-receiving': ['OUTSOURCING_RECEIVING_MANAGE'],
     // V1.3 Phase 1: SALES owns commercial entry (customers, suppliers, SO/PO/PR
     // create/submit) and CRM. SALES does NOT execute warehouse stock, material
     // issue, production receipt, inventory transfer, inventory check, or
