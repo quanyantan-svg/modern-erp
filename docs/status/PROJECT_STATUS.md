@@ -589,6 +589,21 @@ M1_CORE_REBASELINE_READY_FOR_INDEPENDENT_REVIEW
 5. `M1-Core` 的验收以 7 个 `M1C-Gxx` Gate 为准；`M1C-G07` 需要真实 MySQL 8 证据，
    在取得授权前**不得**声称通过。
 
+### 37.8 交付锚点
+
+| 项 | 值 |
+|---|---|
+| 工作分支 | `work/m1-core-rebaseline-20261102`（自 `master` @ `759d7216c7546ffa00a147f603c4e8852aada991` 新建） |
+| 交付提交 | `12a6281ba408510d2fc0b15822b6b71bc3940f95`（`docs(erp): M1-Core 范围重定基线、政策处置与有界 Requirement/Design 修订`） |
+| 变更范围 | 仅治理与文档（`document.md`、`solution.md`、`docs/**`、`log/2026-11-02.md`）；**未修改任何 `src/` / `server/` 生产代码、schema、migration、API、权限、状态机或业务测试** |
+| 交付规模 | 12 个文件，+1302 / −4 行（新增 3 个文件：`docs/decisions/m1-core-scope-rebaseline-20261102.md`、`docs/reviews/m1/procurement-outsourcing-m1-core-design.md`、`log/2026-11-02.md`） |
+| 完整性校验 | `check-doc-consistency.mjs --mode current`：**N1 / N3–N9 PASS，N2 `RETIRED`（未记为 PASS）**；`--mode migration`：**C1–C6 全部 PASS**；`git diff --check`：exit 0 |
+| 远端状态 | **未** Push / Merge / Tag / Release / Deploy；GitHub `github` 与 Gitee `origin` 两端 `master` **仍为** `759d7216c7546ffa00a147f603c4e8852aada991`，本分支**未**推送 |
+
+**边界**：本地交付提交**不等于** M1-Core Requirement 验收、**不等于** Design PASS、
+**不等于** Domain Acceptance / Freeze / Release Readiness，也**不授权**任何 Implementation。
+本轮**未运行**任何 FULL / HEAVY / MySQL / 浏览器 Gate，**不声称**通过。
+
 ---
 
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
