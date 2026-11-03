@@ -1445,6 +1445,31 @@ G01–G06 的 MySQL 对等/并发证据仍缺失，加工费必填政策与既�
 M1C_WP7A_G05_R1_READY_FOR_INDEPENDENT_REVIEW
 ```
 
+### 37.29 M1-Core `M1C-WP7-B0` G05 收口与 G07 安全准备（2026-11-03）
+
+- 基线：`work/m1-core-rebaseline-20261102` @ `8559c03f78898b0b059330f096a4e1bde694f277`；本轮开始时本地、
+  GitHub、Gitee 同名分支完整 SHA 一致，工作树干净。
+- G05：`M1C_G05_INDEPENDENT_REVIEW_PASS`，见
+  `docs/acceptance/m1-core-g05-independent-review-20261103.md`。原 16/8 FAIL 历史完整保留；修复后 24/24、
+  FAST 511/511、FULL 3236/3236、Build、N7 的既有记录已核对。本轮未重跑浏览器。Owner 未签发正式
+  Acceptance，故 `M1C-G05 PASS` 未签发。
+- G03：合法 HTTP 不能控制内部 `eventId`，无法触发 `INVENTORY_MUTATION_UNEXPECTED_REPLAY`；内部 Writer
+  对同 Mutation Key 异指纹明确 409 并事务回滚，未见静默丢腿。已提出 L1 外部幂等 + L2 primitive 的证据
+  分层候选，等待 Owner 裁定。
+- G07：ACK-4 仍为 `NOT_IMPLEMENTED`。现有环境变量授权可被直接 Node Gate 重用，concurrency runner 另有
+  自有 DROP 路径。候选定义 run ID、完整 SHA、精确 target/operations、15 分钟有效期、原子一次性消费、
+  批准事实、secret 隔离和 Node primitive 强制检查。
+- CR-01～CR-09 已映射真实 Handler 和至少两个独立 session；`race_probe_generic` 不得用于 G07。
+  CR-02/04/05 的稳定 error code 与 CR-07 唯一 oracle 为实施前待批准缺口。
+- 候审 Design：`docs/reviews/m1/m1-core-wp7b0-g03-g07-safety-design-amendment.md`，状态
+  `PENDING_APPROVAL / PENDING_REVIEW / NOT_AUTHORIZED_FOR_IMPLEMENTATION`；Active Design §13 未修改。
+- 未连接、创建、删除或重置 MySQL；未执行 MySQL Gate、M-15、Migration；未修改业务代码、schema、
+  Requirement 或 Active Design；未 Push / Merge / Tag / Release / Deploy；未签发其他 Gate 或 Acceptance。
+
+```text
+M1C_WP7B0_READY_FOR_INDEPENDENT_REVIEW
+```
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。

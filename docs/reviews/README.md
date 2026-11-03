@@ -15,6 +15,7 @@
 | [`m1/procurement-outsourcing-critical-chain-design.md`](./m1/procurement-outsourcing-critical-chain-design.md) | Procurement & Outsourcing | Design（候选，**M1 全范围**；源 `solution.md §26.33`） | `PENDING_APPROVAL` / `PENDING_REVIEW` | 无 —— 源 `solution.md §26.33` @ `912fd76700ff6f3ad1509eec4c9e2241c1830265` |
 | [`m1/procurement-outsourcing-m1-core-design.md`](./m1/procurement-outsourcing-m1-core-design.md) | Procurement & Outsourcing | Active Design Promotion 迁移指针（**不含合同正文**） | `PENDING_REVIEW` | 无 —— 当前唯一 Active Design 位于 `docs/design/procurement-outsourcing-m1-core.md` |
 | [`m1/procurement-outsourcing-m1-core-processing-po-design-amendment.md`](./m1/procurement-outsourcing-m1-core-processing-po-design-amendment.md) | Procurement & Outsourcing | M1-Core Design Amendment（加工费 PO 正式可达路径，R1 Promotion 来源快照） | `SUPERSEDED`（候审快照元数据仍保留 `PENDING`） | 2026-11-03 已精确融合至 `docs/design/procurement-outsourcing-m1-core.md`；本文件仅保留审查追溯，不构成第二份 Active Contract |
+| [`m1/m1-core-wp7b0-g03-g07-safety-design-amendment.md`](./m1/m1-core-wp7b0-g03-g07-safety-design-amendment.md) | Procurement & Outsourcing / Platform | G03 证据分层、G07 ACK-4 与 CR-01～CR-09 安全执行 Design Amendment 候选 | `PENDING_APPROVAL` / `PENDING_REVIEW`，`NOT_AUTHORIZED_FOR_IMPLEMENTATION` | 无；Active Design §13 继续唯一有效，等待 Domain Owner 与 Database Safety Owner 裁定 |
 
 > M1 全范围候选设计继续承担 C / D 组延期部分与历史结论追溯，**没有整体获得 Design PASS**。
 > M1-Core 首期有界后继设计已于 2026-11-02 提升为
