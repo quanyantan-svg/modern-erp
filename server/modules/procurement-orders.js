@@ -11,6 +11,105 @@ const STANDARD_BUY_TYPES = new Set(['STANDARD_PURCHASE']);
 const BUSINESS_TYPES = new Set(['STANDARD_PURCHASE', 'OUTSOURCE_PROCESSING']);
 const ACTIONS = new Set(['ADD', 'MODIFY', 'CANCEL']);
 
+export function createPurchaseOrderDraftCanonical(db, actor, command) {
+  const businessType = normalizeBusinessType(command.businessType);
+  const sourceOutsourcingOrderId = command.sourceOutsourcingOrderId || null;
+  if (businessType === 'STANDARD_PURCHASE' && sourceOutsourcingOrderId) {
+    throw new HttpError(400, '普通采购订单不得设置委外来源', { code: 'PURCHASE_ORDER_SOURCE_NOT_ALLOWED' });
+  }
+  if (businessType === 'OUTSOURCE_PROCESSING' && !sourceOutsourcingOrderId) {
+    throw new HttpError(400, '加工费采购订单必须绑定委外订单', { code: 'PROCESSING_PO_SOURCE_REQUIRED' });
+  }
+  if (!Array.isArray(command.items) || !command.items.length) throw new HttpError(400, '采购订单至少需要一条明细');
+  if (businessType === 'OUTSOURCE_PROCESSING' && command.items.length !== 1) {
+    throw new HttpError(400, '加工费采购订单首期只允许一条来源锁定明细', { code: 'PROCESSING_PO_SINGLE_LINE_REQUIRED' });
+  }
+  if (!Number.isSafeInteger(command.totalCents) || command.totalCents < 0) throw new HttpError(400, '采购订单总额必须为安全整数分');
+  const orderId = command.id || randomUUID();
+  const orderNo = command.orderNo || `PO-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0, 6).toUpperCase()}`;
+  const now = command.now || new Date().toISOString();
+  db.prepare(`INSERT INTO purchase_orders(
+      id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at,
+      order_date,expected_delivery_date,payment_terms,payment_terms_days,supplier_contact_name,supplier_contact_phone,supplier_address,
+      business_type,source_outsourcing_order_id,supplier_contact_snapshot,supplier_address_snapshot,payment_terms_snapshot,purchase_requisition_id)
+    VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    orderId, orderNo, command.supplierId, command.totalCents, command.remark || '', actor.id, now, now,
+    command.orderDate || null, command.expectedDeliveryDate || null, command.paymentTerms || '', command.paymentTermsDays ?? null,
+    command.supplierContactName || '', command.supplierContactPhone || '', command.supplierAddress || '',
+    businessType, sourceOutsourcingOrderId, command.supplierContactSnapshot || '', command.supplierAddressSnapshot || '',
+    command.paymentTermsSnapshot || '', command.purchaseRequisitionId || null,
+  );
+  const insert = db.prepare(`INSERT INTO purchase_order_items(
+      id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,purchase_requisition_item_id,is_gift_line,
+      document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  for (const [index, item] of command.items.entries()) {
+    if (!Number.isSafeInteger(item.unitPriceCents) || item.unitPriceCents < 0 || !Number.isSafeInteger(item.amountCents) || item.amountCents < 0) {
+      throw new HttpError(400, `第 ${index + 1} 行金额必须为安全整数分`);
+    }
+    insert.run(item.id || randomUUID(), orderId, item.productId, Number(item.quantity), item.unitPriceCents, item.amountCents,
+      item.lineNo || index + 1, item.purchaseRequisitionItemId || null, item.isGiftLine ? 1 : 0,
+      item.documentUomCode || null, item.documentQuantityNumerator ?? (Number.isSafeInteger(item.quantity) ? item.quantity : null), item.documentQuantityDenominator ?? 1,
+      item.conversionNumerator ?? 1, item.conversionDenominator ?? 1,
+      item.baseQuantityNumerator ?? (Number.isSafeInteger(item.quantity) ? item.quantity : null), item.baseQuantityDenominator ?? 1);
+  }
+  audit(db, actor.id, command.auditAction || 'CREATE', 'PURCHASE_ORDER', orderId,
+    command.auditDetail || `创建采购订单 ${orderNo}`);
+  return { id: orderId, orderNo };
+}
+
+function assertProcessingPurchaseOrderChangeAllowed(order) {
+  if (order && (order.business_type || 'STANDARD_PURCHASE') === 'OUTSOURCE_PROCESSING') {
+    throw new HttpError(409, '首期加工费采购订单不允许 ADD/MODIFY/CANCEL 变更', { code: 'PROCESSING_PO_CHANGE_NOT_ALLOWED' });
+  }
+}
+
+/**
+ * 加工费 PO 商业字段原位更新器（Active Design §3 / §5.5）。
+ *
+ * 只允许 `DRAFT` / `REJECTED`，只允许商业白名单，且必须原位 UPDATE：
+ * `purchase_order_items.id`、来源身份、产品、数量与 UOM/换算快照一律不可变。
+ * 调用方负责事务与权限；本函数自身在事务内重读并校验权威委外来源。
+ */
+export function updateOutsourcingProcessingPurchaseOrderCommercialFields(db, { orderId, actor, input, now }) {
+  const order = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(orderId);
+  if (!order) throw new HttpError(404, '采购订单不存在');
+  if ((order.business_type || 'STANDARD_PURCHASE') !== 'OUTSOURCE_PROCESSING') {
+    throw new HttpError(409, '非加工费采购订单不得使用加工费商业更新器', { code: 'PROCESSING_PO_SOURCE_IMMUTABLE' });
+  }
+  if (!['DRAFT', 'REJECTED'].includes(order.status)) {
+    throw new HttpError(409, '加工费采购订单状态不可修改', { code: 'PROCESSING_PO_STATE_CHANGED' });
+  }
+  const stored = db.prepare('SELECT * FROM purchase_order_items WHERE order_id=? ORDER BY line_no').all(orderId);
+  const source = order.source_outsourcing_order_id
+    ? db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(order.source_outsourcing_order_id)
+    : null;
+  const requested = input.items[0];
+  if (!source || stored.length !== 1 || input.items.length !== 1
+    || input.supplierId !== order.supplier_id || input.supplierId !== source.supplier_id
+    || requested.productId !== stored[0].product_id || requested.productId !== source.product_id
+    || requested.quantity !== Number(stored[0].quantity)
+    || requested.documentUomCode !== stored[0].document_uom_code
+    || requested.documentQuantityNumerator !== Number(stored[0].document_quantity_num)
+    || requested.documentQuantityDenominator !== Number(stored[0].document_quantity_den)
+    || requested.conversionNumerator !== Number(stored[0].conversion_numerator)
+    || requested.conversionDenominator !== Number(stored[0].conversion_denominator)
+    || requested.baseQuantityNumerator !== Number(stored[0].base_quantity_num)
+    || requested.baseQuantityDenominator !== Number(stored[0].base_quantity_den)) {
+    throw new HttpError(409, '加工费采购订单仅允许修改商业字段，来源、供应商、货品、数量及单位不可变', { code: 'PROCESSING_PO_SOURCE_IMMUTABLE' });
+  }
+  db.prepare(`UPDATE purchase_orders SET total_cents=?,remark=?,status='DRAFT',rejection_reason='',updated_at=?,
+      order_date=?,expected_delivery_date=?,payment_terms=?,payment_terms_days=?,supplier_contact_name=?,supplier_contact_phone=?,supplier_address=?
+    WHERE id=?`).run(
+    input.totalCents, input.remark, now, input.orderDate, input.expectedDeliveryDate, input.paymentTerms, input.paymentTermsDays,
+    input.supplierContactName, input.supplierContactPhone, input.supplierAddress, orderId,
+  );
+  db.prepare('UPDATE purchase_order_items SET unit_price_cents=?,amount_cents=?,is_gift_line=? WHERE id=?')
+    .run(requested.unitPriceCents, requested.amountCents, requested.isGiftLine, stored[0].id);
+  audit(db, actor.id, 'UPDATE', 'PURCHASE_ORDER', orderId, `修改加工费采购订单商业字段 ${order.order_no}`);
+  return { itemId: stored[0].id };
+}
+
 function assertViewPermission(actor) { allowAny(actor, VIEW_PERMISSIONS); }
 function assertManagePermission(actor) { allow(actor, 'PURCHASE_ORDERS_MANAGE'); }
 function assertChangePermission(actor) { allowAny(actor, CHANGE_PERMISSIONS); }
@@ -153,11 +252,12 @@ export async function createPurchaseOrderChange(db, req, res, actor) {
   assertChangeManagePermission(actor);
   const body = await readJson(req);
   assertAllowedFields(body, ['orderId', 'action', 'payload']);
-  const order = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(body.orderId);
-  if (!order) throw new HttpError(404, '采购订单不存在');
   const action = normalizeAction(body.action);
   const changeId = randomUUID(); const now = new Date().toISOString();
   transaction(db, () => {
+    const order = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(body.orderId);
+    if (!order) throw new HttpError(404, '采购订单不存在');
+    assertProcessingPurchaseOrderChangeAllowed(order);
     db.prepare(`INSERT INTO purchase_order_changes(id,order_id,action,status,payload_json,original_json,requested_json,created_by,created_at)
       VALUES(?,?,?,?,?,?,?,?,?)`).run(changeId, body.orderId, action, 'DRAFT', JSON.stringify(body.payload), JSON.stringify(body.payload), JSON.stringify(body.payload), actor.id, now);
     audit(db, actor.id, 'CREATE', 'PO_CHANGE', changeId, `${body.orderId}:${action}`);
@@ -172,6 +272,9 @@ export async function approvePurchaseOrderChange(db, req, res, actor, changeId) 
   if (change.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以审核');
   const now = new Date().toISOString();
   transaction(db, () => {
+    const order = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(change.order_id);
+    if (!order) throw new HttpError(404, '采购订单不存在');
+    assertProcessingPurchaseOrderChangeAllowed(order);
     db.prepare('UPDATE purchase_order_changes SET status=?, approver_id=?, approved_at=? WHERE id=?').run('APPROVED', actor.id, now, changeId);
     audit(db, actor.id, 'APPROVE', 'PO_CHANGE', changeId, '');
   });
@@ -184,10 +287,11 @@ export async function applyPurchaseOrderChange(db, req, res, actor, changeId) {
   if (!change) throw new HttpError(404, '变更单不存在');
   if (change.status !== 'APPROVED') throw new HttpError(409, '只有已审核的变更单可以应用');
   const payload = JSON.parse(change.payload_json);
-  const order = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(change.order_id);
-  if (!order) throw new HttpError(404, '采购订单不存在');
   const now = new Date().toISOString();
   transaction(db, () => {
+    const order = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(change.order_id);
+    if (!order) throw new HttpError(404, '采购订单不存在');
+    assertProcessingPurchaseOrderChangeAllowed(order);
     if (change.action === 'ADD') {
       const itemId = randomUUID();
       db.prepare(`INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,is_gift_line)

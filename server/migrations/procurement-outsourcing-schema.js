@@ -269,6 +269,13 @@ export function migrateProcurementOutsourcingSchema(db) {
   safeAddColumn(db, 'purchase_orders', 'purchasing_group_id', 'purchasing_group_id TEXT');
   safeAddColumn(db, 'purchase_orders', 'business_type', "business_type TEXT NOT NULL DEFAULT 'STANDARD_PURCHASE'");
   safeAddColumn(db, 'purchase_orders', 'source_outsourcing_order_id', 'source_outsourcing_order_id TEXT');
+  const duplicateProcessingSource = db.prepare(`SELECT source_outsourcing_order_id source_id, COUNT(*) duplicate_count
+    FROM purchase_orders WHERE source_outsourcing_order_id IS NOT NULL
+    GROUP BY source_outsourcing_order_id HAVING COUNT(*) > 1 LIMIT 1`).get();
+  if (duplicateProcessingSource) {
+    throw new Error(`PROCESSING_PO_SOURCE_HISTORY_CONFLICT:${duplicateProcessingSource.source_id}:${duplicateProcessingSource.duplicate_count}`);
+  }
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_purchase_orders_source_outsourcing ON purchase_orders(source_outsourcing_order_id)');
   safeAddColumn(db, 'purchase_orders', 'supplier_contact_snapshot', 'supplier_contact_snapshot TEXT');
   safeAddColumn(db, 'purchase_orders', 'supplier_address_snapshot', 'supplier_address_snapshot TEXT');
   safeAddColumn(db, 'purchase_orders', 'payment_terms_snapshot', 'payment_terms_snapshot TEXT');

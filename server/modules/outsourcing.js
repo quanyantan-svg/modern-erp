@@ -1,19 +1,29 @@
 import { randomUUID } from 'node:crypto';
 import { transaction } from '../db.js';
-import { audit } from '../lib/audit.js';
+import { audit, auditBusinessRejection } from '../lib/audit.js';
 import {
   HttpError, allow, allowAny, assertAllowedFields, readJson, send,
 } from '../lib/http.js';
+import { executeOutsourcingBackflush, executeOutsourcingMove } from './outsourcing-inventory.js';
+import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
+import { createPurchaseOrderDraftCanonical } from './procurement-orders.js';
 
 const VIEW_PERMISSIONS = ['OUTSOURCING_VIEW', 'OUTSOURCING_MANAGE', 'OUTSOURCING_RELEASE'];
-const RECEIVE_PERMISSIONS = ['OUTSOURCING_RECEIVING_VIEW', 'OUTSOURCING_RECEIVING_MANAGE'];
 const MATERIAL_PERMISSIONS = ['OUTSOURCING_MATERIAL_EXECUTE'];
 
 function assertViewPermission(actor) { allowAny(actor, VIEW_PERMISSIONS); }
 function assertManagePermission(actor) { allow(actor, 'OUTSOURCING_MANAGE'); }
 function assertReleasePermission(actor) { allowAny(actor, ['OUTSOURCING_RELEASE', 'OUTSOURCING_MANAGE']); }
-function assertMaterialPermission(actor) { allowAny(actor, [...MATERIAL_PERMISSIONS, 'OUTSOURCING_MANAGE']); }
-function assertReceivingPermission(actor) { allowAny(actor, [...RECEIVE_PERMISSIONS, 'OUTSOURCING_MANAGE']); }
+function assertMaterialPermission(actor) { allowAny(actor, MATERIAL_PERMISSIONS); }
+function assertReceivingPermission(actor) { allow(actor, 'OUTSOURCING_RECEIVING_MANAGE'); }
+
+function businessConflict(code, message) {
+  return new HttpError(409, message, { code });
+}
+
+function auditRejectedBusinessRule(db, actor, entityType, entityId, action, error) {
+  auditBusinessRejection(db, actor, { entityType, entityId: entityId || null, action }, error);
+}
 
 const LIFECYCLE_NEXT = {
   DRAFT: 'PLAN_CONFIRMED',
@@ -218,6 +228,104 @@ export async function cancelOutsourcingOrder(db, req, res, actor, orderId) {
     audit(db, actor.id, 'CANCEL', 'OUTSOURCING_ORDER', orderId, order.order_no);
   });
   return send(res, 200, { ok: true });
+}
+
+const PROCESSING_PO_BUSINESS_FIELDS = ['unitPriceCents', 'orderDate', 'expectedDeliveryDate', 'paymentTerms',
+  'supplierContactName', 'supplierContactPhone', 'supplierAddress', 'remark'];
+
+// 加工费 PO 创建的规范化 fingerprint（Active Design §6）：
+// 只含路由委外订单 ID 与规范化商业输入；可选文本 trim 后缺省为空，
+// 日期统一 YYYY-MM-DD|null，单价为安全整数；不含 actor/tenant 与服务端主数据快照。
+function normalizeProcessingPoFingerprint(orderId, body) {
+  const text = (value) => (value === undefined || value === null ? '' : String(value).trim());
+  const date = (value) => {
+    const raw = text(value);
+    return raw === '' ? null : raw;
+  };
+  const unitPriceCents = Number(body.unitPriceCents);
+  return {
+    outsourcingOrderId: String(orderId),
+    unitPriceCents: Number.isSafeInteger(unitPriceCents) ? unitPriceCents : null,
+    orderDate: date(body.orderDate),
+    expectedDeliveryDate: date(body.expectedDeliveryDate),
+    paymentTerms: text(body.paymentTerms),
+    supplierContactName: text(body.supplierContactName),
+    supplierContactPhone: text(body.supplierContactPhone),
+    supplierAddress: text(body.supplierAddress),
+    remark: text(body.remark),
+  };
+}
+
+export async function createOutsourcingProcessingPurchaseOrder(db, req, res, actor, orderId) {
+  assertManagePermission(actor);
+  const body = await readJson(req);
+  assertAllowedFields(body, PROCESSING_PO_BUSINESS_FIELDS);
+  const idempotencyKey = String(req.headers['idempotency-key'] || '').trim();
+  if (!idempotencyKey) throw new HttpError(400, 'Idempotency-Key 必填');
+  const unitPriceCents = Number(body.unitPriceCents);
+  if (!Number.isSafeInteger(unitPriceCents) || unitPriceCents < 0) throw new HttpError(400, '加工费单价必须为非负安全整数分');
+  const fingerprint = requestFingerprint(normalizeProcessingPoFingerprint(orderId, body));
+  const operation = 'OUTSOURCING_PROCESSING_PO_CREATE';
+  try {
+    const replay = idempotencyReplay(db, operation, orderId, idempotencyKey, fingerprint);
+    if (replay) return send(res, 200, { ...replay, replayed: true });
+  } catch (error) {
+    if (error?.status !== 409) throw error;
+    const conflict = new HttpError(409, error.message, { code: 'PROCESSING_PO_IDEMPOTENCY_CONFLICT' });
+    auditRejectedBusinessRule(db, actor, 'OUTSOURCING_ORDER', orderId, '创建加工费采购订单', conflict);
+    throw conflict;
+  }
+  let result;
+  try {
+    transaction(db, () => {
+      db.prepare('UPDATE outsourcing_orders SET updated_at=updated_at WHERE id=?').run(orderId);
+      const order = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(orderId);
+      if (!order) throw new HttpError(404, '委外订单不存在');
+      if (order.status !== 'RELEASED') throw businessConflict('PROCESSING_PO_SOURCE_STATE_INVALID', '只有已下达委外订单可以创建加工费采购订单');
+      if (db.prepare('SELECT id FROM purchase_orders WHERE source_outsourcing_order_id=?').get(orderId)) {
+        throw businessConflict('OUTSOURCING_PROCESSING_PO_ALREADY_EXISTS', '该委外订单终身已创建加工费采购订单，不得重建');
+      }
+      const supplier = db.prepare(`SELECT * FROM suppliers WHERE id=? AND active=1 AND outsourcing_enabled=1`).get(order.supplier_id);
+      const today = new Date().toISOString().slice(0, 10);
+      if (!supplier || supplier.qualification_status !== 'QUALIFIED'
+        || (supplier.qualification_valid_from && supplier.qualification_valid_from > today)
+        || (supplier.qualification_valid_to && supplier.qualification_valid_to < today)) {
+        throw businessConflict('PROCESSING_PO_SUPPLIER_NOT_QUALIFIED', '委外供应商资质无效');
+      }
+      const product = db.prepare('SELECT * FROM products WHERE id=? AND active=1').get(order.product_id);
+      if (!product) throw businessConflict('PROCESSING_PO_PRODUCT_INVALID', '委外成品不存在或已停用');
+      const quantity = Number(order.order_quantity);
+      const amountCents = Math.round(quantity * unitPriceCents);
+      if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isSafeInteger(amountCents)) {
+        throw new HttpError(400, '委外数量或加工费金额无法精确表示');
+      }
+      const unitCode = String(product.base_uom_code || product.unit || order.unit || 'EA').toUpperCase();
+      const quantityNum = Number.isSafeInteger(quantity) ? quantity : null;
+      if (quantityNum === null) throw businessConflict('PROCESSING_PO_QUANTITY_UNSUPPORTED', '首期加工费采购订单仅支持整数基础数量');
+      result = createPurchaseOrderDraftCanonical(db, actor, {
+        supplierId: order.supplier_id, totalCents: amountCents, businessType: 'OUTSOURCE_PROCESSING',
+        sourceOutsourcingOrderId: order.id, orderDate: body.orderDate || today,
+        expectedDeliveryDate: body.expectedDeliveryDate || order.expected_completion_date || null,
+        paymentTerms: body.paymentTerms || '', paymentTermsDays: supplier.default_payment_terms_days ?? null,
+        supplierContactName: body.supplierContactName || supplier.contact || '',
+        supplierContactPhone: body.supplierContactPhone || supplier.phone || '', supplierAddress: body.supplierAddress || supplier.address || '',
+        supplierContactSnapshot: `${body.supplierContactName || supplier.contact || ''}|${body.supplierContactPhone || supplier.phone || ''}`,
+        supplierAddressSnapshot: body.supplierAddress || supplier.address || '', paymentTermsSnapshot: body.paymentTerms || '',
+        remark: body.remark || '', auditDetail: `由委外订单 ${order.order_no} 创建加工费采购订单草稿`,
+        items: [{ productId: order.product_id, quantity, unitPriceCents, amountCents, lineNo: 1,
+          documentUomCode: unitCode, documentQuantityNumerator: quantityNum, documentQuantityDenominator: 1,
+          conversionNumerator: 1, conversionDenominator: 1, baseQuantityNumerator: quantityNum, baseQuantityDenominator: 1 }],
+      });
+      saveIdempotency(db, operation, orderId, idempotencyKey, fingerprint, result);
+    });
+  } catch (error) {
+    if (/source_outsourcing_order_id|uq_purchase_orders_source_outsourcing/i.test(String(error.message))) {
+      error = businessConflict('OUTSOURCING_PROCESSING_PO_ALREADY_EXISTS', '该委外订单终身已创建加工费采购订单，不得重建');
+    }
+    auditRejectedBusinessRule(db, actor, 'OUTSOURCING_ORDER', orderId, '创建加工费采购订单', error);
+    throw error;
+  }
+  return send(res, 201, result);
 }
 
 export async function snapshotMaterialList(db, req, res, actor, orderId) {

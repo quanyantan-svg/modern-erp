@@ -323,6 +323,8 @@ import {
 import {
   applyPurchaseOrderChange,
   approvePurchaseOrderChange,
+  createPurchaseOrderDraftCanonical,
+  updateOutsourcingProcessingPurchaseOrderCommercialFields,
   createDeliverySchedule,
   createPurchaseOrderChange,
   getPurchaseOrderExecutionView,
@@ -355,6 +357,7 @@ import {
   backflushMaterial,
   cancelOutsourcingOrder,
   createOutsourcingOrder,
+  createOutsourcingProcessingPurchaseOrder,
   createOutsourcingReceipt,
   getMaterialPosition,
   getOutsourcingOrder,
@@ -1055,6 +1058,12 @@ ownedRouteTable.register({
   method: 'POST',
   path: /^\/api\/procurement\/outsourcing\/orders\/([^/]+)\/transition$/,
   handler: ({ db, req, res, actor, params }) => transitionOutsourcingOrder(db, req, res, actor, params[0]),
+  owner: 'server/modules/outsourcing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/outsourcing\/orders\/([^/]+)\/processing-fee-purchase-orders$/,
+  handler: ({ db, req, res, actor, params }) => createOutsourcingProcessingPurchaseOrder(db, req, res, actor, params[0]),
   owner: 'server/modules/outsourcing.js',
 });
 ownedRouteTable.register({
@@ -2312,6 +2321,13 @@ export function createApp(db, options = {}) {
       return serveStatic(res, url.pathname, distDir);
     } catch (error) {
       if (error instanceof HttpError) {
+        if (error.status === 403 && req.actor && !error.authorizationAuditWritten) {
+          const permissions = Array.isArray(error.deniedPermissions) && error.deniedPermissions.length
+            ? error.deniedPermissions.join('|') : 'UNSPECIFIED_PERMISSION';
+          audit(db, req.actor.id, 'REJECT', 'AUTHORIZATION', null,
+            `主体=${req.actor.id}; 动作=${req.method}; 被拒权限=${permissions}`);
+          error.authorizationAuditWritten = true;
+        }
         const safe = serializeError(error, requestId);
         return send(res, error.status, safe);
       }
@@ -3553,7 +3569,12 @@ function getPurchaseOrder(db, res, actor, orderId) {
 
 async function createPurchaseOrder(db, req, res, actor) {
   allow(actor, 'PURCHASE_ORDERS_CREATE');
-  const body = await readJson(req); const input = purchaseOrderInput(db, body);
+  const body = await readJson(req);
+  if (body.businessType !== undefined || body.business_type !== undefined
+    || body.sourceOutsourcingOrderId !== undefined || body.source_outsourcing_order_id !== undefined) {
+    throw new HttpError(400, '通用采购订单接口不得指定业务类型或委外来源', { code: 'PURCHASE_ORDER_BUSINESS_TYPE_NOT_CLIENT_SETTABLE' });
+  }
+  const input = purchaseOrderInput(db, body);
   const orderId = id(); const now = new Date().toISOString(); const orderNo = makePurchaseOrderNo();
   // Wave A procurement: supplier snapshot for commercial identity;
   // Wave C procurement-orders: business_type defaults to STANDARD_PURCHASE.
@@ -3562,17 +3583,10 @@ async function createPurchaseOrder(db, req, res, actor) {
   const supplierAddressSnapshot = supplier?.address || '';
   const paymentTermsSnapshot = input.paymentTerms || '';
   transaction(db, () => {
-    db.prepare(`INSERT INTO purchase_orders(id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at,
-        order_date,expected_delivery_date,payment_terms,payment_terms_days,supplier_contact_name,supplier_contact_phone,supplier_address,
-        business_type,supplier_contact_snapshot,supplier_address_snapshot,payment_terms_snapshot)
-      VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-      orderId, orderNo, input.supplierId, input.totalCents, input.remark, actor.id, now, now,
-      input.orderDate, input.expectedDeliveryDate, input.paymentTerms, input.paymentTermsDays,
-      input.supplierContactName, input.supplierContactPhone, input.supplierAddress,
-      'STANDARD_PURCHASE', supplierContactSnapshot, supplierAddressSnapshot, paymentTermsSnapshot,
-    );
-    savePurchaseOrderItems(db, orderId, input.items);
-    audit(db, actor.id, 'CREATE', 'PURCHASE_ORDER', orderId, `创建采购订单 ${orderNo}`);
+    createPurchaseOrderDraftCanonical(db, actor, {
+      ...input, id: orderId, orderNo, now, businessType: 'STANDARD_PURCHASE',
+      supplierContactSnapshot, supplierAddressSnapshot, paymentTermsSnapshot,
+    });
   });
   return send(res, 201, { id: orderId, orderNo });
 }
@@ -3582,8 +3596,20 @@ async function updatePurchaseOrder(db, req, res, actor, orderId) {
   const current = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(orderId);
   if (!current) throw new HttpError(404, '采购订单不存在');
   if (!['DRAFT', 'REJECTED'].includes(current.status)) throw new HttpError(409, '只有草稿或已驳回订单可以修改');
-  if (current.creator_id !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能修改自己创建的订单');
-  const body = await readJson(req); const input = purchaseOrderInput(db, body); const now = new Date().toISOString();
+  const processing = current.business_type === 'OUTSOURCE_PROCESSING';
+  if (!processing && current.creator_id !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能修改自己创建的订单');
+  const body = await readJson(req);
+  if (body.businessType !== undefined || body.business_type !== undefined
+    || body.sourceOutsourcingOrderId !== undefined || body.source_outsourcing_order_id !== undefined) {
+    throw new HttpError(400, '采购订单业务类型及来源不可由客户端修改', { code: 'PURCHASE_ORDER_SOURCE_IMMUTABLE' });
+  }
+  const input = purchaseOrderInput(db, body); const now = new Date().toISOString();
+  if (processing) {
+    transaction(db, () => {
+      updateOutsourcingProcessingPurchaseOrderCommercialFields(db, { orderId, actor, input, now });
+    });
+    return send(res, 200, { ok: true });
+  }
   const hasSourcedLines = Boolean(db.prepare('SELECT 1 FROM purchase_order_items WHERE order_id=? AND purchase_requisition_item_id IS NOT NULL LIMIT 1').get(orderId));
   if (hasSourcedLines) {
     if (body.purchaseRequisitionId !== undefined && body.purchaseRequisitionId !== current.purchase_requisition_id) throw new HttpError(409, '请购单来源不可修改');
@@ -3628,7 +3654,7 @@ async function changePurchaseOrderState(db, req, res, actor, orderId, action) {
   const now = new Date().toISOString();
   if (action === 'submit') {
     if (!['DRAFT', 'REJECTED'].includes(order.status)) throw new HttpError(409, '只有草稿或已驳回订单可以提交');
-    if (order.creator_id !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能提交自己创建的订单');
+    if (order.business_type !== 'OUTSOURCE_PROCESSING' && order.creator_id !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能提交自己创建的订单');
     // V1.3 Phase 1 commercial contract gate. SUBMITTED purchase orders
     // must carry order date, expected delivery date, supplier contact /
     // phone / address, payment terms, and a positive unit price on
@@ -3773,7 +3799,7 @@ function purchaseOrderInput(db, body) {
     if (!Number.isFinite(unitPriceCents) || unitPriceCents < 0) {
       throw new HttpError(400, `第 ${index + 1} 行单价不正确`);
     }
-    if (!Number.isInteger(unitPriceCents)) {
+    if (!Number.isSafeInteger(unitPriceCents)) {
       throw new HttpError(400, `第 ${index + 1} 行单价必须为整数（分）`);
     }
     if (isGiftLine && unitPriceCents !== 0) throw new HttpError(400, `第 ${index + 1} 行赠品单价必须为 0`);
