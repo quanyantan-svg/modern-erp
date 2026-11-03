@@ -15,6 +15,7 @@ const mysqlSchema = read('server/database/mysql-schema.js');
 const mysqlAdapter = read('server/database/mysql-adapter.js');
 const glPolicy = read('server/modules/outsourcing-gl-policy.js');
 const outsourcingFinance = read('server/modules/outsourcing-finance.js');
+const outsourcing = read('server/modules/outsourcing.js');
 const commercialGolive = read('server/modules/commercial-golive.js');
 
 function stripComments(source) {
@@ -78,14 +79,40 @@ test('M1-P-03 grant matrix keeps only the approved role-accounting permission in
   const accountingSeed = dbSource.match(/'role-accounting': \[([^\]]+)\]/)?.[1] || '';
   assert.doesNotMatch(accountingSeed, /OUTSOURCING_MANAGE|OUTSOURCING_RECEIVING_MANAGE|OUTSOURCING_MATERIAL_EXECUTE|IQC_MANAGE/,
     'role-accounting must not hold outsourcing execution or receiving rights');
+});
 
-  // Active Design §2.3 assigns the 委外收货员 creation to M1C-WP-2 and §8.1.3
-  // marks both outsourcing technical IDs as pending role definitions, so
-  // M1C-WP0-R1 removed them from the WP-0 seed.
-  for (const role of ['role-outsourcing', 'role-outsourcing-receiving']) {
-    assert.equal(dbSource.includes(`'${role}'`), false, `${role} must not be seeded by M1C-WP-0`);
-    assert.equal(v13.includes(`'${role}'`), false, `${role} must not enter the V13 desired permission set`);
+// M1C-WP-2 supersedes the M1C-WP0-R1 posture: Active Design §8.1.3 assigned
+// the two M1-P-03 outsourcing technical IDs to WP-2 and required the later
+// Implementation to land the matrix. The roles now exist, so this assertion
+// pins the EXACT narrow grants instead of their former absence.
+test('M1-P-03 outsourcing roles are seeded by WP-2 with exactly the approved narrow grants', () => {
+  const expected = {
+    'role-outsourcing': ['OUTSOURCING_MANAGE', 'OUTSOURCING_MATERIAL_EXECUTE'],
+    'role-outsourcing-receiving': ['OUTSOURCING_RECEIVING_MANAGE'],
+  };
+  for (const [role, permissions] of Object.entries(expected)) {
+    const seed = dbSource.match(new RegExp(`'${role}': \\[([^\\]]+)\\]`))?.[1] || '';
+    const granted = [...seed.matchAll(/'([A-Z_]+)'/g)].map((match) => match[1]).sort();
+    assert.deepEqual(granted, [...permissions].sort(), `${role} seed grants must match the approved matrix`);
+    const reconciled = v13.match(new RegExp(`'${role}': \\[([^\\]]+)\\]`))?.[1] || '';
+    const reconciledGrants = [...reconciled.matchAll(/'([A-Z_]+)'/g)].map((match) => match[1]).sort();
+    assert.deepEqual(reconciledGrants, [...permissions].sort(), `${role} reconciled grants must match the approved matrix`);
   }
+
+  // 职责分离：委外业务员不得持有收货、IQC 或正式过账权；
+  // 委外收货员不得持有委外业务、材料执行或 IQC 权。
+  const outsourcingSeed = dbSource.match(/'role-outsourcing': \[([^\]]+)\]/)?.[1] || '';
+  assert.doesNotMatch(outsourcingSeed, /OUTSOURCING_RECEIVING_MANAGE|IQC_MANAGE|SUPPLIER_BILL_MANAGE/,
+    '委外业务员不得持有收货、IQC 或加工费正式过账权');
+  const receivingSeed = dbSource.match(/'role-outsourcing-receiving': \[([^\]]+)\]/)?.[1] || '';
+  assert.doesNotMatch(receivingSeed, /OUTSOURCING_MANAGE|OUTSOURCING_MATERIAL_EXECUTE|IQC_MANAGE|SUPPLIER_BILL_MANAGE/,
+    '委外收货员不得持有委外业务、材料执行、IQC 或正式过账权');
+
+  // 真实主体：正向证据必须由真实角色取得，管理员不得替代职责分离证据。
+  assert.match(dbSource, /'user-outsourcing-receiving'[^\]]*'role-outsourcing-receiving'/,
+    '必须存在绑定委外收货员角色的真实主体');
+  assert.match(dbSource, /'user-outsourcing'[^\]]*'role-outsourcing'/,
+    '必须存在绑定委外业务员角色的真实主体');
 });
 
 test('WP-0 retains canonical transaction and lock-order guards for later writers', () => {
@@ -131,8 +158,13 @@ test('R1-A 加工费正式过账只认 SUPPLIER_BILL_MANAGE，草稿创建权限
 test('R1-B 收货生效只认 OUTSOURCING_RECEIVING_MANAGE，其他动作未被误伤', () => {
   assert.match(outsourcingFinance, /const RECEIVE_EFFECT_PERMISSIONS = \['OUTSOURCING_RECEIVING_MANAGE'\]/);
   assert.match(outsourcingFinance, /export async function confirmOutsourcingReceipt\(db, req, res, actor, receiptId\) \{\s*assertReceiveEffectPermission\(actor\);/);
-  assert.match(outsourcingFinance, /const RECEIVE_PERMISSIONS = \['OUTSOURCING_RECEIVING_MANAGE', 'OUTSOURCING_MANAGE'\]/,
-    '收货录入等其他动作的权限语义不得被 R1-B 改变');
-  assert.match(outsourcingFinance, /const MATERIAL_PERMISSIONS = \['OUTSOURCING_MATERIAL_EXECUTE', 'OUTSOURCING_MANAGE'\]/,
-    '委外材料执行权限不得被 R1-B 改变');
+  // M1C-WP-2 依 Active Design §8.1.2 收紧了 R1-B 当时保留的两个回退：
+  // 收货录入/收货域动作只认 OUTSOURCING_RECEIVING_MANAGE，材料执行只认
+  // OUTSOURCING_MATERIAL_EXECUTE（委外业务员同时持有两者）。
+  assert.match(outsourcingFinance, /const RECEIVE_PERMISSIONS = \['OUTSOURCING_RECEIVING_MANAGE'\]/,
+    '收货域动作只认收货管理权限，不得保留 OUTSOURCING_MANAGE 回退');
+  assert.match(outsourcingFinance, /const MATERIAL_PERMISSIONS = \['OUTSOURCING_MATERIAL_EXECUTE'\]/,
+    '委外材料执行只认材料执行权限');
+  assert.match(outsourcing, /function assertReceivingPermission\(actor\) \{ allow\(actor, 'OUTSOURCING_RECEIVING_MANAGE'\); \}/,
+    '委外收货录入只认收货管理权限');
 });

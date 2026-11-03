@@ -30,13 +30,17 @@
 // admin inherits from all-permissions.
 //
 // M1-Core M-17 extends the reconciled set with the SUPPLIER_BILL_MANAGE
-// grant to role-accounting. The M1-P-03 outsourcing roles
-// (role-outsourcing / role-outsourcing-receiving) are NOT part of
-// M1C-WP-0: Active Design §2.3 assigns the 委外收货员 creation to
-// M1C-WP-2 and §8.1.3 marks both technical IDs as pending role
-// definitions, so M1C-WP0-R1 removed them from the WP-0 seed.
+// grant to role-accounting. M1C-WP-2 adds the two approved M1-P-03
+// outsourcing system roles; this reconciled set prevents startup from
+// silently widening or stripping their deliberately narrow grants.
 
 const V13_DESIRED_ROLE_PERMISSIONS = {
+  'role-outsourcing': [
+    'OUTSOURCING_MANAGE', 'OUTSOURCING_MATERIAL_EXECUTE',
+  ],
+  'role-outsourcing-receiving': [
+    'OUTSOURCING_RECEIVING_MANAGE',
+  ],
   'role-sales': [
     'DASHBOARD_VIEW', 'SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE',
     'CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE', 'PRODUCTS_VIEW',
