@@ -42,8 +42,14 @@ const VIEWPORTS = [
 // MC-REQ-14 / Active Design §7 指定的两张既有工作面。
 // apiPath 是该工作面自身调用的读接口 —— 用它探测服务端的来源级 RBAC 判定。
 const SURFACES = [
-  { route: 'outsourcing', label: '委外加工', apiPath: '/api/procurement/outsourcing/orders' },
-  { route: 'sourcing-pricing', label: '寻源与定价', apiPath: '/api/procurement/source-entries' },
+  {
+    route: 'outsourcing', label: '委外加工', apiPath: '/api/procurement/outsourcing/orders',
+    mutationPath: '/api/procurement/outsourcing/orders',
+  },
+  {
+    route: 'sourcing-pricing', label: '寻源与定价', apiPath: '/api/procurement/source-entries',
+    mutationPath: '/api/procurement/sourcing-decisions',
+  },
 ];
 
 // 真实角色主体：
@@ -97,19 +103,96 @@ async function probeApiStatus(page, apiPath) {
   }, apiPath);
 }
 
-async function checkSurface(page, baseUrl, viewport, surface) {
+async function probeMutationStatus(page, surface) {
+  return page.evaluate(async ({ route, path }) => {
+    const token = localStorage.getItem('modern_erp_token') || '';
+    const body = route === 'outsourcing'
+      ? { supplierId: 'supplier-001', productId: 'product-001', orderQuantity: 1, unit: 'EA' }
+      : { sourceType: 'PR', sourceId: 'DENIED-PROBE', productId: 'product-001', quantity: 1 };
+    const response = await fetch(path, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return response.status;
+  }, { route: surface.route, path: surface.mutationPath });
+}
+
+async function exerciseAuthorizedSurface(page, surface, performMutation) {
+  if (surface.route === 'sourcing-pricing') {
+    const action = page.getByRole('button', { name: '模拟寻源分配' });
+    await action.waitFor({ state: 'visible' });
+    if (await action.isDisabled()) throw new Error('寻源分配动作不可用');
+    if (!performMutation) return { legalAction: 'button visible and enabled', businessError: 'covered at 320px' };
+    const responsePromise = page.waitForResponse((response) => response.url().endsWith('/api/procurement/sourcing-decisions') && response.request().method() === 'POST');
+    await action.click();
+    const response = await responsePromise;
+    if (response.status() !== 200) throw new Error(`寻源分配动作返回 ${response.status()}，期望 200`);
+    await page.locator('.help-disclosure').filter({ hasText: 'Sourcing OK:' }).waitFor({ state: 'visible' });
+    return { legalAction: `sourcing POST ${response.status()}`, businessError: 'not-applicable' };
+  }
+
+  const create = page.getByRole('button', { name: '新建委外订单' });
+  await create.waitFor({ state: 'visible' });
+  if (await create.isDisabled()) throw new Error('新建委外订单动作不可用');
+  if (!performMutation) return { legalAction: 'button visible and enabled', businessError: 'covered at 320px' };
+  await create.click();
+  let dialog = page.getByRole('dialog', { name: '新建委外订单' });
+  await dialog.getByLabel('供应商 ID').fill('supplier-does-not-exist');
+  await dialog.getByLabel('产品 ID').fill('product-001');
+  const invalidResponsePromise = page.waitForResponse((response) => response.url().endsWith('/api/procurement/outsourcing/orders') && response.request().method() === 'POST');
+  await dialog.getByRole('button', { name: '创建' }).click();
+  const invalidResponse = await invalidResponsePromise;
+  if (invalidResponse.status() !== 409) throw new Error(`非法供应商业务错误返回 ${invalidResponse.status()}，期望 409`);
+  const disclosure = dialog.locator('.help-disclosure');
+  await disclosure.waitFor({ state: 'visible' });
+  if (!(await disclosure.textContent())?.trim()) throw new Error('委外表单业务错误未展示');
+  // 业务错误后直接纠正同一表单，证明页面可恢复，而不是靠关闭页面绕过错误。
+  await dialog.getByLabel('供应商 ID').fill('supplier-001');
+  await dialog.getByLabel('产品 ID').fill('product-001');
+  await dialog.getByLabel('数量').fill('1');
+  const createResponsePromise = page.waitForResponse((response) => response.url().endsWith('/api/procurement/outsourcing/orders') && response.request().method() === 'POST');
+  await dialog.getByRole('button', { name: '创建' }).click();
+  const createResponse = await createResponsePromise;
+  if (createResponse.status() !== 201) throw new Error(`合法委外创建返回 ${createResponse.status()}，期望 201`);
+  await dialog.waitFor({ state: 'detached' });
+
+  const newestOrder = page.locator('[data-testid="outsourcing-order-list"] .compact-record__open').first();
+  await newestOrder.waitFor({ state: 'visible' });
+  await newestOrder.click();
+  const detail = page.getByRole('dialog', { name: /委外订单 / });
+  await detail.getByRole('button', { name: '确认计划' }).waitFor({ state: 'visible' });
+  await detail.getByRole('button', { name: '取消' }).waitFor({ state: 'visible' });
+  const transitionResponsePromise = page.waitForResponse((response) => /\/api\/procurement\/outsourcing\/orders\/[^/]+\/transition$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST');
+  await detail.getByRole('button', { name: '确认计划' }).click();
+  const transitionResponse = await transitionResponsePromise;
+  if (transitionResponse.status() !== 200) throw new Error(`委外状态推进返回 ${transitionResponse.status()}，期望 200`);
+  await detail.getByRole('button', { name: '下达' }).waitFor({ state: 'visible' });
+  await detail.getByRole('button', { name: '取消' }).waitFor({ state: 'visible' });
+  const stateContext = await detail.locator('.page-header__context').textContent();
+  if (!stateContext?.includes('已确认 / 数量 1')) throw new Error(`委外状态推进后 DOM 未更新：${stateContext || '缺失'}`);
+  return { legalAction: `create ${createResponse.status()} + transition ${transitionResponse.status()}`, businessError: `invalid supplier ${invalidResponse.status()} displayed` };
+}
+
+async function checkSurface(page, baseUrl, viewport, surface, expectedStatus, performMutation) {
   const browserErrors = [];
+  const pageReads = [];
   const onConsole = (msg) => { if (msg.type() === 'error') browserErrors.push(`console: ${msg.text()}`); };
   const onPageError = (err) => browserErrors.push(`pageerror: ${err.message}`);
+  const onResponse = (response) => {
+    const path = new URL(response.url()).pathname;
+    if (response.request().method() === 'GET' && path === surface.apiPath) pageReads.push(response.status());
+  };
   page.on('console', onConsole);
   page.on('pageerror', onPageError);
+  page.on('response', onResponse);
   try {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto(`${baseUrl}#${surface.route}`, { waitUntil: 'networkidle', timeout: 20000 });
     // 关键：注入 token 后必须 reload，否则 SPA 仍停在登录页，被测对象错误。
     await page.reload({ waitUntil: 'networkidle', timeout: 20000 });
     await page.waitForTimeout(800);
-    const evidence = await page.evaluate(() => {
+    const evidence = await page.evaluate(({ expectedLabel, authorized }) => {
       const docEl = document.documentElement;
       const bodyText = (document.body?.innerText || '').trim();
       const markers = ['登录', '应用暂时无法打开', '请返回应用列表后重试'];
@@ -129,17 +212,30 @@ async function checkSurface(page, baseUrl, viewport, surface) {
           .map((el) => el.textContent.trim()).join(' | '),
         listCount: document.querySelectorAll('.compact-record-list').length,
         actionButtonCount: document.querySelectorAll('.business-action-bar button').length,
+        routeTitle: document.querySelector('.page-header__route-context')?.textContent?.trim() || '',
+        permissionDenied: bodyText.includes('无权访问') && bodyText.includes('当前账号没有打开该应用的权限。'),
+        expectedLabelPresent: bodyText.includes(expectedLabel),
       };
-    });
+    }, { expectedLabel: surface.label, authorized: expectedStatus === 200 });
+    const applicationReadStatuses = [...pageReads];
     const apiStatus = await probeApiStatus(page, surface.apiPath);
+    let mutationStatus = null;
+    let actionEvidence = null;
+    if (expectedStatus === 200) {
+      actionEvidence = await exerciseAuthorizedSurface(page, surface, performMutation);
+    } else {
+      mutationStatus = await probeMutationStatus(page, surface);
+    }
     // 服务端 403 是预期的 RBAC 判定，浏览器会记录一条资源加载失败 —— 它不是缺陷。
-    const defects = browserErrors.filter((message) => !/Failed to load resource.*\b403\b/.test(message));
-    return { ok: true, evidence, apiStatus, errors: defects, allErrors: browserErrors };
+    // 委外表单还会有一条被明确断言为 409 且已展示给用户的负向业务请求。
+    const defects = browserErrors.filter((message) => !/Failed to load resource.*\b(403|409)\b/.test(message));
+    return { ok: true, evidence, apiStatus, mutationStatus, actionEvidence, applicationReadStatuses, errors: defects, allErrors: browserErrors };
   } catch (error) {
     return { ok: false, error: error.message, errors: browserErrors, apiStatus: 0 };
   } finally {
     page.off('console', onConsole);
     page.off('pageerror', onPageError);
+    page.off('response', onResponse);
   }
 }
 
@@ -160,6 +256,20 @@ async function seedOutsourcingOrder(token) {
   return created.status;
 }
 
+async function seedSourcing(token) {
+  const today = new Date().toISOString().slice(0, 10);
+  const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+  const source = await fetch(`http://127.0.0.1:${server.address().port}/api/procurement/source-entries`, {
+    method: 'POST', headers,
+    body: JSON.stringify({ supplierId: 'supplier-001', productId: 'product-001', sourceType: 'PURCHASE', enabled: true, effectiveFrom: today }),
+  });
+  const quota = await fetch(`http://127.0.0.1:${server.address().port}/api/procurement/quotas`, {
+    method: 'POST', headers,
+    body: JSON.stringify({ supplierId: 'supplier-001', productId: 'product-001', sourceType: 'PURCHASE', proportion: { num: 1, den: 1 }, effectiveFrom: today }),
+  });
+  return { source: source.status, quota: quota.status };
+}
+
 async function main() {
   await new Promise((done) => server.listen(0, '127.0.0.1', done));
   const port = server.address().port;
@@ -176,6 +286,8 @@ async function main() {
       return (await response.json()).token;
     })();
     console.log(`[seed] 生产 API 创建委外订单状态 = ${await seedOutsourcingOrder(seedToken)}`);
+    const sourcingSeed = await seedSourcing(seedToken);
+    console.log(`[seed] 生产 API 创建寻源/配额状态 = ${sourcingSeed.source}/${sourcingSeed.quota}`);
 
     for (const subject of SUBJECTS) {
       const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
@@ -186,8 +298,8 @@ async function main() {
 
       for (const viewport of VIEWPORTS) {
         for (const surface of SURFACES) {
-          const result = await checkSurface(page, baseUrl, viewport, surface);
           const expectedStatus = subject.expectApiStatus[surface.route];
+          const result = await checkSurface(page, baseUrl, viewport, surface, expectedStatus, viewport.width === 320);
           const failures = [];
           if (!result.ok) {
             failures.push(`检查异常：${result.error}`);
@@ -202,10 +314,21 @@ async function main() {
             if (result.apiStatus !== expectedStatus) {
               failures.push(`服务端 RBAC 判定为 ${result.apiStatus}，期望 ${expectedStatus}`);
             }
+            if (expectedStatus === 200) {
+              if (e.routeTitle !== surface.label) failures.push(`目标工作面 DOM 未渲染（标题 ${e.routeTitle || '缺失'}）`);
+              if (!result.applicationReadStatuses.includes(200)) failures.push(`页面自身未完成真实 GET（${result.applicationReadStatuses.join('/') || '无'}）`);
+              if (!result.actionEvidence) failures.push('授权用户未完成合法动作');
+              if (surface.route === 'outsourcing' && e.listCount < 1) failures.push('委外真实订单列表未渲染');
+              if (surface.route === 'sourcing-pricing' && e.listCount < 1) failures.push('寻源真实货源列表未渲染');
+            } else {
+              if (!e.permissionDenied) failures.push('无权用户未获得页面级无权处理');
+              if (result.mutationStatus !== 403) failures.push(`无权写操作返回 ${result.mutationStatus}，期望 403`);
+              if (e.routeTitle || e.actionButtonCount) failures.push('无权用户仍可见目标工作面或动作按钮');
+            }
           }
           const passed = failures.length === 0;
           const detail = result.ok
-            ? `w=${result.evidence.documentWidth}/${result.evidence.viewportWidth} overflow=${result.evidence.overflow} typeError=${result.evidence.typeError} api=${result.apiStatus}(期望${expectedStatus}) notOpen=[${result.evidence.notOpenMarkers.join('/')}] lists=${result.evidence.listCount} actions=${result.evidence.actionButtonCount} errors=${result.errors.length}`
+            ? `w=${result.evidence.documentWidth}/${result.evidence.viewportWidth} overflow=${result.evidence.overflow} typeError=${result.evidence.typeError} api=${result.apiStatus}(期望${expectedStatus}) pageGET=[${result.applicationReadStatuses.join('/')}] mutation=${result.mutationStatus ?? '-'} title=${result.evidence.routeTitle || '-'} lists=${result.evidence.listCount} action=${JSON.stringify(result.actionEvidence)} errors=${result.errors.length}`
             : `error: ${result.error} errors=${JSON.stringify(result.errors).slice(0, 160)}`;
           console.log(`${passed ? '[32mPASS[0m' : '[31mFAIL[0m'} ${subject.label} ${viewport.label}px ${surface.route} :: ${detail}`);
           if (!passed) {

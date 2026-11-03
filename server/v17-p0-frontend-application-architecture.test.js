@@ -128,6 +128,8 @@ test('P0-C shell resolves registry routes lazily and guards route mount before p
   assert.match(app, /<RouteScreen route=\{route\}/);
   assert.match(registry, /const loadScreenModule = \(path\)/);
   assert.match(registry, /return import\('\.\.\/pages\/master-data\.jsx'\)/);
+  assert.match(registry, /case '\.\.\/pages\/sourcing-pricing\.jsx': return import\('\.\.\/pages\/sourcing-pricing\.jsx'\)/);
+  assert.match(registry, /case '\.\.\/pages\/outsourcing\.jsx': return import\('\.\.\/pages\/outsourcing\.jsx'\)/);
   assert.match(app, /addEventListener\('hashchange', applyBrowserLocation\)/);
   assert.match(app, /history\.replaceState/);
 });

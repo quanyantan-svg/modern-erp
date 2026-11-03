@@ -32,10 +32,10 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { api } from '../api.js';
-import { can, Empty, Modal, ConfirmAction } from '../components/ui.jsx';
+import { can, Empty, Modal } from '../components/ui.jsx';
 import {
   BusinessAction, BusinessActionBar, BusinessPageHeader, BusinessPageShell,
-  CompactRecordList, HelpDisclosure, RecordCard,
+  CompactRecord, CompactRecordList, HelpDisclosure, RecordCard, StatusChip,
 } from '../components/design-system.jsx';
 
 const STATUS_LABELS = {
@@ -57,7 +57,7 @@ function statusTone(status) {
   return 'neutral';
 }
 
-export default function OutsourcingPage() {
+export default function OutsourcingPage({ user }) {
   const [orders, setOrders] = useState([]);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
@@ -81,13 +81,11 @@ export default function OutsourcingPage() {
     <BusinessPageShell>
       <BusinessPageHeader
         title="委外加工"
-        subtitle="委外订单执行中心"
-        actions={can(['OUTSOURCING_MANAGE', 'OUTSOURCING_RELEASE']) ? (
-          <BusinessActionBar>
-            <BusinessAction onClick={() => setActive('create')}>新建委外订单</BusinessAction>
-          </BusinessActionBar>
+        context="委外订单执行中心"
+        primaryAction={can(user, 'OUTSOURCING_MANAGE') ? (
+          <BusinessAction hierarchy="primary" onClick={() => setActive('create')}>新建委外订单</BusinessAction>
         ) : null}
-        filters={
+        secondaryActions={
           <select value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">全部状态</option>
             {Object.entries(STATUS_LABELS).map(([k, v]) => (<option key={k} value={k}>{v}</option>))}
@@ -95,19 +93,25 @@ export default function OutsourcingPage() {
         }
       />
       {error && <HelpDisclosure variant="negative">{error}</HelpDisclosure>}
-      {!orders.length && !error ? <Empty title="暂无委外订单" hint="新建或由计划释放委外订单" /> : null}
-      <CompactRecordList
-        items={orders.map((o) => ({
-          key: o.id,
-          primary: o.orderNo,
-          secondary: `${SOURCE_LABELS[o.sourceType] || o.sourceType} / ${o.supplierId} / ${o.productId}`,
-          meta: `数量 ${o.orderQuantity} / ${STATUS_LABELS[o.status] || o.status} / ${fmtDate(o.businessDate)}`,
-          tone: statusTone(o.status),
-          onClick: () => setActive(o.id),
-        }))}
-      />
+      {!orders.length && !error ? <Empty title="暂无委外订单" text="新建或由计划释放委外订单" /> : null}
+      <CompactRecordList data-testid="outsourcing-order-list">
+        {orders.map((o) => (
+          <CompactRecord
+            key={o.id}
+            title={o.orderNo}
+            subtitle={`${SOURCE_LABELS[o.sourceType] || o.sourceType} / ${o.supplierId} / ${o.productId}`}
+            status={<StatusChip status={o.status}>{STATUS_LABELS[o.status] || o.status}</StatusChip>}
+            metadata={[
+              { label: '数量', value: o.orderQuantity },
+              { label: '业务日期', value: fmtDate(o.businessDate) },
+            ]}
+            className={`outsourcing-order outsourcing-order--${statusTone(o.status)}`}
+            onOpen={() => setActive(o.id)}
+          />
+        ))}
+      </CompactRecordList>
       {active && active !== 'create' && (
-        <OutsourcingOrderDetail orderId={active} onClose={() => { setActive(null); load(); }} />
+        <OutsourcingOrderDetail user={user} orderId={active} onClose={() => { setActive(null); load(); }} />
       )}
       {active === 'create' && (
         <CreateOutsourcingOrderModal onClose={() => { setActive(null); load(); }} />
@@ -116,7 +120,7 @@ export default function OutsourcingPage() {
   );
 }
 
-function OutsourcingOrderDetail({ orderId, onClose }) {
+function OutsourcingOrderDetail({ user, orderId, onClose }) {
   const [order, setOrder] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -164,11 +168,12 @@ function OutsourcingOrderDetail({ orderId, onClose }) {
     <Modal title={`委外订单 ${order.outsourcingOrder.orderNo}`} onClose={onClose}>
       <BusinessPageHeader
         title={order.outsourcingOrder.orderNo}
-        subtitle={`${STATUS_LABELS[order.outsourcingOrder.status] || order.outsourcingOrder.status} / 数量 ${order.outsourcingOrder.orderQuantity}`}
+        context={`${STATUS_LABELS[order.outsourcingOrder.status] || order.outsourcingOrder.status} / 数量 ${order.outsourcingOrder.orderQuantity}`}
       />
       <section>
         <RecordCard
-          items={[
+          title="订单信息"
+          facts={[
             { label: '来源', value: SOURCE_LABELS[order.outsourcingOrder.sourceType] || order.outsourcingOrder.sourceType },
             { label: '供应商', value: order.outsourcingOrder.supplierId },
             { label: '产品', value: order.outsourcingOrder.productId },
@@ -180,33 +185,35 @@ function OutsourcingOrderDetail({ orderId, onClose }) {
       <section>
         <h3>物料位置</h3>
         <CompactRecordList
-          items={(order.materials || []).map((m) => ({
-            key: m.id,
-            primary: `产品 ${m.productId}`,
-            secondary: `需求 ${m.requiredQuantity} / 已发 ${m.issuedQuantity} / 补 ${m.supplementedQuantity} / 退 ${m.returnedQuantity} / 倒冲 ${m.backflushedQuantity}`,
-            meta: `供应商 WIP 剩余 ${m.supplierWipRemaining} ${m.unit}`,
-            tone: m.supplierWipRemaining > 0 ? 'accent' : 'muted',
-          }))}
-        />
+        >
+          {(order.materials || []).map((m) => (
+            <CompactRecord
+              key={m.id}
+              title={`产品 ${m.productId}`}
+              subtitle={`需求 ${m.requiredQuantity} / 已发 ${m.issuedQuantity} / 补 ${m.supplementedQuantity} / 退 ${m.returnedQuantity} / 倒冲 ${m.backflushedQuantity}`}
+              metadata={[{ label: '供应商 WIP 剩余', value: `${m.supplierWipRemaining} ${m.unit}` }]}
+            />
+          ))}
+        </CompactRecordList>
       </section>
       <section>
         <h3>倒冲扣减</h3>
-        <RecordCard items={order.issues ? [
+        <RecordCard title="执行汇总" facts={order.issues ? [
           { label: '发料次数', value: order.issues.length },
           { label: '补料次数', value: (order.supplements || []).length },
           { label: '退料次数', value: (order.returns || []).length },
         ] : []} />
       </section>
-      <BusinessActionBar>
-        {nextLifecycle && can(['OUTSOURCING_RELEASE']) && (
+      <BusinessActionBar
+        primary={nextLifecycle && (can(user, 'OUTSOURCING_RELEASE') || can(user, 'OUTSOURCING_MANAGE')) ? (
           <BusinessAction onClick={() => transition('NEXT')} disabled={busy}>
             {nextLifecycle === 'PLAN_CONFIRMED' ? '确认计划' : nextLifecycle === 'RELEASED' ? '下达' : '标记完工'}
           </BusinessAction>
-        )}
-        {order.outsourcingOrder.status === 'DRAFT' && can(['OUTSOURCING_MANAGE']) && (
-          <BusinessAction onClick={cancelOrder} variant="danger" disabled={busy}>取消</BusinessAction>
-        )}
-      </BusinessActionBar>
+        ) : null}
+        destructive={['DRAFT', 'PLAN_CONFIRMED'].includes(order.outsourcingOrder.status) && can(user, 'OUTSOURCING_MANAGE') ? (
+          <BusinessAction onClick={cancelOrder} hierarchy="danger" disabled={busy}>取消</BusinessAction>
+        ) : null}
+      />
     </Modal>
   );
 }
@@ -238,9 +245,7 @@ function CreateOutsourcingOrderModal({ onClose }) {
         <label>数量<input type="number" value={form.orderQuantity} onChange={(e) => setForm({ ...form, orderQuantity: e.target.value })} required min="1" /></label>
         <label>单位<input value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} /></label>
         <label>业务日期<input type="date" value={form.businessDate} onChange={(e) => setForm({ ...form, businessDate: e.target.value })} /></label>
-        <BusinessActionBar>
-          <BusinessAction type="submit" disabled={busy}>创建</BusinessAction>
-        </BusinessActionBar>
+        <BusinessActionBar primary={<BusinessAction hierarchy="primary" type="submit" disabled={busy}>创建</BusinessAction>} />
       </form>
     </Modal>
   );

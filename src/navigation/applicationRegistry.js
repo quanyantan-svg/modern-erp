@@ -140,6 +140,8 @@ const loadScreenModule = (path) => {
     case '../pages/credit-query.jsx': return import('../pages/credit-query.jsx');
     case '../pages/sales-batch-a.jsx': return import('../pages/sales-batch-a.jsx');
     case '../pages/wave8-sales.jsx': return import('../pages/wave8-sales.jsx');
+    case '../pages/sourcing-pricing.jsx': return import('../pages/sourcing-pricing.jsx');
+    case '../pages/outsourcing.jsx': return import('../pages/outsourcing.jsx');
     default: return Promise.reject(new Error(`Unknown route screen module: ${path}`));
   }
 };

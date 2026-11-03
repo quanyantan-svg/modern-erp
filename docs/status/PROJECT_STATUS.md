@@ -1389,6 +1389,62 @@ M1-Core Acceptance、Domain Closure、Freeze 或 Release Readiness；
 M1C_WP7A_READY_FOR_INDEPENDENT_REVIEW
 ```
 
+---
+
+### 37.28 M1-Core `M1C-WP7A-G05-R1` 移动工作面阻塞修复（2026-11-03）
+
+**授权与范围**：业务所有者授权对 §37.27 已登记的 G05-A / G05-B 执行有界
+Implementation 缺陷修复；不修改 Requirement §31.13 或 Active Design §12 / §13.1，
+不重做其他 Gate，不签发 `M1C-G05` PASS、WP7-A Acceptance、M1-Core Acceptance、
+Domain Closure、Freeze 或 Release Readiness。起始 HEAD 为
+`a04b7a5cecd088b923fc809b0b9778fc32d7567c`，原 WP7-A 报告、修复前
+`PASS=16 / FAIL=8 / TOTAL=24` 与 G01–G04/G06 证据均原样保留。
+
+**G05-A 根因与修复**：`SCREEN_DEFINITIONS` 已登记 `sourcing-pricing` / `outsourcing`，
+但 `loadScreenModule()` 的静态 `switch` 缺少两条 import，运行时落入
+`Unknown route screen module`。现已只在既有 switch 补齐两条静态 import；未引入变量路径、
+第二 Registry 或路由身份/分组/可见性变更。正式 `pnpm build` 产物已生成独立
+`page-sourcing-pricing-*.js` 与 `page-outsourcing-*.js` chunk。
+
+**G05-B 权限与可执行页面修复**：`OutsourcingPage` 从 `RouteScreen` 既有 props 取得 `user`，
+并传给详情；三处错误 `can([...])` 已按后端真实矩阵改为：新建仅
+`OUTSOURCING_MANAGE`，推进为 `OUTSOURCING_RELEASE OR OUTSOURCING_MANAGE`，取消为
+`OUTSOURCING_MANAGE` 且状态限 `DRAFT / PLAN_CONFIRMED`。同时把两页仍使用的旧版
+Design System `actions / filters / items` 与 action-bar children 调用对齐到现行
+`primaryAction / secondaryActions / children / primary / destructive` 合同；否则权限修复后
+按钮与真实列表仍会被组件静默忽略。未修改 `can()` 签名、角色授予、后端 Handler、状态机或
+全局 Design System。`sourcing-pricing.jsx` 未发现同类权限误用，未扩大权限策略。
+
+**修复后 G05 浏览器证据**：正式构建产物 + 临时 SQLite + Edge/Playwright，
+3 个真实主体 × 4 宽度 × 2 工作面 = **`PASS=24 / FAIL=0 / TOTAL=24`**：
+
+| 主体 | 委外加工 | 寻源与定价 |
+|---|---|---|
+| admin | 320/390/430/680：4/4 | 320/390/430/680：4/4 |
+| 委外业务员 | 320/390/430/680：4/4 | 页面级拒绝 + 服务端 403：4/4 |
+| 销售专员 | 页面级拒绝 + 服务端 403：4/4 | 页面级拒绝 + 服务端 403：4/4 |
+
+授权页面逐项证明目标标题与真实列表 DOM 已渲染、页面自身 GET 为 200、无
+`Unknown route screen module`、无 `api.get/api.post is not a function`、无未捕获异常、
+无横向溢出；320px 额外执行委外非法供应商 409 错误展示并原位纠正、合法创建 201、
+订单推进 200，以及寻源分配 POST 200。其余宽度证明动作可见且可用。无权主体不渲染目标
+工作面或动作，并对两类直接 POST 均返回后端 403，前端门禁未替代后端 RBAC。
+
+**回归**：G05 Browser **24/24 PASS**；`pnpm test:fast` **511/511 PASS**；
+`pnpm test` **3236/3236 PASS**、0 fail / 0 skipped / 0 cancelled；`pnpm build` PASS；
+文档 `current` / `migration` 与提交后 N7 结果见本逻辑单元最终门禁记录；
+`git diff --check` PASS。全部常规测试继续由隔离器固定 SQLite；未运行 MySQL Gate。
+
+**未发生事项与剩余阻塞**：未修改 Requirement、Active Design、后端状态机、库存/估值/财务
+Writer、schema/migration、权限矩阵、G01–G04/G06 断言或 WP7-A 原报告；未运行 M-15、项目
+数据库 Migration、MySQL Gate；未 Push / Merge / Tag / Release / Deploy。G07 仍 `NOT_RUN`，
+G01–G06 的 MySQL 对等/并发证据仍缺失，加工费必填政策与既有 WP7-A residual 仍开放。
+本节只登记修复与复跑证据，**不自行签发** `M1C-G05` PASS。
+
+```text
+M1C_WP7A_G05_R1_READY_FOR_INDEPENDENT_REVIEW
+```
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。

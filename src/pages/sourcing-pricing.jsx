@@ -28,10 +28,10 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { api } from '../api.js';
-import { can, Empty, Modal } from '../components/ui.jsx';
+import { Empty } from '../components/ui.jsx';
 import {
-  BusinessAction, BusinessActionBar, BusinessPageHeader, BusinessPageShell,
-  CompactRecordList, HelpDisclosure, RecordCard,
+  BusinessAction, BusinessPageHeader, BusinessPageShell,
+  CompactRecord, CompactRecordList, HelpDisclosure,
 } from '../components/design-system.jsx';
 
 function fmtDate(s) { return s ? new Date(s).toISOString().slice(0, 10) : '—'; }
@@ -84,15 +84,13 @@ export default function SourcingPricingPage() {
     <BusinessPageShell>
       <BusinessPageHeader
         title="寻源与定价"
-        subtitle="Source List · Quota · Sourcing · Price List · Pricing UOM · Pricing Discount · Price Adjustment"
-        actions={
-          <BusinessActionBar>
-            <BusinessAction onClick={runAllocation} disabled={allocating}>
-              模拟寻源分配
-            </BusinessAction>
-          </BusinessActionBar>
+        context="Source List · Quota · Sourcing · Price List · Pricing UOM · Pricing Discount · Price Adjustment"
+        primaryAction={
+          <BusinessAction hierarchy="primary" onClick={runAllocation} disabled={allocating}>
+            模拟寻源分配
+          </BusinessAction>
         }
-        filters={
+        secondaryActions={
           <select value={tab} onChange={(e) => setTab(e.target.value)}>
             <option value="source">Source List</option>
             <option value="quota">Quota</option>
@@ -103,42 +101,24 @@ export default function SourcingPricingPage() {
       />
       {error && <HelpDisclosure>{error}</HelpDisclosure>}
       {tab === 'source' && (
-        <CompactRecordList
-          items={sources.map((s) => ({
-            key: s.id, primary: `${s.supplierId} / ${s.productId}`,
-            secondary: `${s.sourceType} / ${s.enabled ? '启用' : '停用'}`,
-            meta: `${fmtDate(s.effectiveFrom)} → ${fmtDate(s.effectiveTo)}`,
-            tone: s.enabled ? 'positive' : 'muted',
-          }))}
-        />
+        <CompactRecordList data-testid="sourcing-source-list">
+          {sources.map((s) => <CompactRecord key={s.id} title={`${s.supplierId} / ${s.productId}`} subtitle={`${s.sourceType} / ${s.enabled ? '启用' : '停用'}`} metadata={[{ label: '有效期', value: `${fmtDate(s.effectiveFrom)} → ${fmtDate(s.effectiveTo)}` }]}/>)}
+        </CompactRecordList>
       )}
       {tab === 'quota' && (
-        <CompactRecordList
-          items={quotas.map((q) => ({
-            key: q.id, primary: `${q.supplierId} / ${q.productId}`,
-            secondary: `${q.sourceType} / 比例 ${q.proportion.num}/${q.proportion.den}`,
-            meta: `${fmtDate(q.effectiveFrom)} → ${fmtDate(q.effectiveTo)}`,
-          }))}
-        />
+        <CompactRecordList>
+          {quotas.map((q) => <CompactRecord key={q.id} title={`${q.supplierId} / ${q.productId}`} subtitle={`${q.sourceType} / 比例 ${q.proportion.num}/${q.proportion.den}`} metadata={[{ label: '有效期', value: `${fmtDate(q.effectiveFrom)} → ${fmtDate(q.effectiveTo)}` }]}/>)}
+        </CompactRecordList>
       )}
       {tab === 'price' && (
-        <CompactRecordList
-          items={prices.map((p) => ({
-            key: p.id, primary: `${p.supplierId} / ${p.productId}`,
-            secondary: `${p.pricingUomCode} / ¥${(p.unitPriceCents/100).toFixed(2)}`,
-            meta: `${p.status} v${p.version} ${fmtDate(p.effectiveFrom)} → ${fmtDate(p.effectiveTo)}`,
-            tone: p.status === 'ACTIVE' ? 'positive' : 'muted',
-          }))}
-        />
+        <CompactRecordList>
+          {prices.map((p) => <CompactRecord key={p.id} title={`${p.supplierId} / ${p.productId}`} subtitle={`${p.pricingUomCode} / ¥${(p.unitPriceCents/100).toFixed(2)}`} metadata={[{ label: '版本与有效期', value: `${p.status} v${p.version} ${fmtDate(p.effectiveFrom)} → ${fmtDate(p.effectiveTo)}` }]}/>)}
+        </CompactRecordList>
       )}
       {tab === 'discount' && (
-        <CompactRecordList
-          items={discounts.map((d) => ({
-            key: d.id, primary: `${d.supplierId} / ${d.productId}`,
-            secondary: `${d.basis} ${d.value.num}/${d.value.den}`,
-            meta: `${d.status} v${d.version} ${fmtDate(d.effectiveFrom)} → ${fmtDate(d.effectiveTo)}`,
-          }))}
-        />
+        <CompactRecordList>
+          {discounts.map((d) => <CompactRecord key={d.id} title={`${d.supplierId} / ${d.productId}`} subtitle={`${d.basis} ${d.value.num}/${d.value.den}`} metadata={[{ label: '版本与有效期', value: `${d.status} v${d.version} ${fmtDate(d.effectiveFrom)} → ${fmtDate(d.effectiveTo)}` }]}/>)}
+        </CompactRecordList>
       )}
       {tab === 'source' && !sources.length && <Empty title="暂无货源" />}
       {tab === 'quota' && !quotas.length && <Empty title="暂无配额" />}
