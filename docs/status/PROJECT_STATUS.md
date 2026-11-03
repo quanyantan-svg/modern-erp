@@ -1086,6 +1086,57 @@ Release / Deploy，未进入 WP-2～WP-6。**完成后 HARD STOP**，等待审�
 提交信息中列明全部受治理路径，且最终报告继续保留该 FAIL。Design Promotion 完成后
 **HARD STOP**，等待单独 Implementation 授权。
 
+### 37.23 M1C-WP2–WP6 Implementation 交付（`M1C-IMPL-20261103`，2026-11-03）
+
+**授权与范围**：业务所有者通过本轮 Session Handoff 明确授权恢复并完成 `M1C-WP-2..WP-6`
+Implementation、既有套件合同适配、全量门禁、本地提交与状态登记。起始分支为
+`work/m1-core-rebaseline-20261102`，起始 HEAD `a059d96e13f6e7c0a8c2ebb1b1ce092c92ce2b7c`；
+既有工作树全部保留并续做，未 reset / clean / stash / rebase 或覆盖。
+
+| 项 | 当前状态 |
+|---|---|
+| Implementation | `IMPLEMENTED / AWAITING_INDEPENDENT_REVIEW`；**未签发 Implementation PASS** |
+| M1-P-03 角色与拒绝审计 | `eb4ff58180402ce254d0bfb171eebfba08671cf9` |
+| 加工费 PO 正式生产路径 | `3566aae60d2d77669e00e8bd8449bd30dd663f43` |
+| WP2–WP5 委外收货、材料、倒冲与延期拒绝 | `09afd37bee0373f4b3a7932612de57daa7439c6e` |
+| WP6 前端 API 与响应式验收脚本 | `a059d96e13f6e7c0a8c2ebb1b1ce092c92ce2b7c` |
+| 既有套件迁移与容量口径修正 | `f5abbe31664e93ee3a49598a9efc5f3f5e6eb774` |
+| `M1C-G01..M1C-G07` | **7/7 `NOT_RUN`**；未签发任何 Gate PASS |
+| 数据库 / Migration / MySQL | 未连接项目数据库；未执行项目 migration 或 `M-15`；未运行 MySQL Gate |
+| 外部交付 | 未 Push / Merge / Tag / Release / Deploy；WP7 未执行 |
+
+**实施证据**：加工费 PO 已通过生产 API 完成“创建草稿 → 提交 → 独立审批 → OUTSOURCE
+完工通知 → CONFIRMED → 表头与正式明细原子收货”链；同一委外订单的 PO 终身唯一由
+`purchase_orders(source_outsourcing_order_id)` UNIQUE 方案和 canonical Writer 双层约束。
+委外收货两段式生效、已批准 OUTSOURCE BOM 快照、材料 canonical 库存/估值 Writer、增量倒冲、
+成品入库、职责分离、延期危险写入 409 拒绝与 403/409 拒绝审计均已落地。委外通知容量依据
+Active Design §5.2.2 与 `MC-REQ-02/09` 净除已由通知行收货的数量，避免同一批量重复扣减；
+标准采购口径未改变。
+
+**验证结果**：
+
+- focused：`server/m1c-processing-po.test.js` 13/13、`server/m1c-wp2-wp5-outsourcing.test.js`
+  13/13、响应式浏览器 UAT 16/16；本轮续跑 `server/procurement-execution-suite.test.js` 与
+  `server/m1c-outsourcing-gl-policy-guard.test.js` 合计 15/15；
+- UNIQUE 一次性临时 SQLite 证据：索引存在、重复非空来源被拒绝、多个 NULL 合法、历史冲突
+  fail closed；未对项目数据库执行 migration；
+- `pnpm test:fast`：511/511 PASS；
+- `pnpm test`：3205 项，3203 PASS / 2 FAIL；两项均为下述 N7 继承性失败，**无新增业务测试失败**；
+- `pnpm build`：PASS；`git diff --check`：PASS；
+- `current` 文档检查：N1、N3–N6、N8、N9 PASS，N2 `RETIRED`，N7 FAIL；
+  `migration` 模式 C1–C6 全部 PASS。
+
+**N7 精确状态**：历史失败仍为 §37.22 已登记的三条证据：`171ade577bad` 缺
+`docs/status/PROJECT_STATUS.md §37.21` 或完整路径引用；`4403a80d2543` 缺
+`docs/reviews/README.md` 与
+`docs/reviews/m1/procurement-outsourcing-m1-core-processing-po-design-amendment.md` 完整路径。
+本轮新增 N7 失败为 **0**；受影响 Gate 仅为 current 文档完整性及其纳入 FULL 的两项测试，
+不把该结果豁免或记为 PASS。
+
+**暂停点**：实现已交付并等待独立审查；业务所有者尚未签发 `M1C-WP2..WP6`
+Implementation PASS、任何 `M1C-Gxx` PASS、Acceptance、Freeze、Domain Closure 或 Release Readiness。
+当前项目状态仍只以本文件为唯一登记。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
