@@ -178,13 +178,15 @@ export function contentDigest(value) {
   return createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 }
 
-export function databaseSnapshot(db) {
+export function databaseSnapshot(db, { excludeTables = [] } = {}) {
+  const excluded = new Set(excludeTables.map((name) => String(name)));
   const tables = db.dialect === 'mysql'
     ? db.prepare(`SELECT table_name AS name FROM information_schema.tables
         WHERE table_schema=DATABASE() AND table_type='BASE TABLE' ORDER BY table_name`).all()
     : db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all();
   const snapshot = {};
   for (const { name } of tables) {
+    if (excluded.has(String(name))) continue;
     const escaped = String(name).replace(/`/g, '``');
     const rows = db.prepare(`SELECT * FROM \`${escaped}\``).all();
     const normalized = rows.map((row) => canonical(row)).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
@@ -193,8 +195,8 @@ export function databaseSnapshot(db) {
   return snapshot;
 }
 
-export function databaseDigest(db) {
-  return contentDigest(databaseSnapshot(db));
+export function databaseDigest(db, options) {
+  return contentDigest(databaseSnapshot(db, options));
 }
 
 // ---------------------------------------------------------------------------

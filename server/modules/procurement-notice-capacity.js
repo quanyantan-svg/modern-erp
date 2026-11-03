@@ -269,5 +269,16 @@ export function sumOutsourcingNoticeQtyByStatus(db, outsourcingOrderId, statuses
     FROM receipt_notice_items rni
     JOIN receipt_notices rn ON rn.id=rni.notice_id
     WHERE rn.outsourcing_order_id=? AND rn.business_type='OUTSOURCE' AND rn.status IN (${placeholders})`).get(outsourcingOrderId, ...statuses);
-  return Number(row?.q || 0);
+  const notified = Number(row?.q || 0);
+  // M1C-WP-2：委外收货必须绑定 CONFIRMED 完工通知与通知行，因此同一批量既在
+  // “已通知”又在“已收货”中出现。此处扣除已由这些通知行收货的量，避免对委外
+  // 订单剩余可收量（Active Design §5.2.2）重复计数。
+  const received = db.prepare(`SELECT COALESCE(SUM(ori.quantity),0) q
+    FROM outsourcing_receipt_items ori
+    JOIN receipt_notice_items rni ON rni.id=ori.source_notice_item_source_id
+    JOIN receipt_notices rn ON rn.id=rni.notice_id
+    JOIN outsourcing_receipts orc ON orc.id=ori.receipt_id
+    WHERE rn.outsourcing_order_id=? AND rn.business_type='OUTSOURCE' AND orc.business_status<>'CANCELLED'`)
+    .get(outsourcingOrderId);
+  return Math.max(0, notified - Number(received?.q || 0));
 }

@@ -27,7 +27,8 @@ describe('V1.3 Phase 6B lot, serial, genealogy and configurable quality', () => 
   test('schema is additive; legacy products default NONE; roles and approval families remain canonical', () => {
     for (const table of ['inventory_lots','inventory_lot_balances','inventory_serials','tracked_source_allocations','tracked_inventory_movements','tracked_identity_hold_history','production_genealogy_allocations','quality_control_points','quality_control_criteria','logistics_quality_policy_snapshots','inspection_criteria_snapshots']) assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table), table);
     assert.equal(db.prepare("SELECT tracking_policy FROM products WHERE id='p-none'").get().tracking_policy, 'NONE');
-    assert.equal(db.prepare('SELECT COUNT(*) n FROM roles').get().n, 5);
+    // M1-P-03（Active Design §8.1.3）新增 role-outsourcing 与 role-outsourcing-receiving 两个系统角色。
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM roles').get().n, 7);
     assert.deepEqual(APPROVAL_DOCUMENT_TYPES, ['SALES_ORDER','PURCHASE_ORDER','INVENTORY_CHECK','ACCOUNTING_VOUCHER','PURCHASE_REQUISITION','PRODUCTION_ORDER']);
   });
 

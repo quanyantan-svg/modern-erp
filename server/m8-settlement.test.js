@@ -40,7 +40,8 @@ describe('M8 AR/AP and settlement workflow', () => {
   test('permission registry keeps the approved Wave 10 family plus M1-Core M-17; role registry holds the canonical five-role model', () => {
     assert.equal(PERMISSIONS.length, 227);
     for (const code of ['AR_VIEW', 'COLLECTION_MANAGE', 'AP_VIEW', 'PAYMENT_MANAGE']) assert.ok(PERMISSIONS.some(([item]) => item === code));
-    assert.equal(db.prepare('SELECT COUNT(*) n FROM roles').get().n, 5);
+    // M1-P-03（Active Design §8.1.3）新增 role-outsourcing 与 role-outsourcing-receiving 两个系统角色。
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM roles').get().n, 7);
   });
 
   test('sourced draft Sales Delivery creates no AR; confirmation creates one exact-cent AR and retry cannot duplicate it', async () => {

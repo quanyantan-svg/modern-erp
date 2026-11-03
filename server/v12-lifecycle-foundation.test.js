@@ -93,7 +93,8 @@ describe('V1.2 lifecycle schema foundation', () => {
 
   test('permission, role and approval contracts remain unchanged', () => {
     assert.equal(PERMISSIONS.length, 227);
-    assert.equal(database.prepare('SELECT COUNT(*) n FROM roles').get().n, 5);
+    // M1-P-03（Active Design §8.1.3）新增 role-outsourcing 与 role-outsourcing-receiving 两个系统角色。
+    assert.equal(database.prepare('SELECT COUNT(*) n FROM roles').get().n, 7);
     assert.deepEqual(APPROVAL_DOCUMENT_TYPES, ['SALES_ORDER', 'PURCHASE_ORDER', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER', 'PURCHASE_REQUISITION', 'PRODUCTION_ORDER']);
     assert.deepEqual(LIFECYCLE_CLASSIFICATIONS, ['SAFE_DELETE', 'SAFE_CHAIN_DELETE', 'SAFE_REVERSAL_CLEANUP', 'ARCHIVE_ONLY', 'BLOCKED']);
   });

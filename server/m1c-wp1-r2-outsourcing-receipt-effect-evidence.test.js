@@ -18,7 +18,9 @@
 
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { createProcurementFixture } from './test-support/procurement-http-fixture.js';
+import {
+  createApprovedProcessingPo, createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource,
+} from './test-support/procurement-http-fixture.js';
 
 describe('M1C-WP1-R2 — outsourcing historical receipt effect evidence fails closed', () => {
   let fixture;
@@ -49,12 +51,21 @@ describe('M1C-WP1-R2 — outsourcing historical receipt effect evidence fails cl
     return order.data.id;
   }
 
-  async function createReceipt(orderId, quantity) {
-    const receipt = await fixture.request('POST', '/api/procurement/outsourcing/receipts', fixture.tokens.admin, {
-      orderId, quantity, receivedDate: isoDate(0), processingFeeCents: 10000,
-    });
-    assert.equal(receipt.status, 201, receipt.data.error);
-    return receipt.data.id;
+  /** Isolated historical fixture: a receipt created BEFORE M1C-WP-2 existed.
+   * The current production writer requires a CONFIRMED completion notice, a
+   * source-locked processing PO and detail lines, so a pre-WP-2 receipt can
+   * only be expressed as history. The suite is exactly about such history:
+   * whether it proves the receipt effect. */
+  function createHistoricalReceipt(orderId, quantity) {
+    const id = `or-r2-${orderId}-${quantity}`;
+    const day = isoDate(0);
+    fixture.db.prepare(`INSERT INTO outsourcing_receipts(
+        id,receipt_no,order_id,processing_po_id,quantity,received_date,supplier_id,business_status,
+        processing_fee_cents,total_cost_cents,creator_id,created_at,updated_at)
+      VALUES(?,?,?,NULL,?,?,?,'CONFIRMED',10000,10000,'user-admin',?,?)`)
+      .run(id, id, orderId, quantity, day, 'supplier-001', day, day);
+    insertReceiptItem(id, quantity);
+    return id;
   }
 
   /** Isolated historical fixture: the production receipt writer does not emit
@@ -82,7 +93,8 @@ describe('M1C-WP1-R2 — outsourcing historical receipt effect evidence fails cl
 
   async function createOutsourceNotice(orderId, quantity) {
     return fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, {
-      businessType: 'OUTSOURCE', outsourcingOrderId: orderId, warehouseId: 'warehouse-001',
+      businessType: 'OUTSOURCE', outsourcingOrderId: orderId,
+      processingPoId: await createApprovedProcessingPo(fixture, orderId), warehouseId: 'warehouse-001',
       noticeDate: isoDate(0), items: [{ productId: 'product-001', quantity }],
     });
   }
@@ -110,7 +122,7 @@ describe('M1C-WP1-R2 — outsourcing historical receipt effect evidence fails cl
     test('A a PENDING quality record does not prove a historical receipt (the defect)', async () => {
       await qualifyOutsourceSupplier();
       const orderId = await createReleasedOutsourcingOrder(100);
-      const receiptId = await createReceipt(orderId, 60);
+      const receiptId = createHistoricalReceipt(orderId, 60);
       insertHistoricalInspection(receiptId, { status: 'PENDING', orderId });
 
       const rejected = await createOutsourceNotice(orderId, 10);
@@ -121,7 +133,7 @@ describe('M1C-WP1-R2 — outsourcing historical receipt effect evidence fails cl
     test('B a DRAFT quality record does not prove a historical receipt', async () => {
       await qualifyOutsourceSupplier();
       const orderId = await createReleasedOutsourcingOrder(100);
-      const receiptId = await createReceipt(orderId, 60);
+      const receiptId = createHistoricalReceipt(orderId, 60);
       insertHistoricalInspection(receiptId, { status: 'DRAFT', orderId });
 
       const rejected = await createOutsourceNotice(orderId, 10);
@@ -132,7 +144,7 @@ describe('M1C-WP1-R2 — outsourcing historical receipt effect evidence fails cl
     test('C a CANCELLED quality record does not prove a historical receipt', async () => {
       await qualifyOutsourceSupplier();
       const orderId = await createReleasedOutsourcingOrder(100);
-      const receiptId = await createReceipt(orderId, 60);
+      const receiptId = createHistoricalReceipt(orderId, 60);
       insertHistoricalInspection(receiptId, { status: 'CANCELLED', orderId });
 
       const rejected = await createOutsourceNotice(orderId, 10);
@@ -143,7 +155,7 @@ describe('M1C-WP1-R2 — outsourcing historical receipt effect evidence fails cl
     test('D a COMPLETED but FAILED quality record does not prove a historical receipt', async () => {
       await qualifyOutsourceSupplier();
       const orderId = await createReleasedOutsourcingOrder(100);
-      const receiptId = await createReceipt(orderId, 60);
+      const receiptId = createHistoricalReceipt(orderId, 60);
       insertHistoricalInspection(receiptId, { status: 'COMPLETED', result: 'FAIL', orderId, quantity: 60 });
 
       const rejected = await createOutsourceNotice(orderId, 10);
@@ -159,8 +171,7 @@ describe('M1C-WP1-R2 — outsourcing historical receipt effect evidence fails cl
     test('E a completed PASS quality decision lets the receipt count as received capacity', async () => {
       await qualifyOutsourceSupplier();
       const orderId = await createReleasedOutsourcingOrder(100);
-      const receiptId = await createReceipt(orderId, 60);
-      insertReceiptItem(receiptId, 60);
+      const receiptId = createHistoricalReceipt(orderId, 60);
 
       const created = await fixture.request('POST', '/api/iqc', fixture.tokens.admin, { outsourcing_receipt_id: receiptId });
       assert.equal(created.status, 201, JSON.stringify(created.data));
@@ -190,8 +201,14 @@ describe('M1C-WP1-R2 — outsourcing historical receipt effect evidence fails cl
     test('F1 a receipt confirmed through the production API keeps its inventory and cost evidence', async () => {
       await qualifyOutsourceSupplier();
       const orderId = await createReleasedOutsourcingOrder(100);
-      const receiptId = await createReceipt(orderId, 30);
-      const receiptConfirmed = await fixture.request('POST', `/api/procurement/outsourcing/receipts/${receiptId}/confirm`, fixture.tokens.admin);
+      // M1C-WP-2：生产收货写入器要求 CONFIRMED 完工通知、来源锁定的加工费 PO 与明细行。
+      const source = await prepareOutsourcingReceiptSource(fixture, orderId, 30, `wp1-r2-f1-${orderId}`);
+      const receipt = await fixture.request('POST', '/api/procurement/outsourcing/receipts', fixture.tokens.admin, {
+        orderId, ...outsourcingReceiptBody(source, 30, 10000), processingFeeCents: 10000,
+      }, { 'idempotency-key': `wp1-r2-f1-receipt-${orderId}` });
+      assert.equal(receipt.status, 201, receipt.data.error);
+      const receiptId = receipt.data.id;
+      const receiptConfirmed = await fixture.request('POST', `/api/procurement/outsourcing/receipts/${receiptId}/confirm`, fixture.tokens.admin, {}, { 'idempotency-key': `wp1-r2-f1-effect-${orderId}` });
       assert.equal(receiptConfirmed.status, 200, JSON.stringify(receiptConfirmed.data));
 
       const movements = fixture.db.prepare("SELECT COUNT(*) n FROM inventory_transactions WHERE source_type='OUTSOURCING_RECEIPT' AND source_id=?").get(receiptId).n;
@@ -213,8 +230,8 @@ describe('M1C-WP1-R2 — outsourcing historical receipt effect evidence fails cl
     test('F2 a historical receipt with only a valuation movement is still proven', async () => {
       await qualifyOutsourceSupplier();
       const orderId = await createReleasedOutsourcingOrder(100);
-      const receiptId = await createReceipt(orderId, 40);
-      const itemId = insertReceiptItem(receiptId, 40);
+      const receiptId = createHistoricalReceipt(orderId, 40);
+      const itemId = fixture.db.prepare('SELECT id FROM outsourcing_receipt_items WHERE receipt_id=?').get(receiptId).id;
       // Isolated historical fixture: a receipt whose only recorded effect is a
       // posted valuation movement.
       fixture.db.prepare(`INSERT INTO inventory_valuation_movements(id,business_date,product_id,warehouse_id,quantity_delta,value_delta_cents,valuation_basis,movement_type,source_type,source_id,source_item_id,created_at)
@@ -245,7 +262,7 @@ describe('M1C-WP1-R2 — outsourcing historical receipt effect evidence fails cl
       assert.equal(notice.status, 201, JSON.stringify(notice.data));
 
       // A historical receipt with an unfinished inspection appears afterwards.
-      const receiptId = await createReceipt(orderId, 60);
+      const receiptId = createHistoricalReceipt(orderId, 60);
       insertHistoricalInspection(receiptId, { status: 'PENDING', orderId });
 
       const rejected = await fixture.request('POST', `/api/receipt-notices/${notice.data.id}/confirm`, fixture.tokens.admin);
@@ -259,7 +276,7 @@ describe('M1C-WP1-R2 — outsourcing historical receipt effect evidence fails cl
     test('H a rejected OUTSOURCE notice has zero business side effects and exactly one rejection audit', async () => {
       await qualifyOutsourceSupplier();
       const orderId = await createReleasedOutsourcingOrder(100);
-      const receiptId = await createReceipt(orderId, 60);
+      const receiptId = createHistoricalReceipt(orderId, 60);
       insertHistoricalInspection(receiptId, { status: 'PENDING', orderId });
 
       const before = businessSnapshot();
