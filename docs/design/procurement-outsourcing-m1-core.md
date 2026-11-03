@@ -326,6 +326,24 @@ M1C-WP-0  基础设施
   加工费 PO 行**只**承担"收货明细 ↔ 加工费来源"的可追溯角色（`MC-REQ-05` 的来源链），不承担容量角色。
 - 委外订单剩余可收量**不可证明**（历史收货效力未证实） → 一律 fail closed（409）。
 
+**`OUTSOURCE` 通知行可转换剩余的权威口径（M1C-WP2–WP6-R1 登记，2026-11-03）**
+
+`OUTSOURCE` 通知**不**创建 `receipt_notice_item_sources`（§5.1 / MC-REQ-02 已明确该表只承载
+`STANDARD_PURCHASE` 来源关系），因此它的"已转换量"由**委外收货明细**侧的来源追溯给出，
+而不是由该表的 `converted_quantity` 给出：
+
+| 量 | 权威口径 |
+|---|---|
+| 通知行数量 | `receipt_notice_items.quantity`（按**真实通知行 ID** 逐行，不按订单粗略分配） |
+| 通知行历史有效收货占用 | `SUM(outsourcing_receipt_items.quantity)`，来源行 `outsourcing_receipt_items.source_notice_item_source_id = 通知行 ID`，且 `outsourcing_receipts.business_status <> 'CANCELLED'`（**待检与已生效都仍占用**） |
+| 通知行剩余 | 通知行数量 − 历史有效收货占用 − **本次拟收货量**（比较总量含本次） |
+
+- 历史收货若**无法证明**其通知行来源（`source_notice_item_source_id` 为 NULL 或指向已不存在的通知行），
+  该订单的通知行剩余容量**不可证明** → 一律 fail closed（409 `RECEIPT_NOTICE_OUTSOURCING_CAPACITY_UNPROVEN`）；
+  **不得**按订单总量粗略分摊、**不得**推定归属（§10、MC-REQ-12）。
+- 越界一律 409 `RECEIPT_NOTICE_CAPACITY_EXCEEDED`（§9.3），业务零副作用 + 拒绝审计恰好 1 条。
+- 换 `Idempotency-Key` **不得**绕过该上界：容量以历史累计占用为准，与请求键无关。
+
 #### 5.2.3 两类共同适用的条件与例外
 
 - **供应商相容性**与**仓库相容性**是两类共同适用的必要条件（不相容即 409）。
@@ -558,6 +576,11 @@ PO、Item、成功审计与幂等结果原子提交。不同 Key 竞争只允许
 | 明细产品与加工费 PO 行不匹配 | 409 | `OUTSOURCING_RECEIPT_ITEM_SOURCE_MISMATCH` | 同上 | 恰好 1 条 |
 | 质量门禁未通过（生效动作） | 409 | `OUTSOURCING_QUALITY_GATE_NOT_PASSED` | 库存 / 估值 / 成本证据**零变化** | 恰好 1 条 |
 | 容量上界越界（按 §5.2 分域判定） | 409 | `RECEIPT_NOTICE_CAPACITY_EXCEEDED` | 收货 / 库存 / 估值 / 通知 / 交期台账**零变化** | 恰好 1 条 |
+| 同一完工通知行被重复消费（历史有效收货占用 + 本次 > 通知行数量，见 §5.2.2） | 409 | `RECEIPT_NOTICE_CAPACITY_EXCEEDED` | 同上 | 恰好 1 条 |
+| 委外收货生效被重复请求（已生效收货，换 `Idempotency-Key` 或并发进入事务时状态已改变） | 409 | `OUTSOURCING_RECEIPT_ALREADY_EFFECTED` | 收货 / 库存 / 估值 / 成本证据 / WIP 计数**零变化** | 恰好 1 条 |
+| 同一幂等键携带不同请求内容 | 409 | `OUTSOURCING_RECEIPT_IDEMPOTENCY_CONFLICT` | 同上 | 恰好 1 条 |
+| 加工费金额非法（非安全整数分 / 负数 / 溢出 / 非法字符串） | 400 | `OUTSOURCING_RECEIPT_AMOUNT_INVALID` | 收货 / 库存 / 估值**零变化** | 不写 |
+| 委外收货成品成本金额溢出安全整数分 | 409 | `OUTSOURCING_RECEIPT_AMOUNT_OVERFLOW` | 库存 / 估值 / 成本证据**零变化** | 恰好 1 条 |
 | 交期不可判定（零 / 多交期 / 历史不可证） | 409 | `RECEIPT_NOTICE_SCHEDULE_UNPROVEN` | 同上 | 恰好 1 条 |
 | 转换后重新转换（来源容量未恢复，`T-11`） | 409 | `RECEIPT_NOTICE_SOURCE_CAPACITY_UNKNOWN` | 同上 | 恰好 1 条 |
 | 委外订单剩余可收量不可证明 | 409 | `RECEIPT_NOTICE_OUTSOURCING_CAPACITY_UNPROVEN` | 同上 | 恰好 1 条 |

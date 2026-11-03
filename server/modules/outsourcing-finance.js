@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { transaction } from '../db.js';
+import { releaseMySqlIdempotencyLocks, transaction } from '../db.js';
 import { audit, auditBusinessRejection } from '../lib/audit.js';
 import {
   HttpError, allow, allowAny, assertAllowedFields, readJson, send,
@@ -35,6 +35,18 @@ function rejectDeferredWrite(db, actor, entityType, entityId, action, code, mess
   const error = new HttpError(409, message, { code });
   auditBusinessRejection(db, actor, { entityType, entityId: entityId || null, action }, error);
   throw error;
+}
+
+// 委外收货生效的业务门禁拒绝：409 必须写恰好一条 Domain 拒绝审计，且审计含
+// 业务单据标识与精确 error code（MC-REQ-11）。400 输入错误不写 Domain 审计。
+//
+// 事务前拒绝还必须释放 MySQL 幂等命名锁：`idempotencyReplay` 在未命中记录时
+// 会持有该锁直到事务提交/回滚，若在进入事务前拒绝却不释放，同一
+// Idempotency-Key 的后续请求会被 GET_LOCK 阻塞并退化成 503，而不是稳定的 409。
+function rejectReceiptConfirm(db, actor, receiptId, error) {
+  if (db?.dialect === 'mysql') releaseMySqlIdempotencyLocks(db);
+  auditBusinessRejection(db, actor, { entityType: 'OUTSOURCING_RECEIPT', entityId: receiptId, action: '确认委外收货' }, error);
+  return error;
 }
 
 function refreshOutsourcingCostEvidence(db, receiptId, calculatedAt = new Date().toISOString()) {
@@ -99,31 +111,53 @@ export async function confirmOutsourcingReceipt(db, req, res, actor, receiptId) 
   if (!idempotencyKey) throw new HttpError(400, 'Idempotency-Key 必填');
   const operation = 'OUTSOURCING_RECEIPT_CONFIRM';
   const fingerprint = requestFingerprint(body);
-  const replay = idempotencyReplay(db, operation, receiptId, idempotencyKey, fingerprint);
+  // 精确重放只返回已记录的真实结果；同键异内容是 409 业务门禁拒绝。
+  let replay = null;
+  try {
+    replay = idempotencyReplay(db, operation, receiptId, idempotencyKey, fingerprint);
+  } catch (error) {
+    if (error?.status !== 409) throw error;
+    const conflict = new HttpError(409, error.message, { code: 'OUTSOURCING_RECEIPT_IDEMPOTENCY_CONFLICT' });
+    throw rejectReceiptConfirm(db, actor, receiptId, conflict);
+  }
   if (replay) return send(res, 200, { ...replay, replayed: true });
   const receipt = db.prepare('SELECT * FROM outsourcing_receipts WHERE id=?').get(receiptId);
-  if (!receipt) throw new HttpError(404, '委外收货不存在');
-  if (receipt.business_status === 'EFFECTED') throw new HttpError(409, '已生效收货必须使用原 Idempotency-Key 重放');
-  if (receipt.business_status !== 'PENDING_INSPECTION') throw new HttpError(409, '只有待检收货可以生效');
+  if (!receipt) throw rejectReceiptConfirm(db, actor, receiptId, new HttpError(404, '委外收货不存在'));
+  // 已生效收货只接受原 Idempotency-Key 的精确重放；换 Key 重复确认是 409 拒绝。
+  if (receipt.business_status === 'EFFECTED') {
+    throw rejectReceiptConfirm(db, actor, receiptId,
+      new HttpError(409, '已生效收货必须使用原 Idempotency-Key 重放', { code: 'OUTSOURCING_RECEIPT_ALREADY_EFFECTED' }));
+  }
+  if (receipt.business_status !== 'PENDING_INSPECTION') {
+    throw rejectReceiptConfirm(db, actor, receiptId, new HttpError(409, '只有待检收货可以生效'));
+  }
   const materialIdentities = new Map((Array.isArray(body.materialIdentities) ? body.materialIdentities : []).map((item) => [item.materialListId, item]));
   const order = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(receipt.order_id);
-  if (!order) throw new HttpError(404, '委外订单不存在');
-  if (order.status !== 'RELEASED') throw new HttpError(409, '只有下达状态可收货');
+  if (!order) throw rejectReceiptConfirm(db, actor, receiptId, new HttpError(404, '委外订单不存在'));
+  if (order.status !== 'RELEASED') {
+    throw rejectReceiptConfirm(db, actor, receiptId, new HttpError(409, '只有下达状态可收货'));
+  }
   // Validate processing PO compatibility
   if (receipt.processing_po_id) {
     const po = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(receipt.processing_po_id);
     if (!po || po.business_type !== 'OUTSOURCE_PROCESSING' || po.supplier_id !== order.supplier_id) {
-      throw new HttpError(409, '处理 PO 与委外订单不兼容');
+      throw rejectReceiptConfirm(db, actor, receiptId, new HttpError(409, '处理 PO 与委外订单不兼容'));
     }
   }
   const items = db.prepare('SELECT * FROM outsourcing_receipt_items WHERE receipt_id=? ORDER BY line_no').all(receiptId);
-  if (!items.length) throw new HttpError(409, '委外收货缺少正式明细', { code: 'OUTSOURCING_RECEIPT_ITEMS_REQUIRED' });
+  if (!items.length) {
+    throw rejectReceiptConfirm(db, actor, receiptId, new HttpError(409, '委外收货缺少正式明细', { code: 'OUTSOURCING_RECEIPT_ITEMS_REQUIRED' }));
+  }
   const now = new Date().toISOString();
   let totalMaterialValue = 0;
   let incrementalRows = [];
   try { transaction(db, () => {
     const lockedReceipt = db.prepare('SELECT * FROM outsourcing_receipts WHERE id=?').get(receiptId);
-    if (lockedReceipt.business_status === 'EFFECTED') return;
+    // 并发第二请求进入本事务时状态已被另一请求改变：不得静默返回并由外层
+    // 报告成功，必须明确失败（MC-REQ-05 / MC-REQ-09）。
+    if (lockedReceipt.business_status === 'EFFECTED') {
+      throw new HttpError(409, '已生效收货必须使用原 Idempotency-Key 重放', { code: 'OUTSOURCING_RECEIPT_ALREADY_EFFECTED' });
+    }
     if (lockedReceipt.business_status !== 'PENDING_INSPECTION') throw new HttpError(409, '只有待检收货可以生效');
     const lockedOrder = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(lockedReceipt.order_id);
     if (!lockedOrder || lockedOrder.status !== 'RELEASED') throw new HttpError(409, '委外订单状态不允许收货生效');
@@ -184,6 +218,10 @@ export async function confirmOutsourcingReceipt(db, req, res, actor, receiptId) 
       incrementalRows.push({ materialListId: m.id, incremental, carryingValueCents: materialValue });
     }
     const totalFinishedValue = totalMaterialValue + Number(lockedReceipt.processing_fee_cents);
+    // 成品估值金额必须仍是安全整数分：溢出金额不得进入库存估值。
+    if (!Number.isSafeInteger(totalFinishedValue) || totalFinishedValue < 0) {
+      throw new HttpError(409, '委外收货成品成本金额溢出安全整数分', { code: 'OUTSOURCING_RECEIPT_AMOUNT_OVERFLOW' });
+    }
     let remainingValue = totalFinishedValue;
     lockedItems.forEach((item, index) => {
       const itemValue = index === lockedItems.length - 1
@@ -211,8 +249,7 @@ export async function confirmOutsourcingReceipt(db, req, res, actor, receiptId) 
       ok: true, totalMaterialValueCents: totalMaterialValue, incrementalRows,
     });
   }); } catch (error) {
-    auditBusinessRejection(db, actor, { entityType: 'OUTSOURCING_RECEIPT', entityId: receiptId, action: '确认委外收货' }, error);
-    throw error;
+    throw rejectReceiptConfirm(db, actor, receiptId, error);
   }
   return send(res, 200, { ok: true, totalMaterialValueCents: totalMaterialValue, incrementalRows });
 }

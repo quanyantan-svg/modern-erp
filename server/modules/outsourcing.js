@@ -21,6 +21,58 @@ function businessConflict(code, message) {
   return new HttpError(409, message, { code });
 }
 
+// 加工费金额输入口径（M1C-WP2–WP6-R1 / P1）：复用既有“安全整数分 + 非负”规则，
+// 并拒绝非法字符串的隐式转换。NaN / Infinity / 负数 / 非安全整数 / 溢出都必须
+// 在进入收货与成品估值之前被拒绝；未提供时沿用既有收货合同按 0 处理。
+function outsourcingAmountCents(value, label) {
+  if (value === undefined || value === null) return 0;
+  let candidate;
+  if (typeof value === 'number') {
+    candidate = value;
+  } else if (typeof value === 'string' && /^\d+$/.test(value)) {
+    candidate = Number(value);
+  } else {
+    throw new HttpError(400, `${label}必须是非负安全整数分`, { code: 'OUTSOURCING_RECEIPT_AMOUNT_INVALID' });
+  }
+  if (!Number.isSafeInteger(candidate) || candidate < 0) {
+    throw new HttpError(400, `${label}必须是非负安全整数分`, { code: 'OUTSOURCING_RECEIPT_AMOUNT_INVALID' });
+  }
+  return candidate;
+}
+
+/**
+ * OUTSOURCE 完工通知行的剩余容量占用（M1C-WP2–WP6-R1 / P0-01）。
+ *
+ * 权威口径（Active Design §5.2.2、Requirement MC-REQ-02 / MC-REQ-09）：
+ *   通知行数量 ≥ 同一通知行的历史有效收货占用量 + 本次拟收货量
+ *
+ * - 按**真实通知行 ID** 逐行累计，不按整个订单粗略分配；
+ * - 待检（`PENDING_INSPECTION`）与已生效（`EFFECTED`）都仍占用来源容量，
+ *   只有 `CANCELLED` 不占用；
+ * - 历史收货若无法证明其通知行来源（`source_notice_item_source_id` 为 NULL 或
+ *   指向已不存在的通知行），该通知行的剩余容量**不可证明** ⇒ fail closed。
+ */
+function outsourcingNoticeLineUsage(db, orderId) {
+  const rows = db.prepare(`SELECT ori.source_notice_item_source_id notice_item_id,
+      SUM(ori.quantity) quantity,
+      MAX(CASE WHEN rni.id IS NULL THEN 1 ELSE 0 END) unprovable
+    FROM outsourcing_receipt_items ori
+    JOIN outsourcing_receipts orc ON orc.id = ori.receipt_id
+    LEFT JOIN receipt_notice_items rni ON rni.id = ori.source_notice_item_source_id
+    WHERE orc.order_id=? AND orc.business_status<>'CANCELLED'
+    GROUP BY ori.source_notice_item_source_id`).all(orderId);
+  const usage = new Map();
+  let unprovable = false;
+  for (const row of rows) {
+    if (Number(row.unprovable) > 0 || !row.notice_item_id) {
+      unprovable = true;
+      continue;
+    }
+    usage.set(row.notice_item_id, Number(row.quantity));
+  }
+  return { usage, unprovable };
+}
+
 function auditRejectedBusinessRule(db, actor, entityType, entityId, action, error) {
   auditBusinessRejection(db, actor, { entityType, entityId: entityId || null, action }, error);
 }
@@ -585,6 +637,8 @@ export async function createOutsourcingReceipt(db, req, res, actor) {
   }
   if (Math.abs(quantity - itemQuantity) > 1e-9) throw new HttpError(400, '收货表头数量必须等于明细数量之和');
   if (!body.processingPoId || !body.sourceNoticeId || !body.warehouseId) throw new HttpError(400, '委外收货必须提供加工费 PO、完工通知和目标仓库');
+  const processingFeeCents = outsourcingAmountCents(body.processingFeeCents, '加工费金额');
+  const itemUnitPriceCents = body.items.map((item, index) => outsourcingAmountCents(item.unitPriceCents, `第 ${index + 1} 行单价`));
   const id = randomUUID(); const now = new Date().toISOString();
   const receiptNo = 'OS-RCPT-' + Date.now().toString().slice(-10);
   try { transaction(db, () => {
@@ -606,12 +660,18 @@ export async function createOutsourcingReceipt(db, req, res, actor) {
     if (!db.prepare('SELECT 1 FROM warehouses WHERE id=? AND active=1').get(body.warehouseId)) throw businessConflict('OUTSOURCING_RECEIPT_ITEM_SOURCE_MISMATCH', '目标仓库不存在或已停用');
     const existingQuantity = Number(db.prepare("SELECT COALESCE(SUM(quantity),0) q FROM outsourcing_receipts WHERE order_id=? AND business_status<>'CANCELLED'").get(lockedOrder.id).q);
     if (existingQuantity + quantity > Number(lockedOrder.order_quantity) + 1e-9) throw businessConflict('RECEIPT_NOTICE_CAPACITY_EXCEEDED', '委外累计收货数量超过订单容量');
+    // 通知行剩余容量（M1C-WP2–WP6-R1 / P0-01）：同一完工通知行的历史有效收货
+    // 占用量 + 本次拟收货量必须 <= 通知行数量。权威口径在事务内重读。
+    const noticeLine = outsourcingNoticeLineUsage(db, lockedOrder.id);
+    if (noticeLine.unprovable) {
+      throw businessConflict('RECEIPT_NOTICE_OUTSOURCING_CAPACITY_UNPROVEN', '委外收货历史来源不可证明，无法证明完工通知行剩余容量');
+    }
     db.prepare(`INSERT INTO outsourcing_receipts(
       id,receipt_no,order_id,processing_po_id,quantity,received_date,supplier_id,business_status,
       processing_fee_cents,total_cost_cents,creator_id,created_at,updated_at,warehouse_id,source_notice_id,business_date,version
     ) VALUES(?,?,?,?,?,?,?,'PENDING_INSPECTION',?,?,?,?,?,?,?,?,0)`).run(
       id, receiptNo, lockedOrder.id, processingPo.id, quantity, body.receivedDate || now.slice(0, 10), lockedOrder.supplier_id,
-      Number(body.processingFeeCents || 0), Number(body.processingFeeCents || 0), actor.id, now, now,
+      processingFeeCents, processingFeeCents, actor.id, now, now,
       body.warehouseId, notice.id, body.businessDate || body.receivedDate || now.slice(0, 10),
     );
     const insertItem = db.prepare(`INSERT INTO outsourcing_receipt_items(
@@ -631,12 +691,20 @@ export async function createOutsourcingReceipt(db, req, res, actor) {
         || seenNoticeItems.has(noticeItem.id)) {
         throw businessConflict('OUTSOURCING_RECEIPT_ITEM_SOURCE_MISMATCH', `第 ${index + 1} 行来源、产品或单位不匹配`);
       }
-      if (Number(item.quantity) > Number(noticeItem.quantity) + 1e-9) throw businessConflict('OUTSOURCING_RECEIPT_ITEM_SOURCE_MISMATCH', `第 ${index + 1} 行超过完工通知数量`);
+      // 通知行剩余容量按真实通知行 ID 逐行累计：历史占用 + 本次拟收货 <= 通知行数量。
+      const noticeLineQuantity = Number(noticeItem.quantity);
+      const noticeLineUsed = Number(noticeLine.usage.get(noticeItem.id) || 0);
+      const requestedQuantity = Number(item.quantity);
+      if (noticeLineUsed + requestedQuantity > noticeLineQuantity + 1e-9) {
+        throw businessConflict('RECEIPT_NOTICE_CAPACITY_EXCEEDED',
+          `第 ${index + 1} 行超过完工通知行剩余容量：通知行 ${noticeLineQuantity}、已占用 ${noticeLineUsed}、本次 ${requestedQuantity}`);
+      }
+      noticeLine.usage.set(noticeItem.id, noticeLineUsed + requestedQuantity);
       if (product.tracking_policy === 'LOT' && (!item.lotId || item.serialId)) throw businessConflict('OUTSOURCING_RECEIPT_ITEM_SOURCE_MISMATCH', 'LOT 成品必须提供批次身份');
       if (product.tracking_policy === 'SERIAL' && (!item.serialId || item.lotId || Number(item.quantity) !== 1)) throw businessConflict('OUTSOURCING_RECEIPT_ITEM_SOURCE_MISMATCH', 'SERIAL 成品必须逐行提供唯一序列号');
       if (product.tracking_policy === 'NONE' && (item.lotId || item.serialId)) throw businessConflict('OUTSOURCING_RECEIPT_ITEM_SOURCE_MISMATCH', '非跟踪成品不得携带 LOT/SERIAL');
       seenNoticeItems.add(noticeItem.id);
-      insertItem.run(randomUUID(), id, item.productId, Number(item.quantity), Number(item.unitPriceCents || 0), index + 1,
+      insertItem.run(randomUUID(), id, item.productId, Number(item.quantity), itemUnitPriceCents[index], index + 1,
         item.lotId || null, item.serialId || null, unitCode, poItem.id, noticeItem.id);
     });
     audit(db, actor.id, 'CREATE', 'OUTSOURCING_RECEIPT', id, `${receiptNo} 待检，${body.items.length} 行`);

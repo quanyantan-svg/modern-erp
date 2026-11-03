@@ -1186,6 +1186,99 @@ FULL、Build、`git diff --check`、完整 current / migration 及两个远端 l
 **当前状态**：历史 N7 阻塞已解决。该结论只关闭 N7 文档追溯缺陷，不签发
 `M1C-G01..M1C-G07`、Implementation Acceptance、Freeze、Release 或 Deploy。
 
+### 37.26 M1C-WP2–WP6-R1 独立审查阻塞修复（2026-11-03）
+
+**授权与范围**：业务所有者授权对已交付的 M1C-WP2–WP6 Implementation 做**有界阻塞修复**，
+只修复独立代码复核提出的两项 P0 缺陷与一项金额校验风险；**不重做 WP2–WP6、不进入 WP7**。
+授权不包含 Push / Merge / Tag / Release / Deploy、项目数据库 Migration、`M-15` 或 MySQL Gate。
+
+**基线**：修复前 fetch 两个远端并以 `ls-remote` 直接核对，本地 / Gitee / GitHub 的
+`work/m1-core-rebaseline-20261102` 同名分支均精确位于
+`3c3a8ce5edf6f465cad0ea699e430df265fad30f`，工作树干净。
+
+#### P0-01 完工通知行剩余容量（`server/modules/outsourcing.js::createOutsourcingReceipt`）
+
+- **原因**：原文只比较「本次明细行数量 ≤ 通知行数量」，**从未**扣减该通知行已被历史收货
+  占用的容量；因此同一完工通知行可被反复收货，只要委外订单总量尚有余量。
+- **修复**：在权威事务内按**真实通知行 ID** 逐行重读并累计历史有效收货占用
+  （`outsourcing_receipt_items.source_notice_item_source_id` → 通知行，
+  `outsourcing_receipts.business_status <> 'CANCELLED'`，**待检与已生效都仍占用**），
+  校验「历史占用 + 本次拟收货 ≤ 通知行数量」；越界 409 `RECEIPT_NOTICE_CAPACITY_EXCEEDED`。
+  历史收货**无法证明**通知行来源（`source_notice_item_source_id` 为 NULL 或悬空）⇒
+  409 `RECEIPT_NOTICE_OUTSOURCING_CAPACITY_UNPROVEN`（fail closed）。
+  加工费 PO 行与交期**不**作为收货容量上界；`STANDARD_PURCHASE` 来源模型不受影响。
+- **反例证据**：`server/m1c-wp2-wp6-r1-notice-line-capacity.test.js` —— 委外订单 10、通知 A 数量 4、
+  通知 B 数量 4；第一次从 A 收货 4 → 201；第二次从 A 收货 4（换 Idempotency-Key，订单仍有 6 余量）
+  → 409 `RECEIPT_NOTICE_CAPACITY_EXCEEDED` 且收货表头/明细/库存/估值/通知逐表零变化、
+  拒绝审计恰好 1 条；另一合法通知 B 仍可独立收货 4 → 201。
+  该套件在修复前（`git show HEAD:` 版本）为 **12 FAIL / 3 PASS**，修复后 15/15 PASS。
+
+#### P0-02 收货生效重复确认与审计（`server/modules/outsourcing-finance.js::confirmOutsourcingReceipt`）
+
+- **原因**：权威事务内存在 `if (lockedReceipt.business_status === 'EFFECTED') return;`，
+  该分支**静默返回**并由外层报告 HTTP 200 成功，使没有合法幂等重放证据的并发第二请求
+  被记为成功；且事务前的状态检查 409 **未写**拒绝审计。
+- **修复**：静默 `return` 改为 409 `OUTSOURCING_RECEIPT_ALREADY_EFFECTED`；
+  同键异内容改为 409 `OUTSOURCING_RECEIPT_IDEMPOTENCY_CONFLICT`；**全部** 409 业务门禁拒绝
+  （含事务前状态检查）统一写**恰好 1 条** Domain 拒绝审计（含业务单据标识与精确 error code）；
+  403 授权拒绝仍由 dispatch 层写且**不含**业务单据标识；400 输入失败不写 Domain 审计。
+  事务前拒绝同时释放 MySQL 幂等命名锁，避免同一 Key 的后续请求被 `GET_LOCK` 阻塞退化为 503。
+- **并发证据**：`server/m1c-wp2-wp6-r1-receipt-effect-idempotency.test.js` 覆盖顺序重复确认、
+  同 Key 精确重放（返回已记录的真实结果）、同 Key 异内容、换 Key 重复确认、
+  两个不同 Key 的并发竞争（至多一个生效，另一请求明确 409）、
+  「第二个请求进入事务时状态已改变」的确定性复现、拒绝方业务状态逐字段不变、
+  拒绝审计恰好 1 条、403 不泄露单据标识、400 不写 Domain 审计。
+  该套件在修复前为 **4 FAIL / 4 PASS**，修复后 8/8 PASS。
+
+#### P1 加工费金额输入
+
+- **修复**：`createOutsourcingReceipt()` 的表头 `processingFeeCents` 与明细 `unitPriceCents`
+  统一经「安全整数分 + 非负」校验：拒绝负数、非整数、非安全整数、溢出与**非法字符串**
+  （`'abc'`、`'NaN'`、`'Infinity'`、`'1e3'`、`'12.5'`、布尔、对象等），
+  400 `OUTSOURCING_RECEIPT_AMOUNT_INVALID`，且**不留下任何业务事实**；
+  生效路径另加成品成本金额溢出守卫（409 `OUTSOURCING_RECEIPT_AMOUNT_OVERFLOW`），
+  不受控金额不得进入成品库存估值。
+- **未自定合同**：既有合同**未**确定委外收货的加工费是否**必须**提供。本轮**保留既有缺省**
+  （未提供按 0 处理），**不**自行扩展 Requirement，也**不**发明加工费价格或分摊政策。
+  该问题作为**开放合同项**交回业务所有者裁定（见「新增业务合同阻塞」）。
+
+#### 合同登记与 Gate
+
+- Active Design `docs/design/procurement-outsourcing-m1-core.md` §5.2.2 登记
+  `OUTSOURCE` 通知行可转换剩余的权威口径（按真实通知行 ID 逐行累计、待检与已生效都占用、
+  历史来源不可证明即 fail closed）；§9.3 登记本轮 4 个精确 error code
+  （`OUTSOURCING_RECEIPT_ALREADY_EFFECTED`、`OUTSOURCING_RECEIPT_IDEMPOTENCY_CONFLICT`、
+  `OUTSOURCING_RECEIPT_AMOUNT_INVALID`、`OUTSOURCING_RECEIPT_AMOUNT_OVERFLOW`）。
+- 新增两个套件登记进 `scripts/testing/test-suites.js` 的 **FULL**（不进 FAST：各自持有一次性临时 SQLite）。
+- 门禁：Focused（新增 23 项 + WP2–WP5 / WP1-R2 / GL 守卫 / 加工费 PO / 既有委外套件）全 PASS；
+  `pnpm test:fast` **511/511 PASS**；`pnpm test` **3228/3228 PASS、0 FAIL、0 SKIP**
+  （基线 3205 + 本轮新增 23）；`pnpm build` PASS；文档 `current` 模式 N1、N3–N9 全部 PASS
+  （N2 按治理决定为 `RETIRED`），其中 N7 经本轮提交后复跑确认为 PASS；
+  文档 `migration` 模式 C1–C6 全部 PASS；`git diff --check` PASS。
+  全程未连接项目数据库，未运行 MySQL Gate。
+
+**未发生事项**：未 Push / Merge / Tag / Release / Deploy；未运行项目数据库 Migration、`M-15` 或
+MySQL Gate；未修改 `master`、`package.json` version `1.6.2` 与既有 release tag；
+未签发 Implementation Acceptance、`M1C-G01..M1C-G07` PASS、Freeze 或 Acceptance；
+未进入 WP7。
+
+**新增业务合同阻塞（开放项，待业务所有者裁定）**：
+委外收货表头 `processingFeeCents` 与明细 `unitPriceCents` 是否**必须**提供。
+本轮只收紧**取值合法性**，保留既有缺省 0；该缺省会让 `INV-4`（委外成本证据 = 材料实耗价值 + 加工费）
+在缺省时低估成品成本，属**会计政策**范畴，按 §31.13.4 与 `C-P01` 边界需业务所有者裁定，
+**不得**由 Implementation 自行决定。
+
+**WP7 启动前的剩余风险**：
+① 加工费是否必填的会计政策未裁定（见上）；
+② 本轮并发证据只在一次性 SQLite 上完成，MySQL 下的命名锁与全局事务闸门语义**未**复跑，
+须在获得受保护的可丢弃 MySQL 环境后单独执行 MySQL Gate；
+③ `OUTSOURCE` 通知行的历史来源不可证明即 fail closed，可能使部分历史委外订单**不可继续收货**
+（§15.2 第 4 条已登记该历史隔离规模未实测）。
+
+```text
+M1C_WP2_TO_WP6_R1_READY_FOR_INDEPENDENT_REVIEW
+```
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。

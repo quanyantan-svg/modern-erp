@@ -227,6 +227,17 @@ const FULL = [
   // Deliberately NOT registered in FAST: each case owns a disposable temp
   // SQLite and drives the real HTTP API.
   'server/m1c-wp2-wp5-outsourcing.test.js',
+  // M1C-WP2–WP6-R1: 委外收货的完工通知行剩余容量（P0-01）与加工费金额输入（P1）。
+  // 通知行容量按真实通知行 ID 逐行累计；金额拒绝非法字符串与不安全整数分。
+  // Deliberately NOT registered in FAST: each case owns a disposable temp
+  // SQLite and drives the real HTTP API.
+  'server/m1c-wp2-wp6-r1-notice-line-capacity.test.js',
+  // M1C-WP2–WP6-R1: 委外收货生效的重复确认、幂等重放与并发竞争（P0-02）。
+  // 覆盖顺序重复、同 Key 重放、同 Key 异内容、换 Key 重复、并发竞争、
+  // 拒绝方状态逐字段不变与拒绝审计恰好一条。
+  // Deliberately NOT registered in FAST: each case owns a disposable temp
+  // SQLite and drives the real HTTP API.
+  'server/m1c-wp2-wp6-r1-receipt-effect-idempotency.test.js',
   'server/procurement-parameters.test.js',
   'server/procurement-profiles.test.js',
   'server/buyers.test.js',
