@@ -61,6 +61,10 @@ const SOURCE_TYPES = new Set([
   'CONSIGNMENT_HANDOFF', 'CONSIGNMENT_SETTLEMENT', 'CONSIGNMENT_RETURN',
 ]);
 const CONSIGNMENT_SOURCE_TYPES = new Set(['CONSIGNMENT_HANDOFF', 'CONSIGNMENT_SETTLEMENT', 'CONSIGNMENT_RETURN']);
+const OUTSOURCING_STRICT_SOURCE_TYPES = new Set([
+  'OUTSOURCING_ISSUE', 'OUTSOURCING_SUPPLEMENT', 'OUTSOURCING_RETURN',
+  'OUTSOURCING_BACKFLUSH', 'OUTSOURCING_RECEIPT',
+]);
 const CONSIGNMENT_POLICIES = Object.freeze({
   CONSIGNMENT_HANDOFF: 'HANDOFF_VALUE_NEUTRAL_V1',
   CONSIGNMENT_SETTLEMENT: 'SETTLEMENT_COGS_V1',
@@ -107,6 +111,24 @@ function canonicalFingerprint(input, businessDate, movementGroupId, fromJson, to
     valuationMode: 'EXTERNAL_STRICT',
     valuationPolicy: expectedPolicy,
     commercialAmountCents: amount == null ? null : String(amount),
+  };
+  return `V1:${createHash('sha256').update(JSON.stringify(payload)).digest('hex')}`;
+}
+
+function outsourcingFingerprint(input, businessDate, movementGroupId, fromJson, toJson) {
+  const payload = {
+    fingerprintVersion: 1,
+    sourceType: input.sourceType,
+    sourceId: String(input.sourceId),
+    sourceItemId: String(input.sourceItemId),
+    movementGroupId,
+    movementKind: input.movementKind,
+    quantity: Number(input.quantity),
+    businessDate,
+    fromPosition: fromJson == null ? null : JSON.parse(fromJson),
+    toPosition: toJson == null ? null : JSON.parse(toJson),
+    trackingMode: input.trackingMode || null,
+    valuationMode: input.valuationMode || null,
   };
   return `V1:${createHash('sha256').update(JSON.stringify(payload)).digest('hex')}`;
 }
@@ -241,8 +263,13 @@ export function applyInventoryMutation(input) {
   const businessDate = input.businessDate || new Date().toISOString().slice(0, 10);
   const movementGroupId = input.movementGroupId || genId();
   const isConsignment = CONSIGNMENT_SOURCE_TYPES.has(input.sourceType);
-  if (isConsignment && (!input.sourceItemId || !input.movementGroupId)) {
-    throw new HttpError(400, 'Consignment sourceItemId and stable movementGroupId are required');
+  const isStrictOutsourcing = OUTSOURCING_STRICT_SOURCE_TYPES.has(input.sourceType);
+  const requiresReplayEvidence = isConsignment || isStrictOutsourcing;
+  if (requiresReplayEvidence && (!input.sourceItemId || !input.movementGroupId)) {
+    throw new HttpError(400, 'Strict inventory sourceItemId and stable movementGroupId are required');
+  }
+  if (isStrictOutsourcing && (input.trackingMode !== 'EXTERNAL' || input.valuationMode !== 'EXTERNAL')) {
+    throw new HttpError(400, 'Outsourcing strict tracking/valuation policy mismatch');
   }
 
   // Movement-kind pairing: paired kinds must have both from and to.
@@ -256,7 +283,7 @@ export function applyInventoryMutation(input) {
   const runMutation = (db) => {
     const replaySql = `SELECT * FROM inventory_mutation_log WHERE idempotency_key=?${db.dialect === 'mysql' ? ' FOR UPDATE' : ''}`;
     const replay = db.prepare(replaySql).get(input.idempotencyKey);
-    if (replay && !isConsignment) {
+    if (replay && !requiresReplayEvidence) {
       result = { replayed: true, movementGroupId: replay.movement_group_id };
       return;
     }
@@ -264,11 +291,13 @@ export function applyInventoryMutation(input) {
     const toPos   = input.toPosition   ? buildIdentity(input.toPosition)   : null;
     if (fromPos) validateInventoryMaster(db, fromPos);
     if (toPos)   validateInventoryMaster(db, toPos);
-    const fromPositionIdentityJson = isConsignment && fromPos ? canonicalPositionSnapshot(fromPos) : null;
-    const toPositionIdentityJson = isConsignment && toPos ? canonicalPositionSnapshot(toPos) : null;
+    const fromPositionIdentityJson = requiresReplayEvidence && fromPos ? canonicalPositionSnapshot(fromPos) : null;
+    const toPositionIdentityJson = requiresReplayEvidence && toPos ? canonicalPositionSnapshot(toPos) : null;
     const requestFingerprint = isConsignment
       ? canonicalFingerprint(input, businessDate, movementGroupId, fromPositionIdentityJson, toPositionIdentityJson)
-      : null;
+      : isStrictOutsourcing
+        ? outsourcingFingerprint(input, businessDate, movementGroupId, fromPositionIdentityJson, toPositionIdentityJson)
+        : null;
     if (replay) {
       const stored = readConsignmentEvidence(db, replay);
       const readableMismatch = replay.source_type !== input.sourceType
@@ -277,11 +306,16 @@ export function applyInventoryMutation(input) {
         || replay.movement_group_id !== movementGroupId
         || replay.movement_kind !== input.movementKind
         || replay.business_date !== businessDate
-        || Math.round(Number(replay.quantity) * 1_000_000) !== input.quantityMicros
+        || (isConsignment
+          ? Math.round(Number(replay.quantity) * 1_000_000) !== input.quantityMicros
+          : Number(replay.quantity) !== Number(input.quantity))
         || replay.from_position_identity_json !== fromPositionIdentityJson
         || replay.to_position_identity_json !== toPositionIdentityJson
         || replay.request_fingerprint !== requestFingerprint;
-      if (readableMismatch) throw mutationConflict('Inventory mutation idempotency conflict');
+      if (readableMismatch) throw mutationConflict(
+        'Inventory mutation idempotency conflict',
+        isStrictOutsourcing ? 'INVENTORY_MUTATION_UNEXPECTED_REPLAY' : 'INVENTORY_MUTATION_IDEMPOTENCY_CONFLICT',
+      );
       result = {
         replayed: true,
         mutationId: replay.id,
@@ -401,13 +435,13 @@ export function applyInventoryMutation(input) {
     `).run(
       mutationId, input.idempotencyKey, movementGroupId, input.sourceType, input.sourceId,
       input.movementKind, input.quantity, businessDate, input.actor?.id || null, new Date().toISOString(),
-      isConsignment ? input.sourceItemId : null,
-      isConsignment ? fromPos?.positionKey ?? null : null,
-      isConsignment ? toPos?.positionKey ?? null : null,
+      requiresReplayEvidence ? input.sourceItemId : null,
+      requiresReplayEvidence ? fromPos?.positionKey ?? null : null,
+      requiresReplayEvidence ? toPos?.positionKey ?? null : null,
       fromPositionIdentityJson, toPositionIdentityJson,
-      isConsignment ? outMovement?.transactionId ?? null : null,
-      isConsignment ? inMovement?.transactionId ?? null : null,
-      requestFingerprint, isConsignment ? 1 : null,
+      requiresReplayEvidence ? outMovement?.transactionId ?? null : null,
+      requiresReplayEvidence ? inMovement?.transactionId ?? null : null,
+      requestFingerprint, requiresReplayEvidence ? 1 : null,
     );
 
     // Audit

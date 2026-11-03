@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { createProcurementFixture } from './test-support/procurement-http-fixture.js';
+import { createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource, seedApprovedOutsourceBom } from './test-support/procurement-http-fixture.js';
 
 describe('Procurement Wave F-H outsourcing foundation, material execution, receiving', () => {
   let fixture;
+  const receiptSources = new Map();
   before(async () => { fixture = await createProcurementFixture('modern-erp-prc-wavef-'); });
   after(async () => fixture.close());
 
@@ -16,15 +17,23 @@ describe('Procurement Wave F-H outsourcing foundation, material execution, recei
   async function qualifyOutsourceSupplier() {
     const result = await fixture.request('PATCH', '/api/suppliers/supplier-001/profile', fixture.tokens.admin, {
       outsourcingEnabled: true, category: 'OUTSOURCE', qualificationStatus: 'QUALIFIED',
-      qualificationValidFrom: isoDate(-30), qualificationValidTo: isoDate(180),
+      qualificationValidFrom: isoDate(-30), qualificationValidTo: isoDate(180), supplierWipWarehouseId: 'warehouse-002',
     });
     assert.equal(result.status, 200, result.data.error);
+    const now = new Date().toISOString();
+    for (const productId of ['product-001', 'product-002']) {
+      fixture.db.prepare(`INSERT INTO inventory_valuation_balances(balance_key,valuation_method,product_id,warehouse_id,lot_id,serial_id,quantity,value_cents,updated_at)
+        VALUES(?, 'MOVING_AVERAGE', ?, 'warehouse-001', NULL, NULL, 1000, 1000000, ?)
+        ON CONFLICT(balance_key) DO NOTHING`).run(`NONE:warehouse-001:${productId}`, productId, now);
+    }
   }
 
-  async function createReleasedOrder({ source = 'MANUAL', orderQty = 100 } = {}) {
+  async function createReleasedOrder({ source = 'MANUAL', orderQty = 100, materials = [] } = {}) {
+    const bomId = materials.length ? seedApprovedOutsourceBom(fixture, 'product-001', materials, `outsourcing-${Date.now()}-${Math.random()}`) : null;
     const body = {
       supplierId: 'supplier-001', productId: 'product-001',
       orderQuantity: orderQty, unit: 'EA', businessDate: isoDate(0),
+      ...(bomId ? { bomId } : {}),
     };
     if (source === 'PLANNING') {
       // OUT-05: a real planning_outsource_handoffs row must exist before the
@@ -36,7 +45,14 @@ describe('Procurement Wave F-H outsourcing foundation, material execution, recei
     assert.equal(order.status, 201, order.data.error);
     await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'PLAN_CONFIRMED' });
     await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'RELEASED' });
+    receiptSources.set(order.data.id, await prepareOutsourcingReceiptSource(fixture, order.data.id, orderQty, `outsourcing-${order.data.id}`));
     return order.data.id;
+  }
+
+  async function createReceipt(orderId, body) {
+    return fixture.request('POST', '/api/procurement/outsourcing/receipts', fixture.tokens.admin, {
+      orderId, ...body, ...outsourcingReceiptBody(receiptSources.get(orderId), body.quantity, body.processingFeeCents, body.receivedDate),
+    }, { 'idempotency-key': `receipt-${orderId}-${Date.now()}-${Math.random()}` });
   }
 
   function seedHandoff(id, productId = 'product-001', quantity = 100) {
@@ -88,12 +104,13 @@ describe('Procurement Wave F-H outsourcing foundation, material execution, recei
 
   test('Material execution: issue / supplement / return preserves enterprise ownership and stock', async () => {
     await qualifyOutsourceSupplier();
-    const orderId = await createReleasedOrder({ orderQty: 100 });
+    const bomMaterials = [{ productId: 'product-001', requiredQuantity: 0.02, unit: 'EA' }, { productId: 'product-002', requiredQuantity: 0.005, unit: 'EA' }];
+    const orderId = await createReleasedOrder({ orderQty: 100, materials: bomMaterials });
     // Snapshot material list with two distinct materials (different UOM-like).
     const snap = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/material-list`, fixture.tokens.admin, {
       items: [
-        { productId: 'product-001', requiredQuantity: 2, unit: 'PCS', bomSnapshot: { ref: 'A' } },
-        { productId: 'product-002', requiredQuantity: 0.5, unit: 'KG', bomSnapshot: { ref: 'B' } },
+        { productId: 'product-001', sourceWarehouseId: 'warehouse-001' },
+        { productId: 'product-002', sourceWarehouseId: 'warehouse-001' },
       ],
     });
     assert.equal(snap.status, 200, snap.data.error);
@@ -102,59 +119,57 @@ describe('Procurement Wave F-H outsourcing foundation, material execution, recei
     const mat2 = materials.find((m) => m.product_id === 'product-002');
     // Issue 50 PCS for material-1
     const issue = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/issues`, fixture.tokens.admin, {
-      materialListId: mat1.id, quantity: 50, fromWarehouseId: 'warehouse-001', toWarehouseId: 'warehouse-002',
-      issuedDate: isoDate(0), idempotencyKey: 'issue-1',
+      materialListId: mat1.id, quantity: 3, issuedDate: isoDate(0), idempotencyKey: 'issue-1',
     });
     assert.equal(issue.status, 201, issue.data.error);
     // Supplement 10 PCS for material-1 (independent of required_qty)
     const supplement = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/supplements`, fixture.tokens.admin, {
-      materialListId: mat1.id, quantity: 10, reason: '损耗补料', supplementDate: isoDate(0),
+      materialListId: mat1.id, quantity: 2, reason: '损耗补料', supplementDate: isoDate(0), idempotencyKey: 'supplement-1',
     });
     assert.equal(supplement.status, 201, supplement.data.error);
     // Return 5 PCS for material-1
     const ret = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/returns`, fixture.tokens.admin, {
-      materialListId: mat1.id, quantity: 5, fromWarehouseId: 'warehouse-002', toWarehouseId: 'warehouse-001',
-      returnDate: isoDate(0),
+      materialListId: mat1.id, quantity: 1, returnDate: isoDate(0), idempotencyKey: 'return-1',
     });
     assert.equal(ret.status, 201, ret.data.error);
-    // Verify WIP remaining = 50+10-5 = 55 (enterprise owned)
+    // Verify WIP remaining = 3+2-1 = 4 (enterprise owned)
     const m1 = fixture.db.prepare('SELECT issued_quantity issued, supplemented_quantity supplemented, returned_quantity returned FROM outsourcing_material_list WHERE id=?').get(mat1.id);
-    assert.equal(Number(m1.issued) + Number(m1.supplemented) - Number(m1.returned), 55);
+    assert.equal(Number(m1.issued) + Number(m1.supplemented) - Number(m1.returned), 4);
     // Over-return blocked
     const over = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/returns`, fixture.tokens.admin, {
-      materialListId: mat1.id, quantity: 9999, fromWarehouseId: 'warehouse-002', toWarehouseId: 'warehouse-001',
-      returnDate: isoDate(0),
+      materialListId: mat1.id, quantity: 9999, returnDate: isoDate(0), idempotencyKey: 'return-over',
     });
     assert.equal(over.status, 409);
   });
 
   test('Backflush: per-material cumulative, different UOM never aggregate, insufficient supply fails closed', async () => {
     await qualifyOutsourceSupplier();
-    const orderId = await createReleasedOrder({ orderQty: 100 });
+    const bomMaterials = [{ productId: 'product-001', requiredQuantity: 0.02, unit: 'EA' }, { productId: 'product-002', requiredQuantity: 0.005, unit: 'EA' }];
+    const orderId = await createReleasedOrder({ orderQty: 100, materials: bomMaterials });
     const snap = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/material-list`, fixture.tokens.admin, {
       items: [
-        { productId: 'product-001', requiredQuantity: 2, unit: 'PCS' },
-        { productId: 'product-002', requiredQuantity: 0.5, unit: 'KG' },
+        { productId: 'product-001', sourceWarehouseId: 'warehouse-001' },
+        { productId: 'product-002', sourceWarehouseId: 'warehouse-001' },
       ],
     });
     assert.equal(snap.status, 200);
     const mat1 = fixture.db.prepare('SELECT id FROM outsourcing_material_list WHERE order_id=? AND product_id=?').get(orderId, 'product-001').id;
     const mat2 = fixture.db.prepare('SELECT id FROM outsourcing_material_list WHERE order_id=? AND product_id=?').get(orderId, 'product-002').id;
     // Issue 60 PCS and 30 KG (sufficient net supplied)
-    await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/issues`, fixture.tokens.admin, {
-      materialListId: mat1, quantity: 60, fromWarehouseId: 'warehouse-001', toWarehouseId: 'warehouse-002', issuedDate: isoDate(0),
+    const issue1 = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/issues`, fixture.tokens.admin, {
+      materialListId: mat1, quantity: 10, issuedDate: isoDate(0), idempotencyKey: 'issue-bf-1',
     });
-    await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/issues`, fixture.tokens.admin, {
-      materialListId: mat2, quantity: 30, fromWarehouseId: 'warehouse-001', toWarehouseId: 'warehouse-002', issuedDate: isoDate(0),
+    assert.equal(issue1.status, 201, issue1.data.error);
+    const issue2 = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/issues`, fixture.tokens.admin, {
+      materialListId: mat2, quantity: 10, issuedDate: isoDate(0), idempotencyKey: 'issue-bf-2',
     });
+    assert.equal(issue2.status, 201, issue2.data.error);
     // Create first receipt 30 finished qty.
-    const r1 = await fixture.request('POST', '/api/procurement/outsourcing/receipts', fixture.tokens.admin, {
-      orderId, quantity: 30, receivedDate: isoDate(0), processingFeeCents: 30000,
-    });
+    const r1 = await createReceipt(orderId, { quantity: 30, receivedDate: isoDate(0), processingFeeCents: 30000 });
     assert.equal(r1.status, 201, r1.data.error);
     // Backflush: target for material-1 = 2 × 30 / 100 = 0.6 PCS; material-2 = 0.5 × 30 / 100 = 0.15 KG
-    const bf = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/backflush`, fixture.tokens.admin, { receiptId: r1.data.id });
-    assert.equal(bf.status, 200, bf.data.error);
+    const effected = await fixture.request('POST', `/api/procurement/outsourcing/receipts/${r1.data.id}/confirm`, fixture.tokens.admin, {}, { 'idempotency-key': 'effect-receipt-1' });
+    assert.equal(effected.status, 200, effected.data.error);
     // Verify backflushed amounts are independent (no cross-material aggregation)
     const m1 = fixture.db.prepare('SELECT backflushed_quantity bf FROM outsourcing_material_list WHERE id=?').get(mat1);
     const m2 = fixture.db.prepare('SELECT backflushed_quantity bf FROM outsourcing_material_list WHERE id=?').get(mat2);
@@ -165,9 +180,7 @@ describe('Procurement Wave F-H outsourcing foundation, material execution, recei
   test('Outsourcing Receipt uses OUTSOURCE_PROCESSING PO and excludes BUY supply', async () => {
     await qualifyOutsourceSupplier();
     const orderId = await createReleasedOrder({ orderQty: 50 });
-    const receipt = await fixture.request('POST', '/api/procurement/outsourcing/receipts', fixture.tokens.admin, {
-      orderId, quantity: 10, receivedDate: isoDate(0), processingFeeCents: 5000,
-    });
+    const receipt = await createReceipt(orderId, { quantity: 10, receivedDate: isoDate(0), processingFeeCents: 5000 });
     assert.equal(receipt.status, 201, receipt.data.error);
     // Verify business_type isolation: this is the OUTSOURCING domain, not standard receipt.
     const row = fixture.db.prepare("SELECT order_id FROM outsourcing_receipts WHERE id=?").get(receipt.data.id);

@@ -217,10 +217,11 @@ describe('V21 Wave B — applyInventoryMutation dispatcher', () => {
     });
     applyInventoryMutation({
       db, sourceType: 'OUTSOURCING_ISSUE', sourceId: 'out-1', businessDate: '2026-10-10',
-      actor: { id: 'u-act' }, movementKind: 'OUT', quantity: 50,
+      actor: { id: 'u-act' }, movementKind: 'MOVE', movementGroupId: 'out-1', sourceItemId: 'out-1-item', quantity: 50,
       fromPosition: { productId: 'p-1', warehouseId: 'wh-A', ownerType: 'ENTERPRISE', stockStatus: 'AVAILABLE' },
       toPosition:   { productId: 'p-1', warehouseId: 'wh-WIP', ownerType: 'ENTERPRISE', stockStatus: 'AVAILABLE' },
       idempotencyKey: 'OUT:out-1',
+      trackingMode: 'EXTERNAL', valuationMode: 'EXTERNAL',
     });
     const entA = db.prepare(`SELECT quantity FROM inventory WHERE product_id='p-1' AND warehouse_id='wh-A' AND owner_type='ENTERPRISE'`).get();
     const entWip = db.prepare(`SELECT quantity FROM inventory WHERE product_id='p-1' AND warehouse_id='wh-WIP' AND owner_type='ENTERPRISE'`).get();
