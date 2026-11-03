@@ -14,6 +14,7 @@
 |---|---|---|---|
 | [`m1/procurement-outsourcing-critical-chain-design.md`](./m1/procurement-outsourcing-critical-chain-design.md) | Procurement & Outsourcing | Design（候选，**M1 全范围**；源 `solution.md §26.33`） | `PENDING_APPROVAL` / `PENDING_REVIEW` | 无 —— 源 `solution.md §26.33` @ `912fd76700ff6f3ad1509eec4c9e2241c1830265` |
 | [`m1/procurement-outsourcing-m1-core-design.md`](./m1/procurement-outsourcing-m1-core-design.md) | Procurement & Outsourcing | Active Design Promotion 迁移指针（**不含合同正文**） | `PENDING_REVIEW` | 无 —— 当前唯一 Active Design 位于 `docs/design/procurement-outsourcing-m1-core.md` |
+| [`m1/procurement-outsourcing-m1-core-processing-po-design-amendment.md`](./m1/procurement-outsourcing-m1-core-processing-po-design-amendment.md) | Procurement & Outsourcing | M1-Core Design Amendment（加工费 PO 正式可达路径） | `PENDING_APPROVAL` / `PENDING_REVIEW` | 无 —— 依据 §31.13 与当前 Active Design 的增量候选，不构成 Current Active Contract |
 
 > M1 全范围候选设计继续承担 C / D 组延期部分与历史结论追溯，**没有整体获得 Design PASS**。
 > M1-Core 首期有界后继设计已于 2026-11-02 提升为
