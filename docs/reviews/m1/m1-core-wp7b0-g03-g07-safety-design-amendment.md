@@ -6,6 +6,7 @@
 > 权威来源：Requirement `docs/requirements/procurement-outsourcing.md` §31.13；Active Design
 > `docs/design/procurement-outsourcing-m1-core.md` §6 / §13；WP7-A 执行记录 §4.3 / §5。
 > 本候选不构成 Current Active Contract，不降低 Gate，不授权 MySQL、Migration、M-15 或破坏性操作。
+> **来源 SHA**：`1d67ce8ea34d604c245d95dd42435b4beadf0c26`
 > **初始来源 SHA**：`8559c03f78898b0b059330f096a4e1bde694f277`
 > **R1 审查基线**：`1d67ce8ea34d604c245d95dd42435b4beadf0c26`
 > **来源章节**：Requirement §31.13；Active Design §6、§13.1、§13.3；WP7-A §4.3、§5
