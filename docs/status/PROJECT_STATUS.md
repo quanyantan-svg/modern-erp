@@ -1470,6 +1470,35 @@ M1C_WP7A_G05_R1_READY_FOR_INDEPENDENT_REVIEW
 M1C_WP7B0_READY_FOR_INDEPENDENT_REVIEW
 ```
 
+### 37.30 M1-Core `M1C-WP7-B0-R1` G07 Safety Design Final Corrections（2026-11-03）
+
+- 基线：`work/m1-core-rebaseline-20261102` @
+  `1d67ce8ea34d604c245d95dd42435b4beadf0c26`；开始时本地、GitHub、Gitee 同名分支完整 SHA 一致，工作树干净。
+- R1-01：候审 Design §2 / §4 已区分治理批准事实与机器凭据；Gate/launcher 不得签发批准，普通 JSON/环境变量
+  不构成批准；明确同一 OS 用户不是对抗性防篡改边界，并登记现有 Gate、diagnostic、shared reset、Migration
+  等 destructive 入口的保护或拒绝方案。
+- R1-02：候审 Design §3 固定 `ISSUED → CONSUMED → FINISHED / FAILED / CLEANUP_UNVERIFIED`，定义原子消费、
+  进程树/child lease、15 分钟启动窗口、单次 cleanup、崩溃隔离与单独 recovery 授权；不存在凭据消费后启动第二次
+  Gate 的路径。
+- R1-03：候审 Design §6 否决 CR-01 原“确认通知 vs 转换通知”容量竞争，替换为两个真实通知创建竞争同一 PO Item/
+  delivery schedule 的 10 容量、6 vs 6；固定 CR-07 为两张不同合法待检委外收货竞争同一材料行 WIP=6、4 vs 4；
+  CR-02/04/05 的新增稳定 code 与最小触发位置保持 `NOT_AUTHORIZED`。
+- R1-04：候审 Design §8 区分全新 disposable current-schema 初始化和历史数据库 M-15/PRE-A/B/C。当前 M-15 未实现，
+  涉及 `tracked_inventory_movements.identity_key` 的 G07 parity 保持 BLOCKED；空库 0 行检查不构成历史 Migration PASS。
+- G05 独立技术审查、WP7-A 原始 16/8 FAIL 与修复后 24/24 证据均完整保留；G03 L1/L2 技术结论未降级。
+- 本轮只修改候审 Design、候审索引、唯一项目状态登记和当日日志；未修改 Requirement、Active Design、业务源码、
+  MySQL 执行器、Migration 或测试合同。
+- 只读门禁：文档 `migration` C1～C6 PASS；`current` N1、N3～N9 PASS，N2 `RETIRED`；`git diff --check`
+  PASS。提交后仍须以最终 HEAD 复跑 N7。
+- 未连接、创建、删除或重置 MySQL；未执行 MySQL Gate、M-15、Migration；未签发 Gate PASS / Acceptance；
+  未 Push / Merge / Tag / Release / Deploy。
+- 后续仍需 Domain Owner 与 Platform / Database Safety Owner 对候选分别批准，再单独授权 Implementation、M-15
+  Implementation/历史 Migration，以及最终精确 run ID/SHA/target/operations 的一次性 MySQL Gate。
+
+```text
+M1C_WP7B0_R1_READY_FOR_INDEPENDENT_DESIGN_REVIEW
+```
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
