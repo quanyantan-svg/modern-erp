@@ -258,6 +258,7 @@ export async function createReceiptNotice(db, req, res, actor) {
   } else {
     if (!body.outsourcingOrderId) throw new HttpError(400, 'OUTSOURCE 通知单必须提供 outsourcingOrderId');
     if (body.purchaseOrderId) throw new HttpError(400, 'OUTSOURCE 通知单不允许设置 purchaseOrderId');
+    if (!body.processingPoId) throw new HttpError(400, 'OUTSOURCE 完工通知必须提供 processingPoId');
     const order = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(body.outsourcingOrderId);
     if (!order) throw new HttpError(404, '委外订单不存在');
     if (!['RELEASED'].includes(order.status)) throw new HttpError(409, '只有下达状态委外订单可创建完工通知');
@@ -265,12 +266,13 @@ export async function createReceiptNotice(db, req, res, actor) {
     if (body.processingPoId) {
       processingPo = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(body.processingPoId);
       if (!processingPo) throw new HttpError(404, '处理 PO 不存在');
-      if (processingPo.business_type !== 'OUTSOURCE_PROCESSING' || processingPo.source_outsourcing_order_id !== order.id) {
+      if (processingPo.status !== 'APPROVED' || processingPo.business_type !== 'OUTSOURCE_PROCESSING'
+        || processingPo.source_outsourcing_order_id !== order.id || processingPo.supplier_id !== order.supplier_id) {
         throw new HttpError(409, '处理 PO 与委外订单不兼容');
       }
     }
     if (body.supplierId && body.supplierId !== order.supplier_id) throw new HttpError(409, '委外订单与供应商不一致');
-    resolved = { supplierId: order.supplier_id, purchaseOrderId: null, outsourcingOrderId: order.id, processingPoId: processingPo?.id || null, businessType };
+    resolved = { supplierId: order.supplier_id, purchaseOrderId: null, outsourcingOrderId: order.id, processingPoId: processingPo.id, businessType };
   }
 
   const noticeId = randomUUID(); const now = new Date().toISOString();
@@ -278,6 +280,32 @@ export async function createReceiptNotice(db, req, res, actor) {
   try {
     transaction(db, () => {
       if (businessType === 'OUTSOURCE') {
+        const lockedOrder = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(resolved.outsourcingOrderId);
+        const lockedPo = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(resolved.processingPoId);
+        const processingItems = lockedPo ? db.prepare('SELECT * FROM purchase_order_items WHERE order_id=? ORDER BY line_no').all(lockedPo.id) : [];
+        if (!lockedOrder || lockedOrder.status !== 'RELEASED' || !lockedPo || lockedPo.status !== 'APPROVED'
+          || lockedPo.business_type !== 'OUTSOURCE_PROCESSING' || lockedPo.source_outsourcing_order_id !== lockedOrder.id
+          || lockedPo.supplier_id !== lockedOrder.supplier_id || processingItems.length !== 1) {
+          throw noticeBusinessError(NOTICE_ERROR_CODES.SOURCE_CAPACITY_UNKNOWN, '加工费采购订单审批状态或委外来源不可证明');
+        }
+        // Amendment §8.1：唯一 PO Item 的产品、来源数量与 UOM 快照必须与权威委外来源一致。
+        const processingItem = processingItems[0];
+        const sourceProduct = db.prepare('SELECT base_uom_code,unit FROM products WHERE id=? AND active=1').get(lockedOrder.product_id);
+        const baseUom = String(sourceProduct?.base_uom_code || sourceProduct?.unit || '').toUpperCase();
+        const documentQuantity = Number(processingItem.document_quantity_num) / Number(processingItem.document_quantity_den);
+        const baseQuantity = Number(processingItem.base_quantity_num) / Number(processingItem.base_quantity_den);
+        if (!sourceProduct
+          || processingItem.product_id !== lockedOrder.product_id
+          || String(processingItem.document_uom_code || '').toUpperCase() !== baseUom
+          || Math.abs(documentQuantity - Number(lockedOrder.order_quantity)) > EPSILON
+          || Math.abs(baseQuantity - Number(lockedOrder.order_quantity)) > EPSILON) {
+          throw noticeBusinessError(NOTICE_ERROR_CODES.SOURCE_CAPACITY_UNKNOWN, '加工费采购订单明细的产品、数量或单位快照与委外来源不一致');
+        }
+        for (const [index, item] of body.items.entries()) {
+          if (item.productId !== lockedOrder.product_id || item.productId !== processingItem.product_id) {
+            throw noticeBusinessError(NOTICE_ERROR_CODES.SOURCE_CAPACITY_UNKNOWN, `第 ${index + 1} 行产品与加工费采购订单来源不匹配`);
+          }
+        }
         // The outsourcing capacity bound is re-read inside the transaction and
         // the quantity of THIS notice is part of the compared total.
         const capacity = resolveOutsourcingOrderCapacity(db, resolved.outsourcingOrderId);
@@ -391,7 +419,8 @@ export async function createReceiptNotice(db, req, res, actor) {
         const productId = item.productId || plans[0]?.orderItem?.product_id || null;
         insertItem.run(
           noticeItemId, noticeId,
-          businessType === 'STANDARD_PURCHASE' ? (plans[0]?.orderItem?.id ?? item.purchaseOrderItemId ?? null) : null,
+          businessType === 'STANDARD_PURCHASE' ? (plans[0]?.orderItem?.id ?? item.purchaseOrderItemId ?? null)
+            : db.prepare('SELECT id FROM purchase_order_items WHERE order_id=?').get(resolved.processingPoId)?.id,
           productId, Number(item.quantity), index + 1,
           businessType === 'OUTSOURCE' ? resolved.outsourcingOrderId : null,
         );

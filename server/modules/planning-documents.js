@@ -32,6 +32,7 @@ import {
 } from '../lib/http.js';
 import { lifecycleArchiveFilter } from './lifecycle-engine.js';
 import { createProductionOrderCommand } from './manufacturing-orders.js';
+import { createPurchaseOrderDraftCanonical } from './procurement-orders.js';
 
 const PI_STATUS = { DRAFT: '草稿', RELEASED: '已下达', CANCELLED: '已取消' };
 const PUI_STATUS = { DRAFT: '草稿', RELEASED: '已下达', CANCELLED: '已取消' };
@@ -944,20 +945,19 @@ function createPurchaseOrderGroups(db, actor, rawItems, defaults = {}) {
     const requisitionNos = [...new Set(group.map((entry) => entry.source.requisitionNo))];
     const requisitionIds = [...new Set(group.map((entry) => entry.source.requisitionId))];
     const headerRequisitionId = requisitionIds.length === 1 ? requisitionIds[0] : null;
-    db.prepare(`
-      INSERT INTO purchase_orders(id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at,
-        order_date,expected_delivery_date,payment_terms,supplier_contact_name,supplier_contact_phone,supplier_address,purchase_requisition_id)
-      VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?,?)
-    `).run(poId, orderNo, supplierId, totalCents, `批量转换请购单 ${requisitionNos.join('、')}`, actor.id, now, now,
-      orderDate, expectedDeliveryDate, paymentTerms, supplier.contact || '', supplier.phone || '', supplier.address || '', headerRequisitionId);
-    const insertItem = db.prepare(`
-      INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,purchase_requisition_item_id)
-      VALUES(?,?,?,?,?,?,?,?)
-    `);
-    group.forEach((entry, lineIndex) => insertItem.run(
-      genId(), poId, entry.source.product_id, entry.quantity, entry.unitPriceCents, entry.amountCents, lineIndex + 1, entry.requisitionItemId,
-    ));
-    audit(db, actor.id, 'GENERATE', 'PURCHASE_ORDER', poId, `按供应商批量生成 ${orderNo}; 来源 ${requisitionNos.join(',')}`);
+    createPurchaseOrderDraftCanonical(db, actor, {
+      id: poId, orderNo, now, supplierId, totalCents, businessType: 'STANDARD_PURCHASE',
+      remark: `批量转换请购单 ${requisitionNos.join('、')}`,
+      orderDate, expectedDeliveryDate, paymentTerms,
+      supplierContactName: supplier.contact || '', supplierContactPhone: supplier.phone || '', supplierAddress: supplier.address || '',
+      purchaseRequisitionId: headerRequisitionId, auditAction: 'GENERATE',
+      auditDetail: `按供应商批量生成 ${orderNo}; 来源 ${requisitionNos.join(',')}`,
+      items: group.map((entry, lineIndex) => ({
+        id: genId(), productId: entry.source.product_id, quantity: entry.quantity,
+        unitPriceCents: entry.unitPriceCents, amountCents: entry.amountCents, lineNo: lineIndex + 1,
+        purchaseRequisitionItemId: entry.requisitionItemId,
+      })),
+    });
     created.push({ id: poId, orderNo, supplierId, itemCount: group.length, totalCents });
   }
   const affectedRequisitions = [...new Set(assignments.map((entry) => entry.source.requisitionId))];
