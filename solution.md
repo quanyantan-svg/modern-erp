@@ -827,6 +827,89 @@ backup/restore、production bootstrap、deployment、systemd/nginx、legacy migr
 
 必须有受保护 disposable MySQL 环境。
 
+### 15.1 全局 MySQL destructive Gate 安全合同（ACK-4）
+
+> **批准与来源**：Domain Owner、Platform / Database Safety Owner 与用户于 2026-11-03 明确批准
+> `M1C-WP7-B0-R1` 候选；原文保留于
+> [`docs/reviews/m1/m1-core-wp7b0-g03-g07-safety-design-amendment.md`](docs/reviews/m1/m1-core-wp7b0-g03-g07-safety-design-amendment.md)
+> §2–§4，审查基线 `70edc23aefdca9ee95c45be1b5933fd9cdb7f9e1`。本节是跨 Domain 的当前权威安全合同；
+> 它批准 Design，**不**授权 Implementation、数据库连接或任何 destructive run。
+
+#### 15.1.1 批准事实、运行凭据与威胁模型
+
+每次 destructive Gate 必须同时具备两类不可互相替代的证据：
+
+1. **治理批准事实**：用户或受授权操作者在 Gate 外显式发起，记录批准主体、批准渠道/引用、原文摘要、
+   UUIDv4 `runId`、完整 commit SHA、精确目标身份、精确操作集合、`issuedAt` 与 `expiresAt`。Gate、测试、
+   launcher 不得自行签发、批准、重置或从 Prompt/环境变量推断批准。
+2. **运行时机器凭据**：操作者在批准发生后显式调用独立 issuer，生成一次性随机 capability；使用 Windows
+   CurrentUser DPAPI 与当前用户 ACL 保存，并绑定治理批准引用。普通 JSON、环境变量、run ID 或批准文本本身
+   不构成可信机器凭据；issuer 只转换已发生的批准，不拥有批准权。
+
+记录不得含密码、Token、DPAPI 明文、secret 连接信息或环境变量快照。target 必须同时绑定 host、port、database、
+user、`SELECT DATABASE()`、`CURRENT_USER()`、server UUID 与 grants SHA-256；commit SHA 必须等于干净工作树的
+`git rev-parse HEAD`。只读远端 SHA 核验不产生远端写入。
+
+该机制防止误操作、重放、并发双启动、target/SHA 漂移与普通直接 Node 绕过；**同一 OS 用户不是对抗性安全
+边界**。同一用户或管理员仍可读取自身文件、运行 issuer、调试进程或修改本地代码，DPAPI/ACL 不证明其没有恶意
+篡改。不得声称“不可篡改”或“密码学证明批准主体”；更强威胁模型须另行设计外部签名/第二主体审批/隔离身份。
+
+#### 15.1.2 一次性状态机、进程树与 cleanup
+
+```text
+ISSUED --原子消费--> CONSUMED --测试成功且 cleanup 已证明--> FINISHED
+                              |--测试/启动失败且 cleanup 已证明--> FAILED
+                              `--崩溃、失联、残留或 cleanup 不能证明--> CLEANUP_UNVERIFIED
+```
+
+- 只读 preflight 可在消费前执行；Node 根 orchestrator 必须在首次 DML、bootstrap、DDL、DROP、重建或 cleanup
+  之前消费 ACK-4。缺失、过期、已消费、格式错误、批准引用/target/SHA/operation 不匹配、工作树不净均 BLOCKED。
+- 根进程先取得机器命名 mutex，再用独占句柄 + 原子 rename/CAS 完成 `ISSUED → CONSUMED`；不存在回到
+  `ISSUED`、续租成第二次 run 或失败后重启测试的路径。
+- 15 分钟只约束 `issuedAt → 原子消费开始`；已消费的长测试可跨过该窗口，但受独立最大运行时长和根进程
+  存活监控。超时停止派发新测试动作，只允许本 run 既定 cleanup，不自动续期。
+- 根 lease 绑定 run ID、SHA、target、Windows SID、根 PID/启动时间、随机 nonce、runner manifest 和操作集合。
+  子进程/独立 session 只获得经根登记且操作子集化的 child lease，经继承句柄或受 ACL 保护的临时 capability
+  握手；不得获得 issuer capability、签发权、消费权或扩权能力。根死亡、进程树/target/SHA 漂移、lease 重放或
+  操作超集均拒绝写入。
+- cleanup 权限仅限同一已消费 run，且不因 15 分钟窗口结束而失效。cleanup 前必须证明全部登记子进程已退出；
+  cleanup 只允许一次完整尝试，不能重新 bootstrap 或启动测试。
+- 测试失败但 cleanup 与零对象已证明 → `FAILED`；成功且 cleanup 已证明 → `FINISHED`；崩溃、子进程失联、
+  cleanup 失败、残留或无法证明 → `CLEANUP_UNVERIFIED`。后者写 quarantine marker，所有新 Gate 即使有新 ACK
+  也 BLOCKED；只读检查后必须用新 run ID、精确 recovery 操作集和新的人工批准恢复，旧授权永不复活。
+
+#### 15.1.3 全入口 fail-closed 与兼容边界
+
+所有可能执行 destructive SQL 的现有入口必须在同一 Implementation 逻辑单元中完成保护或保持拒绝；不得只保护
+PowerShell launcher，也不得降低 ACK-1～3、least privilege、空 schema、live identity 或 postflight 条件。
+
+| 入口 / primitive | 当前能力 | ACK-4 权威处置 |
+|---|---|---|
+| `run-mysql-local-gate.ps1` | 可向 package script 注入 ACK-1～3 | 固定 allowlist；只传 run/child bootstrap；不能签发批准；无已消费根 lease 拒绝 |
+| `setup-mysql-local-gate.ps1` | 只读探测；可显式 `-ForceBaseline` 更新本机 baseline | 保持独立 setup 合同；不签发 ACK-4，不得作为 Gate run；baseline 变更仍需显式操作者动作 |
+| `mysql-gate.mjs`、`mysql-concurrency-gate.mjs`、`mysql-finance-concurrency-gate.mjs` | 各自直接 DROP TABLE | 自有 DROP 必须封闭并接入共同 lease primitive；直接 Node 无 lease 拒绝；manifest 未批准前 BLOCKED |
+| `mysql-sales-wave7-gate-a.mjs` | 调 shared reset | shared primitive 同时要求 ACK-1～4；不得接受其他 Gate 的 manifest |
+| Wave10/11/Inventory runners 与 `resetWave10CampaignSchema()` | DROP event/trigger/view/table/routine/function | 保留原身份/权限/零对象检查并叠加根/child lease；base64 child lease 不再单独构成授权 |
+| `temp-db.js` / `resetAuthorizedDisposableMySqlSchema()` | suite create/cleanup 时 DROP 对象 | 校验登记 child lease、target、operation；直接 `node --test` 无 lease 在首次写入前拒绝 |
+| `mysql-phase7c-performance.mjs`、`mysql-phase7c-full-benchmark.mjs` | 自建表并 DROP 全表 | 未迁移到独立 ACK-4 manifest 前 BLOCKED；不得继承 M1 或其他 Gate lease |
+| Migration/upgrade suites 与 CLI | 可执行 DDL/DROP | 排除于普通 Gate ACK；需要独立 Migration/upgrade 授权；持其他 run lease 时拒绝 |
+| 各后续 Domain 专用 root runner | reset/bootstrap/fixture/cleanup | 必须是其 manifest 的唯一 root consumer；所有写 primitive 重验 active lease 与操作子集 |
+
+全局 primitive 的 ACK-4 改造不得意外放开或破坏既有 MySQL Gate。兼容含义是“原 Gate 的业务 suite 与全部既有
+保护保持，新增一次性批准前置”；旧环境变量不能继续冒充 ACK-4。任何入口无法安全迁移时必须 fail closed。
+
+#### 15.1.4 单次 operation manifest
+
+每个 Domain Gate 必须登记精确、有序且无通配符的 manifest。M1-Core 当前批准的操作集合仅为：
+
+1. `RESET_SCHEMA_PRE_RUN`；
+2. `BOOTSTRAP_CURRENT_SCHEMA`；
+3. `RUN_M1_HTTP_FIXTURES`；
+4. `CLEANUP_SCHEMA_POST_RUN`。
+
+它不授权 `CREATE/DROP DATABASE`、用户/权限变更、M-15、任意 Migration、手写正向业务 SQL、其他 Gate 或任意
+脚本注入。其他 Domain/diagnostic 必须拥有独立 manifest 与逐次批准，不能复用 M1 lease。
+
 不得硬编码快速变化的 test count 作为长期设计事实；实时数量以 runner 输出为准。
 
 ---

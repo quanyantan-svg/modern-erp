@@ -1499,6 +1499,29 @@ M1C_WP7B0_READY_FOR_INDEPENDENT_REVIEW
 M1C_WP7B0_R1_READY_FOR_INDEPENDENT_DESIGN_REVIEW
 ```
 
+### 37.31 M1-Core `M1C-WP7-B0-DESIGN-PROMOTION`（2026-11-03）
+
+- 授权：独立结论 `M1C_WP7B0_R1_INDEPENDENT_DESIGN_REVIEW_PASS` 后，用户明确提供 Domain Owner 对 G03/CR/error
+  code 的批准、Platform / Database Safety Owner 对 ACK-4 的批准，以及本次 Active Design Promotion 授权。
+- 基线：`work/m1-core-rebaseline-20261102` @ `70edc23aefdca9ee95c45be1b5933fd9cdb7f9e1`；起始工作树干净。
+- Active Promotion：G03 L1/L2、CR-01～CR-09、CR-02/04/05 error code、M-15 条件边界已融合至
+  `docs/design/procurement-outsourcing-m1-core.md §6 / §9.3 / §13–§17`；跨 Domain ACK-4 权威合同融合至
+  `solution.md §15.1`。候选原文不改写，由 `docs/reviews/README.md` 登记为 `SUPERSEDED` 来源快照。
+- ACK-4 当前状态：`APPROVED / NOT_IMPLEMENTED`；固定批准事实/机器凭据分离、一次性状态机、child lease、
+  cleanup/quarantine/recovery、全 destructive 入口 fail closed 与 M1 四项 operation manifest。
+- CR-01 已固定为两次通知创建以 6 vs 6 竞争同一容量 10 的 PO Item/交期；CR-07 固定为两张合法待检收货
+  各 4 竞争 WIP 6。`notice_no` 同毫秒碰撞登记为 Active Design §14 `RISK-9`，本轮未改业务编号逻辑。
+- G05 未取得本次之外的 Owner 正式 Acceptance；继续保持 `M1C_G05_INDEPENDENT_REVIEW_PASS`，未签发
+  `M1C-G05 PASS`。
+- 本轮只修改 Design、批准/索引/状态文档与当日日志；未修改 Requirement、业务源码、MySQL 执行器、Migration
+  或测试合同；未连接 MySQL，未执行 ACK-4、MySQL Gate、M-15、Migration 或 destructive operation。
+- 后续 Implementation 清单：ACK-4 issuer/root/child/cleanup/quarantine、全入口迁移；M1 root runner 与真实 Handler
+  race；CR-02/04/05 code；schema parity；`notice_no` 风险处置；M-15 Implementation。每项仍需独立授权。
+
+```text
+M1C_WP7B0_DESIGN_PROMOTION_READY_FOR_INDEPENDENT_REVIEW
+```
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。

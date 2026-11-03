@@ -42,6 +42,12 @@
 >   批准 `M1C-PO-P01`、`M1C-PO-P02` 与最小来源唯一索引方案，并将其精确融合进
 >   §2.3、§3、§5–§11、§13–§17。该 Promotion **不授权 Implementation**，未连接数据库、
 >   未执行 migration，7 个 Gate 仍全部 `NOT_RUN`。
+> - 本轮（`M1C-WP7-B0-DESIGN-PROMOTION`，2026-11-03）：Domain Owner、Platform / Database
+>   Safety Owner 与用户明确批准 G03 L1/L2 分层、CR-01～CR-09、CR-02/04/05 精确错误码及 ACK-4
+>   全入口安全合同；候选 `docs/reviews/m1/m1-core-wp7b0-g03-g07-safety-design-amendment.md`
+>   （审查 SHA `70edc23aefdca9ee95c45be1b5933fd9cdb7f9e1`）精确融合至本文件 §6、§9.3、
+>   §13–§17，跨 Domain ACK-4 规范提升至 `solution.md §15.1`。候选原文保留作来源快照。
+>   本次只激活 Design，**不授权 Implementation / MySQL / M-15 / Migration**，7 个 Gate 状态不变。
 
 ## 1. 位置、与旧候选设计的关系
 
@@ -67,6 +73,22 @@ G0 文档重构后，`solution.md` 不再保有 §26 的正文；M1 全范围候
 | §26.33.15（阻塞与 HARD STOP） | **收敛**为 §15–§17 |
 
 **旧文件保持原样、不被改写、不被删除**。它仍是延期部分（C / D 组）与历史结论的权威载体。
+
+`M1C-WP7-B0-R1` 候选亦保持原文，保存在
+[`docs/reviews/m1/m1-core-wp7b0-g03-g07-safety-design-amendment.md`](../reviews/m1/m1-core-wp7b0-g03-g07-safety-design-amendment.md)
+（初始来源 `8559c03`，R1 审查/Promotion 基线 `70edc23aefdca9ee95c45be1b5933fd9cdb7f9e1`）。其映射为：
+
+| 候选章节 | Active 权威位置 |
+|---|---|
+| §1 G03 证据分层 | 本文件 §13.1.1 |
+| §2–§4 ACK-4 / 状态机 / 全入口 | `solution.md §15.1`；M1 manifest 见本文件 §13.1.4 |
+| §5 M1 专用入口 | 本文件 §13.1.4 |
+| §6 CR-01～CR-09 / error code | 本文件 §9.3、§13.1.3 |
+| §7 schema parity | 本文件 §13.1 / §13.1.2 |
+| §8 M-15 条件依赖 | 本文件 §4.4 / §13.1.2 |
+| §9 待批准项 | 已由本次 Promotion 关闭 Design 批准项；Implementation / run 授权仍由本文件 §17 与 `solution.md §15.1` 控制 |
+
+候选仅作为获批来源快照与 Supersession 追溯，不再构成并列待决 Design，也不成为第二份 Active Contract。
 
 **深引用解析**：本文件中的 `§26.33.x` 自指**指向上述旧候选设计文件**；
 `§31.12.x` 指向 [`docs/requirements/procurement-outsourcing.md`](../requirements/procurement-outsourcing.md)；
@@ -588,6 +610,8 @@ PO、Item、成功审计与幂等结果原子提交。不同 Key 竞争只允许
 | 倒冲基数不受支持（损耗 / 单位换算） | 409 | `OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED` | 物理腿 / 跟踪 / 估值 / 身份层 effect / 计数器**零变化** | 恰好 1 条 |
 | 身份证据缺失 / 策略不匹配 | 409 | `WIP_IDENTITY_EVIDENCE_MISSING` / `WIP_IDENTITY_POLICY_MISMATCH` | 同上 | 恰好 1 条 |
 | 非预期重放 | 409 | `INVENTORY_MUTATION_UNEXPECTED_REPLAY` | **不得**静默丢弃后续腿 | 恰好 1 条 |
+| 采购入库并发重复确认（不同 Key，事务内重读已为 `CONFIRMED`） | 409 | `PURCHASE_RECEIPT_ALREADY_CONFIRMED` | 入库单 / PO 累计量 / 库存 / 跟踪 / 估值 / AP / 凭证**逐字段零变化** | 恰好 1 条；`confirmPurchaseReceipt()` rejection-audit allowlist 精确纳入该 code |
+| 委外发料 / 补料的权威 source position 库存不足 | 409 | `OUTSOURCING_SOURCE_INVENTORY_INSUFFICIENT` | 发料/补料单、来源仓、WIP、物理腿、跟踪、估值、身份 effect **逐字段零变化** | 恰好 1 条 |
 | 委外加工费**正式过账**（首期，含共享入口） | 409 | `OUTSOURCING_GL_POLICY_NOT_APPROVED` | 账单 `status` / `grni_cents` / `variance_cents` **零变化**（保持 `DRAFT`）；**零** AP open item / 凭证 / 分录 / 成本证据刷新 | 恰好 1 条 |
 | 委外加工费账单**匹配**（首期，含共享匹配入口） | 409 | `OUTSOURCING_GL_POLICY_NOT_APPROVED` | 账单 `status` / `grni_cents` / `variance_cents` **零变化** | 恰好 1 条 |
 | VMI 结算 / 物权释放（首期） | 409 | `VMI_SETTLEMENT_POLICY_PENDING` | 库存位 / 期间 / 结算行 / 账单**零变化** | 恰好 1 条 |
@@ -596,6 +620,15 @@ PO、Item、成功审计与幂等结果原子提交。不同 Key 竞争只允许
 
 **错误断言纪律**：必须**精确**验证 status + error code + 状态不变；
 **不得**使用 `201 或 409` 之类的宽松区间掩盖错误。
+
+`PURCHASE_RECEIPT_ALREADY_CONFIRMED` 的唯一新增触发点是 `confirmPurchaseReceiptCore()` 在事务内重读
+`purchase_receipts` 后发现 `status='CONFIRMED'`；其他非法状态保持既有语义。其 HTTP caller 的拒绝审计 allowlist
+只精确增加该 code，不扩大其他采购拒绝的审计范围。
+
+`OUTSOURCING_SOURCE_INVENTORY_INSUFFICIENT` 由 `applyInventoryMutation()` 在权威 source position 已锁定且
+`current < quantity` 的检查点按调用方受限参数产生；只有 `executeOutsourcingMove()` 的 SUPPLY 路径传该 code。
+Writer 的默认调用方继续保持既有 409/message 行为；不得在上层按 message substring 翻译，亦不得改变普通采购、
+库存或其他 Domain 的既有外部语义。两项错误码的实现仍需独立 Implementation Authorization。
 
 ### 9.4 委外加工费过账的**来源级**拒绝合同
 
@@ -703,45 +736,99 @@ all-permissions 持有权限的管理员命中委外来源后均返回 409
 证据层级：`L1` = 生产 API 造数；`L2` = 直接调用领域函数；`L3` = 直接 SQL 造数
 （**不可**作为通路证据）。
 
+#### 13.1.1 `M1C-G03` Mutation Key 证据分层
+
+`issueMaterial`、`supplementMaterial`、`returnMaterial` 在外部幂等检查后由服务端生成唯一 `eventId`；合法 HTTP
+输入不包含该 eventId 或物理腿 Mutation Key。因此合法生产 HTTP 当前不能主动触发
+`INVENTORY_MUTATION_UNEXPECTED_REPLAY`，不得为制造碰撞而向 HTTP 暴露内部 key。G03 固定分层为：
+
+| 层级 | 权威断言 |
+|---|---|
+| L1 生产 HTTP | 同外部键同内容为 200 replay 且无第二次动作；同键异内容为稳定 409 且业务事实逐字段零变化；不同外部键各获唯一内部 eventId；实际物理腿数等于预期腿数 |
+| L2 canonical inventory primitive | 同一五字段 Mutation Key：同指纹只 replay；异指纹 409 `INVENTORY_MUTATION_UNEXPECTED_REPLAY`；无物理腿、跟踪、估值或 mutation log 部分写入 |
+
+L1 不冒充能触发内部碰撞，L2 不替代真实 HTTP 正向通路。Writer 对同 key 异指纹的唯一键冲突必须整体回滚，
+不得静默忽略任何物理腿。若后续要求 L1 同键异内容具有独立精确 code，使用已批准候选
+`OUTSOURCING_MATERIAL_IDEMPOTENCY_CONFLICT`，但仍须独立 Implementation Authorization。
+
 | Gate | 前置数据创建方式 | 证据层 | 成功断言 | 拒绝断言 | 零副作用断言 | `execution_status` |
 |---|---|---|---|---|---|---|
 | `M1C-G01` | L1：`createReceiptNotice()` 经兼容单 PO 与多 PO `sourceAllocations` 创建标准采购通知 → 转换 → 采购入库；另建 OUTSOURCE 通知与无通知直接 PO → 采购入库路径 | HTTP + SQLite/MySQL | `createReceiptNotice()`（或其同事务私有 helper）原子创建表头、明细、已验证来源行与显式初始 0；转换模块不创建来源行；新建后部分转换成立且累计量正确增长；重放不重置、不重复扣减；行级多 PO 来源成立；OUTSOURCE 不写标准采购来源行；容量上界**按通知 `business_type` 分域**；交期消费进入不可变台账；直接路径仍合法 | 历史 NULL 行拒绝且历史数据零改写；来源分配和不等于通知行、PO/产品/供应商不匹配、交期不可判定、容量越界、委外订单剩余不可证明、转换后重转均精确拒绝 | 拒绝时收货 / 库存 / 估值 / 通知 / 来源累计量 / 交期台账**逐字段零变化** + 拒绝审计恰好 1 条 | `NOT_RUN` |
 | `M1C-G02` | L1：委外订单 → 显式创建/提交/独立审批加工费 PO → OUTSOURCE 完工通知 → 待检收货（带明细）→ IQC → 生效；正向主体必须为已配置的委外收货员，管理员不得替代 | HTTP + Quality + Inventory | 加工费 PO 为唯一单行来源且 `APPROVED`；通知、收货创建与生效逐段重读 PO/Item 来源；表头与 **≥1 条明细**原子落库；IQC 从正式明细可达；建待检与确认效力分离；生效后成品与成本证据一致 | 缺/未审批/错来源 PO、错 PO Item、缺明细、来源不匹配、质量门禁未过均精确拒绝；`OUTSOURCING_MANAGE` 单独持有时执行收货录入或生效 → 403 | 拒绝时 PO / Item / 收货 / IQC / 库存 / 估值 / 成本证据**逐字段零变化** + 拒绝审计恰好 1 条 | `NOT_RUN` |
-| `M1C-G03` | L1：物料行 → 发料 / 补料 / 退料 | HTTP + Inventory / Valuation snapshots | 沿 canonical 仓位写**真实**物理库存、跟踪与估值；企业所有权不变；内部仓与 WIP 仓数量与流水可对账；多物料行与 SERIAL 拆分各自成键，实际腿数 == 预期腿数 | 缺 WIP 仓 409；库存不足 409；UOM 不符 409；撞键 409 `INVENTORY_MUTATION_UNEXPECTED_REPLAY`；重放幂等 | 拒绝时业务单据 / 库存 / 跟踪 / 估值 / 身份层**逐字段零变化** + 拒绝审计恰好 1 条 | `NOT_RUN` |
+| `M1C-G03` | L1：物料行 → 发料 / 补料 / 退料；L2：仅验证 HTTP 不可达的 strict Mutation Key 碰撞 | HTTP + Inventory / Valuation snapshots；L2 primitive | 沿 canonical 仓位写**真实**物理库存、跟踪与估值；企业所有权不变；内部仓与 WIP 仓数量与流水可对账；多物料行与 SERIAL 拆分各自成键，实际腿数 == 预期腿数 | L1：缺 WIP 仓、库存不足、UOM/身份异常及同外部键异内容精确拒绝；L2：异指纹同 Mutation Key 409 `INVENTORY_MUTATION_UNEXPECTED_REPLAY`；重放幂等 | 拒绝时业务单据 / 库存 / 跟踪 / 估值 / 身份层**逐字段零变化** + 拒绝审计恰好 1 条；L2 不冒充 L1 | `NOT_RUN` |
 | `M1C-G04` | L1：发料 → 分批完工 → 生效 | HTTP + Valuation snapshots | 增量倒冲公式正确；材料成本来自 canonical 位置口径分摊（**非**全局平均价）；成品经唯一 Writer 入企业仓；OUT-21 成本证据 = 实际倒冲材料账面价值 + 加工费 | 增量 < 0 或 > 可用净供应 409；基数不受支持 409 `OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED`；重复确认不双扣 / 双收 | 重复 / 并发时零重复扣减、零重复入库 | `NOT_RUN` |
 | `M1C-G05` | 无（浏览器） | Browser | 两个工作面无 `api.get/post` TypeError；320 / 390 / 430 / 680 四宽度交互成功；服务端 RBAC 生效；**不含**视觉体系重做 | 无权用户访问 → 页面级处理 + 服务端 403 | — | `NOT_RUN` |
 | `M1C-G06` | L1：委外加工费草稿创建、专用/共享 POST、共享 MATCH、普通采购自动开票内部调用链及普通采购共享入口回归；并覆盖其余延期危险写入 | HTTP + Finance + Inventory snapshots | HTTP 危险写入精确拒绝；管理员与持财务权限主体通过 RBAC 后由来源级 Guard 返回 409；未授权主体在读来源前 403；内部服务调用同一 Guard 并按既有异常合同传播；委外草稿仍为 `DRAFT`；普通采购创建/匹配/过账仍合法 | 管理员和财务主体命中委外来源 → 409；未授权主体 → 403 且不泄露来源；专用 POST、共享 POST/MATCH 与内部服务均不可绕过；普通采购同链路成功 | **零** AP open item / 凭证 / 分录 / 库存位 / 结算行 / 账单 `status` / `grni_cents` / `variance_cents` / 成本证据写入（逐字段零变化）+ 拒绝审计恰好 1 条 | `NOT_RUN` |
 | `M1C-G07` | L1：全部 Core 业务对象经生产 API 造数，含加工费 PO 正式创建/提交/审批 | HTTP + Real MySQL 8 concurrency | 生产 API 端到端**无手写 SQL 造数**；加工费 PO Item ID 经商业更新保持稳定；运行时 PO/Item Writer/Mutator 有 zero-bypass proof；SQLite / MySQL 行为对等；同源不同 Key 并发只一方成功 | 同 Key 异内容、同源第二张、PO Change ADD/MODIFY/CANCEL、通用 PO 类型注入及来源篡改均精确拒绝 | 拒绝方 PO / Item / 幂等 / 审计及下游快照逐字段相同（不得只断言数量） | `NOT_RUN` |
 
-**`TC-01 / M-15` 共享 Gate 前置**：它不是第 8 个 Gate，不改变 7-Gate 结构；在未来独立 Migration
-获授权并执行后，`M1C-G03` / `M1C-G04` / `M1C-G07` 必须取得 PRE-A / PRE-B / PRE-C 的真实数据证据、
-基于 `products.tracking_policy` 的三类允许身份键确定性映射、旧 `ELSE 'NONE'` 不再适用、
-不可判定与撞键样本的停止/零改写证据、SQLite/MySQL 对等证据，
-以及唯一索引未建立时相关委外跟踪写入 fail closed 的证据。本轮未运行，Gate 状态不变。
+#### 13.1.2 `TC-01 / M-15` 条件前置
 
-**Core 并发场景选取（`M1C-G07`）** —— 按首期实际 mutation 选取**真实 Handler**，
-**不再强制**原 11 项全量完成：
+它不是第 8 个 Gate，不改变 7-Gate 结构。当前 schema parity 明确断言
+`tracked_inventory_movements` 尚无 `identity_key`；在 M-15 Implementation 获批并进入 canonical current schema
+前，涉及该列/唯一索引的 G03/G04/G07 parity 断言保持 BLOCKED。
 
-| Core 场景 | 竞争的权威资源 | 必须直接调用的真实 Handler | 引用旧编号 |
-|---|---|---|---|
-| `CR-01` | 交期容量（同一交期行的剩余可收量） | `confirmReceiptNotice` 与 `convertReceiptNoticeToReceipts` **共用**同一容量解析函数 | `RACE-04` / `RACE-05a` |
-| `CR-02` | 采购订单行累计收货量 | `confirmPurchaseReceipt` | `RACE-05` |
-| `CR-03` | 委外收货生效（成品入库 + 倒冲） | `confirmOutsourcingReceipt` | `RACE-09` |
-| `CR-04` | 物料行 WIP 数量 | `issueMaterial` | `RACE-08` |
-| `CR-05` | 物料行 WIP 数量 | `supplementMaterial` | `RACE-08` 变体 |
-| `CR-06` | 物料行 WIP 数量 | `returnMaterial` | `RACE-08` 变体 |
-| `CR-07` | 增量倒冲可消费量 | `confirmOutsourcingReceipt`（倒冲腿） | `RACE-09` 变体 |
-| `CR-08` | 同一 LOT / SERIAL 身份的可用量 | 倒冲腿与退料腿 | 新增（身份级独占） |
-| `CR-09` | 同一委外订单的加工费 PO 终身唯一性 | `createOutsourcingProcessingPurchaseOrder`（目标真实 Handler） | `M1C-D-PO01` |
+- **A — 全新 disposable MySQL**：未来 M-15 实现进入 canonical schema 后，空目标可以通过 current-schema
+  bootstrap 直接建立目标列、约束和索引，并验证新写入/并发唯一性。Gate 不得为了测试调用历史 Migration/M-15；
+  空表 PRE-A/B/C 的 0 行结果只说明该空库无冲突，不证明任何历史数据库迁移完成。
+- **B — 现有历史数据库**：必须另获 Migration 与 destructive 授权，按 §4.4/§4.4.1 在真实历史数据上执行
+  PRE-A → additive column → 确定性规范化 → PRE-B/PRE-C → unique index。缺来源、身份不明/双身份、策略不一致
+  或撞键即停；不得删、并、伪造、覆盖非空 identity 或无条件归为 `NONE`。
+
+G03/G04/G07 仍须取得三类允许身份键的确定性映射、不可判定/撞键停止且零改写、SQLite/MySQL 对等，以及唯一
+索引未建立时相关写入 fail closed 的证据。空库 G07 不得外推为历史 Migration PASS。
+
+#### 13.1.3 `M1C-G07` 同步合同与 CR-01～CR-09
+
+全部正向业务对象必须由生产 HTTP 创建。每项至少两个独立应用进程/数据库 session；控制 session 先持有
+`mysql_transaction_gates(gate_id=1) FOR UPDATE`，同时发出两条真实 HTTP，并通过 `performance_schema` lock-wait
+与请求在途状态证明二者已到达事务门后再释放。控制 SQL 只做同步，不创建或修改业务对象；不得以 `sleep` 猜竞争。
+胜者身份可以不确定，但“恰一成功 + 恰一指定失败 + 最终逐字段快照”必须唯一。
+
+原 CR-01“确认通知与转换通知竞争新增容量”被取代：通知创建已把 allocation 计入 outstanding reservation，转换
+只把既有 reservation 形成 receipt，不新增 used quantity；DRAFT 确认与转换也没有共同合法初态。CR-01 固定为
+两个通知创建请求竞争同一 PO Item / delivery schedule。
+
+| CR | 两条真实 HTTP / 权威资源 | 初始量与唯一结果 | 失败 status/code | 逐字段快照 |
+|---|---|---|---|---|
+| `CR-01` | 两次 `POST /api/receipt-notices`，body 使用不同 `idempotencyKey`；同 P1/S1 | PO Item 与交期 capacity=10、used=0；6 vs 6；恰一 201 | 409 `RECEIPT_NOTICE_CAPACITY_EXCEEDED` | 恰一 DRAFT 通知/行/source allocation=6；outstanding=6、ledger=0；无 receipt/库存/估值/AP/凭证；败方无第二业务对象/幂等结果，拒绝审计恰一 |
+| `CR-02` | 两次 `POST /api/purchase-receipts/:id`；同一 DRAFT receipt，不同 Key | receipt qty=10；恰一 200 | 409 `PURCHASE_RECEIPT_ALREADY_CONFIRMED` | receipt 状态、PO 累计量、库存/跟踪/估值、AP/凭证、幂等与成功/拒绝审计均唯一 |
+| `CR-03` | 两次 `POST /api/procurement/outsourcing/receipts/:id/confirm`；同一待检 receipt，不同 Key | finished qty=4、WIP 足量；恰一 200 | 409 `OUTSOURCING_RECEIPT_ALREADY_EFFECTED` | 成品、倒冲、估值、成本、状态/version、幂等和审计均只一份 |
+| `CR-04` | 两次 `POST .../orders/:id/issues`；同 material row/source position identity | source=10；6 vs 6；恰一 201 | 409 `OUTSOURCING_SOURCE_INVENTORY_INSUFFICIENT` | source=4、WIP=6；恰一 issue；MOVE 两腿/跟踪/估值/WIP effect/幂等/审计唯一；败方业务全零 |
+| `CR-05` | 两次 `POST .../orders/:id/supplements`；同 material row/source position identity | source=10；6 vs 6；恰一 201 | 409 `OUTSOURCING_SOURCE_INVENTORY_INSUFFICIENT` | source=4、WIP=6；恰一 supplement；物理腿/跟踪/估值/WIP/幂等/审计唯一；败方业务全零 |
+| `CR-06` | 两次 `POST .../orders/:id/returns`；同 material row/WIP identity | WIP=10；6 vs 6；恰一 201 | 409 `OUTSOURCING_WIP_INSUFFICIENT` | WIP=4、source 回入=6；恰一 return；身份余额/腿/估值/幂等/审计唯一 |
+| `CR-07` | 两个不同 receipt 各 `POST .../receipts/:id/confirm`；同 order/material/WIP identity | order=10、per-unit=1、WIP=6；两张各 qty=4 且均 IQC PASS；恰一 200 | 409 `OUTSOURCING_WIP_INSUFFICIENT` | 恰一 EFFECTED/一张保持 PENDING_INSPECTION；backflush=4、WIP=2、成品=4；材料只消费 4，成品成本=实际材料成本+胜者加工费；败方业务/库存/估值/成本全零，拒绝审计恰一 |
+| `CR-08` | 一次 receipt confirm 与一次 `POST .../orders/:id/returns`；同 LOT/SERIAL WIP identity | identity WIP=1，backflush=1，return=1；恰一成功 | 另一方 409 `OUTSOURCING_WIP_INSUFFICIENT` | identity 余额非负守恒；confirm 胜则一份成品/成本，return 胜则一份 source 回入；败方全零 |
+| `CR-09` | 两次 `POST .../orders/:id/processing-fee-purchase-orders`；同 RELEASED order，不同 Key | 恰一 201 | 409 `OUTSOURCING_PROCESSING_PO_ALREADY_EXISTS` | 恰一 PO/稳定 Item/成功幂等与审计；拒绝审计恰一；同源 PO 终身唯一 |
+
+CR-07 前置必须经生产 HTTP 完整建立：创建/下达委外订单与材料快照、创建并审批加工费 PO、分别创建并确认两张
+OUTSOURCE 通知、分别创建两张委外收货、分别完成 IQC PASS。若实现审查发现该链不能产生两张合法待检收货，
+CR-07 必须 BLOCKED 并返回 Design 裁定；不得用 CR-03 的同收货重复确认冒充独立 CR-07。
 
 **不纳入首期**（随延期能力移出）：`RACE-01`（Sourcing allocation）、`RACE-02`（PR→PO）、
 `RACE-03`（PO Change vs Receipt）、`RACE-06`（Purchase Return vs Bill）、`RACE-07`（Planning handoff，
 其 exactly-once 实现**已存在**，剩余为证据）、`RACE-10`（加工费账单）、`RACE-11`（VMI 物权转移）、
 `RACE-10a`（会计政策区间）、`RACE-11a`（VMI 结算期间重叠）。
 
-**MySQL 执行前提**：只能在**独立 disposable 数据库**上执行，并另获**本次 run 的 destructive 授权**；
-四重 ACK 中 `ACK-1` / `ACK-2` / `ACK-3` 已有源码实现，`ACK-4`（绑定 run ID + commit SHA 的一次性授权）
-仍为 **`PROPOSED / NOT IMPLEMENTED`**。**本轮未运行、也不授权运行任何 MySQL Gate。**
+#### 13.1.4 `M1C-G07` ACK-4 与专用入口
+
+全局 destructive 安全合同以 `solution.md §15.1` 为唯一跨 Domain 权威；本节只规定 M1 manifest。批准后的目标入口为：
+
+```text
+pnpm test:mysql:m1-core -- --run-id <uuid-v4>
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/gates/run-mysql-local-gate.ps1 \
+  -Script test:mysql:m1-core -RunId <uuid-v4>
+```
+
+`scripts/gates/mysql-m1-core-gate.mjs` 只注册 M1-Core schema parity、真实 HTTP Handler 多 session 竞态和
+SQLite/MySQL 对等 suite；不得运行 `race_probe_generic`，不得 SQL 造正向业务单据。M1 单次 operation manifest
+固定且有序为 `RESET_SCHEMA_PRE_RUN`、`BOOTSTRAP_CURRENT_SCHEMA`、`RUN_M1_HTTP_FIXTURES`、
+`CLEANUP_SCHEMA_POST_RUN`，不接受通配/追加；不授权 CREATE/DROP DATABASE、账号/权限变更、M-15、Migration、
+其他 Gate 或任意脚本。
+
+四重 ACK 中 ACK-1～3 已有实现；ACK-4 设计现已 `APPROVED / NOT_IMPLEMENTED`。任何缺失、过期、已消费、
+target/SHA/operation 漂移、工作树不净、直接 Node、未登记 child 或 cleanup 未证明路径一律 BLOCKED。只能在精确
+disposable target 上、于 ACK-4 Implementation 和独立安全审查通过后，再取得**本次 run**的明确授权执行。
+**本次 Promotion 未运行、也不授权运行任何 MySQL Gate。**
 
 ### 13.2 旧 13 Gate → M1-Core Gate / DEFERRED / SUPERSEDED 逐项映射
 
@@ -778,7 +865,8 @@ all-permissions 持有权限的管理员命中委外来源后均返回 409
   都**不得**签发对应能力的 `COVERED`。
 - 延期 Gate **不再**作为 M1-Core Design 接受的全局阻塞项；但延期能力仍受 §9.2–§9.4 的**拒绝边界**约束，
   且由 `M1C-G06` 验证（**含共享入口**）。
-- MySQL destructive Gate 必须使用独立 disposable 数据库并取得逐次明确授权；本轮未执行。
+- MySQL destructive Gate 必须遵守 `solution.md §15.1` 与本文件 §13.1.4，使用精确 disposable target、完成
+  ACK-4 一次性消费并取得逐次明确授权；ACK-4 未实现或 cleanup/quarantine 未闭合时一律不得执行。本轮未执行。
 
 ## 14. 现状风险核对（本轮逐项复核）
 
@@ -795,6 +883,7 @@ all-permissions 持有权限的管理员命中委外来源后均返回 409
 | `RISK-6` | `src/pages/outsourcing.jsx`（5 处）与 `src/pages/sourcing-pricing.jsx`（5 处）调用 `api.get` / `api.post`；`src/api.js:21` 的 `api` 是**函数**，`api.get` / `api.post` **不存在** ⇒ 两页运行时 TypeError | 改为 `api(path, { method, body })`；不扩展 `api` 对象（§12） | `NOT_IMPLEMENTED` |
 | `RISK-7` | **CURRENT**：`confirmOutsourcingReceipt`（`server/modules/outsourcing-finance.js:77`）与 `createOutsourcingReceipt`（`server/modules/outsourcing.js:345`）**共用** `RECEIVE_PERMISSIONS = ['OUTSOURCING_RECEIVING_MANAGE','OUTSOURCING_MANAGE']`（`:13` / `:9`）⇒ 委外**业务操作**权限 `OUTSOURCING_MANAGE` **可自行使收货生效**；同理 `FINANCE_PERMISSIONS = ['SUPPLIER_BILL_MANAGE','OUTSOURCING_MANAGE']`（`server/modules/outsourcing-finance.js:14`）⇒ 委外业务角色**可**执行加工费过账。二者均与 `MC-REQ-10` 冲突。**授权矩阵现状**：`V13_DESIRED_ROLE_PERMISSIONS`（`server/migrations/v13-phase1-contracts.js:32`）与 `server/db.js` 种子中普通角色不持有 `OUTSOURCING_*`，仅 `admin` 经 all-permissions 继承 | 收货录入/生效只认 `OUTSOURCING_RECEIVING_MANAGE`；加工费过账 RBAC 只认 `SUPPLIER_BILL_MANAGE` 并仅授予 `role-accounting`，其后来源级 Policy Guard 对管理员同样生效；按 §8.1 创建/配置委外业务员与委外收货员 | `NOT_IMPLEMENTED`（角色、授予与两层门禁均待实施） |
 | `RISK-8` | **CURRENT**：通用 PO Writer 固定创建标准 PO；加工费 PO 无正式创建入口；`updatePurchaseOrder` 删除重建明细导致 Item ID 不稳定；PO Change ADD/MODIFY/CANCEL 无加工费类型守卫；来源列无唯一约束 | 按 §5.5–§10 建立统一 Writer、原位更新、三阶段 Change 守卫、下游来源重读及最小 UNIQUE 索引 | `NOT_IMPLEMENTED` |
+| `RISK-9` | **CURRENT**：`createReceiptNotice()` 以 `Date.now().toString().slice(-10)` 生成 `notice_no`；CR-01 会并发创建两张通知，同毫秒生成相同业务号的碰撞风险尚未由实现证据排除 | G07 Implementation 前必须审计 schema 唯一性、错误传播与并发生成行为；不得让编号碰撞把预期容量 409 退化为未分类约束错误或重复业务号。若修复会改变业务编号语义，必须返回 Design/Owner 裁定；本次 Promotion 不修改编号逻辑 | `OPEN_IMPLEMENTATION_RISK` |
 
 **本节明确不把任何上述现状缺陷写成已修复。**
 
@@ -834,10 +923,9 @@ all-permissions 持有权限的管理员命中委外来源后均返回 409
 4. **历史隔离的业务影响规模未知**：历史 WIP 残差、历史转换量、历史来源行、历史收货效力缺口的
    影响行数**未实测**。首期**不做任何历史回填**（§4.2），一律 fail closed 执行，
    **可能**造成部分历史订单不可继续；该规模的评估属**独立授权**的历史对账，不在首期。
-5. **容量上界的分域判定尚未有既有实现可复用**：`STANDARD_PURCHASE` 的采购订单行剩余与交期剩余
-   有现状代码可参考（`confirmPurchaseReceipt`），但 `OUTSOURCE` 的"委外订单剩余可收量"与
-   "按类型分域的容量解析函数"必须**新建**，且必须被 `confirmReceiptNotice` 与转换流程**共用**
-   （`CR-01` 的并发要求）。
+5. **CR-01 与通知编号风险已重新裁定**：确认通知与转换通知不竞争新增容量；CR-01 改为两个
+   `createReceiptNotice()` 请求竞争同一 PO Item / delivery schedule 的剩余容量。实现还必须关闭 §14 `RISK-9`
+   的同毫秒 `notice_no` 碰撞风险，且不得用编号碰撞替代容量 409 证据。
 6. **加工费 PO 政策已裁定但尚未实施**：`M1C-PO-P01/P02` 不再是政策阻塞；canonical Writer、
    Item ID 稳定、UNIQUE 索引、下游来源重读及 `CR-09` 仍须独立 Implementation 授权和真实证据。
 
@@ -863,6 +951,9 @@ all-permissions 持有权限的管理员命中委外来源后均返回 409
   `A-P02` / `T-11` 继续受限，`M1-P-02` 仅在放宽严格支持范围时待签。
 - `M1C-PO-P01` / `M1C-PO-P02` 已由业务所有者在本轮明确批准；最小 UNIQUE 索引仅获
   **后续代码实现许可的设计前提**，本轮未授权或执行数据库连接、migration 或 MySQL Gate。
+- `M1C-WP7-B0-R1` 已由 Domain Owner、Platform / Database Safety Owner 与用户明确批准；G03 分层、
+  CR-01～CR-09、CR-02/04/05 精确错误码及全局 ACK-4 合同现为 Active Design。其状态均为
+  `APPROVED / NOT_IMPLEMENTED`，本次 Promotion 不构成 Implementation Authorization。
 - 旧候选设计 §26.33 **未被改写**；其 A / B / U / T 部分的结论在本文件 §13.2 有逐项处置映射。
 - 旧 13 Gate **未被伪造 PASS**；其状态仍为 13/13 `NOT_RUN`。
 - **IMPLEMENTATION HARD STOP**：Design 已批准，但 Implementation 明确为 `NOT_AUTHORIZED`；
