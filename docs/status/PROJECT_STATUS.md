@@ -1056,6 +1056,36 @@ Release / Deploy，未进入 WP-2～WP-6。**完成后 HARD STOP**，等待审�
 `M-15` 保持 `DEFERRED`。本登记只确认既有 WP1 Implementation 交付，不改写 Requirement / Active Design，
 不改变 R2 残余边界，也不替代后续独立 Gate 验收。
 
+### 37.22 加工费 PO R1 Active Design Promotion（`M1C-D-PO01`，2026-11-03）
+
+业务所有者在本轮指令中明确批准 `M1C-PO-P01`、`M1C-PO-P02`、最小来源 UNIQUE
+索引及 R1 其余技术合同。候审来源为
+`docs/reviews/m1/procurement-outsourcing-m1-core-processing-po-design-amendment.md`
+@ `627559c6032d9ec0adb2740a38e41a16b168dd59`；批准内容已精确融合至唯一 Active Design
+`docs/design/procurement-outsourcing-m1-core.md`。
+
+| 项 | 当前状态 |
+|---|---|
+| Design Promotion | `APPROVED / PROMOTED` |
+| `M1C-PO-P01` | `APPROVED`：有界非创建人商业修改/提交；独立审批与来源不可变保持 |
+| `M1C-PO-P02` | `APPROVED`：同源终身唯一；CANCEL、重建、Change ADD/MODIFY 拒绝 |
+| UNIQUE 方案 | `APPROVED_DESIGN`：`purchase_orders(source_outsourcing_order_id)`；实施前历史冲突预检 |
+| Implementation | `NOT_AUTHORIZED / NOT_STARTED_BY_THIS_PROMOTION` |
+| Gate | `M1C-G01..G07` 全部保持 `NOT_RUN`；未签发任何 PASS |
+| 数据库 | 未连接、未执行 migration、未运行 MySQL Gate |
+
+**N7 继承性证据**：Promotion 前现场执行
+`node scripts/docs/check-doc-consistency.mjs --mode current --target HEAD --only N7` 返回 FAIL：
+
+- `171ade577bad` 未引用 `docs/status/PROJECT_STATUS.md §37.21` 或完整路径；
+- `4403a80d2543` 修改 `docs/reviews/README.md` 元数据/文件头但提交信息缺完整路径；
+- `4403a80d2543` 新增候审 Design，但提交信息缺该完整路径。
+
+该 FAIL 来自已推送历史提交，未改写历史、未修改 checker、未降低标准，也未记为 PASS。
+它不指向本次 Promotion 的语义冲突或文件缺失，因此登记为继承性治理债务；本次提交必须在
+提交信息中列明全部受治理路径，且最终报告继续保留该 FAIL。Design Promotion 完成后
+**HARD STOP**，等待单独 Implementation 授权。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
