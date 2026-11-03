@@ -218,6 +218,15 @@ const FULL = [
   // misjudged as unknown. It is deliberately NOT registered in FAST: each case
   // owns a disposable temp SQLite and drives the real HTTP API.
   'server/m1c-wp1-r2-outsourcing-receipt-effect-evidence.test.js',
+  // M1C Processing PO R1: explicit outsourcing route, canonical PO draft
+  // writer, lifetime source uniqueness, bounded non-creator commercial edit,
+  // PO Change rejection and APPROVED PO notice/receipt provenance.
+  'server/m1c-processing-po.test.js',
+  // M1C WP2-WP5: 委外收货两段式生效、委外材料 canonical Writer 与身份证据、
+  // 增量倒冲与成品入库、职责分离与延期危险写入拒绝、来源 UNIQUE 索引。
+  // Deliberately NOT registered in FAST: each case owns a disposable temp
+  // SQLite and drives the real HTTP API.
+  'server/m1c-wp2-wp5-outsourcing.test.js',
   'server/procurement-parameters.test.js',
   'server/procurement-profiles.test.js',
   'server/buyers.test.js',

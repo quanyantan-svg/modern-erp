@@ -147,56 +147,16 @@ describe('Procurement Wave E VMI business layer with owner-dimension canonical p
     const transfer = await fixture.request('POST', '/api/procurement/vmi/ownership-transfers', fixture.tokens.admin, {
       vmiReceiptId: receipt.id, settlementQuantity: 10, settlementAmountCents: 10000, transferDate: isoDate(0),
     });
-    assert.equal(transfer.status, 201, JSON.stringify(transfer.data));
-    const transferId = transfer.data.id;
-
+    assert.equal(transfer.status, 409, JSON.stringify(transfer.data));
+    assert.equal(transfer.data.code, 'VMI_SETTLEMENT_POLICY_PENDING');
     const supplierAfter = fixture.db.prepare(
-      `SELECT COALESCE(SUM(quantity),0) total FROM inventory
-        WHERE warehouse_id='warehouse-001' AND product_id='product-001'
-          AND owner_type='SUPPLIER' AND owner_id='supplier-001' AND active=1`
+`SELECT COALESCE(SUM(quantity),0) total FROM inventory WHERE warehouse_id='warehouse-001' AND product_id='product-001' AND owner_type='SUPPLIER' AND owner_id='supplier-001' AND active=1`
     ).get();
     const enterpriseAfter = fixture.db.prepare(
-      `SELECT COALESCE(SUM(quantity),0) total FROM inventory
-        WHERE warehouse_id='warehouse-001' AND product_id='product-001'
-          AND owner_type='ENTERPRISE' AND active=1`
+`SELECT COALESCE(SUM(quantity),0) total FROM inventory WHERE warehouse_id='warehouse-001' AND product_id='product-001' AND owner_type='ENTERPRISE' AND active=1`
     ).get();
-    const totalAfter = Number(supplierAfter.total) + Number(enterpriseAfter.total);
-
-    // Ownership change is a paired MOVE: SUPPLIER decreases by 10,
-    // ENTERPRISE increases by 10. Total stock is conserved.
-    assert.equal(Number(supplierAfter.total), Number(supplierBefore.total) - 10, 'supplier stock decreases by transfer quantity');
-    assert.equal(Number(enterpriseAfter.total), Number(enterpriseBefore.total) + 10, 'enterprise stock increases by transfer quantity');
-    assert.equal(totalAfter, totalBefore, 'total stock conserved across ownership transfer');
-
-    // Exactly one ownership transfer row exists for this receipt.
-    const transferRows = fixture.db.prepare(
-      `SELECT COUNT(*) n FROM vmi_ownership_transfers WHERE vmi_receipt_id=? AND business_status<>'CANCELLED'`
-    ).get(receipt.id);
-    assert.equal(Number(transferRows.n), 1, 'exactly one ownership transfer is recorded');
-
-    // A second attempt with the same receipt is rejected (idempotency /
-    // "no double ownership change").
-    const duplicate = await fixture.request('POST', '/api/procurement/vmi/ownership-transfers', fixture.tokens.admin, {
-      vmiReceiptId: receipt.id, settlementQuantity: 5, settlementAmountCents: 5000, transferDate: isoDate(0),
-    });
-    assert.equal(duplicate.status, 409, JSON.stringify(duplicate.data));
-
-    // The total is still conserved (no duplicate evidence, no extra write).
-    const supplierFinal = fixture.db.prepare(
-      `SELECT COALESCE(SUM(quantity),0) total FROM inventory
-        WHERE warehouse_id='warehouse-001' AND product_id='product-001'
-          AND owner_type='SUPPLIER' AND owner_id='supplier-001' AND active=1`
-    ).get();
-    const enterpriseFinal = fixture.db.prepare(
-      `SELECT COALESCE(SUM(quantity),0) total FROM inventory
-        WHERE warehouse_id='warehouse-001' AND product_id='product-001'
-          AND owner_type='ENTERPRISE' AND active=1`
-    ).get();
-    assert.equal(Number(supplierFinal.total), Number(supplierAfter.total), 'no extra supplier mutation on rejected duplicate');
-    assert.equal(Number(enterpriseFinal.total), Number(enterpriseAfter.total), 'no extra enterprise mutation on rejected duplicate');
-
-    // Summary endpoint still surfaces the aggregated read model.
-    const summary = await fixture.request('GET', '/api/procurement/vmi/summary/supplier-001', fixture.tokens.admin);
-    assert.equal(summary.status, 200, summary.data.error);
+    assert.equal(Number(supplierAfter.total), Number(supplierBefore.total));
+    assert.equal(Number(enterpriseAfter.total), Number(enterpriseBefore.total));
+    assert.equal(fixture.db.prepare('SELECT COUNT(*) n FROM vmi_ownership_transfers WHERE vmi_receipt_id=?').get(receipt.id).n, 0);
   });
 });

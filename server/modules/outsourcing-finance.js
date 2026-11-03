@@ -1,19 +1,22 @@
 import { randomUUID } from 'node:crypto';
 import { transaction } from '../db.js';
-import { audit } from '../lib/audit.js';
+import { audit, auditBusinessRejection } from '../lib/audit.js';
 import {
   HttpError, allow, allowAny, assertAllowedFields, readJson, send,
 } from '../lib/http.js';
-import { createCommercialCreditNote } from './commercial-golive.js';
-import { backflushMaterial } from './outsourcing.js';
 import { ensurePayableSource } from './settlement-core.js';
-import { deriveQualityState } from './quality-gates.js';
+import { assertQualityGate } from './quality-gates.js';
 import { assertSupplierBillGlPostable } from './outsourcing-gl-policy.js';
-import { adjustInventory } from '../lib/stock.js';
+import { executeOutsourcingBackflush, receiveOutsourcingFinishedGoods } from './outsourcing-inventory.js';
+import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 
-const RECEIVE_PERMISSIONS = ['OUTSOURCING_RECEIVING_MANAGE', 'OUTSOURCING_MANAGE'];
+// 收货域动作只认收货管理权限：委外业务操作权限不得代行收货职责
+// （MC-REQ-10；Active Design §8.1.2 收紧项）。
+const RECEIVE_PERMISSIONS = ['OUTSOURCING_RECEIVING_MANAGE'];
 const FINANCE_PERMISSIONS = ['SUPPLIER_BILL_MANAGE', 'OUTSOURCING_MANAGE'];
-const MATERIAL_PERMISSIONS = ['OUTSOURCING_MATERIAL_EXECUTE', 'OUTSOURCING_MANAGE'];
+// 材料执行只认材料执行权限；委外业务员同时持有委外业务与材料执行权限
+// （Active Design §8.1.2）。
+const MATERIAL_PERMISSIONS = ['OUTSOURCING_MATERIAL_EXECUTE'];
 // 收货生效只认收货管理权限：委外业务操作权限不得自行使收货生效
 // （MC-REQ-10；Active Design §8.1.2 收紧项，M1C-WP0-R1）。
 const RECEIVE_EFFECT_PERMISSIONS = ['OUTSOURCING_RECEIVING_MANAGE'];
@@ -27,6 +30,12 @@ function assertFinancePermission(actor) { allowAny(actor, FINANCE_PERMISSIONS); 
 function assertPostingPermission(actor) { allowAny(actor, POSTING_PERMISSIONS); }
 function assertMaterialPermission(actor) { allowAny(actor, MATERIAL_PERMISSIONS); }
 function assertScanPermission(actor) { allowAny(actor, ['PROCUREMENT_SCAN_EXECUTE', 'PURCHASE_RECEIPTS_MANAGE']); }
+
+function rejectDeferredWrite(db, actor, entityType, entityId, action, code, message) {
+  const error = new HttpError(409, message, { code });
+  auditBusinessRejection(db, actor, { entityType, entityId: entityId || null, action }, error);
+  throw error;
+}
 
 function refreshOutsourcingCostEvidence(db, receiptId, calculatedAt = new Date().toISOString()) {
   const receipt = db.prepare('SELECT * FROM outsourcing_receipts WHERE id=?').get(receiptId);
@@ -84,9 +93,19 @@ function refreshOutsourcingCostEvidence(db, receiptId, calculatedAt = new Date()
  */
 export async function confirmOutsourcingReceipt(db, req, res, actor, receiptId) {
   assertReceiveEffectPermission(actor);
+  const body = await readJson(req);
+  assertAllowedFields(body, ['materialIdentities']);
+  const idempotencyKey = String(req.headers['idempotency-key'] || '').trim();
+  if (!idempotencyKey) throw new HttpError(400, 'Idempotency-Key 必填');
+  const operation = 'OUTSOURCING_RECEIPT_CONFIRM';
+  const fingerprint = requestFingerprint(body);
+  const replay = idempotencyReplay(db, operation, receiptId, idempotencyKey, fingerprint);
+  if (replay) return send(res, 200, { ...replay, replayed: true });
   const receipt = db.prepare('SELECT * FROM outsourcing_receipts WHERE id=?').get(receiptId);
   if (!receipt) throw new HttpError(404, '委外收货不存在');
-  if (receipt.business_status !== 'CONFIRMED') throw new HttpError(409, '该收货已生效');
+  if (receipt.business_status === 'EFFECTED') throw new HttpError(409, '已生效收货必须使用原 Idempotency-Key 重放');
+  if (receipt.business_status !== 'PENDING_INSPECTION') throw new HttpError(409, '只有待检收货可以生效');
+  const materialIdentities = new Map((Array.isArray(body.materialIdentities) ? body.materialIdentities : []).map((item) => [item.materialListId, item]));
   const order = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(receipt.order_id);
   if (!order) throw new HttpError(404, '委外订单不存在');
   if (order.status !== 'RELEASED') throw new HttpError(409, '只有下达状态可收货');
@@ -97,50 +116,84 @@ export async function confirmOutsourcingReceipt(db, req, res, actor, receiptId) 
       throw new HttpError(409, '处理 PO 与委外订单不兼容');
     }
   }
-  // OUT-18: validate quality against OUTSOURCING_RECEIPT IQC source.
-  const q = deriveQualityState(db, 'IQC', receiptId, 'OUTSOURCING_RECEIPT');
-  if (!['PASS', 'WAIVED'].includes(q.code)) {
-    throw new HttpError(409, `委外入库单质量门禁未通过：${q.label}`);
-  }
   const items = db.prepare('SELECT * FROM outsourcing_receipt_items WHERE receipt_id=? ORDER BY line_no').all(receiptId);
+  if (!items.length) throw new HttpError(409, '委外收货缺少正式明细', { code: 'OUTSOURCING_RECEIPT_ITEMS_REQUIRED' });
   const now = new Date().toISOString();
   let totalMaterialValue = 0;
   let incrementalRows = [];
-  transaction(db, () => {
-    const cumulativeFinished = Number(db.prepare("SELECT COALESCE(SUM(quantity),0) q FROM outsourcing_receipts WHERE order_id=? AND business_status<>'CANCELLED' AND id<>?").get(order.id, receiptId).q) + Number(receipt.quantity);
-    const materials = db.prepare('SELECT * FROM outsourcing_material_list WHERE order_id=?').all(order.id);
+  try { transaction(db, () => {
+    const lockedReceipt = db.prepare('SELECT * FROM outsourcing_receipts WHERE id=?').get(receiptId);
+    if (lockedReceipt.business_status === 'EFFECTED') return;
+    if (lockedReceipt.business_status !== 'PENDING_INSPECTION') throw new HttpError(409, '只有待检收货可以生效');
+    const lockedOrder = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(lockedReceipt.order_id);
+    if (!lockedOrder || lockedOrder.status !== 'RELEASED') throw new HttpError(409, '委外订单状态不允许收货生效');
+    const lockedItems = db.prepare('SELECT * FROM outsourcing_receipt_items WHERE receipt_id=? ORDER BY line_no').all(receiptId);
+    if (!lockedItems.length || Math.abs(lockedItems.reduce((sum, item) => sum + Number(item.quantity), 0) - Number(lockedReceipt.quantity)) > 1e-9) {
+      throw new HttpError(409, '委外收货明细缺失或数量不守恒', { code: 'OUTSOURCING_RECEIPT_ITEMS_REQUIRED' });
+    }
+    const lockedPo = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(lockedReceipt.processing_po_id);
+    if (!lockedPo || lockedPo.status !== 'APPROVED' || lockedPo.business_type !== 'OUTSOURCE_PROCESSING'
+      || lockedPo.source_outsourcing_order_id !== lockedOrder.id || lockedPo.supplier_id !== lockedOrder.supplier_id) {
+      throw new HttpError(409, '委外收货生效时加工费采购订单来源或审批状态已变化', { code: 'OUTSOURCING_RECEIPT_ITEM_SOURCE_MISMATCH' });
+    }
+    for (const item of lockedItems) {
+      const poItem = db.prepare('SELECT * FROM purchase_order_items WHERE id=? AND order_id=?').get(item.processing_po_item_id, lockedReceipt.processing_po_id);
+      const noticeItem = db.prepare('SELECT ni.*,n.business_type,n.status,n.outsourcing_order_id,n.processing_po_id FROM receipt_notice_items ni JOIN receipt_notices n ON n.id=ni.notice_id WHERE ni.id=?').get(item.source_notice_item_source_id);
+      if (!poItem || !noticeItem || poItem.product_id !== item.product_id || noticeItem.product_id !== item.product_id
+        || noticeItem.business_type !== 'OUTSOURCE' || noticeItem.status !== 'CONFIRMED'
+        || noticeItem.outsourcing_order_id !== lockedOrder.id || noticeItem.processing_po_id !== lockedReceipt.processing_po_id
+        || (poItem.document_uom_code && String(item.unit_code || '').toUpperCase() !== String(poItem.document_uom_code).toUpperCase())) {
+        throw new HttpError(409, '委外收货正式明细来源失效', { code: 'OUTSOURCING_RECEIPT_ITEM_SOURCE_MISMATCH' });
+      }
+    }
+    const alreadyEffective = Number(db.prepare("SELECT COALESCE(SUM(quantity),0) q FROM outsourcing_receipts WHERE order_id=? AND business_status='EFFECTED' AND id<>?").get(lockedOrder.id, receiptId).q);
+    const cumulativeFinished = alreadyEffective + Number(lockedReceipt.quantity);
+    if (cumulativeFinished > Number(lockedOrder.order_quantity) + 1e-9) throw new HttpError(409, '委外累计合格收货超过订单容量', { code: 'RECEIPT_NOTICE_CAPACITY_EXCEEDED' });
+    try {
+      assertQualityGate(db, 'IQC', receiptId, 'OUTSOURCING_RECEIPT');
+    } catch (error) {
+      throw new HttpError(409, error.message, { code: 'OUTSOURCING_QUALITY_GATE_NOT_PASSED' });
+    }
+    const materials = db.prepare('SELECT * FROM outsourcing_material_list WHERE order_id=? ORDER BY id').all(lockedOrder.id);
     // OUT-21 backflush: per-material line cumulative formula
     for (const m of materials) {
-      const targetCumulative = Number(m.required_quantity) * cumulativeFinished / Number(order.order_quantity);
+      if (m.legacy_unverified_wip_quantity === null || m.legacy_unverified_wip_quantity === undefined) {
+        throw new HttpError(409, '该委外物料行的历史 WIP 不可证明，不得被新的转出或倒冲消费', { code: 'OUTSOURCING_WIP_HISTORY_UNPROVEN' });
+      }
+      const snapshot = JSON.parse(m.bom_snapshot_json || '{}');
+      if (!Number.isFinite(Number(snapshot.per_unit_quantity)) || !Number.isFinite(Number(snapshot.required_quantity))
+        || Math.abs(Number(snapshot.required_quantity) - Number(m.required_quantity)) > 1e-9) {
+        throw new HttpError(409, '委外用料快照缺少已批准的每单位/总量基数', { code: 'OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED' });
+      }
+      const targetCumulative = Number(snapshot.per_unit_quantity) * cumulativeFinished;
       const incremental = targetCumulative - Number(m.backflushed_quantity);
       const netSupplied = Number(m.issued_quantity) + Number(m.supplemented_quantity) - Number(m.returned_quantity);
       const remaining = netSupplied - Number(m.backflushed_quantity);
       if (incremental < 0 || incremental > remaining + 1e-9) {
-        throw new HttpError(409, `BACKFLUSH_INSUFFICIENT_SUPPLY: 行 ${m.id}`);
+        throw new HttpError(409, `BACKFLUSH_INSUFFICIENT_SUPPLY: 行 ${m.id}`, { code: 'OUTSOURCING_WIP_INSUFFICIENT' });
       }
       if (incremental <= 0) continue;
-      // Capture material carrying value at moving average (exclude unused/returned/supplier-WIP remaining).
-      // The "actual consumed carrying value" excludes issued-but-unused (still in supplier WIP) and returned
-      // (already returned to enterprise) and remaining (still in supplier WIP). We only count what was backflushed.
-      const product = db.prepare('SELECT id, base_uom_code FROM products WHERE id=?').get(m.product_id);
-      const carrying = Number(db.prepare('SELECT COALESCE(SUM(quantity),0) q FROM inventory WHERE product_id=?').get(m.product_id).q);
-      const movingAvg = Number(db.prepare('SELECT COALESCE(SUM(value_cents*1.0)/NULLIF(SUM(quantity),0),0) v FROM inventory_valuation_balances WHERE product_id=?').get(m.product_id).v);
-      const materialValue = Math.round(movingAvg * incremental);
+      const identityInput = materialIdentities.get(m.id) || {};
+      const backflush = executeOutsourcingBackflush(db, {
+        actor, order: lockedOrder, material: m, receipt: lockedReceipt, quantity: incremental,
+        businessDate: lockedReceipt.business_date || lockedReceipt.received_date, identityInput,
+      });
+      const materialValue = backflush.valuation.issuedValueCents;
       totalMaterialValue += materialValue;
       db.prepare('UPDATE outsourcing_material_list SET backflushed_quantity=backflushed_quantity+?, updated_at=? WHERE id=?').run(incremental, now, m.id);
-      // Insert valuation movement for backflush (consumed material carrying value).
-      db.prepare(`INSERT INTO inventory_valuation_movements(id,product_id,warehouse_id,movement_type,source_type,source_id,source_item_id,quantity_delta,value_delta_cents,created_at,business_date,valuation_basis)
-        VALUES(?,?,?,'OUTSOURCING_BACKFLUSH','OUTSOURCING_RECEIPT',?,?,?,?,?,?,'MOVING_AVERAGE')`).run(randomUUID(), m.product_id, 'warehouse-001', receiptId, m.id, -incremental, -materialValue, now, receipt.received_date || now.slice(0, 10));
       incrementalRows.push({ materialListId: m.id, incremental, carryingValueCents: materialValue });
     }
-    // Recognize finished inventory: insert finished item row into finished_inventory_position (canonical inventory).
-    // V21 — write at the canonical default position via adjustInventory so
-    // the multidimensional identity is preserved.
-    db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,source_type,source_id,source_no,remark,creator_id,created_at,business_date)
-      VALUES(?,?,?,?,'IN','OUTSOURCING_RECEIPT',?,?,?,?,?,?)`).run(randomUUID(), 'warehouse-001', order.product_id, receipt.quantity, receiptId, receipt.receipt_no, '委外加工入库', actor.id, now, receipt.received_date);
-    adjustInventory(db, 'warehouse-001', order.product_id, Number(receipt.quantity), now);
+    const totalFinishedValue = totalMaterialValue + Number(lockedReceipt.processing_fee_cents);
+    let remainingValue = totalFinishedValue;
+    lockedItems.forEach((item, index) => {
+      const itemValue = index === lockedItems.length - 1
+        ? remainingValue
+        : Math.round(totalFinishedValue * Number(item.quantity) / Number(lockedReceipt.quantity));
+      remainingValue -= itemValue;
+      receiveOutsourcingFinishedGoods(db, { actor, order: lockedOrder, receipt: lockedReceipt, item, valueCents: itemValue, businessDate: lockedReceipt.business_date || lockedReceipt.received_date });
+    });
     // Update receipt with cost evidence: consumed material value + processing fee provisional.
-    db.prepare(`UPDATE outsourcing_receipts SET business_status='EFFECTED', backflush_material_value_cents=?, total_cost_cents=?, updated_at=? WHERE id=?`).run(totalMaterialValue, totalMaterialValue + Number(receipt.processing_fee_cents), now, receiptId);
+    db.prepare(`UPDATE outsourcing_receipts SET business_status='EFFECTED', backflush_material_value_cents=?, total_cost_cents=?, version=version+1, updated_at=? WHERE id=? AND business_status='PENDING_INSPECTION'`).run(totalMaterialValue, totalFinishedValue, now, receiptId);
     db.prepare(`INSERT INTO outsourcing_cost_evidences(
       id,outsourcing_receipt_id,processing_po_id,material_consumed_value_cents,
       processing_fee_provisional_cents,processing_fee_actual_cents,variance_cents,basis_status,calculated_at
@@ -150,11 +203,17 @@ export async function confirmOutsourcingReceipt(db, req, res, actor, receiptId) 
       material_consumed_value_cents=excluded.material_consumed_value_cents,
       processing_fee_provisional_cents=excluded.processing_fee_provisional_cents,
       calculated_at=excluded.calculated_at`).run(
-      randomUUID(), receiptId, receipt.processing_po_id, totalMaterialValue,
-      Number(receipt.processing_fee_cents), now,
+      randomUUID(), receiptId, lockedReceipt.processing_po_id, totalMaterialValue,
+      Number(lockedReceipt.processing_fee_cents), now,
     );
-    audit(db, actor.id, 'CONFIRM', 'OUTSOURCING_RECEIPT', receiptId, `material_value=${totalMaterialValue}; processing_fee=${receipt.processing_fee_cents}`);
-  });
+    audit(db, actor.id, 'CONFIRM', 'OUTSOURCING_RECEIPT', receiptId, `material_value=${totalMaterialValue}; processing_fee=${lockedReceipt.processing_fee_cents}`);
+    saveIdempotency(db, operation, receiptId, idempotencyKey, fingerprint, {
+      ok: true, totalMaterialValueCents: totalMaterialValue, incrementalRows,
+    });
+  }); } catch (error) {
+    auditBusinessRejection(db, actor, { entityType: 'OUTSOURCING_RECEIPT', entityId: receiptId, action: '确认委外收货' }, error);
+    throw error;
+  }
   return send(res, 200, { ok: true, totalMaterialValueCents: totalMaterialValue, incrementalRows });
 }
 
@@ -259,79 +318,8 @@ export async function createFinishedReturn(db, req, res, actor) {
   assertReceivingPermission(actor);
   const body = await readJson(req);
   assertAllowedFields(body, ['outsourcingReceiptId', 'quantity', 'returnDate', 'remark']);
-  const receipt = db.prepare('SELECT * FROM outsourcing_receipts WHERE id=?').get(body.outsourcingReceiptId);
-  if (!receipt) throw new HttpError(404, '委外收货不存在');
-  if (receipt.business_status !== 'EFFECTED') throw new HttpError(409, '只有已生效的收货可以退货');
-  const returnQuantity = Number(body.quantity);
-  if (!Number.isFinite(returnQuantity) || returnQuantity <= 0) throw new HttpError(400, '退货数量必须大于 0');
-  const id = randomUUID(); const now = new Date().toISOString();
-  const returnNo = 'OSRET-' + Date.now().toString().slice(-10);
-  let commercialCreditCents = 0;
-  let commercialCreditCount = 0;
-  transaction(db, () => {
-    const alreadyReturned = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) q FROM outsourcing_finished_returns
-      WHERE outsourcing_receipt_id=? AND business_status='CONFIRMED'`).get(receipt.id).q);
-    if (returnQuantity > Number(receipt.quantity) - alreadyReturned + 1e-9) {
-      throw new HttpError(409, '退货数量超过收货剩余数量');
-    }
-    const productId = db.prepare('SELECT product_id FROM outsourcing_orders WHERE id=?').get(receipt.order_id).product_id;
-    db.prepare(`INSERT INTO outsourcing_finished_returns(id,return_no,outsourcing_receipt_id,supplier_id,quantity,return_date,business_status,creator_id,created_at)
-      VALUES(?,?,?,?,?,?,'CONFIRMED',?,?)`).run(id, returnNo, receipt.id, receipt.supplier_id, returnQuantity, body.returnDate || now.slice(0, 10), actor.id, now);
-    // Finished inventory reversal: deduct from inventory + insert OUT transaction.
-    db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,source_type,source_id,source_no,remark,creator_id,created_at,business_date)
-      VALUES(?,?,?,?,'OUT','OUTSOURCING_FINISHED_RETURN',?,?,?,?,?,?)`).run(randomUUID(), 'warehouse-001', productId, returnQuantity, id, returnNo, '委外加工退货', actor.id, now, body.returnDate || now.slice(0, 10));
-    // V21 — sum across canonical positions and route the write through
-    // adjustInventory (position_key aware, refuses to operate on non-default
-    // identities).
-    const inventory = db.prepare('SELECT COALESCE(SUM(quantity),0) q FROM inventory WHERE warehouse_id=? AND product_id=? AND active=1').get('warehouse-001', productId);
-    if (!inventory || Number(inventory.q) + 1e-9 < returnQuantity) throw new HttpError(409, '委外完工库存不足');
-    adjustInventory(db, 'warehouse-001', productId, -Number(returnQuantity), now);
-
-    let remainingBilledReturn = returnQuantity;
-    const postedLines = db.prepare(`SELECT sbi.id bill_item_id,sbi.bill_id,
-      sbi.base_quantity_num*1.0/sbi.base_quantity_den billed_quantity,sbi.gross_cents,
-      sb.supplier_id,sb.bill_no
-      FROM supplier_bill_items sbi JOIN supplier_bills sb ON sb.id=sbi.bill_id
-      WHERE sbi.commercial_source_type='OUTSOURCING_RECEIPT_ITEM'
-        AND sbi.commercial_source_id=? AND sb.status='POSTED'
-      ORDER BY sb.posted_at,sb.id,sbi.line_no,sbi.id`).all(receipt.id);
-    for (const line of postedLines) {
-      if (remainingBilledReturn <= 1e-9) break;
-      const prior = db.prepare(`SELECT COALESCE(SUM(billed_quantity),0) quantity,
-        COALESCE(SUM(credit_cents),0) cents FROM outsourcing_finished_return_credits
-        WHERE supplier_bill_item_id=?`).get(line.bill_item_id);
-      const availableQuantity = Number(line.billed_quantity) - Number(prior.quantity);
-      const availableCents = Number(line.gross_cents) - Number(prior.cents);
-      if (availableQuantity <= 1e-9 || availableCents <= 0) continue;
-      const creditedQuantity = Math.min(remainingBilledReturn, availableQuantity);
-      const creditCents = Math.abs(creditedQuantity - availableQuantity) <= 1e-9
-        ? availableCents
-        : Math.round(Number(line.gross_cents) * creditedQuantity / Number(line.billed_quantity));
-      const creditNote = createCommercialCreditNote(db, {
-        side: 'AP', sourceId: line.bill_id, grossCents: creditCents,
-        creditDate: body.returnDate || now.slice(0, 10), adjustmentType: 'RETURN',
-        reason: `委外完工退货 ${returnNo}`, actorId: actor.id,
-        idempotencyKey: `OUTSOURCING_FINISHED_RETURN:${id}:${line.bill_item_id}`,
-      });
-      db.prepare(`INSERT INTO outsourcing_finished_return_credits(
-        id,return_id,supplier_bill_id,supplier_bill_item_id,commercial_credit_note_id,
-        billed_quantity,credit_cents,created_at
-      ) VALUES(?,?,?,?,?,?,?,?)`).run(
-        randomUUID(), id, line.bill_id, line.bill_item_id, creditNote.id,
-        creditedQuantity, creditCents, now,
-      );
-      commercialCreditCents += creditCents;
-      commercialCreditCount += 1;
-      remainingBilledReturn -= creditedQuantity;
-    }
-    refreshOutsourcingCostEvidence(db, receipt.id, now);
-    audit(db, actor.id, 'CREATE', 'OUTSOURCING_FINISHED_RETURN', id, returnNo);
-  });
-  return send(res, 201, {
-    id, returnNo,
-    commercialState: commercialCreditCount ? 'BILLED_CREDIT_POSTED' : 'UNBILLED_NO_AP_CREDIT',
-    commercialCreditCents,
-  });
+  rejectDeferredWrite(db, actor, 'OUTSOURCING_RECEIPT', body.outsourcingReceiptId || null,
+    '委外完工退货', 'OUTSOURCING_FINISHED_RETURN_NOT_APPROVED', '委外完工退货不在首期批准范围内');
 }
 
 /**
@@ -361,28 +349,8 @@ export async function applyOutsourcingDifference(db, req, res, actor, orderId) {
   assertMaterialPermission(actor);
   const body = await readJson(req);
   assertAllowedFields(body, ['materialListId', 'supplementQuantity', 'returnQuantity', 'periodKey']);
-  const material = db.prepare('SELECT * FROM outsourcing_material_list WHERE id=? AND order_id=?').get(body.materialListId, orderId);
-  if (!material) throw new HttpError(404, '物料行不存在');
-  const now = new Date().toISOString();
-  const id = randomUUID();
-  transaction(db, () => {
-    const expected = Number(material.required_quantity);
-    const actual = Number(material.issued_quantity) + Number(material.supplemented_quantity) - Number(material.returned_quantity) - Number(material.backflushed_quantity);
-    db.prepare(`INSERT INTO outsourcing_period_differences(id,order_id,material_list_id,expected_quantity,actual_quantity,difference_quantity,period_key,business_status,creator_id,created_at)
-      VALUES(?,?,?,?,?,?,?,'APPLIED',?,?)`).run(id, orderId, body.materialListId, expected, actual, expected - actual, body.periodKey || now.slice(0, 7), actor.id, now);
-    if (Number(body.supplementQuantity || 0) > 0) {
-      db.prepare(`INSERT INTO outsourcing_supplements(id,order_id,material_list_id,quantity,reason,supplement_date,business_status,creator_id,created_at)
-        VALUES(?,?,?,?,?,?,'CONFIRMED',?,?)`).run(randomUUID(), orderId, body.materialListId, Number(body.supplementQuantity), 'DIFF: ' + (body.reason || ''), now.slice(0, 10), actor.id, now);
-      db.prepare('UPDATE outsourcing_material_list SET supplemented_quantity=supplemented_quantity+?, updated_at=? WHERE id=?').run(Number(body.supplementQuantity), now, body.materialListId);
-    }
-    if (Number(body.returnQuantity || 0) > 0) {
-      db.prepare(`INSERT INTO outsourcing_returns(id,order_id,material_list_id,quantity,from_warehouse_id,to_warehouse_id,return_date,business_status,creator_id,created_at)
-        VALUES(?,?,?,?,?,?,?,'CONFIRMED',?,?)`).run(randomUUID(), orderId, body.materialListId, Number(body.returnQuantity), 'warehouse-002', 'warehouse-001', now.slice(0, 10), actor.id, now);
-      db.prepare('UPDATE outsourcing_material_list SET returned_quantity=returned_quantity+?, updated_at=? WHERE id=?').run(Number(body.returnQuantity), now, body.materialListId);
-    }
-    audit(db, actor.id, 'APPLY', 'OUTSOURCING_DIFFERENCE', id, `Δ=${expected - actual}`);
-  });
-  return send(res, 200, { ok: true });
+  rejectDeferredWrite(db, actor, 'OUTSOURCING_ORDER', orderId,
+    '倒冲差异生效', 'OUTSOURCING_DIFFERENCE_APPROVAL_PENDING', '倒冲差异审核生效政策尚未批准');
 }
 
 /**
@@ -399,6 +367,14 @@ export async function createWipTransfer(db, req, res, actor) {
   // Target material line is identified by product_id within target order.
   const targetMaterial = db.prepare('SELECT * FROM outsourcing_material_list WHERE order_id=? AND product_id=?').get(body.targetOrderId, sourceMaterial.product_id);
   if (!targetMaterial) throw new HttpError(404, '目标订单无同产品物料行');
+  // 跨单 WIP 转移的成本携带与身份归属属延期能力（B-P01 / M1-GB03 DEFERRED）：
+  // 源行一旦存在身份证据余额，计数转移会破坏 INV-WIP-1 与来源追溯，必须 fail closed。
+  const identityBalances = db.prepare('SELECT COUNT(*) n FROM outsourcing_wip_identity_balances WHERE material_list_id=?').get(sourceMaterial.id);
+  if (Number(identityBalances.n) > 0) {
+    const error = new HttpError(409, '该委外物料行存在身份证据余额，跨单 WIP 转移的身份归属尚未批准', { code: 'OUTSOURCING_WIP_TRANSFER_IDENTITY_UNSUPPORTED' });
+    auditBusinessRejection(db, actor, { entityType: 'OUTSOURCING_ORDER', entityId: body.sourceOrderId || null, action: '委外跨单 WIP 转移' }, error);
+    throw error;
+  }
   const wipRemaining = Number(sourceMaterial.issued_quantity) + Number(sourceMaterial.supplemented_quantity) - Number(sourceMaterial.returned_quantity) - Number(sourceMaterial.backflushed_quantity);
   if (Number(body.quantity) > wipRemaining) throw new HttpError(409, '转移数量超过源订单 supplier WIP 剩余');
   const id = randomUUID(); const now = new Date().toISOString();

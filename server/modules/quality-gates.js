@@ -140,13 +140,12 @@ export function loadQualitySource(db, kind, sourceId, sourceTypeHint) {
   if (!sourceId) throw new HttpError(400, `${c.label} 必须选择来源${c.sourceLabel}`);
   const source = db.prepare(`SELECT * FROM ${c.sourceHeaderTable} WHERE id=?`).get(sourceId);
   if (!source) throw new HttpError(400, `${c.sourceLabel}不存在`);
-  // OUT-18: outsourcing_receipts uses `business_status` (not `status`), so we
-  // must read the correct column for the source-type at hand. Inspections
-  // can be created against a CONFIRMED receipt (the receipt already carries
-  // finished material in DRAFT/CONFIRMED state; PASS/WAIVED releases it).
+  // OUT-18: outsourcing_receipts uses `business_status` (not `status`).
+  // M1-Core creates PENDING_INSPECTION receipts; legacy DRAFT/CONFIRMED rows
+  // remain inspectable for backwards-compatible evidence reads.
   const statusColumn = chosen === 'OUTSOURCING_RECEIPT' ? 'business_status' : 'status';
   const sourceReadyStatuses = chosen === 'OUTSOURCING_RECEIPT'
-    ? ['DRAFT', 'CONFIRMED']
+    ? ['PENDING_INSPECTION', 'DRAFT', 'CONFIRMED']
     : ['DRAFT'];
   if (!sourceReadyStatuses.includes(source[statusColumn])) {
     throw new HttpError(409, `只有草稿/可检状态的${c.sourceLabel}可以创建 ${c.label}`);
