@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { createProcurementFixture } from './test-support/procurement-http-fixture.js';
+import {
+  createApprovedProcessingPo, createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource,
+} from './test-support/procurement-http-fixture.js';
 
 describe('OUT-05/17/18 final acceptance — Planning Handoff / Completion Receipt Notice / Quality source', () => {
   let fixture;
@@ -180,6 +182,7 @@ describe('OUT-05/17/18 final acceptance — Planning Handoff / Completion Receip
       const notice = await fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, {
         businessType: 'OUTSOURCE',
         outsourcingOrderId: orderId,
+        processingPoId: await createApprovedProcessingPo(fixture, orderId),
         warehouseId: 'warehouse-001',
         noticeDate: isoDate(0),
         items: [{ productId: 'product-001', quantity: 10 }],
@@ -192,12 +195,8 @@ describe('OUT-05/17/18 final acceptance — Planning Handoff / Completion Receip
 
     test('B. source Outsourcing Order retained + processing PO compatibility', async () => {
       const orderId = await createReleasedOutsourceOrder();
-      // Generate a processing PO row directly (the procurement fixture does
-      // not expose an OUTSOURCE_PROCESSING PO endpoint, so we insert via DB).
-      const processingPoId = 'po-' + orderId.slice(0, 8);
-      fixture.db.prepare(`INSERT INTO purchase_orders(id,order_no,business_type,status,source_outsourcing_order_id,supplier_id,creator_id,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?)`)
-        .run(processingPoId, processingPoId, 'OUTSOURCE_PROCESSING', 'APPROVED', orderId, 'supplier-001', 'user-admin', isoDate(0), isoDate(0));
+      // M1C-D-PO01：加工费 PO 已有正式生产入口，完工通知必须绑定该 APPROVED PO。
+      const processingPoId = await createApprovedProcessingPo(fixture, orderId);
       const notice = await fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, {
         businessType: 'OUTSOURCE',
         outsourcingOrderId: orderId,
@@ -207,11 +206,9 @@ describe('OUT-05/17/18 final acceptance — Planning Handoff / Completion Receip
         items: [{ productId: 'product-001', quantity: 5 }],
       });
       assert.equal(notice.status, 201, notice.data.error);
-      // Cross-PO compatibility: notice with the wrong processing PO is 409.
-      const wrongPoId = 'po-' + orderId.slice(0, 4) + '-wrong';
-      fixture.db.prepare(`INSERT INTO purchase_orders(id,order_no,business_type,status,source_outsourcing_order_id,supplier_id,creator_id,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?)`)
-        .run(wrongPoId, wrongPoId, 'OUTSOURCE_PROCESSING', 'APPROVED', 'different-order', 'supplier-001', 'user-admin', isoDate(0), isoDate(0));
+      // Cross-PO compatibility: notice with another order's processing PO is 409.
+      const otherOrderId = await createReleasedOutsourceOrder();
+      const wrongPoId = await createApprovedProcessingPo(fixture, otherOrderId);
       const bad = await fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, {
         businessType: 'OUTSOURCE',
         outsourcingOrderId: orderId,
@@ -229,6 +226,7 @@ describe('OUT-05/17/18 final acceptance — Planning Handoff / Completion Receip
       const notice = await fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, {
         businessType: 'OUTSOURCE',
         outsourcingOrderId: orderId,
+        processingPoId: await createApprovedProcessingPo(fixture, orderId),
         warehouseId: 'warehouse-001',
         noticeDate: isoDate(0),
         items: [{ productId: 'product-001', quantity: 10 }],
@@ -246,6 +244,7 @@ describe('OUT-05/17/18 final acceptance — Planning Handoff / Completion Receip
       const notice = await fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, {
         businessType: 'OUTSOURCE',
         outsourcingOrderId: orderId,
+        processingPoId: await createApprovedProcessingPo(fixture, orderId),
         warehouseId: 'warehouse-001',
         noticeDate: isoDate(0),
         items: [{ productId: 'product-001', quantity: 5 }],
@@ -304,15 +303,16 @@ describe('OUT-05/17/18 final acceptance — Planning Handoff / Completion Receip
       // Use a larger orderQty so test isolation doesn't shrink the cap;
       // and compute the second call's qty from orderQty to stay tight.
       const orderId = await createReleasedOutsourceOrder({ orderQty: 100 });
+      const processingPoId = await createApprovedProcessingPo(fixture, orderId);
       const firstNotice = await fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, {
-        businessType: 'OUTSOURCE', outsourcingOrderId: orderId,
+        businessType: 'OUTSOURCE', outsourcingOrderId: orderId, processingPoId,
         warehouseId: 'warehouse-001', noticeDate: isoDate(0),
         items: [{ productId: 'product-001', quantity: 60 }],
       });
       assert.equal(firstNotice.status, 201, JSON.stringify(firstNotice.data));
       // 60 + 50 > 100: the create call should reject at insert time.
       const over = await fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, {
-        businessType: 'OUTSOURCE', outsourcingOrderId: orderId,
+        businessType: 'OUTSOURCE', outsourcingOrderId: orderId, processingPoId,
         warehouseId: 'warehouse-001', noticeDate: isoDate(0),
         items: [{ productId: 'product-001', quantity: 50 }],
       });
@@ -338,13 +338,13 @@ describe('OUT-05/17/18 final acceptance — Planning Handoff / Completion Receip
     }
 
     async function createOutsourcingReceiptWithLine(orderId, qty) {
+      // M1C-WP-2：生产收货写入器要求 CONFIRMED 完工通知、来源锁定的加工费 PO 与明细行。
+      const source = await prepareOutsourcingReceiptSource(fixture, orderId, qty, `out18-${orderId}-${qty}`);
       const receipt = await fixture.request('POST', '/api/procurement/outsourcing/receipts', fixture.tokens.admin, {
-        orderId, quantity: qty, receivedDate: isoDate(0), processingFeeCents: 10000,
-      });
+        orderId, ...outsourcingReceiptBody(source, qty, 10000),
+      }, { 'idempotency-key': `out18-receipt-${orderId}-${qty}` });
       assert.equal(receipt.status, 201, receipt.data.error);
-      const itemId = 'ori-' + receipt.data.id;
-      fixture.db.prepare(`INSERT INTO outsourcing_receipt_items(id,receipt_id,product_id,quantity,unit_price_cents,line_no) VALUES(?,?,?,?,?,?)`)
-        .run(itemId, receipt.data.id, 'product-001', qty, 100, 1);
+      const itemId = fixture.db.prepare('SELECT id FROM outsourcing_receipt_items WHERE receipt_id=?').get(receipt.data.id).id;
       return { receiptId: receipt.data.id, itemId };
     }
 

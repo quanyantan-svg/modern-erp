@@ -18,6 +18,10 @@ import { join, resolve } from 'node:path';
 import { createApp } from './app.js';
 import { createDatabase } from './db.js';
 import { matchSupplierBill, postSupplierBill } from './modules/commercial-golive.js';
+import {
+  createApprovedProcessingPo, outsourcingReceiptBody, prepareOutsourcingReceiptSource,
+  seedApprovedOutsourceBom,
+} from './test-support/procurement-http-fixture.js';
 
 const POLICY_CODE = 'OUTSOURCING_GL_POLICY_NOT_APPROVED';
 
@@ -131,15 +135,21 @@ describe('M1C-WP0-R1 — outsourcing GL source-level policy guard and receiving-
     assert.deepEqual(after, before, '收货生效被拒后收货单据必须逐字段一致');
   });
 
-  test('R1-B 收货录入与委外材料执行权限未被收紧动作误伤', async () => {
-    const receipt = await fixture.request('POST', '/api/procurement/outsourcing/receipts', fixture.tokens.outsourcingOnly, {
-      orderId: fixture.outsourcingOrderId, quantity: 5, receivedDate: isoDate(0), processingFeeCents: 5000,
-    });
+  test('R1-B 收货录入只认 OUTSOURCING_RECEIVING_MANAGE 且正式来源链可达', async () => {
+    const source = fixture.receivingRoleSource;
+    const denied = await fixture.request('POST', '/api/procurement/outsourcing/receipts', fixture.tokens.outsourcingOnly, {
+      orderId: fixture.outsourcingOrderId, ...outsourcingReceiptBody(source, 5, 5000), receivedDate: isoDate(0),
+    }, { 'idempotency-key': 'r1-receiving-denied' });
+    assert.equal(denied.status, 403, JSON.stringify(denied.data));
+    const receipt = await fixture.request('POST', '/api/procurement/outsourcing/receipts', fixture.tokens.outsourcingReceiving, {
+      orderId: fixture.outsourcingOrderId, ...outsourcingReceiptBody(source, 5, 5000), receivedDate: isoDate(0),
+    }, { 'idempotency-key': 'r1-receiving-approved' });
     assert.equal(receipt.status, 201, receipt.data.error);
   });
 
   test('R1-B admin 收货生效仍然成功（权限未被反向收紧）', async () => {
-    const response = await fixture.request('POST', `/api/procurement/outsourcing/receipts/${outsourcingReceiptId}/confirm`, fixture.tokens.admin);
+    const response = await fixture.request('POST', `/api/procurement/outsourcing/receipts/${outsourcingReceiptId}/confirm`,
+      fixture.tokens.admin, {}, { 'idempotency-key': 'r1-admin-effect' });
     assert.equal(response.status, 200, response.data.error);
     const row = fixture.db.prepare('SELECT business_status FROM outsourcing_receipts WHERE id=?').get(outsourcingReceiptId);
     assert.equal(row.business_status, 'EFFECTED');
@@ -188,39 +198,56 @@ function countRejectAudits(db, billId) {
 async function buildOutsourcingReceipt(fixture) {
   const qualify = await fixture.request('PATCH', '/api/suppliers/supplier-001/profile', fixture.tokens.admin, {
     outsourcingEnabled: true, category: 'OUTSOURCE', qualificationStatus: 'QUALIFIED',
-    qualificationValidFrom: isoDate(-30), qualificationValidTo: isoDate(180),
+    qualificationValidFrom: isoDate(-30), qualificationValidTo: isoDate(180), supplierWipWarehouseId: 'warehouse-002',
   });
   assert.equal(qualify.status, 200, qualify.data.error);
+  const bomId = seedApprovedOutsourceBom(fixture, 'product-001', [
+    { productId: 'product-001', requiredQuantity: 0.1 },
+  ], 'r1-gl-policy', isoDate(-30));
   const order = await fixture.request('POST', '/api/procurement/outsourcing/orders', fixture.tokens.admin, {
-    supplierId: 'supplier-001', productId: 'product-001', orderQuantity: 100, businessDate: isoDate(0),
+    supplierId: 'supplier-001', productId: 'product-001', orderQuantity: 100, businessDate: isoDate(0), bomId,
   });
   assert.equal(order.status, 201, order.data.error);
   await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'PLAN_CONFIRMED' });
   await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'RELEASED' });
-  await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/material-list`, fixture.tokens.admin, {
-    items: [{ productId: 'product-001', requiredQuantity: 5, unit: 'PCS' }],
+  const snapshot = await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/material-list`, fixture.tokens.admin, {
+    items: [{ productId: 'product-001', sourceWarehouseId: 'warehouse-001' }],
   });
+  assert.equal(snapshot.status, 200, snapshot.data.error);
   fixture.outsourcingOrderId = order.data.id;
   const materialListId = fixture.db.prepare('SELECT id FROM outsourcing_material_list WHERE order_id=?').get(order.data.id).id;
+  const now = new Date().toISOString();
+  fixture.db.prepare("UPDATE inventory SET quantity=100 WHERE warehouse_id='warehouse-001' AND product_id='product-001'").run();
+  for (const warehouseId of ['warehouse-001', 'warehouse-002']) {
+    fixture.db.prepare(`INSERT INTO inventory_valuation_balances(balance_key,valuation_method,product_id,warehouse_id,lot_id,serial_id,quantity,value_cents,updated_at)
+      VALUES(?, 'MOVING_AVERAGE', 'product-001', ?, NULL, NULL, 100, 100000, ?)
+      ON CONFLICT(balance_key) DO UPDATE SET quantity=excluded.quantity,value_cents=excluded.value_cents,updated_at=excluded.updated_at`)
+      .run(`NONE:${warehouseId}:product-001`, warehouseId, now);
+  }
   await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/issues`, fixture.tokens.admin, {
-    materialListId, quantity: 10, fromWarehouseId: 'warehouse-001', toWarehouseId: 'warehouse-002', issuedDate: isoDate(0),
+    materialListId, quantity: 10, issuedDate: isoDate(0), idempotencyKey: 'r1-gl-issue',
   });
+  const processingPoId = await createApprovedProcessingPo(fixture, order.data.id, 'r1-gl-po');
+  const source = await prepareOutsourcingReceiptSource(fixture, order.data.id, 30, 'r1-gl-receipt-a');
+  assert.equal(source.processingPoId, processingPoId);
+  // 两张通知先完成确认，再分别生成收货；否则第一张尚未生效的收货会按历史效力
+  // 不可证明规则阻断第二张通知的容量证明。
+  const source2 = await prepareOutsourcingReceiptSource(fixture, order.data.id, 10, 'r1-gl-receipt-b');
+  assert.equal(source2.processingPoId, processingPoId, '同一委外订单的两张通知必须复用唯一加工费 PO');
+  fixture.receivingRoleSource = await prepareOutsourcingReceiptSource(fixture, order.data.id, 5, 'r1-receiving-role');
+  assert.equal(fixture.receivingRoleSource.processingPoId, processingPoId);
   const receipt = await fixture.request('POST', '/api/procurement/outsourcing/receipts', fixture.tokens.admin, {
-    orderId: order.data.id, quantity: 30, receivedDate: isoDate(0), processingFeeCents: 30000,
-  });
+    orderId: order.data.id, ...outsourcingReceiptBody(source, 30, 30000), receivedDate: isoDate(0),
+  }, { 'idempotency-key': 'r1-gl-receipt-a' });
   assert.equal(receipt.status, 201, receipt.data.error);
-  const itemId = `ori-r1-${receipt.data.id}`;
-  fixture.db.prepare(`INSERT INTO outsourcing_receipt_items(id,receipt_id,product_id,quantity,unit_price_cents,line_no)
-    VALUES(?,?,'product-001',30,500,1)`).run(itemId, receipt.data.id);
+  const itemId = fixture.db.prepare('SELECT id FROM outsourcing_receipt_items WHERE receipt_id=?').get(receipt.data.id).id;
   // A second receipt item keeps the billable capacity of the first item free
   // for the responsibility-separation draft case.
   const receipt2 = await fixture.request('POST', '/api/procurement/outsourcing/receipts', fixture.tokens.admin, {
-    orderId: order.data.id, quantity: 10, receivedDate: isoDate(0), processingFeeCents: 10000,
-  });
+    orderId: order.data.id, ...outsourcingReceiptBody(source2, 10, 10000), receivedDate: isoDate(0),
+  }, { 'idempotency-key': 'r1-gl-receipt-b' });
   assert.equal(receipt2.status, 201, receipt2.data.error);
-  const itemId2 = `ori-r1-b-${receipt2.data.id}`;
-  fixture.db.prepare(`INSERT INTO outsourcing_receipt_items(id,receipt_id,product_id,quantity,unit_price_cents,line_no)
-    VALUES(?,?,'product-001',10,500,1)`).run(itemId2, receipt2.data.id);
+  const itemId2 = fixture.db.prepare('SELECT id FROM outsourcing_receipt_items WHERE receipt_id=?').get(receipt2.data.id).id;
   return { receiptId: receipt.data.id, itemId, itemId2 };
 }
 
@@ -231,12 +258,13 @@ async function createFixture() {
   await new Promise((done) => server.listen(0, '127.0.0.1', done));
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
 
-  async function request(method, path, token = null, body) {
+  async function request(method, path, token = null, body, extraHeaders = {}) {
     const response = await fetch(baseUrl + path, {
       method,
       headers: {
         ...(token ? { authorization: `Bearer ${token}` } : {}),
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...extraHeaders,
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
@@ -254,6 +282,8 @@ async function createFixture() {
     admin: await login('admin', 'admin123'),
     accounting: await login('accounting', 'accounting123'),
     sales: await login('sales', 'sales123'),
+    reviewer: await login('reviewer', 'review123'),
+    outsourcingReceiving: await login('outsourcingreceiving', 'outsourcingreceiving123'),
   };
 
   // A dedicated role that holds OUTSOURCING_MANAGE and nothing else, so the

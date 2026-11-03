@@ -12,7 +12,7 @@
 
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { createProcurementFixture } from './test-support/procurement-http-fixture.js';
+import { createApprovedProcessingPo, createProcurementFixture } from './test-support/procurement-http-fixture.js';
 
 describe('M1C-WP-1 — receipt notice sources, business-type scoped capacity and notice conversion', () => {
   let fixture;
@@ -281,7 +281,8 @@ describe('M1C-WP-1 — receipt notice sources, business-type scoped capacity and
       await qualifyOutsourceSupplier();
       const orderId = await createReleasedOutsourcingOrder(100);
       const notice = await fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, {
-        businessType: 'OUTSOURCE', outsourcingOrderId: orderId, warehouseId: 'warehouse-001',
+        businessType: 'OUTSOURCE', outsourcingOrderId: orderId,
+        processingPoId: await createApprovedProcessingPo(fixture, orderId), warehouseId: 'warehouse-001',
         noticeDate: isoDate(0), items: [{ productId: 'product-001', quantity: 10 }],
       });
       assert.equal(notice.status, 201, notice.data.error);
@@ -296,31 +297,35 @@ describe('M1C-WP-1 — receipt notice sources, business-type scoped capacity and
     test('B1 the outsourcing confirmation counts the quantity of this notice exactly once', async () => {
       await qualifyOutsourceSupplier();
       const orderId = await createReleasedOutsourcingOrder(100);
+      const processingPoId = await createApprovedProcessingPo(fixture, orderId);
       const notice = await fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, {
-        businessType: 'OUTSOURCE', outsourcingOrderId: orderId, warehouseId: 'warehouse-001',
+        businessType: 'OUTSOURCE', outsourcingOrderId: orderId, processingPoId, warehouseId: 'warehouse-001',
         noticeDate: isoDate(0), items: [{ productId: 'product-001', quantity: 60 }],
       });
       assert.equal(notice.status, 201, notice.data.error);
+      const confirmed = await fixture.request('POST', `/api/receipt-notices/${notice.data.id}/confirm`, fixture.tokens.admin);
+      assert.equal(confirmed.status, 200, JSON.stringify(confirmed.data));
 
-      // The remaining capacity shrinks after the notice was created: a
-      // confirmed outsourcing receipt consumes 50 of the 100 ordered units.
-      const receipt = await fixture.request('POST', '/api/procurement/outsourcing/receipts', fixture.tokens.admin, {
-        orderId, quantity: 50, receivedDate: isoDate(0), processingFeeCents: 50000,
-      });
-      assert.equal(receipt.status, 201, receipt.data.error);
-      await fixture.request('POST', `/api/procurement/outsourcing/receipts/${receipt.data.id}/confirm`, fixture.tokens.admin);
-
+      // The confirmed notice reserves 60 of the 100 ordered units exactly once:
+      // confirming it again is refused and must change nothing.
       const before = businessSnapshot();
       const rejected = await fixture.request('POST', `/api/receipt-notices/${notice.data.id}/confirm`, fixture.tokens.admin);
       assert.equal(rejected.status, 409, JSON.stringify(rejected.data));
-      assert.equal(rejected.data.code, 'RECEIPT_NOTICE_CAPACITY_EXCEEDED');
       assert.equal(rejectAudits('RECEIPT_NOTICE', notice.data.id), 1, 'exactly one rejection audit');
       const row = fixture.db.prepare('SELECT status FROM receipt_notices WHERE id=?').get(notice.data.id);
-      assert.equal(row.status, 'DRAFT', 'a rejected confirmation keeps the notice untouched');
+      assert.equal(row.status, 'CONFIRMED', 'a rejected confirmation keeps the notice untouched');
       const after = businessSnapshot();
       for (const table of Object.keys(before)) {
         assert.equal(after[table], before[table], `${table} must stay untouched when the notice confirmation fails`);
       }
+
+      // Only the remaining 40 of the 100 ordered units may still be notified.
+      const over = await fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, {
+        businessType: 'OUTSOURCE', outsourcingOrderId: orderId, processingPoId, warehouseId: 'warehouse-001',
+        noticeDate: isoDate(0), items: [{ productId: 'product-001', quantity: 60 }],
+      });
+      assert.equal(over.status, 409, JSON.stringify(over.data));
+      assert.equal(over.data.code, 'RECEIPT_NOTICE_CAPACITY_EXCEEDED');
     });
 
     test('B2 an outsourcing notice capacity never uses a purchase order line capacity and the reverse holds as well', async () => {
@@ -329,7 +334,8 @@ describe('M1C-WP-1 — receipt notice sources, business-type scoped capacity and
       const before = businessSnapshot();
       const auditsBefore = fixture.db.prepare("SELECT id FROM audit_logs WHERE action='REJECT'").all().map((row) => row.id);
       const over = await fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, {
-        businessType: 'OUTSOURCE', outsourcingOrderId: orderId, warehouseId: 'warehouse-001',
+        businessType: 'OUTSOURCE', outsourcingOrderId: orderId,
+        processingPoId: await createApprovedProcessingPo(fixture, orderId), warehouseId: 'warehouse-001',
         noticeDate: isoDate(0), items: [{ productId: 'product-001', quantity: 11 }],
       });
       assert.equal(over.status, 409, 'the outsourcing order capacity is the only bound of an outsourcing notice');
@@ -345,7 +351,8 @@ describe('M1C-WP-1 — receipt notice sources, business-type scoped capacity and
       assert.match(addedAudits[0].detail, /RECEIPT_NOTICE_CAPACITY_EXCEEDED/, 'the rejection audit records the exact error code');
 
       const within = await fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, {
-        businessType: 'OUTSOURCE', outsourcingOrderId: orderId, warehouseId: 'warehouse-001',
+        businessType: 'OUTSOURCE', outsourcingOrderId: orderId,
+        processingPoId: await createApprovedProcessingPo(fixture, orderId), warehouseId: 'warehouse-001',
         noticeDate: isoDate(0), items: [{ productId: 'product-001', quantity: 5 }],
       });
       assert.equal(within.status, 201, within.data.error);

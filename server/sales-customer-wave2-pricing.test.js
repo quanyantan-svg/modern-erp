@@ -484,13 +484,17 @@ test('denied configuration writes are audited while denied and successful resolv
   const denied = await request('/api/sales-price-lists', { token: tokens.accounting, method: 'POST', body: { priceListCode: 'DENIED-AUDIT', name: 'Denied', currencyCode: 'CNY', priority: 0, effectiveFrom: '2026-01-01' } });
   assert.equal(denied.status, 403);
   assert.equal(database.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, auditBefore + 1);
-  const deniedAudit = database.prepare("SELECT action,entity_type FROM audit_logs ORDER BY created_at DESC,id DESC LIMIT 1").get();
-  assert.equal(deniedAudit.action, 'AUTH_DENIED');
-  assert.equal(deniedAudit.entity_type, 'SALES_PRICING');
+  // 403 拒绝审计由路由 dispatch 层统一写出（MC-REQ-11 / Active Design §9.2）：
+  // 恰好一条，含主体、动作与被拒权限，且不含业务单据标识。
+  const deniedAudit = database.prepare("SELECT action,entity_type,entity_id,detail FROM audit_logs WHERE action='REJECT' AND entity_type='AUTHORIZATION' ORDER BY created_at DESC LIMIT 1").get();
+  assert.ok(deniedAudit, '403 拒绝审计必须存在');
+  assert.equal(deniedAudit.entity_id, null, '403 审计不得包含业务单据标识');
+  assert.ok(deniedAudit.detail.includes('SALES_PRICING_MANAGE'), '403 审计必须含被拒权限');
   const afterDenied = database.prepare('SELECT COUNT(*) n FROM audit_logs').get().n;
   const resolverDenied = await request('/api/sales-pricing/resolve', { token: tokens.warehouse, method: 'POST', body: {} });
   assert.equal(resolverDenied.status, 403);
-  assert.equal(database.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, afterDenied);
+  assert.equal(database.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, afterDenied + 1,
+    '每一次权限拒绝都必须恰好新增一条拒绝审计');
 });
 
 test('disabled current rule version does not resurrect older discount history', async () => {

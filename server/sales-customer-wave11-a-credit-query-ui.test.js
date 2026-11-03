@@ -348,7 +348,10 @@ test('U3-C B06 HTTP adapter decodes one canonical identity layer and preserves s
     const subLimit = list.body.exceptions.find((row) => row.scopeType === 'SALESPERSON_SUB_LIMIT');
     assert.ok(aggregate && subLimit);
 
-    const before = databaseDigest(db);
+    // MC-REQ-11：审计行不属于零副作用域，业务零副作用与拒绝审计必须分别断言。
+    // 因此业务快照排除 audit_logs，拒绝审计另行按“恰好 1 条”断言。
+    const before = databaseDigest(db, { excludeTables: ['audit_logs'] });
+    const auditsBefore = db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n;
     for (const row of [aggregate, subLimit]) {
       const encoded = await request(`/api/credit/exceptions/${encodeURIComponent(row.checkResultId)}`, selfToken);
       const lowerCaseEncoding = await request(`/api/credit/exceptions/${row.checkResultId.replaceAll(':', '%3a')}`, selfToken);
@@ -389,7 +392,9 @@ test('U3-C B06 HTTP adapter decodes one canonical identity layer and preserves s
     const denied = await request(`/api/credit/exceptions/${encodeURIComponent(aggregate.checkResultId)}`, deniedToken);
     assert.equal(denied.status, 403);
     assert.equal(denied.body.code, 'CREDIT_SCOPE_DENIED');
-    assert.equal(databaseDigest(db), before, 'SC102 Detail GET variants must remain zero-write');
+    assert.equal(databaseDigest(db, { excludeTables: ['audit_logs'] }), before, 'SC102 Detail GET variants must remain zero-write');
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, auditsBefore + 1,
+      '被拒请求必须恰好新增 1 条拒绝审计');
   } finally {
     server.closeAllConnections?.();
     await new Promise((resolve) => server.close(resolve));
