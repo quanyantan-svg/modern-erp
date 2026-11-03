@@ -1137,6 +1137,39 @@ Active Design §5.2.2 与 `MC-REQ-02/09` 净除已由通知行收货的数量，
 Implementation PASS、任何 `M1C-Gxx` PASS、Acceptance、Freeze、Domain Closure 或 Release Readiness。
 当前项目状态仍只以本文件为唯一登记。
 
+### 37.24 N7 历史提交追溯修复（`N7-HISTORY-REPAIR-20261103`，2026-11-03）
+
+**授权与目的**：业务所有者明确授权修复 §37.22 / §37.23 登记的历史 N7 失败，包括创建本地
+备份分支、重写受影响分支历史、更新 SHA 映射、重跑门禁，以及对 Gitee / GitHub 同名分支执行
+`--force-with-lease`。本次只补齐两条历史提交消息中的受治理完整路径，不修改任何提交的文件树、
+业务语义、Requirement、Design 正文、实现代码、schema、migration 或 release tag。
+
+**安全锚点与范围**：重写基点保持
+`a5847fbdb23a26199ab2854221559e8b68907fcb` 不变；重写前 HEAD
+`cfcaf46db309f5fa42b62aac67b0a43089837c2c` 已由本地分支
+`backup/n7-pre-rewrite-20261103-cfcaf46` 保留。新旧 HEAD 文件树执行 `git diff --exit-code` 为 0。
+原 `171ade577bad` 提交消息补入 `docs/status/PROJECT_STATUS.md`；原 `4403a80d2543`
+提交消息补入 `docs/reviews/README.md` 与
+`docs/reviews/m1/procurement-outsourcing-m1-core-processing-po-design-amendment.md`。
+
+| 原 SHA | 重写后 SHA | 主题 |
+|---|---|---|
+| `171ade577bad46093ede64e081d6cf55132693cd` | `2f2235b22c98ed5eaad368df14f90da29c5dc8ae` | 登记 M1C-WP1 实施验收 |
+| `4403a80d254350ce9ebe4a8c746fbb1006dd67c4` | `71c0f198ca3ba52b5448ddb6900033252e837e2a` | 起草委外加工费 PO 正式可达设计修订 |
+| `627559c6032d9ec0adb2740a38e41a16b168dd59` | `8aa4f0b16f425d0b84c3c255d9fe2b41dd7c39ef` | 修订加工费 PO 候选设计 R1 |
+| `f5ae5fe390ff1622070d71687342db828f95eb4a` | `357939305fc7cbe50963aa66202966a34bc243ef` | 提升加工费 PO R1 为 Active Design |
+| `eb4ff58180402ce254d0bfb171eebfba08671cf9` | `40e121e921fd221c6689eb28b8e4dd8cc82bb91f` | M1-P-03 角色矩阵与拒绝审计 |
+| `3566aae60d2d77669e00e8bd8449bd30dd663f43` | `760e0ee0ce58b8ed5489f5332627262b3fc1f73c` | 加工费 PO 正式生产路径 |
+| `09afd37bee0373f4b3a7932612de57daa7439c6e` | `c2cb3844f56055a11d15dddd2979bc84a46eb0a4` | 委外收货、材料与延期拒绝 |
+| `a059d96e13f6e7c0a8c2ebb1b1ce092c92ce2b7c` | `6e20c8159a0d7af1b57943151e209630c07628a1` | 前端 API 与响应式验收脚本 |
+| `f5abbe31664e93ee3a49598a9efc5f3f5e6eb774` | `465b65228381c8b25bdc79542ce32587cb443138` | 既有套件迁移与容量口径修正 |
+| `cfcaf46db309f5fa42b62aac67b0a43089837c2c` | `b15d26204853e1c35e69112c8e42136f3750394a` | M1C-WP2–WP6 实施交付状态登记 |
+
+**状态取代关系**：§37.22 / §37.23 对 N7 FAIL 的描述是修复前真实历史证据，保留不删；本节是
+当前状态的后继登记。聚焦 `current --target HEAD --only N7` 在重写后已返回 PASS；最终状态登记提交、
+FULL、Build、`git diff --check`、完整 current / migration 及两个远端 lease 推送结果以本节后续验证为准。
+`M1C-G01..M1C-G07`、Implementation Acceptance、Freeze 与 Release Readiness 状态均不因此改变。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
