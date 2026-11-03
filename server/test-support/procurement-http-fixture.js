@@ -13,12 +13,13 @@ export async function createProcurementFixture(prefix) {
   await new Promise((done) => server.listen(0, '127.0.0.1', done));
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
 
-  async function request(method, path, token = null, body) {
+  async function request(method, path, token = null, body, extraHeaders = {}) {
     const response = await fetch(baseUrl + path, {
       method,
       headers: {
         ...(token ? { authorization: `Bearer ${token}` } : {}),
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...extraHeaders,
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
@@ -37,6 +38,9 @@ export async function createProcurementFixture(prefix) {
     sales: await login('sales', 'sales123'),
     reviewer: await login('reviewer', 'review123'),
     warehouse: await login('warehouse', 'warehouse123'),
+    accounting: await login('accounting', 'accounting123'),
+    outsourcing: await login('outsourcing', 'outsourcing123'),
+    outsourcingReceiving: await login('outsourcingreceiving', 'outsourcingreceiving123'),
   };
 
   async function close() {
@@ -46,4 +50,53 @@ export async function createProcurementFixture(prefix) {
   }
 
   return { db, request, tokens, close };
+}
+
+export async function prepareOutsourcingReceiptSource(fixture, orderId, quantity, key = `${Date.now()}-${Math.random()}`) {
+  const po = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/processing-fee-purchase-orders`, fixture.tokens.admin, {
+    unitPriceCents: 500, orderDate: new Date().toISOString().slice(0, 10),
+    expectedDeliveryDate: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10), paymentTerms: '30 days',
+    supplierContactName: 'Supplier', supplierContactPhone: '13800000000', supplierAddress: 'Address',
+  }, { 'idempotency-key': `po-${key}` });
+  assert.equal(po.status, 201, po.data.error);
+  assert.equal((await fixture.request('POST', `/api/purchase-orders/${po.data.id}/submit`, fixture.tokens.admin)).status, 200);
+  assert.equal((await fixture.request('POST', `/api/purchase-orders/${po.data.id}/approve`, fixture.tokens.reviewer)).status, 200);
+  const poItem = fixture.db.prepare('SELECT * FROM purchase_order_items WHERE order_id=?').get(po.data.id);
+  const order = fixture.db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(orderId);
+  const notice = await fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, {
+    businessType: 'OUTSOURCE', outsourcingOrderId: orderId, processingPoId: po.data.id,
+    warehouseId: 'warehouse-001', noticeDate: new Date().toISOString().slice(0, 10),
+    items: [{ productId: order.product_id, quantity }], idempotencyKey: `notice-${key}`,
+  });
+  assert.equal(notice.status, 201, notice.data.error);
+  assert.equal((await fixture.request('POST', `/api/receipt-notices/${notice.data.id}/confirm`, fixture.tokens.admin)).status, 200);
+  const noticeItem = fixture.db.prepare('SELECT * FROM receipt_notice_items WHERE notice_id=?').get(notice.data.id);
+  return {
+    processingPoId: po.data.id, processingPoItemId: poItem.id, sourceNoticeId: notice.data.id,
+    sourceNoticeItemId: noticeItem.id, productId: order.product_id,
+    unitCode: poItem.document_uom_code || 'EA', warehouseId: 'warehouse-001',
+  };
+}
+
+export function outsourcingReceiptBody(source, quantity, processingFeeCents, date = new Date().toISOString().slice(0, 10)) {
+  return {
+    quantity, receivedDate: date, businessDate: date, processingFeeCents,
+    processingPoId: source.processingPoId, sourceNoticeId: source.sourceNoticeId, warehouseId: source.warehouseId,
+    items: [{ productId: source.productId, quantity, unitCode: source.unitCode,
+      unitPriceCents: Number(processingFeeCents || 0) && Number.isSafeInteger(Number(processingFeeCents) / quantity)
+        ? Number(processingFeeCents) / quantity : 0,
+      processingPoItemId: source.processingPoItemId, sourceNoticeItemId: source.sourceNoticeItemId }],
+  };
+}
+
+export function seedApprovedOutsourceBom(fixture, productId, items, key = `${Date.now()}-${Math.random()}`) {
+  const bomId = `bom-outsource-${key}`;
+  const now = new Date().toISOString();
+  fixture.db.prepare(`INSERT INTO boms(id,product_id,version,status,remark,creator_id,created_at,updated_at,purpose,effective_from,approval_status,approved_by,approved_at)
+    VALUES(?,?,'1','ACTIVE','','user-admin',?,?,'OUTSOURCE',?,'APPROVED','user-admin',?)`)
+    .run(bomId, productId, now, now, now.slice(0, 10), now);
+  const insert = fixture.db.prepare(`INSERT INTO bom_items(id,bom_id,product_id,quantity,scrap_rate,line_no)
+    VALUES(?,?,?,?,0,?)`);
+  items.forEach((item, index) => insert.run(`bomi-${key}-${index + 1}`, bomId, item.productId, item.requiredQuantity, index + 1));
+  return bomId;
 }

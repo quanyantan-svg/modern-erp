@@ -52,12 +52,18 @@ export function serializeError(error, requestId) {
 }
 
 export function allow(actor, permission) {
-  if (!actor.permissions.includes(permission)) throw new HttpError(403, '没有执行此操作的权限');
+  if (!actor.permissions.includes(permission)) {
+    const error = new HttpError(403, '没有执行此操作的权限');
+    error.deniedPermissions = [permission];
+    throw error;
+  }
 }
 
 export function allowAny(actor, permissions) {
   if (!permissions.some((permission) => actor.permissions.includes(permission))) {
-    throw new HttpError(403, '没有查看此功能的权限');
+    const error = new HttpError(403, '没有查看此功能的权限');
+    error.deniedPermissions = [...permissions];
+    throw error;
   }
 }
 
@@ -69,9 +75,17 @@ export function allowAny(actor, permissions) {
 const TRANSFER_CONFIRM_ALIASES = Object.freeze(['INVENTORY_TRANSFER_CONFIRM', 'INVENTORY_TRANSFER_APPROVE']);
 
 export function allowInventoryTransferConfirm(actor) {
-  if (!actor || !Array.isArray(actor.permissions)) throw new HttpError(403, '没有执行此操作的权限');
+  if (!actor || !Array.isArray(actor.permissions)) {
+    const error = new HttpError(403, '没有执行此操作的权限');
+    error.deniedPermissions = [...TRANSFER_CONFIRM_ALIASES];
+    throw error;
+  }
   const granted = actor.permissions.some((permission) => TRANSFER_CONFIRM_ALIASES.includes(permission));
-  if (!granted) throw new HttpError(403, '没有执行此操作的权限');
+  if (!granted) {
+    const error = new HttpError(403, '没有执行此操作的权限');
+    error.deniedPermissions = [...TRANSFER_CONFIRM_ALIASES];
+    throw error;
+  }
 }
 
 export function hasInventoryTransferConfirm(actor) {

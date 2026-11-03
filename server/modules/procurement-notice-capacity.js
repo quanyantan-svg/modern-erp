@@ -20,10 +20,12 @@
 // an outsourcing receipt without effect evidence all fail closed.
 
 import { HttpError } from '../lib/http.js';
-import { audit } from '../lib/audit.js';
+import { auditBusinessRejection } from '../lib/audit.js';
 import { confirmedQuantity } from './logistics-core.js';
 import { deriveQualityState } from './quality-gates.js';
 import { scheduleConsumedQuantity } from './procurement-schedule-ledger.js';
+
+export { auditBusinessRejection };
 
 export const NOTICE_ERROR_CODES = Object.freeze({
   CAPACITY_EXCEEDED: 'RECEIPT_NOTICE_CAPACITY_EXCEEDED',
@@ -42,26 +44,6 @@ const RECEIPT_QUANTITY_CONFIG = Object.freeze({
 
 export function noticeBusinessError(code, message) {
   return new HttpError(409, message, { code });
-}
-
-/**
- * Write the rejection audit for a business-gate rejection.
- *
- * It must be called OUTSIDE the business transaction: the transaction rolls
- * back on rejection, and the audit row has to survive that rollback
- * (Active Design §9.2 — "拒绝审计恰好 1 条").
- */
-export function auditBusinessRejection(db, actor, context, error, { onlyCodes = null } = {}) {
-  if (!(error instanceof HttpError) || error.status !== 409) return;
-  if (onlyCodes && !onlyCodes.includes(error.code)) return;
-  audit(
-    db,
-    actor?.id ?? null,
-    'REJECT',
-    context.entityType,
-    context.entityId ?? null,
-    `${context.action} 拒绝：${error.code || 'BUSINESS_RULE_BLOCKED'} ${error.message}`,
-  );
 }
 
 // ---------------------------------------------------------------------------
