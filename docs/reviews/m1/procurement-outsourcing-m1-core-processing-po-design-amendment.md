@@ -8,7 +8,12 @@
 > **来源章节**：`docs/requirements/procurement-outsourcing.md §31.13` 与 `docs/design/procurement-outsourcing-m1-core.md §2.3、§3、§5–§10、§13.1、§14–§17`。
 > **Implementation**：`NOT_AUTHORIZED`
 > **Design PASS**：`NOT_ISSUED`
-> **权威边界**：本文件仅为增量候选 Design，**不构成 Current Active Contract**；未获业务所有者批准并提升进 Active Design 前，不授权 Implementation。
+> **Promotion 结果**：业务所有者于 2026-11-03 批准 R1；批准内容已精确融合至
+> [`docs/design/procurement-outsourcing-m1-core.md`](../../design/procurement-outsourcing-m1-core.md)。
+> 本文件保留为 `627559c6032d9ec0adb2740a38e41a16b168dd59` 候审快照与审查来源；
+> 上述 `PENDING` / `NOT_ISSUED` 元数据描述该候审快照，不再构成当前 Active Contract。
+> **权威边界**：本文件是 Promotion 前的增量候审 Design，**不构成 Current Active Contract**；
+> 当前权威合同只位于 Active Design，本文件的历史批准亦不授权 Implementation。
 > **授权来源**：业务所有者于 2026-11-03 选择“由委外订单流程显式创建加工费 PO 草稿，底层复用统一采购订单 canonical Writer，不开放通用采购订单接口指定业务类型，也不自动审批”。本 R1 仅修订设计。
 > **影响 Active Design 章节**：§2.3、§3、§5、§6、§7、§8、§9、§10、§13.1、§14–§17。
 > **Schema / Migration**：现有列可表达来源关系，但不能跨并发可靠保证来源唯一性。§6.4 提出最小 additive 唯一性方案；该方案仍需独立 Schema / Migration 授权，本轮不实施。

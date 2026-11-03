@@ -176,6 +176,21 @@ G-5（UAT-14 旧 oracle 与 V21 合同冲突）的处置动作已由 `document.m
   M1-Core 的 7 个 Gate 状态见
   [`docs/design/procurement-outsourcing-m1-core.md`](../design/procurement-outsourcing-m1-core.md) §13。
 
+### 1.5 加工费 PO R1 已批准决策（`M1C-D-PO01`，2026-11-03）
+
+> 批准依据：业务所有者在本轮 Promotion 指令中明确批准下列合同；未单独提供具体时分，
+> 因此本表只记录会话日期与批准内容，不虚构批准时间。规范正文已融合至
+> [M1-Core Active Design](../design/procurement-outsourcing-m1-core.md) §2.3、§3、§5–§11、§13–§17。
+
+| ID | 批准内容 | 状态 | 实施边界 |
+|---|---|---|---|
+| `M1C-PO-P01` | 真实、可验证来源的加工费 PO，允许持相应采购权限的非创建人原位修改商业白名单并提交；审批权限独立、创建人不得自审、来源不可变；标准 PO creator 限制不变 | `APPROVED` | 未实施；仍需独立 Implementation 授权 |
+| `M1C-PO-P02` | 一张委外订单终身最多一张加工费 PO；CANCEL、同源重建、PO Change ADD/MODIFY 全部拒绝 | `APPROVED` | 未实施；不得以 admin 或 Change 绕过 |
+| `M1C-PO-U01` | 最小唯一性方案为 `purchase_orders(source_outsourcing_order_id)` UNIQUE；标准 PO 来源为 NULL；建索引前必须验证历史冲突 | `APPROVED_DESIGN` | 仅批准后续代码/schema/migration 实现；不授权连接或迁移项目数据库 |
+
+本节关闭 R1 的 P01/P02 业务待决状态，但**不**签发 Implementation、Gate PASS、Acceptance、
+Freeze、Domain Closure 或 Release Readiness。
+
 
 
 ## 2. Sales & Customer —— 开放设计决策
