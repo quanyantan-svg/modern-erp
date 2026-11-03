@@ -1279,6 +1279,116 @@ MySQL Gate；未修改 `master`、`package.json` version `1.6.2` 与既有 relea
 M1C_WP2_TO_WP6_R1_READY_FOR_INDEPENDENT_REVIEW
 ```
 
+---
+
+### 37.27 M1-Core `M1C-WP7-A` 非破坏性验收执行（2026-11-03）
+
+**授权与范围**：业务所有者授权执行 M1-Core 首期 **WP7-A 非破坏性验收** ——
+建立正式、可复现的 G01–G06 验收证据，并准备 G07 的 MySQL 执行方案。
+授权**不包含**真实 MySQL Gate、项目数据库 Migration、`M-15`、Push / Merge / Tag /
+Release / Deploy，也**不包含**签发任何 Gate PASS。
+
+**基线**：起点 HEAD `2fe1dd841b6c73deb53b09d87da77e0c34533ae4`；`git ls-remote` 核对
+`github` 与 `origin`（Gitee）的 `work/m1-core-rebaseline-20261102` **两端与本地精确一致**；
+起点工作树干净。
+
+**执行证据**：`docs/acceptance/m1-core-wp7a-gate-acceptance-20261103.md`（完整逐 Gate
+证据矩阵、反向断言、命令、结果、剩余风险）。
+
+| Gate | 执行状态 | 结论 |
+|---|---|---|
+| `M1C-G01` 采购通知与转换 | 已执行 | `PASS_WITH_RESIDUAL` |
+| `M1C-G02` 委外收货与质量 | 已执行 | `PASS_WITH_RESIDUAL` |
+| `M1C-G03` 物料库存与 WIP | 已执行 | `PASS_WITH_RESIDUAL` |
+| `M1C-G04` 倒冲与成品 | 已执行 | `PASS_WITH_RESIDUAL` |
+| `M1C-G05` 移动工作面 | 已执行 | **`FAIL`** |
+| `M1C-G06` 延期政策与财务守卫 | 已执行 | `PASS_WITH_RESIDUAL` |
+| `M1C-G07` MySQL 并发与对等 | **NOT_RUN** | `NOT_RUN` |
+
+`PASS_WITH_RESIDIAL` 的含义：本地 SQLite 上、正向来源全部经**生产 HTTP API** 的正向与
+反向断言全部成立且可复跑；但 **MySQL 8 真实后端的对等与并发结论未取得**，
+按 Active Design §13.1 的 Gate 定义**不得**据此签发 PASS。
+
+**本轮补齐的断言位**：新增 `server/m1c-wp7a-gate-acceptance.test.js`（登记进 FULL），
+补上 Active Design §13.1 中此前**没有断言位**的项目 ——
+G03 的 LOT / SERIAL / NONE 三类身份各自成键、缺仓 / 库存不足 / UOM 不符 / 身份异常
+四类拒绝分支、幂等重放与同键异内容；G04 的多批次部分完工、成品估值 **Movement + Balance**
+双写、材料成本按 **canonical 位置口径**（非全局平均价）、加工费 **provisional** 证据；
+G06 的拒绝后 **AP / 凭证 / 库存 / 估值 / 成本 / 单据逐字段零变化**。
+材料成本断言以**临时负向对照**证明非空洞（把分摊改成全局平均后该例报「实际 82」而非 15），
+该临时改动已 `git checkout --` 完整回退，核心实现 diff 为空。
+
+**G05 缺陷登记（阻塞 G05，需独立工作包，本轮不修）**
+
+- **G05-A（P0）**：两个工作面在构建产物中**无法打开**。
+  `src/navigation/applicationRegistry.js:104-144` 的 `loadScreenModule` 缺少
+  `../pages/outsourcing.jsx` 与 `../pages/sourcing-pricing.jsx` 两个 `case`，
+  而 `:80-81` 的路由表已用 `defaultScreen(...)` 注册了这两条路由，
+  打开时落进 `default:` 分支抛 `Unknown route screen module`；
+  全新 `pnpm build` 的 `dist/assets/` 中亦无对应 chunk。
+  现有 `server/v17-p0-frontend-application-architecture.test.js:129` 只断言 loader 的**形状**，
+  不校验每条已注册路由的 screen module 可加载。
+- **G05-B（P1）**：`src/pages/outsourcing.jsx:85/201/206` 以**单参数数组**调用
+  `can([...])`，而契约为 `can(user, permission)`（`src/components/ui.jsx:10`），
+  三处动作门禁恒为假 ⇒「新建委外订单」「确认计划 / 下达 / 标记完工」「取消」
+  **永不渲染**；即使 G05-A 修复，委外页面仍是只读，
+  §13.1 要求的「入口 → 列表 → 详情 → **提交** → 错误展示」仍走不通。
+- **对既有 G05 证据的追溯修正**：此前 `scripts/acceptance/m1c-wp6-outsourcing-responsive-uat.mjs`
+  报告的 `PASS=16/16` **不是**有效证据 —— 该脚本注入 token 后**未 reload**，
+  SPA 从未离开登录页，被测对象是登录页；且其断言在工作面打不开时依然成立。
+  本轮已加固该脚本（reload + 断言工作面确实渲染 + 逐工作面探测服务端 RBAC 状态 +
+  新增无权主体），加固后如实报告 **`PASS=16 / FAIL=8 / TOTAL=24`**。
+- 服务端来源级 RBAC 本身**正确**：admin 200 / 200、委外业务员 200 / 403、
+  销售专员 403 / 403；无权主体走页面级处理，不崩溃、无 TypeError、无横向溢出。
+
+**G07（`NOT_RUN`）**：已完成执行准备 —— CR-01..CR-09 全部映射到**真实生产 Handler**；
+审查 SQLite/MySQL schema parity 入口（`server/m1c-wp0-schema-parity.test.js`，
+离线录制型 mock adapter，**不连接** MySQL，且 `receipt_notice_items` 与
+`outsourcing_receipts` / `outsourcing_receipt_items` 的**表体**未进入逐表对等循环）；
+UNIQUE / 锁 / 事务 / 幂等 / 审计验证方案；四重 disposable MySQL ACK 设计
+（ACK-1/2/3 已实现于 `server/test-utils/mysql-disposable-target.js`，
+**ACK-4 为 `NOT_IMPLEMENTED`**）；目标数据库身份
+`mysql://modern_erp_test@127.0.0.1:3306/modern_erp_domain_test`、run ID、commit SHA
+绑定要求与清理边界。本轮**未**连接 MySQL、**未**运行 destructive Gate、
+**未**执行 Migration 与 `M-15`、**未**在 MySQL 中创建或删除数据库。
+
+**新增 / 修改文件**：`server/m1c-wp7a-gate-acceptance.test.js`（新增）、
+`scripts/testing/test-suites.js`（登记）、`scripts/acceptance/m1c-wp6-outsourcing-responsive-uat.mjs`
+（加固既有浏览器验收工具）、`docs/acceptance/m1-core-wp7a-gate-acceptance-20261103.md`
+（新增）、`docs/acceptance/README.md`（索引登记）、本节、`log/2026-11-03.md`（追加）。
+**未修改**任何核心实现文件。
+
+**门禁**：`--filter m1c` **124/124 PASS**；`--filter wp7a` **8/8 PASS**；
+浏览器验收 **PASS=16 / FAIL=8 / TOTAL=24**（G05）；
+`pnpm test:fast` **511/511 PASS**；`pnpm test`（FULL）**3236/3236 PASS、0 FAIL、0 SKIP**
+（基线 3228 + 本轮新增 8，耗时 1151.7 s）；`pnpm build` PASS；
+文档 `migration` 模式 **C1–C6 全部 PASS**；文档 `current` 模式 N1、N3、N4、N6、N8、N9
+**PASS**、N2 按治理决定为 `RETIRED`（不参与判定）、N5 在补登记 `docs/acceptance/README.md`
+后 PASS、N7 在本轮提交后复跑确认 PASS；`git diff --check` PASS。
+全部测试经 `scripts/testing/run-tests.js` 运行并由 `scripts/testing/test-env.js` 净化环境
+（`ERP_DB_BACKEND=sqlite`），**未接触**任何 MySQL 或项目数据库。
+
+**未发生事项**：未 Push / Merge / Tag / Release / Deploy；未修改 `master`、
+`package.json` version `1.6.2` 与既有 release tag；未修改 Requirement §31.13、
+Active Design 正文与任何既有历史验收事实；未签发 `M1C-G01..M1C-G07` PASS、
+M1-Core Acceptance、Domain Closure、Freeze 或 Release Readiness；
+未把 G05 的两个前端缺陷纳入本轮修复。
+
+**未解决矛盾**：
+
+1. 加工费 `processingFeeCents` / `unitPriceCents` 是否必填**仍未裁定**
+   （沿用 §37.26 的开放合同项）；本轮报告中的一切加工费金额均为 **provisional**。
+2. G01–G06 的 MySQL 对等与并发结论**缺失**（G07 `NOT_RUN`）。
+3. `INVENTORY_MUTATION_UNEXPECTED_REPLAY` 在委外 HTTP 端点**不可达**
+   （canonical 变更键含每次请求的新 `eventId`）；端点上的等价合同是
+   「同一幂等键不能用于不同请求内容」（409）。
+4. `OUTSOURCE` 历史来源隔离规模仍未实测。
+5. G05 的两个前端缺陷需**独立工作包**与用户授权后修复。
+
+```text
+M1C_WP7A_READY_FOR_INDEPENDENT_REVIEW
+```
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。

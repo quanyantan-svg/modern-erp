@@ -238,6 +238,15 @@ const FULL = [
   // Deliberately NOT registered in FAST: each case owns a disposable temp
   // SQLite and drives the real HTTP API.
   'server/m1c-wp2-wp6-r1-receipt-effect-idempotency.test.js',
+  // M1C-WP7-A 首期 Gate 补证套件：M1C-G03 / G04 / G06 中此前没有断言位的
+  // 成功与拒绝断言 —— LOT / SERIAL / NONE 三类身份各自成键、缺仓 / 库存不足 /
+  // UOM 不符 / 身份异常四类拒绝分支、幂等与异内容重放、多批次部分完工的增量
+  // 倒冲、成品估值 Movement + Balance 双写、材料成本按 canonical 位置口径
+  // （非全局平均价）、加工费 provisional 证据，以及来源级拒绝后 AP / 凭证 /
+  // 库存 / 估值 / 成本 / 单据逐字段零变化。正向来源全部经生产 HTTP API。
+  // Deliberately NOT registered in FAST: each case owns a disposable temp
+  // SQLite and drives the real HTTP API.
+  'server/m1c-wp7a-gate-acceptance.test.js',
   'server/procurement-parameters.test.js',
   'server/procurement-profiles.test.js',
   'server/buyers.test.js',
