@@ -1170,6 +1170,22 @@ Implementation PASS、任何 `M1C-Gxx` PASS、Acceptance、Freeze、Domain Closu
 FULL、Build、`git diff --check`、完整 current / migration 及两个远端 lease 推送结果以本节后续验证为准。
 `M1C-G01..M1C-G07`、Implementation Acceptance、Freeze 与 Release Readiness 状态均不因此改变。
 
+### 37.25 N7 历史修复门禁与远端同步完成（2026-11-03）
+
+**验证结论**：在 §37.24 的 SHA 映射提交 `f5dae1c4791b11e306737ca4e0f03c0c13e99750`
+上，文档 `current` 模式 N1、N3–N9 全部 PASS（N2 按治理决定为 RETIRED），其中 N7 已恢复 PASS；
+`migration` 模式 C1–C6 全部 PASS；FULL 为 3205/3205 PASS、0 FAIL、0 SKIP；Build PASS；
+`git diff --check` PASS。上述验证未连接数据库，也未运行 MySQL Gate。
+
+**远端结果**：推送前再次 fetch，Gitee 与 GitHub 同名分支均仍精确位于
+`627559c6032d9ec0adb2740a38e41a16b168dd59`。随后以该 SHA 作为显式 lease，两个远端均成功执行
+`627559c...f5dae1c` forced update；未覆盖任何并发远端提交。最终证据登记提交在其后通过普通快进同步。
+`master`、`package.json` version `1.6.2` 及既有 release tag 均未改变；本地恢复分支
+`backup/n7-pre-rewrite-20261103-cfcaf46` 继续保留。
+
+**当前状态**：历史 N7 阻塞已解决。该结论只关闭 N7 文档追溯缺陷，不签发
+`M1C-G01..M1C-G07`、Implementation Acceptance、Freeze、Release 或 Deploy。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
