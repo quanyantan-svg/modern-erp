@@ -67,7 +67,7 @@ export default function OutsourcingPage() {
     try {
       const params = new URLSearchParams();
       if (status) params.set('status', status);
-      const data = await api.get(`/api/procurement/outsourcing/orders?${params}`);
+      const data = await api(`/api/procurement/outsourcing/orders?${params}`, { method: 'GET' });
       setOrders(data.outsourcingOrders || []);
       setError('');
     } catch (err) {
@@ -123,7 +123,7 @@ function OutsourcingOrderDetail({ orderId, onClose }) {
 
   const load = useCallback(async () => {
     try {
-      const data = await api.get(`/api/procurement/outsourcing/orders/${orderId}`);
+      const data = await api(`/api/procurement/outsourcing/orders/${orderId}`, { method: 'GET' });
       setOrder(data);
     } catch (err) { setError(err.message); }
   }, [orderId]);
@@ -146,7 +146,7 @@ function OutsourcingOrderDetail({ orderId, onClose }) {
   async function transition(action) {
     setBusy(true);
     try {
-      await api.post(`/api/procurement/outsourcing/orders/${orderId}/transition`, { action });
+      await api(`/api/procurement/outsourcing/orders/${orderId}/transition`, { method: 'POST', body: { action } });
       await load();
     } catch (err) { setError(err.message); }
     finally { setBusy(false); }
@@ -154,7 +154,7 @@ function OutsourcingOrderDetail({ orderId, onClose }) {
   async function cancelOrder() {
     setBusy(true);
     try {
-      await api.post(`/api/procurement/outsourcing/orders/${orderId}/cancel`);
+      await api(`/api/procurement/outsourcing/orders/${orderId}/cancel`, { method: 'POST' });
       await load();
     } catch (err) { setError(err.message); }
     finally { setBusy(false); }
@@ -223,7 +223,7 @@ function CreateOutsourcingOrderModal({ onClose }) {
     e.preventDefault();
     setBusy(true);
     try {
-      await api.post('/api/procurement/outsourcing/orders', { ...form, orderQuantity: Number(form.orderQuantity) });
+      await api('/api/procurement/outsourcing/orders', { method: 'POST', body: { ...form, orderQuantity: Number(form.orderQuantity) } });
       onClose();
     } catch (err) { setError(err.message); }
     finally { setBusy(false); }

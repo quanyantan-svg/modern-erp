@@ -48,10 +48,10 @@ export default function SourcingPricingPage() {
   const load = useCallback(async () => {
     try {
       const [s, q, p, d] = await Promise.all([
-        api.get('/api/procurement/source-entries'),
-        api.get('/api/procurement/quotas'),
-        api.get('/api/procurement/price-list'),
-        api.get('/api/procurement/discounts'),
+        api('/api/procurement/source-entries', { method: 'GET' }),
+        api('/api/procurement/quotas', { method: 'GET' }),
+        api('/api/procurement/price-list', { method: 'GET' }),
+        api('/api/procurement/discounts', { method: 'GET' }),
       ]);
       setSources(s.sourceEntries || []);
       setQuotas(q.quotas || []);
@@ -67,10 +67,13 @@ export default function SourcingPricingPage() {
     setAllocating(true);
     try {
       // Demo: allocate 100 PCS of product-001 against all sources.
-      const res = await api.post('/api/procurement/sourcing-decisions', {
-        sourceType: 'PR', sourceId: 'PR-DEMO-001', procurementSourceType: 'PURCHASE',
-        productId: 'product-001', businessDate: new Date().toISOString().slice(0, 10),
-        quantity: 100,
+      const res = await api('/api/procurement/sourcing-decisions', {
+        method: 'POST',
+        body: {
+          sourceType: 'PR', sourceId: 'PR-DEMO-001', procurementSourceType: 'PURCHASE',
+          productId: 'product-001', businessDate: new Date().toISOString().slice(0, 10),
+          quantity: 100,
+        },
       });
       setError(`Sourcing OK: ${res.allocations?.length || 0} allocations, total ${res.allocations?.reduce((a, x) => a + x.allocatedQuantity, 0) || 0}`);
     } catch (err) { setError(err.message); }
