@@ -79,16 +79,18 @@ function fullSnapshot(db, tables) {
 async function waitForBothTransactions(db, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    // performance_schema.data_lock_waits proves one transaction is genuinely
-    // blocked waiting on the mysql_transaction_gates FOR UPDATE lock held by
-    // another — not merely that two SQL texts look alike. If no lock wait is
-    // observed the race is not real and the scenario must fail, never "pass"
+    // performance_schema.data_lock_waits proves BOTH target HTTP transactions
+    // are genuinely blocked waiting on the mysql_transaction_gates FOR UPDATE
+    // lock held by the control session — not merely that two SQL texts look
+    // alike. A single waiter is not enough: it could be an unrelated session,
+    // so the race is only real when at least two waiters are observed. If the
+    // two-target wait is never observed the scenario must fail, never "pass"
     // on a sleep-based guess.
     const row = db.prepare(`SELECT COUNT(*) count
       FROM performance_schema.data_lock_waits w
       JOIN performance_schema.data_locks rl ON rl.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID
       WHERE rl.TABLE_NAME = 'mysql_transaction_gates'`).get();
-    if (Number(row?.count) >= 1) return row;
+    if (Number(row?.count) >= 2) return row;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error('M1_G07_BOTH_HTTP_TRANSACTIONS_NOT_BLOCKING_ON_GATE');

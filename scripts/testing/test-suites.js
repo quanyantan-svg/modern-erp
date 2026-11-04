@@ -253,6 +253,12 @@ const FULL = [
   // Deliberately NOT registered in FAST: each case owns a disposable temp
   // SQLite and drives the real HTTP API.
   'server/m1c-wp7a-gate-acceptance.test.js',
+  // M1C-G07 Phase-5 low-cost real-HTTP smoke: drives CR-01..CR-09 setup chains
+  // through the real createApp HTTP handler against an isolated disposable
+  // SQLite and asserts the pre-race business state. Proves business
+  // reachability of the fixed fixture chains; does not simulate MySQL
+  // concurrency. Deliberately NOT registered in FAST.
+  'server/m1c-g07-sqlite-smoke.test.js',
   'server/procurement-parameters.test.js',
   'server/procurement-profiles.test.js',
   'server/buyers.test.js',
