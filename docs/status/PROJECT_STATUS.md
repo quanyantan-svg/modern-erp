@@ -1592,6 +1592,39 @@ M1C_WP7_COMBINED_IMPLEMENTATION_READY_FOR_INDEPENDENT_REVIEW
 M1C_WP7_R1_READY_FOR_INDEPENDENT_REVIEW
 ```
 
+### 37.34 M1-Core `M1C-WP7-G07-R2` 真实 MySQL Gate 执行准备收口（2026-11-04）
+
+- 授权：用户以已推送 GitHub SHA `6a13b1f8a251d9fbd61d17d80e69a08c566406a0` 为基线，授权集中修复
+  独立代码复核发现的 G07 执行准备缺口；本轮**只执行离线实施与验证**。未授权连接 MySQL、签发/消费真实
+  ACK-4 capability、执行 Gate、M-15 历史 Migration 或 destructive SQL，亦未授权 Push/Merge/Tag/Release/Deploy。
+- P0-A 固定内嵌 Fixture：新建 `server/test-support/m1-core-g07-fixtures.js`，以 versioned 源码模块取代任意外部
+  `--fixture-plan`。每项 CR 固定 handler/method/route/双授权主体/共享资源/具体数量（取自 §13.1.3）；
+  `computeM1CoreG07FixtureDigest` + 固定 `M1_CORE_G07_FIXED_FIXTURE_DIGEST` 摘要静态校验；技术性 L2 前置
+  （disposable target、`mysql_transaction_gates`、RBAC 角色种子、M-15 `identity_key`）逐项枚举不冒充 L1；
+  `assertFixedFixtureManifest` 在消费 ACK-4 前 fail closed。root 与 launcher 已移除 `--fixture-plan`/`-FixturePlan`。
+- P0-B 独立 Oracle：`m1-core-g07-contract.js` 增 `assertG07Result`（恰一成功/恰一指定失败 + 拒绝审计恰 1 +
+  胜者幂等恰 1 + 败方零副作用），接入 `assertSafeIntegerCents` / PO Item 稳定 / 通用 PO 注入拒绝 / PO Change
+  拒绝 / UAT-14 VMI / G03 分层等补充合同**实际断言**；负向控制证明双成功、错误 code、额外幂等、重复审计、
+  败方副作用均使 oracle FAIL。integration 不再依赖 plan 自供快照作为唯一 Oracle。
+- P0-C 独立 postflight：`m1-core-g07-child.mjs` 新增只读 `postflight` 模式，用 `wave10ObjectInventory` 统计
+  tables/views/triggers/routines/events 五类对象；root 在 cleanup 后派发独立 postflight 子进程，五类零对象证明
+  通过后才允许 `finalizeAck4Run` 进入 `FINISHED`，否则 `CLEANUP_UNVERIFIED` + Quarantine。launcher 最终报告改为
+  读取 root 输出的 ACK-4 `state`，不允许 launcher FAIL 而 root 已 `FINISHED`。
+- P1 子进程/并发：`waitForExit`/`hasExited` 抽到 `m1-core-g07-child-lifecycle.mjs`，处理正常/非零/SIGTERM/
+  exit-before-wait 三态；`mysql-m1-core-g07.integration.js` 的锁等待观测改用 `performance_schema.data_lock_waits`
+  证明真实争用同一事务门，观测不到即 FAIL，不以 `sleep` 猜竞争。
+- 离线回归（本轮实际重跑）：FAST `543/543`、FULL `3270/3270`（399 suites）、Build PASS、`git diff --check` PASS；
+  新增 `scripts/gates/m1-core-g07-child-lifecycle.test.js` 纯多进程测试（不连 MySQL）。
+- 真实 MySQL 仍 `NOT_RUN`：CR-01～CR-09 真实执行、真实 `information_schema` parity、真实 lock-wait 竞争观测、
+  真实 postflight 零对象证明、M-15 历史 Migration、MySQL 连接/create/drop/reset、ACK-4 capability 签发/消费、
+  Gate 执行、Push/Merge/Tag/Release/Deploy 均未发生。
+- 本条只登记 R2 执行准备收口；不签发 G07 PASS、M1-Core Acceptance、Domain Closure、Freeze 或 Release。详见
+  [`docs/acceptance/m1-core-wp7-g07-r2-readiness-20261104.md`](../acceptance/m1-core-wp7-g07-r2-readiness-20261104.md)。
+
+```text
+M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
+```
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
