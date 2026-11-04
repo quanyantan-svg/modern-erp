@@ -7,6 +7,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { assertNoAck4Quarantine, consumeAck4Record, M1_CORE_MANIFEST } from './ack4/ack4-runtime.mjs';
+import { hasExited, waitForExit } from './m1-core-g07-child-lifecycle.mjs';
 import { runM1CoreG07Lifecycle } from './m1-core-g07-root-lifecycle.mjs';
 import { buildM1CoreG07HttpFixtures } from '../../server/test-support/m1-core-g07-http-fixture-builder.js';
 
@@ -32,23 +33,17 @@ function decryptDpapi(bytes) {
 async function waitForHttp(baseUrl, child) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) throw new Error(`M1_G07_APP_EXITED:${child.exitCode}`);
+    if (hasExited(child)) throw new Error(`M1_G07_APP_EXITED:${child.exitCode ?? child.signalCode}`);
     try { const response = await fetch(`${baseUrl}/api/health`); if (response.status < 500) return; } catch {}
     await delay(50);
   }
   throw new Error(`M1_G07_APP_START_TIMEOUT:${baseUrl}`);
 }
 
-function waitForExit(child) {
-  if (child.exitCode !== null) return Promise.resolve(child.exitCode);
-  return new Promise((done, reject) => { child.once('exit', done); child.once('error', reject); });
-}
-
 async function main() {
   const runId = requiredArgument('--run-id');
   const capabilityPath = requiredArgument('--ack4-capability');
   const targetPath = resolve(requiredArgument('--target-proof'));
-  const fixturePlanPath = resolve(requiredArgument('--fixture-plan'));
   const portA = Number(requiredArgument('--app-port-a'));
   const portB = Number(requiredArgument('--app-port-b'));
   if (![portA, portB].every((port) => Number.isSafeInteger(port) && port >= 1024 && port <= 65535) || portA === portB) throw new Error('M1_G07_APP_PORTS_INVALID');
@@ -108,8 +103,7 @@ async function main() {
       const appB = await spawnRegistered(context, { mode: 'app', operation: 'RUN_M1_HTTP_FIXTURES', extraEnv: { PORT: String(portB) } });
       const applications = { A: `http://127.0.0.1:${portA}`, B: `http://127.0.0.1:${portB}` };
       await Promise.all([waitForHttp(applications.A, appA.child), waitForHttp(applications.B, appB.child)]);
-      const plans = JSON.parse(readFileSync(fixturePlanPath, 'utf8'));
-      const fixtureManifest = await buildM1CoreG07HttpFixtures({ applications, plans, request: async (baseUrl, step) => {
+      const fixtureManifest = await buildM1CoreG07HttpFixtures({ applications, request: async (baseUrl, step) => {
         const response = await fetch(baseUrl + step.path, {
           method: step.method, headers: { authorization: `Bearer ${step.token}`, 'content-type': 'application/json', ...step.headers },
           body: JSON.stringify(step.body),
@@ -125,19 +119,29 @@ async function main() {
       return { passed: true };
     },
     stopChildren: async () => {
-      for (const entry of children) if (entry.child.exitCode === null) entry.child.kill('SIGTERM');
+      for (const entry of children) if (!hasExited(entry.child)) entry.child.kill('SIGTERM');
       for (const entry of children) {
-        if (entry.child.exitCode === null) await waitForExit(entry.child);
+        if (!hasExited(entry.child)) await waitForExit(entry.child);
         try { entry.context.markChildExited(entry.child.pid, entry.childStartedAt); } catch {}
       }
-      return children.every((entry) => entry.child.exitCode !== null);
+      return children.every((entry) => hasExited(entry.child));
     },
     cleanup: async (context) => finishChild(await spawnRegistered(context, { mode: 'operation', operation: 'CLEANUP_SCHEMA_POST_RUN' })),
     verifyCleanup: async () => {
-      const cleanupChild = [...children].reverse().find((entry) => entry.stdout.includes('CLEANUP_SCHEMA_POST_RUN'));
-      const line = cleanupChild?.stdout.trim().split(/\r?\n/).findLast((item) => item.startsWith('{'));
+      const postflight = spawn(process.execPath, [join(repoRoot, 'scripts/gates/m1-core-g07-child.mjs'), '--mode', 'postflight'], {
+        cwd: repoRoot, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, ERP_M1_G07_TARGET_PROOF: targetPath, ERP_M1_G07_COMMIT_SHA: commitSha, ERP_M1_G07_ROOT_PID: String(process.pid) },
+      });
+      let stdout = ''; let stderr = '';
+      postflight.stdout.on('data', (chunk) => { stdout += chunk; });
+      postflight.stderr.on('data', (chunk) => { stderr += chunk; });
+      const code = await waitForExit(postflight);
+      if (code !== 0) return { clean: false, inventory: [`POSTFLIGHT_EXIT_${code}`] };
+      const line = stdout.trim().split(/\r?\n/).findLast((item) => item.startsWith('{'));
       const result = line ? JSON.parse(line) : null;
-      return { clean: Array.isArray(result?.inventory) && result.inventory.length === 0, inventory: result?.inventory || ['UNVERIFIED'] };
+      if (result?.operation !== 'POSTFLIGHT' || !result?.inventory) return { clean: false, inventory: ['POSTFLIGHT_UNVERIFIED'] };
+      const inventory = Object.entries(result.inventory).filter(([, count]) => count !== 0).map(([kind, count]) => `${kind}=${count}`);
+      return { clean: inventory.length === 0, inventory };
     },
   });
   process.stdout.write(`${JSON.stringify({ ...report, suites: registeredSuites, executionStatus: 'EXECUTED_NOT_ACCEPTED' })}\n`);

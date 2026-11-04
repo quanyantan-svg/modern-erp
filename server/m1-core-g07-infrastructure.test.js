@@ -4,9 +4,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import {
-  assertCompleteG07Contract, assertG07RaceOutcome, G07_SUPPLEMENTAL_ORACLES, M1_CORE_G07_SCENARIOS,
+  assertCompleteG07Contract, assertG03EvidenceLayering, assertG07RaceOutcome, assertG07Result,
+  assertProcessingPoItemStable, assertProcessingPoRejected, assertSafeIntegerCents, assertUat14VmiReceiptOracle,
+  G07_SUPPLEMENTAL_ORACLES, M1_CORE_G07_SCENARIOS,
 } from './test-support/m1-core-g07-contract.js';
 import { compareTableParity, readMySqlInformationSchemaContract } from './test-utils/m1-core-schema-parity.js';
+import {
+  assertFixedFixtureManifest, computeM1CoreG07FixtureDigest, M1_CORE_G07_FIXED_FIXTURE_DIGEST,
+  M1_CORE_G07_FIXED_SCENARIOS, M1_CORE_G07_TECHNICAL_L2_PREREQUISITES,
+} from './test-support/m1-core-g07-fixtures.js';
 import { buildM1CoreG07HttpFixtures } from './test-support/m1-core-g07-http-fixture-builder.js';
 import { runM1CoreG07Lifecycle } from '../scripts/gates/m1-core-g07-root-lifecycle.mjs';
 import { assertNoAck4Quarantine, consumeAck4Record, M1_CORE_MANIFEST } from '../scripts/gates/ack4/ack4-runtime.mjs';
@@ -86,8 +92,12 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
     assert.match(child, /readWave10ConnectedIdentity/);
     assert.ok(child.indexOf("await consume(operation)") < child.indexOf('await openVerifiedAdapter()'),
       'child must consume its lease before opening any target connection');
-    assert.match(launcher, /FixturePlan/);
-    assert.match(launcher, /--fixture-plan/);
+    assert.match(child, /postflightProcess/);
+    assert.match(child, /wave10ObjectInventory/);
+    assert.match(runner, /--mode', 'postflight'/);
+    assert.doesNotMatch(runner, /--fixture-plan/);
+    assert.doesNotMatch(launcher, /FixturePlan/);
+    assert.match(launcher, /ACK-4 STATE/);
   });
 
   test('information_schema reader queries columns, indexes, FK rules and CHECK clauses', () => {
@@ -119,31 +129,62 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
     assert.deepEqual(compareTableParity(sqlite, mysql), ['NULLABLE:amount', 'DEFAULT:amount']);
   });
 
-  test('production HTTP fixture builder covers CR-01..CR-09 and refuses SQL or incomplete provenance', async () => {
-    const plans = M1_CORE_G07_SCENARIOS.map((definition) => ({
-      id: definition.id,
-      setup: [{ id: 'base', application: 'A', method: 'POST', path: '/api/products', body: { code: definition.id } }],
-      requests: ['A', 'B'].map((application) => ({
-        application, method: definition.method,
-        path: definition.path.replace(/\{[^}]+\}/g, 'fixture').replaceAll(':id', 'fixture'),
-        body: { idempotencyKey: `${definition.id}-${application}` }, token: `${application}-token`,
-      })),
-      businessObjects: [{ kind: `${definition.id}-positive-object`, source: 'SETUP_HTTP', stepId: 'base' }],
-      expectedSnapshot: Object.fromEntries(definition.snapshotTables.map((table) => [table, []])),
-    }));
+  test('fixed fixture builder runs the embedded HTTP chain and pins the SHA digest', async () => {
     const calls = [];
     const manifest = await buildM1CoreG07HttpFixtures({
-      applications: { A: 'http://127.0.0.1:3101', B: 'http://127.0.0.1:3102' }, plans,
-      request: async (baseUrl, step) => { calls.push({ baseUrl, step }); return { status: 201, data: { id: step.body.code } }; },
+      applications: { A: 'http://127.0.0.1:3101', B: 'http://127.0.0.1:3102' },
+      request: async (baseUrl, step) => { calls.push({ baseUrl, step }); return { status: 201, data: { id: `${step.path}-id`, rowId: `${step.path}-rowId` } }; },
     });
     assert.equal(manifest.executionStatus, 'NOT_RUN');
-    assert.equal(calls.length, 9);
+    assert.equal(manifest.provenance, 'PRODUCTION_HTTP');
+    assert.equal(manifest.fixtureDigest, M1_CORE_G07_FIXED_FIXTURE_DIGEST);
     assert.equal(Object.keys(manifest.scenarios).length, 9);
-    for (const fixture of Object.values(manifest.scenarios)) {
+    assert.ok(calls.length > 0, 'setup steps must be driven through production HTTP');
+    for (const [id, fixture] of Object.entries(manifest.scenarios)) {
+      assert.equal(fixture.requests.length, 2, `${id} must race two requests`);
+      assert.ok(fixture.requests.every((request) => request.path.startsWith('/api/') && !/[:{}]/.test(request.path)), `${id} requests must be concrete`);
       assert.ok(fixture.businessObjectProvenance.every((item) => item.channel === 'PRODUCTION_HTTP'));
     }
-    const unsafe = structuredClone(plans); unsafe[0].setup[0].sql = 'INSERT INTO forbidden VALUES(1)';
-    await assert.rejects(() => buildM1CoreG07HttpFixtures({ applications: { A: 'a', B: 'b' }, plans: unsafe, request: async () => ({ status: 201, data: {} }) }), /SQL_FORBIDDEN/);
+  });
+
+  test('fixed fixture manifest is complete, digest-pinned and technical L2 enumerated', () => {
+    const manifest = assertFixedFixtureManifest();
+    assert.equal(manifest.version, 1);
+    assert.equal(manifest.scenarioCount, 9);
+    assert.equal(manifest.digest, M1_CORE_G07_FIXED_FIXTURE_DIGEST);
+    assert.equal(computeM1CoreG07FixtureDigest(), M1_CORE_G07_FIXED_FIXTURE_DIGEST);
+    assert.deepEqual(manifest.technicalL2Prerequisites, M1_CORE_G07_TECHNICAL_L2_PREREQUISITES.map((item) => item.id));
+    assert.deepEqual(M1_CORE_G07_FIXED_SCENARIOS.map((item) => item.id), ['CR-01', 'CR-02', 'CR-03', 'CR-04', 'CR-05', 'CR-06', 'CR-07', 'CR-08', 'CR-09']);
+    assert.ok(M1_CORE_G07_TECHNICAL_L2_PREREQUISITES.length >= 4, 'technical L2 prerequisites must be enumerated');
+  });
+
+  test('assertG07Result negative controls: double success, wrong code, duplicate audit, extra idempotency and loser side effect all FAIL', () => {
+    const cr01 = M1_CORE_G07_SCENARIOS[0];
+    const ok = {
+      responses: [{ status: 201, data: { id: 'w' } }, { status: 409, data: { code: 'RECEIPT_NOTICE_CAPACITY_EXCEEDED' } }],
+      rejectAuditCount: 1, winnerIdempotencyCount: 1, loserSideEffectCount: 0,
+    };
+    assert.doesNotThrow(() => assertG07Result(cr01, ok));
+    for (const outcome of [
+      { ...ok, responses: [{ status: 201, data: {} }, { status: 201, data: {} }] },
+      { ...ok, responses: [{ status: 201, data: {} }, { status: 409, data: { code: 'WRONG' } }] },
+      { ...ok, rejectAuditCount: 2 },
+      { ...ok, winnerIdempotencyCount: 2 },
+      { ...ok, loserSideEffectCount: 1 },
+    ]) assert.throws(() => assertG07Result(cr01, outcome));
+  });
+
+  test('supplemental oracles are real assertions, not stored constants', () => {
+    assert.doesNotThrow(() => assertSafeIntegerCents({ price_cents: 12345, qty: 6 }, 'money'));
+    assert.throws(() => assertSafeIntegerCents({ price_cents: 1.5 }, 'money'), /UNSAFE_MONEY/);
+    assert.doesNotThrow(() => assertProcessingPoItemStable({ beforeItemIds: ['a'], afterItemIds: ['a'] }));
+    assert.throws(() => assertProcessingPoItemStable({ beforeItemIds: ['a'], afterItemIds: ['b'] }), /ITEM_ID_DRIFT/);
+    assert.doesNotThrow(() => assertProcessingPoRejected({ responses: [{ status: 409 }, { status: 409 }] }));
+    assert.throws(() => assertProcessingPoRejected({ responses: [{ status: 201 }] }), /REJECTION_MISSING/);
+    assert.doesNotThrow(() => assertUat14VmiReceiptOracle({ createStatus: 201, confirmStatus: 200 }));
+    assert.throws(() => assertUat14VmiReceiptOracle({ createStatus: 409, confirmStatus: 200 }), /UAT14_VMI_ORACLE_MISMATCH/);
+    assert.doesNotThrow(() => assertG03EvidenceLayering({ l1FactCount: 9, l2FactCount: 4, l2Enumerated: ['a', 'b', 'c', 'd'] }));
+    assert.throws(() => assertG03EvidenceLayering({ l1FactCount: 9, l2FactCount: 5, l2Enumerated: ['a', 'b', 'c', 'd'] }), /NOT_ENUMERATED/);
   });
 
   test('root lifecycle blocks before every write without ACK-4 and owns ordered one-time cleanup', async () => {
@@ -199,6 +240,24 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
         && error.m1G07Lifecycle.state === 'CLEANUP_UNVERIFIED'
         && error.m1G07Lifecycle.cleanupAttempts === 0);
       assert.equal(cleanupCalled, false);
+      assert.throws(() => assertNoAck4Quarantine(join(dir, 'quarantine'), target), /quarantined/);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('root lifecycle quarantines when the independent postflight reports residual objects', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'm1-g07-postflight-'));
+    try {
+      const report = await runM1CoreG07Lifecycle({
+        consumeRoot: async () => simulatedRoot(dir, '123e4567-e89b-42d3-a456-426614174088'),
+        expected: { commitSha, target, manifest: 'M1_CORE_G07_V1' }, quarantineDir: join(dir, 'quarantine'),
+        reset: async () => {}, bootstrap: async () => {},
+        runHttpFixtures: async () => ({ passed: true }),
+        stopChildren: async () => true,
+        cleanup: async () => {},
+        verifyCleanup: async () => ({ clean: false, inventory: ['tables=3'] }),
+      });
+      assert.equal(report.state, 'CLEANUP_UNVERIFIED');
+      assert.equal(report.cleanupProven, false);
       assert.throws(() => assertNoAck4Quarantine(join(dir, 'quarantine'), target), /quarantined/);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });

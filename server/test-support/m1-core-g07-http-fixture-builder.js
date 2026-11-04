@@ -1,21 +1,14 @@
-import { M1_CORE_G07_SCENARIOS } from './m1-core-g07-contract.js';
+import {
+  assertFixedFixtureManifest, M1_CORE_G07_FIXED_FIXTURE_DIGEST, M1_CORE_G07_FIXED_SCENARIOS,
+  M1_CORE_G07_FIXTURE_VERSION, resolveRoute,
+} from './m1-core-g07-fixtures.js';
 
-function assertNoSql(value, location = 'plan') {
+function assertNoSql(value, location = 'fixture') {
   if (!value || typeof value !== 'object') return;
   for (const [key, child] of Object.entries(value)) {
     if (/^(sql|query|statement|ddl|dml)$/i.test(key)) throw new Error(`M1_G07_FIXTURE_SQL_FORBIDDEN:${location}.${key}`);
     assertNoSql(child, `${location}.${key}`);
   }
-}
-
-function concreteHttpRequest(request, label) {
-  if (!request || !['POST', 'PUT', 'PATCH'].includes(request.method) || !String(request.path || '').startsWith('/api/')) {
-    throw new Error(`M1_G07_FIXTURE_HTTP_REQUIRED:${label}`);
-  }
-  if (/[:{}]/.test(request.path)) throw new Error(`M1_G07_FIXTURE_PATH_NOT_CONCRETE:${label}`);
-  if (!['A', 'B'].includes(request.application)) throw new Error(`M1_G07_FIXTURE_APPLICATION_INVALID:${label}`);
-  assertNoSql(request, label);
-  return request;
 }
 
 function lookup(context, reference) {
@@ -35,55 +28,63 @@ function resolveRefs(value, context) {
   return value;
 }
 
-function validateBusinessObjectProvenance(objects, setupById) {
-  if (!Array.isArray(objects) || objects.length === 0) throw new Error('M1_G07_FIXTURE_BUSINESS_OBJECT_PROVENANCE_REQUIRED');
-  for (const object of objects) {
-    if (!object?.kind) throw new Error('M1_G07_FIXTURE_BUSINESS_OBJECT_KIND_REQUIRED');
-    if (object.source === 'SETUP_HTTP') {
-      if (!setupById.has(object.stepId)) throw new Error(`M1_G07_FIXTURE_PROVENANCE_STEP_MISSING:${object.stepId}`);
-    } else if (object.source === 'RACE_HTTP') {
-      if (!['A', 'B'].includes(object.application)) throw new Error('M1_G07_FIXTURE_PROVENANCE_RACE_INVALID');
-    } else throw new Error(`M1_G07_FIXTURE_PROVENANCE_INVALID:${object.kind}`);
+function concreteHttpRequest(request, label) {
+  if (!request || !['POST', 'PUT', 'PATCH'].includes(request.method) || !String(request.path || request.route || '').startsWith('/api/')) {
+    throw new Error(`M1_G07_FIXTURE_HTTP_REQUIRED:${label}`);
   }
+  assertNoSql(request, label);
+  return request;
 }
 
-/** Build every positive business fact through injected production HTTP only. */
-export async function buildM1CoreG07HttpFixtures({ applications, plans, request }) {
+/**
+ * Build every positive business fact through the fixed production-HTTP chain.
+ * There is no external plan: the scenario definitions are the fixed, versioned,
+ * SHA-pinned `M1_CORE_G07_FIXED_SCENARIOS`. A dynamic reference that cannot be
+ * resolved, an illegal method, a SQL-shaped field or a non-2xx setup step fails
+ * closed BEFORE any race (and therefore before ACK-4 is consumed upstream).
+ */
+export async function buildM1CoreG07HttpFixtures({ applications, request }) {
   if (!applications?.A || !applications?.B || typeof request !== 'function') throw new Error('M1_G07_FIXTURE_APPLICATIONS_REQUIRED');
-  assertNoSql(plans);
-  const definitions = new Map(M1_CORE_G07_SCENARIOS.map((item) => [item.id, item]));
-  if (!Array.isArray(plans) || plans.length !== definitions.size) throw new Error('M1_G07_FIXTURE_PLAN_SET_INCOMPLETE');
+  assertFixedFixtureManifest();
   const setupTrace = [];
   const scenarios = {};
 
-  for (const plan of plans) {
-    const definition = definitions.get(plan.id);
-    if (!definition || scenarios[plan.id]) throw new Error(`M1_G07_FIXTURE_PLAN_INVALID:${plan.id}`);
+  for (const scenario of M1_CORE_G07_FIXED_SCENARIOS) {
     const context = { setup: {} };
-    const setupById = new Set();
-    for (const raw of plan.setup || []) {
-      if (!raw.id || setupById.has(raw.id)) throw new Error(`${plan.id}_SETUP_STEP_ID_INVALID`);
-      const step = concreteHttpRequest(resolveRefs(raw, context), `${plan.id}.${raw.id}`);
+    for (const raw of scenario.setup) {
+      const body = resolveRefs(raw.body, context);
+      const path = resolveRoute(raw.route, context);
+      const step = concreteHttpRequest({ application: raw.app, method: raw.method, path, body }, `${scenario.id}.${raw.id}`);
       const response = await request(applications[step.application], step);
-      if (response.status < 200 || response.status >= 300) throw new Error(`${plan.id}_SETUP_HTTP_FAILED:${raw.id}:${response.status}`);
-      setupById.add(raw.id);
-      context.setup[raw.id] = { body: response.data, status: response.status };
-      setupTrace.push(Object.freeze({ scenario: plan.id, stepId: raw.id, application: step.application, method: step.method, path: step.path, status: response.status }));
+      if (response.status < 200 || response.status >= 300) {
+        throw new Error(`M1_G07_FIXTURE_SETUP_BLOCKED:${scenario.id}.${raw.id}:http ${response.status}`);
+      }
+      context.setup[raw.id] = response.data;
+      setupTrace.push(Object.freeze({
+        scenario: scenario.id, stepId: raw.id, application: step.application,
+        method: step.method, path: step.path, status: response.status,
+      }));
     }
-    const requests = (plan.requests || []).map((raw, index) => concreteHttpRequest(resolveRefs(raw, context), `${plan.id}.race.${index}`));
-    if (requests.length !== 2 || new Set(requests.map((item) => item.application)).size !== 2) throw new Error(`${plan.id}_RACE_REQUESTS_INVALID`);
-    validateBusinessObjectProvenance(plan.businessObjects, setupById);
-    const expectedKeys = [...definition.snapshotTables].sort();
-    if (Object.keys(plan.expectedSnapshot || {}).sort().join(',') !== expectedKeys.join(',')) throw new Error(`${plan.id}_EXPECTED_SNAPSHOT_INCOMPLETE`);
-    scenarios[plan.id] = Object.freeze({
+    const requests = scenario.raceRequests.map((raw) => {
+      const body = resolveRefs(raw.body, context);
+      const path = resolveRoute(raw.route, context);
+      return concreteHttpRequest({ application: raw.app, method: raw.method, path, body }, `${scenario.id}.race`);
+    });
+    if (requests.length !== 2 || new Set(requests.map((item) => item.application)).size !== 2) {
+      throw new Error(`${scenario.id}_RACE_REQUESTS_INVALID`);
+    }
+    scenarios[scenario.id] = Object.freeze({
       requests: Object.freeze(requests),
-      expectedSnapshot: plan.expectedSnapshot,
-      businessObjectProvenance: Object.freeze(plan.businessObjects.map((item) => Object.freeze({ ...item, channel: 'PRODUCTION_HTTP' }))),
+      businessObjectProvenance: Object.freeze([
+        ...scenario.setup.map((item) => Object.freeze({ kind: item.id, source: 'SETUP_HTTP', stepId: item.id, channel: 'PRODUCTION_HTTP' })),
+        ...scenario.raceRequests.map((item, index) => Object.freeze({ kind: `${scenario.id}-race-${index}`, source: 'RACE_HTTP', application: item.app, channel: 'PRODUCTION_HTTP' })),
+      ]),
     });
   }
-  if (Object.keys(scenarios).length !== definitions.size) throw new Error('M1_G07_FIXTURE_PLAN_SET_INCOMPLETE');
+  if (Object.keys(scenarios).length !== M1_CORE_G07_FIXED_SCENARIOS.length) throw new Error('M1_G07_FIXTURE_PLAN_SET_INCOMPLETE');
   return Object.freeze({
-    version: 1, provenance: 'PRODUCTION_HTTP', applications: Object.freeze({ ...applications }),
-    setupTrace: Object.freeze(setupTrace), scenarios: Object.freeze(scenarios), executionStatus: 'NOT_RUN',
+    version: M1_CORE_G07_FIXTURE_VERSION, provenance: 'PRODUCTION_HTTP', applications: Object.freeze({ ...applications }),
+    setupTrace: Object.freeze(setupTrace), scenarios: Object.freeze(scenarios),
+    fixtureDigest: M1_CORE_G07_FIXED_FIXTURE_DIGEST, executionStatus: 'NOT_RUN',
   });
 }

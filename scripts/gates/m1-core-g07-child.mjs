@@ -91,6 +91,22 @@ async function appProcess() {
   await import('../../server/index.js');
 }
 
+/**
+ * Independent, read-only postflight. It does NOT consume any destructive
+ * operation: it opens a fresh session, re-proves the exact target identity
+ * (via openVerifiedAdapter) and counts the five object categories. The root
+ * uses this to prove the schema is empty before it can mark the run FINISHED.
+ */
+async function postflightProcess() {
+  const verified = await openVerifiedAdapter();
+  try {
+    const { wave10ObjectInventory } = await import('../../server/test-utils/mysql-wave10-campaign-target.js');
+    const inventory = wave10ObjectInventory(verified.db);
+    const identity = { database: verified.config.database, user: verified.config.user };
+    process.stdout.write(`${JSON.stringify({ operation: 'POSTFLIGHT', identity, inventory })}\n`);
+  } finally { verified.db.close(); }
+}
+
 async function suiteProcess() {
   const leasePath = resolve(required('ERP_M1_G07_ACK4_CHILD_LEASE'));
   await waitForLease(leasePath);
@@ -106,4 +122,5 @@ const mode = argument('--mode');
 if (mode === 'operation') await databaseOperation(required('ERP_M1_G07_OPERATION'));
 else if (mode === 'app') await appProcess();
 else if (mode === 'suite') await suiteProcess();
+else if (mode === 'postflight') await postflightProcess();
 else throw new Error('M1_G07_CHILD_MODE_INVALID');

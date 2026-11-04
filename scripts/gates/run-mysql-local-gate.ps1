@@ -29,7 +29,6 @@ param(
   [string]$Script = 'test:mysql:m1-core',
   [string]$RunId,
   [string]$Ack4Capability,
-  [string]$FixturePlan,
   [int]$AppPortA = 33101,
   [int]$AppPortB = 33102
 )
@@ -41,12 +40,8 @@ if ($Script -ne 'test:mysql:m1-core') {
   Write-Host "[mysql-gate] BLOCKED: $Script has no independently approved ACK-4 manifest." -ForegroundColor Red
   exit 7
 }
-if ([string]::IsNullOrWhiteSpace($RunId) -or [string]::IsNullOrWhiteSpace($Ack4Capability) -or [string]::IsNullOrWhiteSpace($FixturePlan)) {
-  Write-Host '[mysql-gate] BLOCKED: -RunId, -Ack4Capability and -FixturePlan are required; the launcher cannot issue approval or invent fixtures.' -ForegroundColor Red
-  exit 7
-}
-if (-not (Test-Path -LiteralPath $FixturePlan -PathType Leaf)) {
-  Write-Host '[mysql-gate] BLOCKED: -FixturePlan must identify an existing JSON file.' -ForegroundColor Red
+if ([string]::IsNullOrWhiteSpace($RunId) -or [string]::IsNullOrWhiteSpace($Ack4Capability)) {
+  Write-Host '[mysql-gate] BLOCKED: -RunId and -Ack4Capability are required; the launcher cannot issue approval or invent fixtures.' -ForegroundColor Red
   exit 7
 }
 if ($AppPortA -lt 1024 -or $AppPortA -gt 65535 -or $AppPortB -lt 1024 -or $AppPortB -gt 65535 -or $AppPortA -eq $AppPortB) {
@@ -227,37 +222,40 @@ $env:ERP_MYSQL_WAVE10_INITIAL_INVENTORY = 'EMPTY_ONLY'
 
 Write-Step ''
 Write-Step "Running pnpm $Script ..."
+$gateOutFile = [System.IO.Path]::GetTempFileName()
+$gateErrFile = [System.IO.Path]::GetTempFileName()
 Push-Location $repoRoot
 try {
-  # A native command that writes to stderr must not be turned into a
-  # terminating PowerShell error, so the preference is relaxed for the call
-  # and restored immediately afterwards.
   $previousPreference = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  & $pnpm run $Script -- --run-id $RunId --ack4-capability $Ack4Capability --target-proof $targetProofPath `
-    --fixture-plan ([System.IO.Path]::GetFullPath($FixturePlan)) --app-port-a $AppPortA --app-port-b $AppPortB
-  $gateExit = $LASTEXITCODE
+  $gate = Start-Process -FilePath $pnpm -ArgumentList @('run', $Script, '--', '--run-id', $RunId, '--ack4-capability', $Ack4Capability, '--target-proof', $targetProofPath, '--app-port-a', $AppPortA, '--app-port-b', $AppPortB) `
+    -NoNewWindow -Wait -PassThru -WorkingDirectory $repoRoot -RedirectStandardOutput $gateOutFile -RedirectStandardError $gateErrFile
+  $gateExit = $gate.ExitCode
   $ErrorActionPreference = $previousPreference
 } finally {
   Pop-Location
 }
+$gateStdout = (Get-Content -Raw -Encoding UTF8 $gateOutFile) -replace "`0", ''
+$gateStderr = (Get-Content -Raw -Encoding UTF8 $gateErrFile) -replace "`0", ''
+Remove-Item $gateOutFile, $gateErrFile -ErrorAction SilentlyContinue
 
-# --- Cleanup verification ----------------------------------------------------
-# The five object categories are counted again on a fresh session, so the
-# cleanup conclusion does not depend on the gate's own report.
+# --- Root ACK-4 state -------------------------------------------------------
+# The root now runs its own independent read-only postflight, so the launcher
+# must report the root's terminal ACK-4 state instead of re-deriving cleanup
+# from a separate preflight. A launcher FAIL while the root marked FINISHED is
+# therefore impossible.
 Remove-Item Env:\ERP_MYSQL_TEST_ALLOW_RESET -ErrorAction SilentlyContinue
 Remove-Item Env:\ERP_MYSQL_TEST_DISPOSABLE_TARGET -ErrorAction SilentlyContinue
 Remove-Item Env:\ERP_MYSQL_TEST_DESTRUCTIVE_OPERATIONS -ErrorAction SilentlyContinue
 
-$postflightRun = Invoke-NodeHelper -HelperPath $preflightHelper
-$cleanupConfirmed = $false
-$cleanupDetail = 'not confirmed'
-if ($postflightRun.ExitCode -eq 0) {
-  $postflight = ($postflightRun.Stdout -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 1) | ConvertFrom-Json
-  $cleanupConfirmed = $true
-  $cleanupDetail = "tables=$($postflight.inventory.tables) views=$($postflight.inventory.views) triggers=$($postflight.inventory.triggers) routines=$($postflight.inventory.routines) events=$($postflight.inventory.events)"
-} else {
-  $cleanupDetail = "the post-run inventory could not be read: $($postflightRun.Stderr.Trim() -split "`r?`n" | Select-Object -First 1)"
+$rootState = 'UNKNOWN'
+$rootReport = $null
+$lastJson = $gateStdout -split "`r?`n" | Where-Object { $_.Trim().StartsWith('{') } | Select-Object -Last 1
+if ($lastJson) {
+  try {
+    $rootReport = $lastJson | ConvertFrom-Json
+    if ($rootReport.state) { $rootState = [string]$rootReport.state }
+  } catch { }
 }
 
 Clear-GateEnvironment
@@ -266,19 +264,17 @@ Remove-Item -LiteralPath $targetProofPath -Force -ErrorAction SilentlyContinue
 if ($null -ne $gateLock) { $gateLock.Dispose() }
 
 Write-Step ''
-if ($gateExit -eq 0 -and $cleanupConfirmed) {
+if ($rootState -eq 'FINISHED') {
   Write-Host "[mysql-gate] RESULT = PASS" -ForegroundColor Green
-  Write-Host "[mysql-gate] CLEANUP = CONFIRMED ($cleanupDetail)"
-  Write-Host "[mysql-gate] The target schema is empty and the test account is kept for the next run."
+  Write-Host "[mysql-gate] ACK-4 STATE = FINISHED (cleanup independently post-flighted by the root)"
   exit 0
 }
-if ($gateExit -eq 0 -and -not $cleanupConfirmed) {
+if ($rootState -eq 'FAILED') {
   Write-Host "[mysql-gate] RESULT = FAIL" -ForegroundColor Red
-  Write-Host "[mysql-gate] CLEANUP = FAILED ($cleanupDetail)"
-  Write-Host "[mysql-gate] The gate reported a pass but the cleanup could not be confirmed."
+  Write-Host "[mysql-gate] ACK-4 STATE = FAILED (tests failed; cleanup was proven)"
   exit 5
 }
+if ($gateStderr) { $gateStderr.Trim() -split "`r?`n" | Select-Object -Last 10 | ForEach-Object { Write-Host "    $_" } }
 Write-Host "[mysql-gate] RESULT = FAIL" -ForegroundColor Red
-Write-Host "[mysql-gate] CLEANUP = $cleanupDetail"
-Write-Host "[mysql-gate] The gate exited with code $gateExit."
+Write-Host "[mysql-gate] ACK-4 STATE = $rootState (gate exit $gateExit)"
 exit $gateExit

@@ -689,6 +689,7 @@ const FULL = [
   'scripts/docs/check-doc-consistency.test.js',
   'scripts/git/check-commit-traceability.test.js',
   'scripts/gates/ack4-runtime.test.js',
+  'scripts/gates/m1-core-g07-child-lifecycle.test.js',
 
   // ----- V22 — Finance Operations Domain Closure -----
   // Wave A foundation: parameters, recognition policy, payment terms,
@@ -727,6 +728,7 @@ const FAST = [
   'server/m1-core-g07-infrastructure.test.js',
   'scripts/git/check-commit-traceability.test.js',
   'scripts/gates/ack4-runtime.test.js',
+  'scripts/gates/m1-core-g07-child-lifecycle.test.js',
   // W7 F2 pure retry-admission parser and injected monotonic-clock contract.
   'server/sales-gate-retry-admission.test.js',
   'server/mysql-disposable-target-guard.test.js',
