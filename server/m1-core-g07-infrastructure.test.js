@@ -94,6 +94,11 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
       'child must consume its lease before opening any target connection');
     assert.match(child, /postflightProcess/);
     assert.match(child, /wave10ObjectInventory/);
+    // The app child must boot against the already-bootstrapped schema, never
+    // import server/index.js (whose createDatabase() re-runs MySQL migration /
+    // view reconciliation that would exceed RUN_M1_HTTP_FIXTURES scope).
+    assert.doesNotMatch(child, /server\/index\.js/);
+    assert.match(child, /createApp\(verified\.db/);
     assert.match(runner, /--mode', 'postflight'/);
     assert.doesNotMatch(runner, /--fixture-plan/);
     assert.doesNotMatch(launcher, /FixturePlan/);

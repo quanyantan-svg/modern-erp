@@ -86,9 +86,28 @@ async function databaseOperation(operation) {
 
 async function appProcess() {
   await consume('RUN_M1_HTTP_FIXTURES');
+  // Boot the HTTP handler directly against the already-bootstrapped schema.
+  // The default boot entrypoint calls createDatabase(), which re-runs the full
+  // MySQL migration/view reconciliation (ensureFinanceOpenItemEffectsView +
+  // migrateSalesCustomerDomain + bootstrap) on every boot — DDL that exceeds
+  // the RUN_M1_HTTP_FIXTURES operation scope. The BOOTSTRAP_CURRENT_SCHEMA
+  // operation has already built the full current schema, so the app only needs
+  // a read/write adapter with no migration.
   const verified = await openVerifiedAdapter();
-  verified.db.close();
-  await import('../../server/index.js');
+  const [{ createServer }, { createApp }, { createStructuredLogger }] = await Promise.all([
+    import('node:http'), import('../../server/app.js'), import('../../server/lib/logger.js'),
+  ]);
+  const port = Number(required('PORT'));
+  const logger = createStructuredLogger();
+  const server = createServer(createApp(verified.db, { distDir: resolve('dist'), logger }));
+  server.listen(port, '127.0.0.1', () => {
+    logger.info('m1_g07_app_started', { port, dialect: verified.db.dialect });
+  });
+  const shutdown = () => {
+    server.close(() => { verified.db.close(); process.exit(0); });
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }
 
 /**
