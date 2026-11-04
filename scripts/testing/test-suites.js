@@ -189,6 +189,12 @@ const FULL = [
   // translation offline with a recording mock adapter. It never connects to
   // MySQL and never claims a dynamic parity Gate PASS.
   'server/m1c-wp0-schema-parity.test.js',
+  // M-15 explicit offline migration: isolated in-memory SQLite plus a pure
+  // MySQL DDL auto-commit/retry mock. Never opens a MySQL connection.
+  'server/m15-tracked-identity-key.test.js',
+  // G07 oracle/runner/parity infrastructure contract. Pure source and mock
+  // checks; the real MySQL integration file is deliberately outside FULL.
+  'server/m1-core-g07-infrastructure.test.js',
   // M1C-WP0-R1 focused regression for the outsourcing GL source-level policy
   // guard and the receiving-effect permission isolation. One disposable
   // isolated SQLite file per run.
@@ -681,6 +687,7 @@ const FULL = [
   // `server/ + src/lib/` discovery does not pick up scripts/).
   'scripts/gate-tap-parser.test.js',
   'scripts/docs/check-doc-consistency.test.js',
+  'scripts/gates/ack4-runtime.test.js',
 
   // ----- V22 — Finance Operations Domain Closure -----
   // Wave A foundation: parameters, recognition policy, payment terms,
@@ -715,6 +722,9 @@ const FULL = [
 const FAST = [
   // M1-Core WP-0 static infrastructure contract; no DB, MySQL or migration execution.
   'server/m1c-wp0-infrastructure.test.js',
+  'server/m15-tracked-identity-key.test.js',
+  'server/m1-core-g07-infrastructure.test.js',
+  'scripts/gates/ack4-runtime.test.js',
   // W7 F2 pure retry-admission parser and injected monotonic-clock contract.
   'server/sales-gate-retry-admission.test.js',
   'server/mysql-disposable-target-guard.test.js',

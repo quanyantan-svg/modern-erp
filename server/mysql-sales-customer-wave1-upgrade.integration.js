@@ -101,6 +101,9 @@ import { SALES_WAVE4_TABLES } from './migrations/sales-customer-wave4-orders.js'
 import { SALES_WAVE5_TABLES } from './migrations/sales-customer-wave5-delivery.js';
 import { SALES_WAVE6_TABLES } from './migrations/sales-customer-wave6-returns.js';
 import { SALES_WAVE9_TABLES } from './migrations/sales-customer-wave9-credit-foundation.js';
+import { blockUnmigratedAck4Entry } from '../scripts/gates/ack4/ack4-runtime.mjs';
+
+blockUnmigratedAck4Entry('mysql-sales-customer-wave1-upgrade.integration.js: independent upgrade manifest required');
 
 const IMPLEMENTED_SALES_TABLES = [...SALES_WAVE1_TABLES, ...SALES_WAVE2_TABLES, ...SALES_WAVE3_TABLES, ...SALES_WAVE4_TABLES, ...SALES_WAVE5_TABLES, ...SALES_WAVE6_TABLES];
 

@@ -1,3 +1,5 @@
+import { assertActivePortableChildOperation } from '../../scripts/gates/ack4/ack4-runtime.mjs';
+
 const DISPOSABLE_NAME_HINT = /(?:test|phase7[abc]|disposable)/i;
 
 export const MYSQL_DESTRUCTIVE_OPERATIONS_ACK =
@@ -39,6 +41,7 @@ export function assertAuthorizedDisposableMySqlTarget(config, env = process.env)
 }
 
 export function resetAuthorizedDisposableMySqlSchema(db, config, env = process.env) {
+  assertActivePortableChildOperation(['RESET_SCHEMA_PRE_RUN', 'CLEANUP_SCHEMA_POST_RUN']);
   const authorization = assertAuthorizedDisposableMySqlTarget(config, env);
   const actualDatabase = db.prepare('SELECT DATABASE() database_name').get()?.database_name;
   if (actualDatabase !== config.database) {

@@ -10,6 +10,9 @@ import { consumeAck4Record, M1_CORE_MANIFEST, assertNoAck4Quarantine } from './a
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const manifest = 'M1_CORE_G07_V1';
+const registeredSuites = Object.freeze([
+  'server/mysql-m1-core-g07.integration.js',
+]);
 
 function argument(name) {
   const index = process.argv.indexOf(name);
@@ -37,6 +40,14 @@ if (!runId || !capabilityPath) throw new Error('ACK-4 BLOCKED: --run-id and --ac
 const commitSha = gitText(['rev-parse', 'HEAD']);
 if (gitText(['status', '--porcelain'])) throw new Error('ACK-4 BLOCKED: the Git worktree must be clean');
 
+// The executor remains deliberately sealed until the production-HTTP fixture
+// builder and root-managed child lifecycle have completed independent safety
+// review. Refuse before reading/decrypting/renaming the one-time capability so
+// a readiness probe cannot burn an approved run or strand it in CONSUMED.
+throw Object.assign(new Error(`M1 G07 BLOCKED_BEFORE_CONSUMPTION: registered ${registeredSuites.join(', ')}; root execution lifecycle is not activated`), {
+  code: 'M1_G07_EXECUTION_NOT_AUTHORIZED',
+});
+
 // The launcher writes this read-only result after target preflight. It contains
 // no password and is bound into the approved capability. Reading it does not
 // open a database from this process.
@@ -55,6 +66,6 @@ const lease = consumeAck4Record({
 // MySQL execution. A future exact run approval will replace this readiness
 // boundary with the reset/bootstrap/suite/cleanup orchestration after an
 // independent security review of the implementation commit.
-throw Object.assign(new Error(`M1 G07 READY_TO_EXECUTE: ACK-4 run ${lease.runId} consumed; execution remains independently disabled`), {
+throw Object.assign(new Error(`M1 G07 READY_TO_EXECUTE: ACK-4 run ${lease.runId} consumed for ${registeredSuites.join(', ')}; execution remains independently disabled`), {
   code: 'M1_G07_EXECUTION_NOT_AUTHORIZED',
 });

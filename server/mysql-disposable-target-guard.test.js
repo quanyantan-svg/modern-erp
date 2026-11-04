@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test, { after, before } from 'node:test';
+import { consumePortableChildLease, issuePortableChildLease } from '../scripts/gates/ack4/ack4-runtime.mjs';
 import {
   MYSQL_DESTRUCTIVE_OPERATIONS_ACK,
   assertAuthorizedDisposableMySqlTarget,
@@ -16,6 +20,28 @@ const authorized = Object.freeze({
   ERP_MYSQL_TEST_DISPOSABLE_TARGET: identity,
   ERP_MYSQL_TEST_DESTRUCTIVE_OPERATIONS: MYSQL_DESTRUCTIVE_OPERATIONS_ACK,
 });
+
+let leaseDir;
+before(() => {
+  const target = {
+    ...config, selectedDatabase: config.database, currentUser: 'gate_a@localhost',
+    serverUuid: '00000000-0000-0000-0000-000000000001', grantsSha256: 'a'.repeat(64),
+  };
+  const root = {
+    state: 'CONSUMED', runId: '123e4567-e89b-42d3-a456-426614174000', rootPid: process.ppid,
+    rootStartedAt: 'root-start', commitSha: 'b'.repeat(40), target, manifest: 'TEST_RESET_V1',
+    operations: ['CLEANUP_SCHEMA_POST_RUN'], nonce: 'unit-test-root-nonce',
+  };
+  const childStartedAt = 'child-start';
+  const child = issuePortableChildLease(root, { childPid: process.pid, childStartedAt, operation: 'CLEANUP_SCHEMA_POST_RUN' });
+  leaseDir = mkdtempSync(join(tmpdir(), 'modern-erp-reset-lease-'));
+  const leasePath = join(leaseDir, 'lease.json'); writeFileSync(leasePath, JSON.stringify(child));
+  consumePortableChildLease({
+    leasePath, consumedDir: join(leaseDir, 'consumed'), rootNonce: root.nonce,
+    expected: { rootPid: process.ppid, childPid: process.pid, childStartedAt, commitSha: root.commitSha, target, manifest: root.manifest, operation: 'CLEANUP_SCHEMA_POST_RUN' },
+  });
+});
+after(() => rmSync(leaseDir, { recursive: true, force: true }));
 
 test('Gate A MySQL guard derives a password-free exact target identity', () => {
   assert.equal(mysqlDisposableTargetIdentity(config), identity);

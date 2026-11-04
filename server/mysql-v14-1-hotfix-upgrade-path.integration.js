@@ -26,6 +26,9 @@ import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import { createDatabase } from './db.js';
 import { createTempDb } from './test-utils/temp-db.js';
+import { blockUnmigratedAck4Entry } from '../scripts/gates/ack4/ack4-runtime.mjs';
+
+blockUnmigratedAck4Entry('mysql-v14-1-hotfix-upgrade-path.integration.js: independent upgrade manifest required');
 
 const required = ['ERP_DB_HOST', 'ERP_DB_PORT', 'ERP_DB_NAME', 'ERP_DB_USER', 'ERP_DB_PASSWORD'];
 for (const name of required) if (!process.env[name]) throw new Error(`MYSQL TEST ENVIRONMENT = UNAVAILABLE (${name} missing)`);

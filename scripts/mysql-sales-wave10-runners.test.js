@@ -324,15 +324,15 @@ test('L-GRD-07 unsafe identifiers and unsupported object types are rejected, vie
   assert.equal(db.statements.at(-1), 'SET FOREIGN_KEY_CHECKS=1');
 });
 
-test('L-GRD-08 the Wave 10 temp lifecycle is consulted first and the default temp-db path is unchanged', async () => {
+test('L-GRD-08 direct MySQL temp-db is ACK-4 blocked before lifecycle/connection; SQLite path is unchanged', async () => {
   const { createTempDb } = await import('../server/test-utils/temp-db.js');
   const saved = {};
   for (const name of ['ERP_TEST_DB_BACKEND', 'ERP_DB_HOST', 'ERP_DB_PORT', 'ERP_DB_NAME', 'ERP_DB_USER', 'ERP_DB_PASSWORD']) {
     saved[name] = process.env[name];
   }
   try {
-    // The MySQL path consults the Wave 10 lifecycle before it would create
-    // any adapter, so a refusing lifecycle proves no connection is opened.
+    // Legacy environment variables and a custom lifecycle no longer confer
+    // authority. ACK-4 refuses the direct path before lifecycle or adapter.
     process.env.ERP_TEST_DB_BACKEND = 'mysql';
     process.env.ERP_DB_HOST = '127.0.0.1';
     process.env.ERP_DB_PORT = '3306';
@@ -342,8 +342,8 @@ test('L-GRD-08 the Wave 10 temp lifecycle is consulted first and the default tem
     const calls = [];
     assert.throws(() => createTempDb({
       label: 'wave10-guard', mysqlLifecycle: { beforeCreate() { calls.push('beforeCreate'); throw new Error('REFUSED'); } },
-    }), /REFUSED/);
-    assert.deepEqual(calls, ['beforeCreate']);
+    }), /registered portable child lease is required/);
+    assert.deepEqual(calls, []);
   } finally {
     for (const [name, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[name]; else process.env[name] = value;

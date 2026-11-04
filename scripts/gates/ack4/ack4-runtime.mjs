@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
@@ -11,6 +11,7 @@ export const M1_CORE_MANIFEST = Object.freeze([
   'CLEANUP_SCHEMA_POST_RUN',
 ]);
 export const ACK4_TERMINAL_STATES = Object.freeze(['FINISHED', 'FAILED', 'CLEANUP_UNVERIFIED']);
+let activePortableChildLease = null;
 
 export class Ack4BlockedError extends Error {
   constructor(message, code = 'ACK4_BLOCKED') {
@@ -154,6 +155,54 @@ export function consumeChildLease(childLease, { rootLease, childPid, childStarte
   if (childLease.commitSha !== commitSha || childLease.targetDigest !== digest(normalizeAck4Target(target))) throw new Ack4BlockedError('child SHA/target drifted', 'ACK4_CHILD_DRIFT');
   childLease.consumed = true;
   return childLease;
+}
+
+function signPortableChildPayload(payload, rootNonce) {
+  return createHmac('sha256', requiredText(rootNonce, 'rootNonce')).update(JSON.stringify(canonical(payload))).digest('hex');
+}
+
+export function issuePortableChildLease(rootLease, { childPid, childStartedAt, operation, expiresAt = Date.now() + ACK4_CONSUME_WINDOW_MS }) {
+  assertActiveRootLease(rootLease, { commitSha: rootLease.commitSha, target: rootLease.target, manifest: rootLease.manifest });
+  if (!rootLease.operations.includes(operation)) throw new Ack4BlockedError('child requested an operation outside the root lease', 'ACK4_CHILD_SCOPE_ESCALATION');
+  const payload = {
+    version: ACK4_VERSION, kind: 'PORTABLE_CHILD', childLeaseId: randomUUID(), runId: rootLease.runId,
+    rootPid: rootLease.rootPid, childPid, childStartedAt: requiredText(childStartedAt, 'childStartedAt'),
+    commitSha: rootLease.commitSha, target: rootLease.target, manifest: rootLease.manifest, operation,
+    issuedAt: Date.now(), expiresAt,
+  };
+  return Object.freeze({ ...payload, signature: signPortableChildPayload(payload, rootLease.nonce) });
+}
+
+export function consumePortableChildLease({ leasePath, consumedDir, rootNonce, expected, nowMs = Date.now() }) {
+  const source = resolve(leasePath);
+  mkdirSync(consumedDir, { recursive: true });
+  const record = JSON.parse(readFileSync(source, 'utf8'));
+  const { signature, ...payload } = record;
+  const calculated = signPortableChildPayload(payload, rootNonce);
+  const left = Buffer.from(String(signature || ''), 'hex');
+  const right = Buffer.from(calculated, 'hex');
+  if (left.length !== right.length || !timingSafeEqual(left, right)) throw new Ack4BlockedError('portable child signature is invalid', 'ACK4_CHILD_SIGNATURE_INVALID');
+  if (record.kind !== 'PORTABLE_CHILD' || record.version !== ACK4_VERSION) throw new Ack4BlockedError('portable child format is invalid', 'ACK4_FORMAT_INVALID');
+  if (nowMs < record.issuedAt || nowMs > record.expiresAt || record.expiresAt - record.issuedAt > ACK4_CONSUME_WINDOW_MS) throw new Ack4BlockedError('portable child lease expired', 'ACK4_EXPIRED');
+  if (record.rootPid !== expected.rootPid || record.childPid !== expected.childPid || record.childStartedAt !== expected.childStartedAt) throw new Ack4BlockedError('portable child process tree drifted', 'ACK4_PROCESS_TREE_MISMATCH');
+  if (record.commitSha !== expected.commitSha || record.manifest !== expected.manifest || record.operation !== expected.operation) throw new Ack4BlockedError('portable child scope drifted', 'ACK4_CHILD_DRIFT');
+  if (digest(normalizeAck4Target(record.target)) !== digest(normalizeAck4Target(expected.target))) throw new Ack4BlockedError('portable child target drifted', 'ACK4_TARGET_MISMATCH');
+  const consumedPath = join(consumedDir, `${record.childLeaseId}.consumed.json`);
+  try { renameSync(source, consumedPath); }
+  catch { throw new Ack4BlockedError('portable child lease is missing or already consumed', 'ACK4_CHILD_REPLAY'); }
+  activePortableChildLease = Object.freeze({ ...record, consumedPath });
+  return activePortableChildLease;
+}
+
+export function assertActivePortableChildOperation(operations) {
+  const allowed = Array.isArray(operations) ? operations : [operations];
+  if (!activePortableChildLease || activePortableChildLease.childPid !== process.pid) {
+    throw new Ack4BlockedError('registered portable child lease is required before MySQL test writes', 'ACK4_CHILD_LEASE_REQUIRED');
+  }
+  if (!allowed.includes(activePortableChildLease.operation)) {
+    throw new Ack4BlockedError('portable child operation is outside the primitive scope', 'ACK4_CHILD_SCOPE_ESCALATION');
+  }
+  return activePortableChildLease;
 }
 
 export function finalizeAck4Run(rootLease, { testsPassed, cleanupProven, childrenExited, quarantineDir, inventory = [] }) {

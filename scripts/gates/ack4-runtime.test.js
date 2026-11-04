@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import {
   Ack4BlockedError, ACK4_CONSUME_WINDOW_MS, M1_CORE_MANIFEST, assertNoAck4Quarantine,
-  consumeAck4Record, consumeChildLease, finalizeAck4Run, issueChildLease, validateAck4Approval,
+  consumeAck4Record, consumeChildLease, consumePortableChildLease, finalizeAck4Run,
+  issueChildLease, issuePortableChildLease, validateAck4Approval,
 } from './ack4/ack4-runtime.mjs';
 
 const target = Object.freeze({
@@ -63,6 +64,27 @@ describe('ACK-4 pure simulation (no database and no MySQL connection)', () => {
       consumeChildLease(child, { rootLease: root, childPid: 200, childStartedAt: 'child-start', operation: 'RUN_M1_HTTP_FIXTURES', commitSha, target, manifest: 'M1_CORE_G07_V1' });
       assert.throws(() => consumeChildLease(child, { rootLease: root, childPid: 200, childStartedAt: 'child-start', operation: 'RUN_M1_HTTP_FIXTURES', commitSha, target, manifest: 'M1_CORE_G07_V1' }), /replayed/);
       assert.throws(() => issueChildLease(root, { childPid: 201, childStartedAt: 'x', operations: ['DROP_DATABASE'] }), /outside the root lease/);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('portable child lease binds PID/parent/SHA/target/operation and is atomically one-time', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'modern-erp-ack4-portable-'));
+    try {
+      const issued = join(dir, `${runId}.issued`);
+      writeFileSync(issued, JSON.stringify(record()));
+      const root = consumeAck4Record({ issuedPath: issued, consumedDir: join(dir, 'root-consumed'), expected: expected(), decrypt: (bytes) => JSON.parse(bytes), rootPid: 100, rootStartedAt: 'root-start' });
+      const child = issuePortableChildLease(root, { childPid: 200, childStartedAt: 'child-start', operation: 'RUN_M1_HTTP_FIXTURES' });
+      const leasePath = join(dir, 'child.json'); writeFileSync(leasePath, JSON.stringify(child));
+      const input = {
+        leasePath, consumedDir: join(dir, 'child-consumed'), rootNonce: root.nonce,
+        expected: { rootPid: 100, childPid: 200, childStartedAt: 'child-start', commitSha, target, manifest: 'M1_CORE_G07_V1', operation: 'RUN_M1_HTTP_FIXTURES' },
+      };
+      assert.equal(consumePortableChildLease(input).operation, 'RUN_M1_HTTP_FIXTURES');
+      assert.throws(() => consumePortableChildLease(input), /missing|already consumed|ENOENT/);
+
+      const tamperedPath = join(dir, 'tampered.json');
+      writeFileSync(tamperedPath, JSON.stringify({ ...child, childPid: 999 }));
+      assert.throws(() => consumePortableChildLease({ ...input, leasePath: tamperedPath }), /signature is invalid/);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 

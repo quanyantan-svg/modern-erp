@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { createDatabase } from '../db.js';
 import { resolveDatabaseConfig } from '../database/config.js';
 import { assertAuthorizedDisposableMySqlTarget, resetAuthorizedDisposableMySqlSchema } from './mysql-disposable-target.js';
+import { assertActivePortableChildOperation } from '../../scripts/gates/ack4/ack4-runtime.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const defaultRepoDb = resolve(repoRoot, 'data', 'erp.db');
@@ -76,6 +77,7 @@ export function createTempDb({
   mysqlLifecycle = null,
 } = {}) {
   if (process.env.ERP_TEST_DB_BACKEND === 'mysql') {
+    assertActivePortableChildOperation(['BOOTSTRAP_CURRENT_SCHEMA', 'RUN_M1_HTTP_FIXTURES', 'CLEANUP_SCHEMA_POST_RUN']);
     const config = resolveDatabaseConfig({ backend: 'mysql' });
     if (mysqlLifecycle) mysqlLifecycle.beforeCreate(config);
     else assertAuthorizedDisposableMySqlTarget(config);

@@ -4,6 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { createDatabase } from '../../server/db.js';
 import { resolveDatabaseConfig } from '../../server/database/config.js';
+import { blockUnmigratedAck4Entry } from '../gates/ack4/ack4-runtime.mjs';
+
+blockUnmigratedAck4Entry('convert-sqlite-to-mysql.mjs: independent Migration/upgrade authorization required');
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const protectedDb = resolve(repoRoot, 'data', 'erp.db');
