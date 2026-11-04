@@ -1522,6 +1522,40 @@ M1C_WP7B0_R1_READY_FOR_INDEPENDENT_DESIGN_REVIEW
 M1C_WP7B0_DESIGN_PROMOTION_READY_FOR_INDEPENDENT_REVIEW
 ```
 
+### 37.32 M1-Core `M1C-WP7-COMBINED` Implementation（2026-11-04）
+
+- 授权：用户明确、独立授权 ACK-4、CR-02/04/05、批准范围内 `notice_no` 风险修复、G07 专用
+  Runner/测试/Schema Parity，以及 M-15 **离线 Implementation**；未授权任何真实 MySQL、数据库
+  create/drop/reset、destructive Gate、历史 Migration、Push/Merge/Tag/Release/Deploy。
+- 起点：`work/m1-core-rebaseline-20261102` @ `6088a501480aaa004b836979aacb805deabeba21`；双远端同分支基线一致。
+- Implementation 提交：`84bca44`（错误码与通知编号）、`c8145c2`（ACK-4）、`cb8538a`（M-15 离线实现）、
+  `b49afed`（G07 Oracle / Schema Parity / Child Lease）。`package.json` 版本仍为 `1.6.2`，release tag 未变。
+- ACK-4：治理批准与运行凭据分离；独立 DPAPI issuer；精确 run/SHA/target/operation；15 分钟原子一次性消费；
+  Root/Child Lease、PID/父进程绑定、cleanup/quarantine/recovery；旧 destructive runner、upgrade/conversion、
+  shared `temp-db`/reset 的直接 Node 路径 fail closed。既有 ACK-1～3 保留。
+- 并发业务修复：CR-02 精确 `PURCHASE_RECEIPT_ALREADY_CONFIRMED`；仅委外 ISSUE/SUPPLEMENT 使用
+  `OUTSOURCING_SOURCE_INVENTORY_INSUFFICIENT`；通知号保持既有 `RN[OS-]<10 digits>` 语义并在事务内探测分配，
+  不把唯一键异常伪装成容量拒绝。
+- M-15：current SQLite/MySQL schema 定义纳入 `identity_key` 与委外部分唯一索引；显式历史迁移函数实现
+  PRE-A/B/C、LOT/SERIAL/NONE 严格映射、SQLite 回滚、MySQL DDL 部分完成识别与幂等重试。它未被 startup
+  自动调用；历史库未运行 M-15 时委外严格跟踪继续 fail closed。
+- G07：CR-01～CR-09 的生产 HTTP、双 session 同步、精确 status/code、拒绝审计、零败方副作用、逐表全字段
+  快照 Oracle 和真实 `information_schema` parity 比较器已实现；真实 integration 文件保持普通 FAST/FULL 之外。
+  root runner 在 capability **消费前**明确 BLOCKED，直至生产 HTTP fixture builder 与 root-managed child cleanup
+  编排完成独立安全审查，故 `M1C-G07` 仍为 `NOT_RUN / BLOCKED`，没有虚构 PASS。
+- 离线回归：focused PASS；FAST `528/528`；FULL `3255/3255`（398 suites）；Build PASS；current
+  N1/N3～N9 PASS、N2 RETIRED；migration C1～C6 PASS；`git diff --check` PASS。测试运行器固定 SQLite，明确移除
+  `ERP_MYSQL_TEST_ALLOW_RESET`；未运行 HEAVY/MySQL/Migration。
+- G01～G06 的 WP7-A 与 G05 独立审查既有证据未覆盖、未降级、未重新签发；本条只登记 Implementation，
+  不构成任何 Gate PASS、Core Acceptance、Domain Closure、Freeze 或 Release。
+- 剩余阻塞：真实 MySQL parity/CR-01～CR-09 执行；G07 production HTTP fixture builder/root cleanup 安全审查与激活；
+  历史数据库 M-15 Migration 的独立批准、preflight、执行与证据。详见
+  [`docs/acceptance/m1-core-wp7-combined-implementation-20261104.md`](../acceptance/m1-core-wp7-combined-implementation-20261104.md)。
+
+```text
+M1C_WP7_COMBINED_IMPLEMENTATION_READY_FOR_INDEPENDENT_REVIEW
+```
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
