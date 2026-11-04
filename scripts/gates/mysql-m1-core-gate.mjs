@@ -10,6 +10,10 @@ import { assertNoAck4Quarantine, consumeAck4Record, M1_CORE_MANIFEST } from './a
 import { hasExited, waitForExit } from './m1-core-g07-child-lifecycle.mjs';
 import { runM1CoreG07Lifecycle } from './m1-core-g07-root-lifecycle.mjs';
 import { buildM1CoreG07HttpFixtures } from '../../server/test-support/m1-core-g07-http-fixture-builder.js';
+import { openM1CoreG07ExistingAdapter } from '../../server/test-utils/m1-core-g07-existing-adapter.js';
+import { changeValuationMethod, receiveValue } from '../../server/modules/financial-inventory.js';
+import { postCanonicalTrackedLeg } from '../../server/modules/traceability-quality.js';
+import { assertM1CoreG07StaticPreflight } from './m1-core-g07-static-preflight.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const manifest = 'M1_CORE_G07_V1';
@@ -76,6 +80,7 @@ async function main() {
   const commitSha = gitText(['rev-parse', 'HEAD']);
   if (gitText(['status', '--porcelain'])) throw new Error('ACK-4 BLOCKED: the Git worktree must be clean');
   const target = JSON.parse(readFileSync(targetPath, 'utf8'));
+  assertM1CoreG07StaticPreflight({ target, environment: process.env, subjectCredentials: SUBJECT_CREDENTIALS });
   const storeRoot = resolve(process.env.LOCALAPPDATA || '', 'ModernERP', 'mysql-gate', 'ack4');
   const quarantineDir = join(storeRoot, 'quarantine');
   assertNoAck4Quarantine(quarantineDir, target);
@@ -135,13 +140,37 @@ async function main() {
       for (const subject of Object.keys(SUBJECT_CREDENTIALS)) {
         subjectTokens[subject] = await loginSubject(applications.A, subject);
       }
-      const fixtureManifest = await buildM1CoreG07HttpFixtures({ applications, subjectTokens, request: async (baseUrl, step) => {
-        const response = await fetch(baseUrl + step.path, {
-          method: step.method, headers: { authorization: `Bearer ${step.token}`, 'content-type': 'application/json', ...step.headers },
-          body: JSON.stringify(step.body),
-        });
-        return { status: response.status, data: await response.json().catch(() => ({})) };
-      } });
+      const l2 = openM1CoreG07ExistingAdapter({ targetProofPath: targetPath });
+      let fixtureManifest;
+      try {
+        fixtureManifest = await buildM1CoreG07HttpFixtures({ applications, subjectTokens, request: async (baseUrl, step) => {
+          const response = await fetch(baseUrl + step.path, {
+            method: step.method,
+            headers: { authorization: `Bearer ${step.token}`, ...(step.body === undefined ? {} : { 'content-type': 'application/json' }), ...step.headers },
+            body: step.body === undefined ? undefined : JSON.stringify(step.body),
+          });
+          return { status: response.status, data: await response.json().catch(() => ({})) };
+        }, admitTechnicalL2: async ({ prerequisite, input }) => {
+          if (prerequisite !== 'SOURCE_INVENTORY_SEED') throw new Error(`M1_G07_TECHNICAL_L2_NOT_ADMITTED:${prerequisite}`);
+          const transaction = l2.db.prepare("SELECT id FROM inventory_transactions WHERE source_type='OTHER_RECEIPT' AND source_id=? AND direction='IN'").get(input.sourceId);
+          if (!transaction?.id) throw new Error('M1_G07_SOURCE_INVENTORY_HTTP_EVIDENCE_MISSING');
+          postCanonicalTrackedLeg(l2.db, {
+            transactionId: transaction.id, sourceType: 'OTHER_RECEIPT', sourceId: input.sourceId,
+            sourceItemId: input.sourceId, productId: input.productId, warehouseId: input.warehouseId,
+            lotId: input.lotId, serialId: null, quantity: input.quantity, direction: 'IN', businessDate: input.businessDate,
+          });
+          changeValuationMethod(l2.db, input.productId, 'LOT_SPECIFIC_POOL');
+          receiveValue(l2.db, {
+            ...input, serialId: null, movementType: 'G07_SOURCE_INVENTORY_L2', sourceType: 'OTHER_RECEIPT',
+            sourceItemId: input.sourceId, inventoryTransactionId: transaction.id, valuationBasis: 'G07_DISPOSABLE_L2',
+          });
+          const balance = l2.db.prepare('SELECT quantity,value_cents FROM inventory_valuation_balances WHERE product_id=? AND warehouse_id=? AND lot_id=?').get(input.productId, input.warehouseId, input.lotId);
+          if (Number(balance?.quantity) !== input.quantity || Number(balance?.value_cents) !== input.valueCents) throw new Error('M1_G07_SOURCE_INVENTORY_L2_EVIDENCE_MISMATCH');
+          return Object.freeze({ prerequisite, admitted: true, quantity: Number(balance.quantity), valueCents: Number(balance.value_cents), lotId: input.lotId, sourceId: input.sourceId });
+        } });
+      } finally {
+        l2.db.close();
+      }
       const fixtureManifestPath = join(childDir, 'fixture-manifest.json');
       writeFileSync(fixtureManifestPath, JSON.stringify(fixtureManifest), { flag: 'wx', mode: 0o600 });
       try {
@@ -179,4 +208,9 @@ async function main() {
   process.stdout.write(`${JSON.stringify({ ...report, suites: registeredSuites, executionStatus: 'EXECUTED_NOT_ACCEPTED' })}\n`);
 }
 
-await main();
+try {
+  await main();
+} catch (error) {
+  if (error?.m1G07Lifecycle) process.stdout.write(`${JSON.stringify({ ...error.m1G07Lifecycle, executionStatus: 'EXECUTED_NOT_ACCEPTED' })}\n`);
+  throw error;
+}

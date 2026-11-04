@@ -264,7 +264,8 @@ Remove-Item -LiteralPath $targetProofPath -Force -ErrorAction SilentlyContinue
 if ($null -ne $gateLock) { $gateLock.Dispose() }
 
 Write-Step ''
-if ($rootState -eq 'FINISHED') {
+if ($gateExit -eq 0 -and $rootState -eq 'FINISHED' -and $null -ne $rootReport -and
+    $rootReport.testsPassed -eq $true -and $rootReport.cleanupProven -eq $true -and $rootReport.childrenExited -eq $true) {
   Write-Host "[mysql-gate] RESULT = PASS" -ForegroundColor Green
   Write-Host "[mysql-gate] ACK-4 STATE = FINISHED (cleanup independently post-flighted by the root)"
   exit 0
@@ -277,4 +278,5 @@ if ($rootState -eq 'FAILED') {
 if ($gateStderr) { $gateStderr.Trim() -split "`r?`n" | Select-Object -Last 10 | ForEach-Object { Write-Host "    $_" } }
 Write-Host "[mysql-gate] RESULT = FAIL" -ForegroundColor Red
 Write-Host "[mysql-gate] ACK-4 STATE = $rootState (gate exit $gateExit)"
+if ($gateExit -eq 0) { exit 8 }
 exit $gateExit

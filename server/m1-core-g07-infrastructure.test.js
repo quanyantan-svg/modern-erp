@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import {
-  assertCompleteG07Contract, assertG03EvidenceLayering, assertG07RaceOutcome, assertG07Result,
+  assertCompleteG07Contract, assertG03EvidenceLayering, assertG07AuthoritativeEvidence, assertG07RaceOutcome, assertG07Result,
   assertProcessingPoItemStable, assertProcessingPoRejected, assertSafeIntegerCents, assertUat14VmiReceiptOracle,
   G07_SUPPLEMENTAL_ORACLES, M1_CORE_G07_SCENARIOS,
 } from './test-support/m1-core-g07-contract.js';
@@ -15,6 +15,7 @@ import {
 } from './test-support/m1-core-g07-fixtures.js';
 import { buildM1CoreG07HttpFixtures } from './test-support/m1-core-g07-http-fixture-builder.js';
 import { runM1CoreG07Lifecycle } from '../scripts/gates/m1-core-g07-root-lifecycle.mjs';
+import { assertM1CoreG07StaticPreflight, M1_G07_REQUIRED_ENVIRONMENT } from '../scripts/gates/m1-core-g07-static-preflight.mjs';
 import { assertNoAck4Quarantine, consumeAck4Record, M1_CORE_MANIFEST } from '../scripts/gates/ack4/ack4-runtime.mjs';
 
 const target = Object.freeze({
@@ -88,8 +89,10 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
     assert.ok(runner.indexOf('consumeAck4Record({') < runner.indexOf("operation: 'RESET_SCHEMA_PRE_RUN'"),
       'root runner must consume ACK-4 before the first destructive child can be launched');
     assert.match(runner, /runM1CoreG07Lifecycle/);
+    assert.ok(runner.indexOf('assertM1CoreG07StaticPreflight({') < runner.indexOf('consumeAck4Record({'),
+      'all pure static checks must finish before ACK-4 consumption');
     assert.match(runner, /buildM1CoreG07HttpFixtures/);
-    assert.match(child, /readWave10ConnectedIdentity/);
+    assert.match(child, /openM1CoreG07ExistingAdapter/);
     assert.ok(child.indexOf("await consume(operation)") < child.indexOf('await openVerifiedAdapter()'),
       'child must consume its lease before opening any target connection');
     assert.match(child, /postflightProcess/);
@@ -100,9 +103,29 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
     assert.doesNotMatch(child, /server\/index\.js/);
     assert.match(child, /createApp\(verified\.db/);
     assert.match(runner, /--mode', 'postflight'/);
+    assert.doesNotMatch(suite, /createDatabase\(config\)|createDatabase\(\)/);
+    assert.match(suite, /openM1CoreG07ExistingAdapter/);
     assert.doesNotMatch(runner, /--fixture-plan/);
     assert.doesNotMatch(launcher, /FixturePlan/);
     assert.match(launcher, /ACK-4 STATE/);
+    assert.match(launcher, /\$gateExit -eq 0 -and \$rootState -eq 'FINISHED'/);
+    assert.match(launcher, /\$rootReport\.testsPassed -eq \$true/);
+    assert.match(launcher, /\$rootReport\.cleanupProven -eq \$true/);
+    assert.match(launcher, /\$rootReport\.childrenExited -eq \$true/);
+    assert.match(launcher, /if \(\$gateExit -eq 0\) \{ exit 8 \}/, 'UNKNOWN/CLEANUP_UNVERIFIED may never inherit exit 0');
+  });
+
+  test('ACK-4 static preflight binds digest, nine CRs, routes/bodies, roles, L2, environment, operations and target before consumption', () => {
+    const environment = Object.fromEntries(M1_G07_REQUIRED_ENVIRONMENT.map((name) => [name, 'declared']));
+    environment.ERP_DB_BACKEND = 'mysql'; environment.ERP_TEST_DB_BACKEND = 'mysql';
+    const credentials = Object.fromEntries(Object.entries({ admin: 'admin', creator: 'sales', approver: 'reviewer', warehouse: 'warehouse', outsourcing: 'outsourcing', receiving: 'outsourcingreceiving' })
+      .map(([subject, username]) => [subject, { username }]));
+    const proof = assertM1CoreG07StaticPreflight({ target, environment, subjectCredentials: credentials });
+    assert.equal(proof.crCount, 9);
+    assert.equal(proof.fixtureDigest, M1_CORE_G07_FIXED_FIXTURE_DIGEST);
+    assert.deepEqual(proof.operations, M1_CORE_MANIFEST);
+    assert.throws(() => assertM1CoreG07StaticPreflight({ target, environment: { ...environment, ERP_DB_NAME: '' }, subjectCredentials: credentials }), /ERP_DB_NAME/);
+    assert.throws(() => assertM1CoreG07StaticPreflight({ target: { ...target, selectedDatabase: 'other' }, environment, subjectCredentials: credentials }), /TARGET_BINDING/);
   });
 
   test('information_schema reader queries columns, indexes, FK rules and CHECK clauses', () => {
@@ -149,7 +172,14 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
     const manifest = await buildM1CoreG07HttpFixtures({
       applications: { A: 'http://127.0.0.1:3101', B: 'http://127.0.0.1:3102' },
       subjectTokens,
-      request: async (baseUrl, step) => { calls.push({ baseUrl, step }); return { status: 201, data: richData }; },
+      request: async (baseUrl, step) => {
+        calls.push({ baseUrl, step });
+        const status = ['GET', 'PATCH', 'PUT'].includes(step.method)
+          || /\/(submit|approve|confirm|complete|transition|material-list)$/.test(step.path)
+          || /^\/api\/purchase-receipts\/[^/]+$/.test(step.path) ? 200 : 201;
+        return { status, data: richData };
+      },
+      admitTechnicalL2: async ({ prerequisite }) => ({ admitted: true, prerequisite }),
     });
     assert.equal(manifest.executionStatus, 'NOT_RUN');
     assert.equal(manifest.provenance, 'PRODUCTION_HTTP');
@@ -188,6 +218,31 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
       { ...ok, winnerIdempotencyCount: 2 },
       { ...ok, loserSideEffectCount: 1 },
     ]) assert.throws(() => assertG07Result(cr01, outcome));
+  });
+
+  test('authoritative Oracle negative controls: inventory, WIP, cost, PO item, reject audit and business source corruption all FAIL', () => {
+    const evidence = (definition, effects, legs = [{ kind: 'inventory', opening: 10, change: -6, closing: 4, sourceId: 'doc-1', identity: 'NONE' }]) => ({
+      before: { full: [] }, after: { full: [] }, effects: { ...effects, winnerBusinessRowDelta: 1, loserBusinessRowDelta: 0 },
+      legs, audit: { count: 1, exactRequestReject: true }, idempotency: { winnerSucceeded: 1, loserAbsent: true }, sources: { allMatched: true },
+    });
+    const cr04 = M1_CORE_G07_SCENARIOS[3];
+    const ok04 = evidence(cr04, { documentDelta: 1, quantityDelta: 6, identityDelta: 1, amountDeltaCents: 600 });
+    assert.doesNotThrow(() => assertG07AuthoritativeEvidence(cr04, ok04));
+    assert.throws(() => assertG07AuthoritativeEvidence(cr04, { ...ok04, legs: [{ ...ok04.legs[0], closing: 5 }] }), /CONSERVATION/,
+      'tampered inventory leg must fail');
+    assert.throws(() => assertG07AuthoritativeEvidence(cr04, { ...ok04, legs: [{ ...ok04.legs[0], identity: '' }] }), /PROVENANCE/,
+      'tampered WIP identity must fail');
+    assert.throws(() => assertG07AuthoritativeEvidence(cr04, { ...ok04, effects: { ...ok04.effects, amountDeltaCents: 599 } }), /AMOUNTDELTACENTS/,
+      'tampered cost must fail');
+    const cr09 = M1_CORE_G07_SCENARIOS[8];
+    const ok09 = evidence(cr09, { documentDelta: 1, quantityDelta: 10, identityDelta: 1, amountDeltaCents: 5000 },
+      [{ kind: 'quantity', opening: 0, change: 10, closing: 10, sourceId: 'order-1', identity: 'po-item-1' }]);
+    assert.throws(() => assertG07AuthoritativeEvidence(cr09, { ...ok09, effects: { ...ok09.effects, identityDelta: 2 } }), /IDENTITYDELTA/,
+      'tampered PO item must fail');
+    assert.throws(() => assertG07AuthoritativeEvidence(cr04, { ...ok04, audit: { count: 1, exactRequestReject: false } }), /AUDIT/,
+      'tampered rejection audit must fail');
+    assert.throws(() => assertG07AuthoritativeEvidence(cr04, { ...ok04, sources: { allMatched: false } }), /SOURCE/,
+      'tampered business source must fail');
   });
 
   test('supplemental oracles are real assertions, not stored constants', () => {
@@ -275,6 +330,26 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
       assert.equal(report.state, 'CLEANUP_UNVERIFIED');
       assert.equal(report.cleanupProven, false);
       assert.throws(() => assertNoAck4Quarantine(join(dir, 'quarantine'), target), /quarantined/);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('root lifecycle reports FAILED only after child exit and independently proven cleanup', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'm1-g07-failed-terminal-'));
+    const events = [];
+    try {
+      await assert.rejects(() => runM1CoreG07Lifecycle({
+        consumeRoot: async () => simulatedRoot(dir, '123e4567-e89b-42d3-a456-426614174077'),
+        expected: { commitSha, target, manifest: 'M1_CORE_G07_V1' }, quarantineDir: join(dir, 'quarantine'),
+        reset: async () => {}, bootstrap: async () => {},
+        runHttpFixtures: async () => { throw new Error('SIMULATED_ORACLE_FAILURE'); },
+        stopChildren: async () => { events.push('stop'); return true; },
+        cleanup: async () => events.push('cleanup'), verifyCleanup: async () => { events.push('postflight'); return { clean: true, inventory: [] }; },
+      }), (error) => error.message === 'SIMULATED_ORACLE_FAILURE'
+        && error.m1G07Lifecycle.state === 'FAILED'
+        && error.m1G07Lifecycle.testsPassed === false
+        && error.m1G07Lifecycle.childrenExited === true
+        && error.m1G07Lifecycle.cleanupProven === true);
+      assert.deepEqual(events, ['stop', 'cleanup', 'postflight']);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

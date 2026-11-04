@@ -42,24 +42,8 @@ async function consume(operation) {
 }
 
 async function openVerifiedAdapter() {
-  const [{ resolveDatabaseConfig }, { MySqlSyncAdapter }, { readWave10ConnectedIdentity }] = await Promise.all([
-    import('../../server/database/config.js'), import('../../server/database/mysql-adapter.js'),
-    import('../../server/test-utils/mysql-wave10-campaign-target.js'),
-  ]);
-  const config = resolveDatabaseConfig({ backend: 'mysql' });
-  const target = JSON.parse(readFileSync(required('ERP_M1_G07_TARGET_PROOF'), 'utf8'));
-  for (const key of ['host', 'port', 'database', 'user']) {
-    if (String(config[key]) !== String(target[key])) throw new Error(`M1_G07_CHILD_TARGET_CONFIG_DRIFT:${key}`);
-  }
-  const db = new MySqlSyncAdapter(config);
-  try {
-    const actual = readWave10ConnectedIdentity(db);
-    if (actual.database !== target.selectedDatabase || actual.currentUser !== target.currentUser
-      || actual.serverUuid !== target.serverUuid || actual.grantDigest.toLowerCase() !== target.grantsSha256.toLowerCase()) {
-      throw new Error('M1_G07_CHILD_CONNECTED_TARGET_DRIFT');
-    }
-    return { db, config };
-  } catch (error) { db.close(); throw error; }
+  const { openM1CoreG07ExistingAdapter } = await import('../../server/test-utils/m1-core-g07-existing-adapter.js');
+  return openM1CoreG07ExistingAdapter({ targetProofPath: required('ERP_M1_G07_TARGET_PROOF') });
 }
 
 async function databaseOperation(operation) {
