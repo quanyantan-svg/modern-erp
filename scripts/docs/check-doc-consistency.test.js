@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,19 +11,27 @@ const repoRoot = resolve(here, '..', '..');
 const checkerSource = join(here, 'check-doc-consistency.mjs');
 const indexSource = join(here, 'lib', 'current-index.mjs');
 const governedSource = join(here, 'lib', 'governed-paths.mjs');
-const dotGit = join(repoRoot, '.git');
-const sourceGitDir = statSync(dotGit).isDirectory()
-  ? dotGit
-  : readFileSync(dotGit, 'utf8').trim().replace(/^gitdir:\s*/, '');
+const migrationIndexSource = join(here, 'lib', 'migration-index.mjs');
+
+// 隔离临时子进程的 Git 配置读取：不触碰用户全局/系统配置，
+// 也避免 core.excludesFile 指向不可访问路径时产生警告与额外开销。
+const isolatedGitEnv = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+  GIT_CONFIG_NOSYSTEM: '1',
+};
 
 function git(cwd, ...args) {
-  return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  return execFileSync('git', args, { cwd, encoding: 'utf8', env: isolatedGitEnv }).trim();
 }
 
 function runCheck(cwd, target = 'WORKTREE') {
-  const args = ['scripts/docs/check-doc-consistency.mjs', '--mode', 'current', '--target', target, '--only', 'N7'];
+  const args = [
+    'scripts/docs/check-doc-consistency.mjs', '--mode', 'current', '--target', target,
+    '--anchor', 'n7-test-anchor', '--only', 'N7',
+  ];
   const result = spawnSync(process.execPath, args, {
-    cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+    cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env: isolatedGitEnv,
   });
   return {
     status: result.status,
@@ -110,23 +118,36 @@ function contractBody(id, headingId = id) {
 function createClone(root, label) {
   const tempRoot = mkdtempSync(join(tmpdir(), `erp-doc-${label}-`));
   const clone = join(tempRoot, 'repo');
-  git(tempRoot, '-c', `safe.directory=${repoRoot}`, '-c', `safe.directory=${sourceGitDir}`,
-    '-c', 'core.autocrlf=false', 'clone', '--quiet', '--no-hardlinks', repoRoot, clone);
+  mkdirSync(clone, { recursive: true });
+  git(clone, 'init', '--quiet');
   git(clone, 'config', 'user.name', 'N7 Regression');
   git(clone, 'config', 'user.email', 'n7-regression@example.invalid');
   git(clone, 'config', 'core.autocrlf', 'false');
+  mkdirSync(join(clone, 'scripts', 'docs', 'lib'), { recursive: true });
+  mkdirSync(join(clone, 'docs', 'status'), { recursive: true });
+  mkdirSync(join(clone, 'docs', 'decisions'), { recursive: true });
+  mkdirSync(join(clone, 'docs', 'requirements'), { recursive: true });
+  mkdirSync(join(clone, 'docs', 'design'), { recursive: true });
+  mkdirSync(join(clone, 'docs', 'reviews', 'm1'), { recursive: true });
   copyNormalized(checkerSource, join(clone, 'scripts', 'docs', 'check-doc-consistency.mjs'));
   copyNormalized(indexSource, join(clone, 'scripts', 'docs', 'lib', 'current-index.mjs'));
   copyNormalized(governedSource, join(clone, 'scripts', 'docs', 'lib', 'governed-paths.mjs'));
-  git(clone, 'add', 'scripts/docs/check-doc-consistency.mjs', 'scripts/docs/lib/current-index.mjs',
-    'scripts/docs/lib/governed-paths.mjs');
-  const staged = git(clone, 'diff', '--cached', '--name-only');
-  let installed = false;
-  if (staged) {
-    git(clone, 'commit', '--quiet', '-m', 'test: install N7 test implementation');
-    installed = true;
-  }
+  copyNormalized(migrationIndexSource, join(clone, 'scripts', 'docs', 'lib', 'migration-index.mjs'));
+  writeFileSync(join(clone, 'document.md'), contractBody('1'), 'utf8');
+  writeFileSync(join(clone, 'solution.md'), contractBody('2'), 'utf8');
+  writeFileSync(join(clone, 'docs', 'status', 'PROJECT_STATUS.md'), contractBody('36'), 'utf8');
+  writeFileSync(join(clone, 'docs', 'decisions', 'OPEN-BUSINESS-DECISIONS.md'), contractBody('40'), 'utf8');
+  writeFileSync(join(clone, 'docs', 'requirements', 'procurement-outsourcing.md'), contractBody('31'), 'utf8');
+  writeFileSync(join(clone, 'docs', 'design', 'procurement-outsourcing.md'), contractBody('13'), 'utf8');
+  writeFileSync(join(clone, 'docs', 'reviews', 'm1', 'procurement-outsourcing-critical-chain-design.md'), candidateText('50'), 'utf8');
+  git(clone, 'add', '-A');
+  git(clone, 'commit', '--quiet', '-m', '建立最小 N7 测试基线');
+  const installed = false;
   const base = git(clone, 'rev-parse', 'HEAD');
+  // The adversarial matrix validates the same anchor..target algorithm over
+  // its own controlled commits. Scanning the repository's full G0 history for
+  // every scenario adds no coverage and made the 31 cases take ~26 minutes.
+  git(clone, 'tag', 'n7-test-anchor', base);
   return { tempRoot, clone, base, installed };
 }
 
