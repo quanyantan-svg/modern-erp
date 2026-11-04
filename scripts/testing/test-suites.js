@@ -687,6 +687,7 @@ const FULL = [
   // `server/ + src/lib/` discovery does not pick up scripts/).
   'scripts/gate-tap-parser.test.js',
   'scripts/docs/check-doc-consistency.test.js',
+  'scripts/git/check-commit-traceability.test.js',
   'scripts/gates/ack4-runtime.test.js',
 
   // ----- V22 — Finance Operations Domain Closure -----
@@ -724,6 +725,7 @@ const FAST = [
   'server/m1c-wp0-infrastructure.test.js',
   'server/m15-tracked-identity-key.test.js',
   'server/m1-core-g07-infrastructure.test.js',
+  'scripts/git/check-commit-traceability.test.js',
   'scripts/gates/ack4-runtime.test.js',
   // W7 F2 pure retry-admission parser and injected monotonic-clock contract.
   'server/sales-gate-retry-admission.test.js',

@@ -10,6 +10,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
 const checkerSource = join(here, 'check-doc-consistency.mjs');
 const indexSource = join(here, 'lib', 'current-index.mjs');
+const governedSource = join(here, 'lib', 'governed-paths.mjs');
 const dotGit = join(repoRoot, '.git');
 const sourceGitDir = statSync(dotGit).isDirectory()
   ? dotGit
@@ -116,7 +117,9 @@ function createClone(root, label) {
   git(clone, 'config', 'core.autocrlf', 'false');
   copyNormalized(checkerSource, join(clone, 'scripts', 'docs', 'check-doc-consistency.mjs'));
   copyNormalized(indexSource, join(clone, 'scripts', 'docs', 'lib', 'current-index.mjs'));
-  git(clone, 'add', 'scripts/docs/check-doc-consistency.mjs', 'scripts/docs/lib/current-index.mjs');
+  copyNormalized(governedSource, join(clone, 'scripts', 'docs', 'lib', 'governed-paths.mjs'));
+  git(clone, 'add', 'scripts/docs/check-doc-consistency.mjs', 'scripts/docs/lib/current-index.mjs',
+    'scripts/docs/lib/governed-paths.mjs');
   const staged = git(clone, 'diff', '--cached', '--name-only');
   let installed = false;
   if (staged) {

@@ -59,6 +59,7 @@ import {
   buildCurrentIndex, activeContractFiles, reviewFiles, bodyFingerprints, diffTraceableBodies,
   resolveStructural, fileText, under, directChildren,
 } from './lib/current-index.mjs';
+import { GOVERNED_DIRS, GOVERNED_FILES } from './lib/governed-paths.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -84,17 +85,6 @@ const SAMPLE_REFERENCES = [
   'document.md §31.12',
   'document.md §22',
 ];
-
-/** 受治理的合同与登记文件（用于 N7 的变更追溯范围）。 */
-const GOVERNED_FILES = [
-  'document.md',
-  'solution.md',
-  'docs/status/PROJECT_STATUS.md',
-  'docs/decisions/OPEN-BUSINESS-DECISIONS.md',
-];
-
-/** 受治理的合同正文目录（N7 历史路径集合的来源）。 */
-const GOVERNED_DIRS = ['docs/requirements/', 'docs/design/', 'docs/reviews/'];
 
 /** 索引目录（若目录内存在 README.md，则要求它登记本目录全部直属正文）。 */
 const INDEX_DIRS = [
