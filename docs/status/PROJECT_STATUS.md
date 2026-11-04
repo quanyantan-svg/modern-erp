@@ -1558,6 +1558,40 @@ M1C_WP7B0_DESIGN_PROMOTION_READY_FOR_INDEPENDENT_REVIEW
 M1C_WP7_COMBINED_IMPLEMENTATION_READY_FOR_INDEPENDENT_REVIEW
 ```
 
+### 37.33 M1-Core `M1C-WP7-R1` 收口与历史修正（2026-11-04）
+
+- 授权：用户对 §37.32 遗留的最终 HEAD N7 blocker 授权**仅限消息级本地历史修正**（重建 `59eccd5`、
+  `59dec19e` 两条 commit message），以及 G07 Root Runner/子租约生命周期收口、N7 提交追溯前置治理与
+  N7 回归耗时优化；未授权真实 MySQL、Migration、Push、Merge、Tag、Release、Deploy。
+- 基线：`work/m1-core-rebaseline-20261102`；起始工作树干净；`core.hooksPath` 已本地激活为 `.githooks`。
+- N7 根因与永久修复：§37.32 最终证据提交 `59eccd5` 的消息未引用 `docs/status/PROJECT_STATUS.md §37.32` 或
+  完整路径，最终 HEAD current N7 fail closed。永久修复为「提交追溯前置治理」（`a16b021`）：
+  `prepare-commit-msg` 自动为受治理路径追加 `Docs-Trace:` 追溯行，`commit-msg` 校验，另有独立入口
+  `scripts/git/check-commit-traceability.mjs check-commit HEAD` 与正式 N7
+  （`check-doc-consistency.mjs --mode current --only N7`）。`--no-verify` 只能跳过 `commit-msg`；
+  `prepare-commit-msg`、独立检查与正式 N7 仍是防线。
+- 六提交历史修正 SHA 映射（前四提交不变）：`84bca44`→`84bca44`、`c8145c2`→`c8145c2`、`cb8538a`→`cb8538a`、
+  `b49afed`→`b49afed`、`59eccd54`→`f3d67edc`、`59dec19e`→`1a59b410`。旧/新 Combined 最终 Tree 一致：
+  `132fe40c96547e3c43223c5e85370112f6aeead2`；备份分支 `backup/m1c-wp7-combined-pre-r1-59dec19` 保留旧历史。
+- G07（`9c20e60`）：Root Runner、生产 HTTP fixture builder、Root/Child/Cleanup/Quarantine/Recovery 离线生命周期
+  已收口；Child Lease 由 HMAC 改为 Ed25519 —— 根持私钥、子进程仅持公钥，子进程不能自行签发扩权 lease；
+  target/SHA/operation/PID/父进程持续校验；子进程未确认退出时禁止 cleanup。CR-01～CR-09 仍 `NOT_RUN`；
+  真实 MySQL parity 仍 `READY_TO_EXECUTE / NOT_RUN`。
+- N7 回归耗时优化（`4f20900`）：改用最小临时仓库与临时 `n7-test-anchor`，隔离临时子进程 Git 配置
+  （`GIT_CONFIG_GLOBAL=NUL` / `GIT_CONFIG_NOSYSTEM=1`），不读取用户全局配置；T01～T31 断言、受治理范围与
+  正式 anchor 均未改。耗时由约 1555s 降至约 63s。
+- 门禁：Build PASS；current（HEAD）N1/N3～N9 PASS、N2 RETIRED；current N7-only PASS；migration C1～C6 PASS；
+  `check-commit-traceability.mjs check-commit HEAD` PASS；`git diff --check` PASS；N7 回归 + 提交追溯测试 4/4 PASS。
+  FAST 534/534 PASS（本轮未重跑）；FULL 本轮被用户要求中止，登记 `NOT_RERUN / ABORTED_AT_USER_REQUEST`，
+  不写 PASS。真实 MySQL parity 仍 `READY_TO_EXECUTE / NOT_RUN`。
+- 未发生：MySQL 连接/初始化/create/drop/reset、Migration、Push、Merge、Tag、Release、Deploy。
+- 本条只登记 R1 收口；不签发 G07 PASS、M1-Core Acceptance、Domain Closure、Freeze 或 Release。详见
+  [`docs/acceptance/m1-core-wp7-r1-closure-20261104.md`](../acceptance/m1-core-wp7-r1-closure-20261104.md)。
+
+```text
+M1C_WP7_R1_READY_FOR_INDEPENDENT_REVIEW
+```
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
