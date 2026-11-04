@@ -49,7 +49,7 @@ export async function createProcurementFixture(prefix) {
     rmSync(tempDir, { recursive: true, force: true });
   }
 
-  return { db, request, tokens, close };
+  return { db, baseUrl, request, tokens, close };
 }
 
 // M1C-PO-P02：同一委外订单终身最多一张加工费 PO，因此测试夹具按订单缓存
