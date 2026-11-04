@@ -138,6 +138,10 @@ M1-P-03 复核结论：`OUTSOURCING_MANAGE` / `OUTSOURCING_MATERIAL_EXECUTE`、
 | FAST | 546/546 PASS |
 | FULL | 3282/3282 PASS（400 suites） |
 | Build | PASS（1968 modules） |
+| docs current | PASS（N1、N3～N9；N2=`RETIRED`） |
+| docs migration | PASS（C1～C6） |
+| N7 独立重跑 | PASS |
+| `git diff --check` | PASS |
 
 真实 MySQL 连接、CR-01～CR-09 真实并发、真实 information_schema、真实 postflight、ACK-4 签发/消费、Migration
 仍为 `NOT_RUN`；Push/Merge/Tag/Release/Deploy 未发生。
