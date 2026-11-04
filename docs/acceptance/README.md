@@ -16,6 +16,7 @@
 | [`m1-core-wp7a-gate-acceptance-20261103.md`](./m1-core-wp7a-gate-acceptance-20261103.md) | M1-Core WP7-A 首期非破坏性验收**执行记录**（G01–G06 逐 Gate 证据矩阵、G05 缺陷登记、G07 MySQL 执行准备）；**未签发**任何 Gate PASS，非 Domain Acceptance |
 | [`m1-core-g05-independent-review-20261103.md`](./m1-core-g05-independent-review-20261103.md) | M1-Core G05 修复独立技术审查（`M1C_G05_INDEPENDENT_REVIEW_PASS`）；Owner 正式 Acceptance 仍为 `PENDING_APPROVAL`，未签发 `M1C-G05 PASS` |
 | [`m1-core-wp7b0-design-promotion-20261103.md`](./m1-core-wp7b0-design-promotion-20261103.md) | M1-Core WP7-B0-R1 Design 三项批准与 Active Promotion 独立记录；Implementation、MySQL、M-15、Migration 与 Gate PASS 均未授权/未签发 |
+| [`m1-core-wp7-combined-implementation-20261104.md`](./m1-core-wp7-combined-implementation-20261104.md) | M1C-WP7-COMBINED Implementation 证据：ACK-4、并发错误码/编号、M-15 离线代码、G07 Oracle/Parity 与统一回归；真实 MySQL/Migration 未运行，非 Acceptance/Freeze |
 | [`sales-customer/`](./sales-customer/) | Sales & Customer 各 Wave 的 Acceptance / Freeze 记录与实施证据 |
 
 ## 规则
