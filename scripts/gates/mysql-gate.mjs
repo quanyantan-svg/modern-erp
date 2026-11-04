@@ -5,6 +5,9 @@ import { resolveDatabaseConfig } from '../../server/database/config.js';
 import { MySqlSyncAdapter } from '../../server/database/mysql-adapter.js';
 import { assertAuthorizedDisposableMySqlTarget } from '../../server/test-utils/mysql-disposable-target.js';
 import { parseTapSummary, assertTapSummaryStrict } from './tap-summary.js';
+import { blockUnmigratedAck4Entry } from './ack4/ack4-runtime.mjs';
+
+blockUnmigratedAck4Entry('mysql-gate.mjs');
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 

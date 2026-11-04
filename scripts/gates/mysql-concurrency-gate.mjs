@@ -5,6 +5,9 @@ import { createDatabase } from '../../server/db.js';
 import { resolveDatabaseConfig } from '../../server/database/config.js';
 import { parseTapSummary, assertTapSummaryStrict } from './tap-summary.js';
 import { assertAuthorizedDisposableMySqlTarget } from '../../server/test-utils/mysql-disposable-target.js';
+import { blockUnmigratedAck4Entry } from './ack4/ack4-runtime.mjs';
+
+blockUnmigratedAck4Entry('mysql-concurrency-gate.mjs');
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 

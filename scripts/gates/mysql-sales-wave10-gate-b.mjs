@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GATE_B_CASES, GATE_B_SUITES } from './mysql-sales-wave10-manifest.mjs';
 import { runProtectedMySqlCampaign } from './mysql-wave10-runner-support.mjs';
+import { blockUnmigratedAck4Entry } from './ack4/ack4-runtime.mjs';
 
 export const GATE_B_EVIDENCE_PREFIX = 'W10_GATE_B_EVIDENCE ';
 
@@ -74,6 +75,7 @@ export function renderGateBBoard(results, context, write = (line) => process.std
 }
 
 async function main() {
+  blockUnmigratedAck4Entry('mysql-sales-wave10-gate-b.mjs');
   await runProtectedMySqlCampaign({
     campaign: 'GATE B MYSQL CAMPAIGN',
     suites: GATE_B_SUITES,

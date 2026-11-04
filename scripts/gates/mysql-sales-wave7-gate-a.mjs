@@ -13,6 +13,9 @@ import {
   resetAuthorizedDisposableMySqlSchema,
 } from '../../server/test-utils/mysql-disposable-target.js';
 import { parseTapSummary, assertTapSummaryStrict } from './tap-summary.js';
+import { blockUnmigratedAck4Entry } from './ack4/ack4-runtime.mjs';
+
+blockUnmigratedAck4Entry('mysql-sales-wave7-gate-a.mjs');
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 

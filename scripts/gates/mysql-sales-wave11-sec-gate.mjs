@@ -33,6 +33,9 @@
 // Design      : solution.md §37.54.7.11, §37.54.14.4, §37.54.15.2
 
 import { runProtectedMySqlCampaign } from './mysql-wave10-runner-support.mjs';
+import { blockUnmigratedAck4Entry } from './ack4/ack4-runtime.mjs';
+
+blockUnmigratedAck4Entry('mysql-sales-wave11-sec-gate.mjs');
 
 export const W11_SEC_MYSQL_SUITES = Object.freeze([
   Object.freeze({ label: 'W11-SEC-SCOPE', file: 'server/mysql-sales-customer-wave11-sec-scope.integration.js' }),

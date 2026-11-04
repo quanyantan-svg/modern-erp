@@ -4,6 +4,9 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import mysql from 'mysql2/promise';
 import { resolveDatabaseConfig } from '../../server/database/config.js';
+import { blockUnmigratedAck4Entry } from '../gates/ack4/ack4-runtime.mjs';
+
+blockUnmigratedAck4Entry('mysql-phase7c-performance.mjs');
 
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 const workerPath = fileURLToPath(new URL('../gates/mysql-concurrency-worker.mjs', import.meta.url));

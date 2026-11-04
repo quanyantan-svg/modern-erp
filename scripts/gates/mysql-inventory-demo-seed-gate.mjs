@@ -15,6 +15,9 @@
 // launcher.
 
 import { runProtectedMySqlCampaign } from './mysql-wave10-runner-support.mjs';
+import { blockUnmigratedAck4Entry } from './ack4/ack4-runtime.mjs';
+
+blockUnmigratedAck4Entry('mysql-inventory-demo-seed-gate.mjs');
 
 export const W11_A_U3_INVENTORY_MYSQL_SUITES = Object.freeze([
   Object.freeze({

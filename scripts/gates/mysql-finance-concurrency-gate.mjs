@@ -22,6 +22,9 @@ import { fileURLToPath } from 'node:url';
 
 import { createDatabase } from '../../server/db.js';
 import { resolveDatabaseConfig } from '../../server/database/config.js';
+import { blockUnmigratedAck4Entry } from './ack4/ack4-runtime.mjs';
+
+blockUnmigratedAck4Entry('mysql-finance-concurrency-gate.mjs');
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 

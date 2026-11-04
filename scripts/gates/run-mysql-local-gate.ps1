@@ -26,11 +26,22 @@
 
 [CmdletBinding()]
 param(
-  [string]$Script = 'test:mysql:wave11-sec'
+  [string]$Script = 'test:mysql:m1-core',
+  [string]$RunId,
+  [string]$Ack4Capability
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+if ($Script -ne 'test:mysql:m1-core') {
+  Write-Host "[mysql-gate] BLOCKED: $Script has no independently approved ACK-4 manifest." -ForegroundColor Red
+  exit 7
+}
+if ([string]::IsNullOrWhiteSpace($RunId) -or [string]::IsNullOrWhiteSpace($Ack4Capability)) {
+  Write-Host '[mysql-gate] BLOCKED: -RunId and -Ack4Capability are required; the launcher cannot issue approval.' -ForegroundColor Red
+  exit 7
+}
 
 # Windows PowerShell 5.1 does not load the DPAPI assembly by default. On
 # PowerShell 7 the type already lives in the shared framework and the load is
@@ -172,6 +183,13 @@ Write-Step "  target       : $($preflight.identity.database) as $($preflight.ide
 Write-Step "  server       : $($preflight.identity.serverVersion)  uuid=$($preflight.identity.serverUuid)"
 Write-Step "  grants sha256: $($preflight.identity.grantsSha256)"
 Write-Step "  objects      : tables=$($preflight.inventory.tables) views=$($preflight.inventory.views) triggers=$($preflight.inventory.triggers) routines=$($preflight.inventory.routines) events=$($preflight.inventory.events)"
+$targetProofPath = [System.IO.Path]::GetTempFileName()
+$targetProof = [ordered]@{
+  host = [string]$baseline.host; port = [int]$baseline.port; database = [string]$baseline.database; user = [string]$baseline.user
+  selectedDatabase = [string]$preflight.identity.database; currentUser = [string]$preflight.identity.currentUser
+  serverUuid = [string]$preflight.identity.serverUuid; grantsSha256 = [string]$preflight.identity.grantsSha256
+}
+$targetProof | ConvertTo-Json -Compress | Set-Content -LiteralPath $targetProofPath -Encoding UTF8
 
 # --- Serialization ------------------------------------------------------------
 $lockName = "ModernERP.MySqlGate.$($baseline.database)"
@@ -205,7 +223,7 @@ try {
   # and restored immediately afterwards.
   $previousPreference = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  & $pnpm run $Script
+  & $pnpm run $Script -- --run-id $RunId --ack4-capability $Ack4Capability --target-proof $targetProofPath
   $gateExit = $LASTEXITCODE
   $ErrorActionPreference = $previousPreference
 } finally {
@@ -232,6 +250,7 @@ if ($postflightRun.ExitCode -eq 0) {
 
 Clear-GateEnvironment
 $password = $null
+Remove-Item -LiteralPath $targetProofPath -Force -ErrorAction SilentlyContinue
 if ($null -ne $gateLock) { $gateLock.Dispose() }
 
 Write-Step ''

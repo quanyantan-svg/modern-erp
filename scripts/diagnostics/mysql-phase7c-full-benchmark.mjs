@@ -26,6 +26,9 @@ import { request as httpRequest } from 'node:http';
 import { createHash, randomBytes, randomUUID, scryptSync } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import mysql from 'mysql2/promise';
+import { blockUnmigratedAck4Entry } from '../gates/ack4/ack4-runtime.mjs';
+
+blockUnmigratedAck4Entry('mysql-phase7c-full-benchmark.mjs');
 
 import { createApp } from '../../server/app.js';
 import { transaction } from '../../server/db.js';

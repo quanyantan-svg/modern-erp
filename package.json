@@ -29,6 +29,7 @@
     "test:mysql:local:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/gates/setup-mysql-local-gate.ps1",
     "test:mysql:performance": "node scripts/diagnostics/mysql-phase7c-performance.mjs",
     "test:mysql:finance-concurrency": "node scripts/gates/mysql-finance-concurrency-gate.mjs",
+    "test:mysql:m1-core": "node scripts/gates/mysql-m1-core-gate.mjs",
     "test:finance:responsive": "node scripts/acceptance/finance-operations-responsive-uat.mjs",
     "test:finance:uat": "node scripts/acceptance/finance-operations-final-uat.mjs",
     "test:sales:wave2-responsive": "node scripts/acceptance/sales-customer-wave2-responsive.mjs",
