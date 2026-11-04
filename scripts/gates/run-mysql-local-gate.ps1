@@ -195,7 +195,11 @@ $targetProof = [ordered]@{
   selectedDatabase = [string]$preflight.identity.database; currentUser = [string]$preflight.identity.currentUser
   serverUuid = [string]$preflight.identity.serverUuid; grantsSha256 = [string]$preflight.identity.grantsSha256
 }
-$targetProof | ConvertTo-Json -Compress | Set-Content -LiteralPath $targetProofPath -Encoding UTF8
+[System.IO.File]::WriteAllText(
+  $targetProofPath,
+  ($targetProof | ConvertTo-Json -Compress),
+  (New-Object System.Text.UTF8Encoding($false))
+)
 
 # --- Serialization ------------------------------------------------------------
 $lockName = "ModernERP.MySqlGate.$($baseline.database)"
