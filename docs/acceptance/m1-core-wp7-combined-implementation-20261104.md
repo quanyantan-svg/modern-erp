@@ -88,20 +88,25 @@ M-15 获得独立离线授权并已实现：
 | `pnpm test:fast`（经 `pnpm.cmd`） | 528 tests PASS；0 fail/cancel/skip/todo |
 | `pnpm test`（经 `pnpm.cmd`） | 3255 tests / 398 suites PASS；0 fail/cancel/skip/todo |
 | `pnpm build`（经 `pnpm.cmd`） | PASS |
-| docs current | N1、N3～N9 PASS；N2 RETIRED，不记 PASS |
+| docs current | 实施代码 HEAD：N1、N3～N9 PASS；最终证据提交后：N1、N3～N6、N8、N9 PASS，N2 RETIRED，N7 FAIL |
 | docs migration | C1～C6 PASS |
 | `git diff --check` | PASS |
 
 FAST/FULL runner 输出 `isolation=sqlite`，并明确移除环境中的 `ERP_MYSQL_TEST_ALLOW_RESET`。没有运行 HEAVY、MySQL
 Gate 或 M-15 历史 Migration。G01～G06 既有 WP7-A/G05 证据文件未修改、未覆盖，原状态保持。
 
+最终证据提交 `59eccd5` 的 commit message 未引用新增的 `docs/status/PROJECT_STATUS.md §37.32` 或完整路径，导致最终
+HEAD 的 N7 fail closed。合法修复需要改写该本地提交消息；用户本轮明确未授权 Git 历史重写，因此没有 amend/rebase，
+也没有把该结果记录为 PASS。实施代码与 FAST/FULL/Build/migration 结果不受此文档追溯缺陷影响。
+
 ## 6. 剩余阻塞与 G07 最小后续授权
 
-1. `M1C-G07` root executor 仍在 capability 消费前 BLOCKED：生产 HTTP fixture builder 与 root-managed app child、
+1. 最终 HEAD 的 N7 提交追溯为 FAIL；需用户独立授权本地历史重写后，才能只修改 `59eccd5` 的 commit message 并复跑。
+2. `M1C-G07` root executor 仍在 capability 消费前 BLOCKED：生产 HTTP fixture builder 与 root-managed app child、
    suite child、退出证明、cleanup/零对象证明需独立安全审查后激活；这不是 Gate PASS。
-2. CR-01～CR-09、真实 `information_schema` parity 和 MySQL 行为对等必须在精确 disposable MySQL 8 上执行。
-3. 历史 M-15 必须另取 Migration run 授权；不得复用 M1 G07 lease。
-4. G07 执行的最小新授权必须绑定：独立审查通过的最终完整 SHA、UUIDv4 run ID、精确 target 全身份、固定有序四操作、
+3. CR-01～CR-09、真实 `information_schema` parity 和 MySQL 行为对等必须在精确 disposable MySQL 8 上执行。
+4. 历史 M-15 必须另取 Migration run 授权；不得复用 M1 G07 lease。
+5. G07 执行的最小新授权必须绑定：独立审查通过的最终完整 SHA、UUIDv4 run ID、精确 target 全身份、固定有序四操作、
    15 分钟 capability 消费窗口；并继续明确允许 reset/bootstrap/fixture/cleanup、禁止 CREATE/DROP DATABASE、用户/权限
    变更、M-15/历史 Migration、其他 Gate、任意脚本注入。
 

@@ -1543,13 +1543,15 @@ M1C_WP7B0_DESIGN_PROMOTION_READY_FOR_INDEPENDENT_REVIEW
   快照 Oracle 和真实 `information_schema` parity 比较器已实现；真实 integration 文件保持普通 FAST/FULL 之外。
   root runner 在 capability **消费前**明确 BLOCKED，直至生产 HTTP fixture builder 与 root-managed child cleanup
   编排完成独立安全审查，故 `M1C-G07` 仍为 `NOT_RUN / BLOCKED`，没有虚构 PASS。
-- 离线回归：focused PASS；FAST `528/528`；FULL `3255/3255`（398 suites）；Build PASS；current
-  N1/N3～N9 PASS、N2 RETIRED；migration C1～C6 PASS；`git diff --check` PASS。测试运行器固定 SQLite，明确移除
-  `ERP_MYSQL_TEST_ALLOW_RESET`；未运行 HEAVY/MySQL/Migration。
+- 离线回归：focused PASS；FAST `528/528`；FULL `3255/3255`（398 suites）；Build PASS；实施代码提交后的
+  current N1/N3～N9 PASS、N2 RETIRED，migration C1～C6 PASS，`git diff --check` PASS。最终证据提交
+  `59eccd5` 的消息未引用 `§37.32` 或完整路径，故最终 HEAD 重跑 current 时 N1/N3～N6/N8/N9 PASS、N2 RETIRED，
+  **N7 FAIL**。修复需要改写该本地提交消息；本工作包未授权 Git 历史重写，因此如实保留为 blocker。测试运行器
+  固定 SQLite，明确移除 `ERP_MYSQL_TEST_ALLOW_RESET`；未运行 HEAVY/MySQL/Migration。
 - G01～G06 的 WP7-A 与 G05 独立审查既有证据未覆盖、未降级、未重新签发；本条只登记 Implementation，
   不构成任何 Gate PASS、Core Acceptance、Domain Closure、Freeze 或 Release。
-- 剩余阻塞：真实 MySQL parity/CR-01～CR-09 执行；G07 production HTTP fixture builder/root cleanup 安全审查与激活；
-  历史数据库 M-15 Migration 的独立批准、preflight、执行与证据。详见
+- 剩余阻塞：最终 HEAD 的 N7 提交追溯（需新增历史重写授权）；真实 MySQL parity/CR-01～CR-09 执行；G07
+  production HTTP fixture builder/root cleanup 安全审查与激活；历史数据库 M-15 Migration 的独立批准、preflight、执行与证据。详见
   [`docs/acceptance/m1-core-wp7-combined-implementation-20261104.md`](../acceptance/m1-core-wp7-combined-implementation-20261104.md)。
 
 ```text
