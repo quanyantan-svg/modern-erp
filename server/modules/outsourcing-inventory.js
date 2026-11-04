@@ -206,6 +206,7 @@ export function executeOutsourcingMove(db, {
     fromPosition: { productId: material.product_id, warehouseId: fromWarehouseId, ownerType: 'ENTERPRISE', ownerId: null, stockStatus: 'AVAILABLE', lotId: identity.lotId, serialId: identity.serialId },
     toPosition: { productId: material.product_id, warehouseId: toWarehouseId, ownerType: 'ENTERPRISE', ownerId: null, stockStatus: 'AVAILABLE', lotId: identity.lotId, serialId: identity.serialId },
     trackingMode: 'EXTERNAL', valuationMode: 'EXTERNAL',
+    ...(direction === 'SUPPLY' ? { insufficientStockCode: 'OUTSOURCING_SOURCE_INVENTORY_INSUFFICIENT' } : {}),
   });
   mutation.fromWarehouseId = fromWarehouseId;
   mutation.toWarehouseId = toWarehouseId;

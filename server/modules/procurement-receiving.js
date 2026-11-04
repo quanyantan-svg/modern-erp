@@ -276,9 +276,28 @@ export async function createReceiptNotice(db, req, res, actor) {
   }
 
   const noticeId = randomUUID(); const now = new Date().toISOString();
-  const noticeNo = 'RN' + (businessType === 'OUTSOURCE' ? 'OS-' : '') + Date.now().toString().slice(-10);
+  let noticeNo = null;
   try {
     transaction(db, () => {
+      // transaction() serializes writers through BEGIN IMMEDIATE on SQLite
+      // and mysql_transaction_gates on MySQL. Allocate the existing
+      // RN[OS-]<10 digits> business number only after that boundary so two
+      // requests in the same millisecond cannot acquire the same number.
+      // The bounded probe preserves the established external format; it does
+      // not reinterpret a duplicate-key failure as a capacity rejection.
+      const prefix = 'RN' + (businessType === 'OUTSOURCE' ? 'OS-' : '');
+      const base = Number(Date.now().toString().slice(-10));
+      for (let offset = 0; offset < 1000; offset += 1) {
+        const digits = String((base + offset) % 10_000_000_000).padStart(10, '0');
+        const candidate = `${prefix}${digits}`;
+        if (!db.prepare('SELECT 1 FROM receipt_notices WHERE notice_no=?').get(candidate)) {
+          noticeNo = candidate;
+          break;
+        }
+      }
+      if (!noticeNo) {
+        throw new HttpError(409, '收料通知编号暂时无法分配', { code: 'RECEIPT_NOTICE_NUMBER_EXHAUSTED' });
+      }
       if (businessType === 'OUTSOURCE') {
         const lockedOrder = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(resolved.outsourcingOrderId);
         const lockedPo = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(resolved.processingPoId);

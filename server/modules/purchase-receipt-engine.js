@@ -218,6 +218,9 @@ export function confirmPurchaseReceiptCore(db, actor, receiptId, { idempotencyKe
   if (!receipt) throw new HttpError(404, '采购入库单不存在');
   const now = new Date().toISOString();
   const locked = db.prepare('SELECT * FROM purchase_receipts WHERE id=?').get(receiptId);
+  if (locked.status === 'CONFIRMED') {
+    throw new HttpError(409, '采购入库单已经确认', { code: 'PURCHASE_RECEIPT_ALREADY_CONFIRMED' });
+  }
   if (locked.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以确认');
   if (!locked.purchase_order_id) throw new HttpError(409, '旧版无来源采购入库不可确认，请使用库存调整单');
   const po = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(locked.purchase_order_id);

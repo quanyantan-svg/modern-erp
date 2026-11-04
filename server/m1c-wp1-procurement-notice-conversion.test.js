@@ -592,6 +592,32 @@ describe('M1C-WP-1 — receipt notice sources, business-type scoped capacity and
   // WP-1D — delivery schedule ledger and the untouched direct purchase path
   // =========================================================================
   describe('WP-1D delivery schedule ledger and the direct purchase receipt path', () => {
+    test('D0 concurrent 6 vs 6 notice creation yields exact 201/409 and distinct numbers cannot mask capacity', async () => {
+      const { orderId, itemIds } = await createApprovedOrder([{ productId: 'product-001', quantity: 10, unitPriceCents: 1000 }]);
+      await createSchedule(orderId, itemIds[0], 10);
+      const originalNow = Date.now;
+      Date.now = () => 1_800_000_000_123;
+      try {
+        const body = (key) => ({
+          purchaseOrderId: orderId, supplierId: 'supplier-001', warehouseId: 'warehouse-001',
+          noticeDate: isoDate(0), idempotencyKey: key,
+          items: [{ purchaseOrderItemId: itemIds[0], productId: 'product-001', quantity: 6 }],
+        });
+        const results = await Promise.all([
+          fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, body('cr01-a')),
+          fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, body('cr01-b')),
+        ]);
+        assert.deepEqual(results.map((result) => result.status).sort(), [201, 409]);
+        const rejected = results.find((result) => result.status === 409);
+        assert.equal(rejected.data.code, 'RECEIPT_NOTICE_CAPACITY_EXCEEDED');
+        const rows = fixture.db.prepare('SELECT notice_no FROM receipt_notices WHERE purchase_order_id=? ORDER BY notice_no').all(orderId);
+        assert.equal(rows.length, 1);
+        assert.match(rows[0].notice_no, /^RN\d{10}$/);
+      } finally {
+        Date.now = originalNow;
+      }
+    });
+
     test('D1 the direct purchase order to purchase receipt path stays legal and consumes the schedule ledger', async () => {
       const { orderId, itemIds } = await createApprovedOrder([{ productId: 'product-001', quantity: 10, unitPriceCents: 1000 }]);
       const scheduleId = await createSchedule(orderId, itemIds[0], 10);
@@ -627,6 +653,13 @@ describe('M1C-WP-1 — receipt notice sources, business-type scoped capacity and
       assert.equal(voucher, 1, 'the voucher is written');
       const quality = fixture.db.prepare("SELECT COUNT(*) n FROM iqc_inspections WHERE purchase_receipt_id=?").get(created.data.id).n;
       assert.equal(quality, 1, 'the IQC decision stays reachable and effective');
+
+      const rejectsBefore = rejectAudits('PURCHASE_RECEIPT', created.data.id);
+      const repeated = await fixture.request('POST', `/api/purchase-receipts/${created.data.id}`, fixture.tokens.warehouse,
+        { action: 'confirm' }, { 'idempotency-key': `repeat-${created.data.id}` });
+      assert.equal(repeated.status, 409);
+      assert.equal(repeated.data.code, 'PURCHASE_RECEIPT_ALREADY_CONFIRMED');
+      assert.equal(rejectAudits('PURCHASE_RECEIPT', created.data.id), rejectsBefore + 1);
     });
 
     test('D2 cancelling a draft purchase receipt releases its schedule reservation with a signed reversal effect', async () => {

@@ -5448,7 +5448,9 @@ async function confirmPurchaseReceipt(db, req, res, actor, receiptId) {
     try {
       transaction(db, () => confirmPurchaseReceiptCore(db, actor, receiptId, { idempotencyKey: key, fingerprint }));
     } catch (error) {
-      auditBusinessRejection(db, actor, { entityType: 'PURCHASE_RECEIPT', entityId: receiptId, action: '确认采购入库' }, error, { onlyCodes: Object.values(NOTICE_ERROR_CODES) });
+      auditBusinessRejection(db, actor, { entityType: 'PURCHASE_RECEIPT', entityId: receiptId, action: '确认采购入库' }, error, {
+        onlyCodes: [...Object.values(NOTICE_ERROR_CODES), 'PURCHASE_RECEIPT_ALREADY_CONFIRMED'],
+      });
       throw error;
     }
   } else if (action === 'cancel') {

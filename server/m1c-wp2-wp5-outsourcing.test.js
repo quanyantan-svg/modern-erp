@@ -304,6 +304,37 @@ describe('M1C WP2-WP5 outsourcing core', () => {
     assert.equal(Number(fixture.db.prepare('SELECT issued_quantity q FROM outsourcing_material_list WHERE id=?').get(materialId).q), 10);
   });
 
+  test('WP3 发料与补料的 source position 库存不足只返回专用精确错误码且业务零副作用', async () => {
+    const orderId = await releaseOrder(10, [{ productId: 'product-001', requiredQuantity: 1 }]);
+    const [materialId] = await snapshotMaterials(orderId, ['product-001']);
+    // Negative precondition only: production HTTP has no endpoint whose
+    // purpose is to force a canonical source position below the requested
+    // quantity. Keep the business action itself on the real HTTP handler.
+    fixture.db.prepare(`UPDATE inventory SET quantity=1
+      WHERE warehouse_id='warehouse-001' AND product_id='product-001' AND active=1`).run();
+    fixture.db.prepare(`UPDATE inventory_valuation_balances SET quantity=1,value_cents=1000
+      WHERE warehouse_id='warehouse-001' AND product_id='product-001'`).run();
+    const unavailable = 2;
+    const before = {
+      material: fixture.db.prepare('SELECT * FROM outsourcing_material_list WHERE id=?').get(materialId),
+      transactions: fixture.db.prepare("SELECT COUNT(*) n FROM inventory_transactions WHERE source_type IN ('OUTSOURCING_ISSUE','OUTSOURCING_SUPPLEMENT')").get().n,
+      effects: fixture.db.prepare('SELECT COUNT(*) n FROM outsourcing_wip_identity_effects WHERE material_list_id=?').get(materialId).n,
+    };
+    for (const [path, key, dates] of [
+      ['issues', 'insufficient-issue', { issuedDate: isoDate() }],
+      ['supplements', 'insufficient-supplement', { reason: 'test', supplementDate: isoDate() }],
+    ]) {
+      const result = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/${path}`, fixture.tokens.outsourcing, {
+        materialListId: materialId, quantity: unavailable, idempotencyKey: key, ...dates,
+      });
+      assert.equal(result.status, 409, JSON.stringify(result.data));
+      assert.equal(result.data.code, 'OUTSOURCING_SOURCE_INVENTORY_INSUFFICIENT');
+    }
+    assert.deepEqual(fixture.db.prepare('SELECT * FROM outsourcing_material_list WHERE id=?').get(materialId), before.material);
+    assert.equal(fixture.db.prepare("SELECT COUNT(*) n FROM inventory_transactions WHERE source_type IN ('OUTSOURCING_ISSUE','OUTSOURCING_SUPPLEMENT')").get().n, before.transactions);
+    assert.equal(fixture.db.prepare('SELECT COUNT(*) n FROM outsourcing_wip_identity_effects WHERE material_list_id=?').get(materialId).n, before.effects);
+  });
+
   test('WP3 历史 WIP 不可证明的行不得被新的退料/倒冲消费', async () => {
     const materials = [{ productId: 'product-001', requiredQuantity: 0.02 }];
     const orderId = await releaseOrder(100, materials);

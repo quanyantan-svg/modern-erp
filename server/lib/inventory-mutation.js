@@ -71,6 +71,17 @@ const CONSIGNMENT_POLICIES = Object.freeze({
   CONSIGNMENT_RETURN: 'RETURN_VALUE_NEUTRAL_V1',
 });
 const MAX_SAFE_MICROS = Number.MAX_SAFE_INTEGER;
+const ALLOWED_INSUFFICIENT_STOCK_CODES = new Set([
+  'OUTSOURCING_SOURCE_INVENTORY_INSUFFICIENT',
+]);
+
+function insufficientStockError(input, message) {
+  const code = input.insufficientStockCode;
+  if (code !== undefined && !ALLOWED_INSUFFICIENT_STOCK_CODES.has(code)) {
+    throw new HttpError(400, 'insufficientStockCode 不合法');
+  }
+  return new HttpError(409, message, code ? { code } : undefined);
+}
 
 function mutationConflict(message, code = 'INVENTORY_MUTATION_IDEMPOTENCY_CONFLICT') {
   return new HttpError(409, message, { code });
@@ -351,7 +362,7 @@ export function applyInventoryMutation(input) {
       const activeLocked = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) q FROM inventory_locks WHERE product_id=? AND warehouse_id=? AND position_key=? AND status='ACTIVE'`).get(fromPos.productId, fromPos.warehouseId, fromPos.positionKey)?.q || 0);
       const lockable = Math.max(0, current - activeLocked);
       if (policy === 'BLOCK' && lockable < Number(input.quantity)) {
-        throw new HttpError(409, `库存不足：position ${fromPos.positionKey} 可用 ${lockable}，需出 ${input.quantity}`);
+        throw insufficientStockError(input, `库存不足：position ${fromPos.positionKey} 可用 ${lockable}，需出 ${input.quantity}`);
       }
     }
     // INV-32: initialization close gate for OPENING_INVENTORY source
@@ -368,7 +379,7 @@ export function applyInventoryMutation(input) {
       const existing = readPositionForUpdate(db, fromPos);
       const current = existing ? existing.quantity : 0;
       if (current < Number(input.quantity) && input.movementKind !== 'ADJUSTMENT') {
-        throw new HttpError(409, `库存不足：position ${fromPos.positionKey} 当前 ${current}`);
+        throw insufficientStockError(input, `库存不足：position ${fromPos.positionKey} 当前 ${current}`);
       }
       balanceAfterFrom = applyToPosition(db, fromPos, -Number(input.quantity));
       movements.push({ position: fromPos, direction: 'OUT', balanceAfter: balanceAfterFrom });
