@@ -14,7 +14,16 @@ function assertNoSql(value, location = 'fixture') {
 function lookup(context, reference) {
   const parts = String(reference).split('.');
   let value = context;
-  for (const part of parts) value = value?.[part];
+  for (const part of parts) {
+    if (value == null) throw new Error(`M1_G07_FIXTURE_REFERENCE_MISSING:${reference}`);
+    if (Array.isArray(value)) {
+      const index = Number(part);
+      if (!Number.isInteger(index) || index < 0) throw new Error(`M1_G07_FIXTURE_REFERENCE_MISSING:${reference}`);
+      value = value[index];
+    } else {
+      value = value[part];
+    }
+  }
   if (value === undefined) throw new Error(`M1_G07_FIXTURE_REFERENCE_MISSING:${reference}`);
   return value;
 }
@@ -29,7 +38,7 @@ function resolveRefs(value, context) {
 }
 
 function concreteHttpRequest(request, label) {
-  if (!request || !['POST', 'PUT', 'PATCH'].includes(request.method) || !String(request.path || request.route || '').startsWith('/api/')) {
+  if (!request || !['GET', 'POST', 'PUT', 'PATCH'].includes(request.method) || !String(request.path || request.route || '').startsWith('/api/')) {
     throw new Error(`M1_G07_FIXTURE_HTTP_REQUIRED:${label}`);
   }
   assertNoSql(request, label);
@@ -39,36 +48,51 @@ function concreteHttpRequest(request, label) {
 /**
  * Build every positive business fact through the fixed production-HTTP chain.
  * There is no external plan: the scenario definitions are the fixed, versioned,
- * SHA-pinned `M1_CORE_G07_FIXED_SCENARIOS`. A dynamic reference that cannot be
- * resolved, an illegal method, a SQL-shaped field or a non-2xx setup step fails
- * closed BEFORE any race (and therefore before ACK-4 is consumed upstream).
+ * SHA-pinned `M1_CORE_G07_FIXED_SCENARIOS`. Intermediate IDs that a create
+ * response does not return are read back via production GET steps (resolved
+ * through array-indexed `$ref`). A dynamic reference that cannot be resolved,
+ * an illegal method, a SQL-shaped field or a non-2xx setup step fails closed
+ * BEFORE any race (and therefore before ACK-4 is consumed upstream).
+ *
+ * `subjectTokens` maps each subject key to a real bearer token obtained by the
+ * caller through the production /api/auth/login flow — never invented here.
  */
-export async function buildM1CoreG07HttpFixtures({ applications, request }) {
-  if (!applications?.A || !applications?.B || typeof request !== 'function') throw new Error('M1_G07_FIXTURE_APPLICATIONS_REQUIRED');
+export async function buildM1CoreG07HttpFixtures({ applications, subjectTokens, request }) {
+  if (!applications?.A || !applications?.B || !subjectTokens || typeof request !== 'function') {
+    throw new Error('M1_G07_FIXTURE_APPLICATIONS_REQUIRED');
+  }
   assertFixedFixtureManifest();
   const setupTrace = [];
   const scenarios = {};
+
+  function tokenFor(subject, label) {
+    const token = subjectTokens[subject];
+    if (!token) throw new Error(`M1_G07_FIXTURE_SUBJECT_TOKEN_MISSING:${label}:${subject}`);
+    return token;
+  }
 
   for (const scenario of M1_CORE_G07_FIXED_SCENARIOS) {
     const context = { setup: {} };
     for (const raw of scenario.setup) {
       const body = resolveRefs(raw.body, context);
       const path = resolveRoute(raw.route, context);
-      const step = concreteHttpRequest({ application: raw.app, method: raw.method, path, body }, `${scenario.id}.${raw.id}`);
+      const token = tokenFor(raw.subject, `${scenario.id}.${raw.id}`);
+      const step = concreteHttpRequest({ application: raw.application ?? 'A', subject: raw.subject, method: raw.method, path, headers: raw.headers, body, token }, `${scenario.id}.${raw.id}`);
       const response = await request(applications[step.application], step);
       if (response.status < 200 || response.status >= 300) {
-        throw new Error(`M1_G07_FIXTURE_SETUP_BLOCKED:${scenario.id}.${raw.id}:http ${response.status}`);
+        throw new Error(`M1_G07_FIXTURE_SETUP_BLOCKED:${scenario.id}.${raw.id}:http ${response.status}:${JSON.stringify(response.data)}`);
       }
       context.setup[raw.id] = response.data;
       setupTrace.push(Object.freeze({
-        scenario: scenario.id, stepId: raw.id, application: step.application,
+        scenario: scenario.id, stepId: raw.id, application: step.application, subject: raw.subject,
         method: step.method, path: step.path, status: response.status,
       }));
     }
     const requests = scenario.raceRequests.map((raw) => {
       const body = resolveRefs(raw.body, context);
       const path = resolveRoute(raw.route, context);
-      return concreteHttpRequest({ application: raw.app, method: raw.method, path, body }, `${scenario.id}.race`);
+      const token = tokenFor(raw.subject, `${scenario.id}.race`);
+      return concreteHttpRequest({ application: raw.app, subject: raw.subject, method: raw.method, path, headers: raw.headers, body, token }, `${scenario.id}.race`);
     });
     if (requests.length !== 2 || new Set(requests.map((item) => item.application)).size !== 2) {
       throw new Error(`${scenario.id}_RACE_REQUESTS_INVALID`);

@@ -119,15 +119,25 @@ function rowCount(snapshot, table) {
   return Array.isArray(snapshot?.[table]) ? snapshot[table].length : 0;
 }
 
+function rejectAuditRows(snapshot) {
+  const rows = snapshot?.audit_logs;
+  return Array.isArray(rows) ? rows.filter((row) => row?.action === 'REJECT').length : 0;
+}
+
 /**
  * Independent, code-computed outcome deltas. The plan no longer supplies an
  * expected snapshot: the winner/loser are proven by the exact status/code pair
  * plus the single reject audit, the single winner idempotency record and the
- * zero loser idempotency leak. A full business-row side-effect delta is a
- * real-MySQL refinement layered on top of these four invariants.
+ * zero loser idempotency leak.
+ *
+ * The reject-audit count is derived from `action='REJECT'` rows only — never
+ * from the raw audit_logs total delta (the winner's CREATE/CONFIRM audit rows
+ * must not be conflated with the loser's rejection audit). The loser-side
+ * idempotency leak is a necessary, not sufficient, proxy; the authoritative
+ * zero-business-side-effect proof is the full ordered snapshot.
  */
 function computeOutcomeCounts(before, after) {
-  const rejectAuditCount = Math.max(0, rowCount(after, 'audit_logs') - rowCount(before, 'audit_logs'));
+  const rejectAuditCount = Math.max(0, rejectAuditRows(after) - rejectAuditRows(before));
   const winnerIdempotencyCount = Math.max(0, rowCount(after, 'idempotency_records') - rowCount(before, 'idempotency_records'));
   const loserSideEffectCount = Math.max(0, winnerIdempotencyCount - 1);
   return { rejectAuditCount, winnerIdempotencyCount, loserSideEffectCount };

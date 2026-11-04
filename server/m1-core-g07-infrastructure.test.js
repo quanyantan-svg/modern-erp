@@ -131,9 +131,20 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
 
   test('fixed fixture builder runs the embedded HTTP chain and pins the SHA digest', async () => {
     const calls = [];
+    // Rich mock data satisfies every array-indexed $ref path (order.items.0.id,
+    // materials.0.id, receipts.0.id, receiptNotice.items.0.sources.0.id).
+    const richData = {
+      id: 'id', rowId: 'rowId', orderNo: 'no',
+      order: { items: [{ id: 'poi', productId: 'p' }] },
+      materials: [{ id: 'mat', productId: 'p' }],
+      receipts: [{ id: 'rcpt' }],
+      receiptNotice: { items: [{ id: 'ni', sources: [{ id: 'src' }] }] },
+    };
+    const subjectTokens = { admin: 't-admin', creator: 't-creator', approver: 't-approver', warehouse: 't-warehouse', outsourcing: 't-outsourcing', receiving: 't-receiving' };
     const manifest = await buildM1CoreG07HttpFixtures({
       applications: { A: 'http://127.0.0.1:3101', B: 'http://127.0.0.1:3102' },
-      request: async (baseUrl, step) => { calls.push({ baseUrl, step }); return { status: 201, data: { id: `${step.path}-id`, rowId: `${step.path}-rowId` } }; },
+      subjectTokens,
+      request: async (baseUrl, step) => { calls.push({ baseUrl, step }); return { status: 201, data: richData }; },
     });
     assert.equal(manifest.executionStatus, 'NOT_RUN');
     assert.equal(manifest.provenance, 'PRODUCTION_HTTP');

@@ -40,6 +40,31 @@ async function waitForHttp(baseUrl, child) {
   throw new Error(`M1_G07_APP_START_TIMEOUT:${baseUrl}`);
 }
 
+// Seeded M1-P-03 test identities. These usernames/passwords are the disposable
+// SQLite/MySQL test identities, not production credentials; they mirror
+// server/db.js seed and server/test-support/procurement-http-fixture.js.
+const SUBJECT_CREDENTIALS = Object.freeze({
+  admin: { username: 'admin', password: 'admin123' },
+  creator: { username: 'sales', password: 'sales123' },
+  approver: { username: 'reviewer', password: 'review123' },
+  warehouse: { username: 'warehouse', password: 'warehouse123' },
+  outsourcing: { username: 'outsourcing', password: 'outsourcing123' },
+  receiving: { username: 'outsourcingreceiving', password: 'outsourcingreceiving123' },
+});
+
+async function loginSubject(baseUrl, subject) {
+  const credentials = SUBJECT_CREDENTIALS[subject];
+  if (!credentials) throw new Error(`M1_G07_SUBJECT_UNKNOWN:${subject}`);
+  const response = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: credentials.username, password: credentials.password }),
+  });
+  if (response.status !== 200) throw new Error(`M1_G07_SUBJECT_LOGIN_FAILED:${subject}:http ${response.status}`);
+  const data = await response.json();
+  if (!data?.token) throw new Error(`M1_G07_SUBJECT_TOKEN_MISSING:${subject}`);
+  return data.token;
+}
+
 async function main() {
   const runId = requiredArgument('--run-id');
   const capabilityPath = requiredArgument('--ack4-capability');
@@ -103,7 +128,14 @@ async function main() {
       const appB = await spawnRegistered(context, { mode: 'app', operation: 'RUN_M1_HTTP_FIXTURES', extraEnv: { PORT: String(portB) } });
       const applications = { A: `http://127.0.0.1:${portA}`, B: `http://127.0.0.1:${portB}` };
       await Promise.all([waitForHttp(applications.A, appA.child), waitForHttp(applications.B, appB.child)]);
-      const fixtureManifest = await buildM1CoreG07HttpFixtures({ applications, request: async (baseUrl, step) => {
+      // Obtain a real token for every subject through the production login
+      // flow. The two app processes share one disposable DB, so tokens issued
+      // by app A are valid for app B.
+      const subjectTokens = {};
+      for (const subject of Object.keys(SUBJECT_CREDENTIALS)) {
+        subjectTokens[subject] = await loginSubject(applications.A, subject);
+      }
+      const fixtureManifest = await buildM1CoreG07HttpFixtures({ applications, subjectTokens, request: async (baseUrl, step) => {
         const response = await fetch(baseUrl + step.path, {
           method: step.method, headers: { authorization: `Bearer ${step.token}`, 'content-type': 'application/json', ...step.headers },
           body: JSON.stringify(step.body),
