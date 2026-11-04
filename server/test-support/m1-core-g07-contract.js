@@ -144,6 +144,44 @@ export function assertG07Result(definition, outcome) {
   return result;
 }
 
+const G07_FIXED_EFFECTS = Object.freeze({
+  'CR-01': Object.freeze({ documentDelta: 1, quantityDelta: 6, identityDelta: 1, amountDeltaCents: 0 }),
+  'CR-02': Object.freeze({ documentDelta: 0, quantityDelta: 10, identityDelta: 1, amountDeltaCents: 1000 }),
+  'CR-03': Object.freeze({ documentDelta: 0, quantityDelta: 4, identityDelta: 1, amountDeltaCents: 400 }),
+  'CR-04': Object.freeze({ documentDelta: 1, quantityDelta: 6, identityDelta: 1, amountDeltaCents: 600 }),
+  'CR-05': Object.freeze({ documentDelta: 1, quantityDelta: 6, identityDelta: 1, amountDeltaCents: 600 }),
+  'CR-06': Object.freeze({ documentDelta: 1, quantityDelta: 6, identityDelta: 1, amountDeltaCents: 600 }),
+  'CR-07': Object.freeze({ documentDelta: 0, quantityDelta: 4, identityDelta: 1, amountDeltaCents: 400 }),
+  'CR-08': Object.freeze({ documentDelta: 1, quantityDelta: 1, identityDelta: 1, amountDeltaCents: 100 }),
+  'CR-09': Object.freeze({ documentDelta: 1, quantityDelta: 10, identityDelta: 1, amountDeltaCents: 5000 }),
+});
+
+/**
+ * Authoritative business-table oracle used by the real MySQL suite. All
+ * values are computed from complete before/after table snapshots; none are
+ * inferred from idempotency cardinality. `legs` are explicit conservation
+ * equations (opening + signed change = closing) for quantity/WIP/value.
+ */
+export function assertG07AuthoritativeEvidence(definition, evidence) {
+  const fixed = G07_FIXED_EFFECTS[definition?.id];
+  if (!fixed || !evidence?.before || !evidence?.after) throw new Error('G07_AUTHORITATIVE_EVIDENCE_INVALID');
+  for (const [key, expected] of Object.entries(fixed)) {
+    if (evidence.effects?.[key] !== expected) throw new Error(`${definition.id}_${key.toUpperCase()}_MISMATCH`);
+  }
+  if (evidence.effects?.loserBusinessRowDelta !== 0) throw new Error(`${definition.id}_LOSER_BUSINESS_ROW_DELTA`);
+  if (evidence.effects?.winnerBusinessRowDelta !== 1) throw new Error(`${definition.id}_WINNER_BUSINESS_ROW_DELTA`);
+  if (evidence.audit?.exactRequestReject !== true || evidence.audit?.count !== 1) throw new Error(`${definition.id}_REJECTION_AUDIT_CORRELATION_MISMATCH`);
+  if (evidence.idempotency?.winnerSucceeded !== 1 || evidence.idempotency?.loserAbsent !== true) throw new Error(`${definition.id}_REQUEST_IDEMPOTENCY_MISMATCH`);
+  if (evidence.sources?.allMatched !== true) throw new Error(`${definition.id}_BUSINESS_SOURCE_MISMATCH`);
+  if (!Array.isArray(evidence.legs) || evidence.legs.length === 0) throw new Error(`${definition.id}_CONSERVATION_LEGS_MISSING`);
+  for (const leg of evidence.legs) {
+    for (const key of ['opening', 'change', 'closing']) if (!Number.isSafeInteger(leg[key])) throw new Error(`${definition.id}_UNSAFE_${String(leg.kind || 'LEG').toUpperCase()}`);
+    if (leg.opening + leg.change !== leg.closing) throw new Error(`${definition.id}_${String(leg.kind || 'LEG').toUpperCase()}_CONSERVATION_MISMATCH`);
+    if (!leg.sourceId || !leg.identity) throw new Error(`${definition.id}_LEG_PROVENANCE_MISSING`);
+  }
+  return Object.freeze({ definition, evidence });
+}
+
 /** 金额必须为安全整数分（bigint 或 number 安全整数），拒绝浮点或越界金额。 */
 export function assertSafeIntegerCents(value, label = 'money') {
   if (value === null || value === undefined) return;
