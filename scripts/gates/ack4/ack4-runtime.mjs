@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign, verify } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
@@ -11,6 +11,10 @@ export const M1_CORE_MANIFEST = Object.freeze([
   'CLEANUP_SCHEMA_POST_RUN',
 ]);
 export const ACK4_TERMINAL_STATES = Object.freeze(['FINISHED', 'FAILED', 'CLEANUP_UNVERIFIED']);
+export const ACK4_RECOVERY_MANIFEST = Object.freeze([
+  'INSPECT_QUARANTINE',
+  'CLEANUP_SCHEMA_RECOVERY',
+]);
 let activePortableChildLease = null;
 
 export class Ack4BlockedError extends Error {
@@ -119,6 +123,10 @@ export function consumeAck4Record({ issuedPath, consumedDir, expected, decrypt, 
       rootPid, rootStartedAt: requiredText(rootStartedAt, 'rootStartedAt'), nonce: randomBytes(32).toString('hex'),
       consumedAt: new Date(nowMs).toISOString(), consumedPath,
     };
+    const childKeys = generateKeyPairSync('ed25519');
+    lease.childLeasePrivateKey = childKeys.privateKey;
+    lease.childLeasePublicKey = childKeys.publicKey.export({ type: 'spki', format: 'pem' });
+    lease.completedOperations = [];
     return lease;
   } finally { release(); }
 }
@@ -157,8 +165,9 @@ export function consumeChildLease(childLease, { rootLease, childPid, childStarte
   return childLease;
 }
 
-function signPortableChildPayload(payload, rootNonce) {
-  return createHmac('sha256', requiredText(rootNonce, 'rootNonce')).update(JSON.stringify(canonical(payload))).digest('hex');
+function signPortableChildPayload(payload, privateKey) {
+  if (!privateKey) throw new Ack4BlockedError('root child-signing key is required', 'ACK4_CHILD_SIGNING_KEY_REQUIRED');
+  return sign(null, Buffer.from(JSON.stringify(canonical(payload))), privateKey).toString('base64');
 }
 
 export function issuePortableChildLease(rootLease, { childPid, childStartedAt, operation, expiresAt = Date.now() + ACK4_CONSUME_WINDOW_MS }) {
@@ -170,18 +179,17 @@ export function issuePortableChildLease(rootLease, { childPid, childStartedAt, o
     commitSha: rootLease.commitSha, target: rootLease.target, manifest: rootLease.manifest, operation,
     issuedAt: Date.now(), expiresAt,
   };
-  return Object.freeze({ ...payload, signature: signPortableChildPayload(payload, rootLease.nonce) });
+  return Object.freeze({ ...payload, signature: signPortableChildPayload(payload, rootLease.childLeasePrivateKey) });
 }
 
-export function consumePortableChildLease({ leasePath, consumedDir, rootNonce, expected, nowMs = Date.now() }) {
+export function consumePortableChildLease({ leasePath, consumedDir, rootPublicKey, expected, nowMs = Date.now() }) {
   const source = resolve(leasePath);
   mkdirSync(consumedDir, { recursive: true });
   const record = JSON.parse(readFileSync(source, 'utf8'));
   const { signature, ...payload } = record;
-  const calculated = signPortableChildPayload(payload, rootNonce);
-  const left = Buffer.from(String(signature || ''), 'hex');
-  const right = Buffer.from(calculated, 'hex');
-  if (left.length !== right.length || !timingSafeEqual(left, right)) throw new Ack4BlockedError('portable child signature is invalid', 'ACK4_CHILD_SIGNATURE_INVALID');
+  if (!rootPublicKey || !verify(null, Buffer.from(JSON.stringify(canonical(payload))), rootPublicKey, Buffer.from(String(signature || ''), 'base64'))) {
+    throw new Ack4BlockedError('portable child signature is invalid', 'ACK4_CHILD_SIGNATURE_INVALID');
+  }
   if (record.kind !== 'PORTABLE_CHILD' || record.version !== ACK4_VERSION) throw new Ack4BlockedError('portable child format is invalid', 'ACK4_FORMAT_INVALID');
   if (nowMs < record.issuedAt || nowMs > record.expiresAt || record.expiresAt - record.issuedAt > ACK4_CONSUME_WINDOW_MS) throw new Ack4BlockedError('portable child lease expired', 'ACK4_EXPIRED');
   if (record.rootPid !== expected.rootPid || record.childPid !== expected.childPid || record.childStartedAt !== expected.childStartedAt) throw new Ack4BlockedError('portable child process tree drifted', 'ACK4_PROCESS_TREE_MISMATCH');
@@ -192,6 +200,20 @@ export function consumePortableChildLease({ leasePath, consumedDir, rootNonce, e
   catch { throw new Ack4BlockedError('portable child lease is missing or already consumed', 'ACK4_CHILD_REPLAY'); }
   activePortableChildLease = Object.freeze({ ...record, consumedPath });
   return activePortableChildLease;
+}
+
+export function beginAck4RootOperation(rootLease, operation, expected) {
+  assertActiveRootLease(rootLease, expected);
+  const index = rootLease.operations.indexOf(operation);
+  if (index < 0) throw new Ack4BlockedError('root operation is outside the approved manifest', 'ACK4_ROOT_SCOPE_ESCALATION');
+  if (rootLease.completedOperations.includes(operation)) throw new Ack4BlockedError('root operation cannot be reused', 'ACK4_OPERATION_REPLAY');
+  const cleanup = operation === 'CLEANUP_SCHEMA_POST_RUN' || operation === 'CLEANUP_SCHEMA_RECOVERY';
+  if (!cleanup) {
+    const firstUnfinished = rootLease.operations.find((item) => !rootLease.completedOperations.includes(item));
+    if (firstUnfinished !== operation) throw new Ack4BlockedError('root operation order drifted', 'ACK4_OPERATION_ORDER_MISMATCH');
+  }
+  rootLease.completedOperations.push(operation);
+  return operation;
 }
 
 export function assertActivePortableChildOperation(operations) {
@@ -224,6 +246,28 @@ export function assertNoAck4Quarantine(quarantineDir, target) {
   if (existsSync(join(quarantineDir, `${digest(normalizeAck4Target(target))}.json`))) {
     throw new Ack4BlockedError('target is quarantined; a new recovery approval is required', 'ACK4_TARGET_QUARANTINED');
   }
+}
+
+export function recoverAck4Quarantine(recoveryLease, { quarantineDir, target, cleanupProven, childrenExited }) {
+  assertActiveRootLease(recoveryLease, {
+    commitSha: recoveryLease.commitSha, target, manifest: 'ACK4_RECOVERY_V1',
+  });
+  exactArray(recoveryLease.operations, ACK4_RECOVERY_MANIFEST, 'recovery operations');
+  const markerPath = join(quarantineDir, `${digest(normalizeAck4Target(target))}.json`);
+  if (!existsSync(markerPath)) throw new Ack4BlockedError('quarantine marker is missing', 'ACK4_QUARANTINE_MISSING');
+  const marker = JSON.parse(readFileSync(markerPath, 'utf8'));
+  if (marker.runId === recoveryLease.runId) throw new Ack4BlockedError('recovery requires a new runId', 'ACK4_RECOVERY_REPLAY');
+  beginAck4RootOperation(recoveryLease, 'INSPECT_QUARANTINE', {
+    commitSha: recoveryLease.commitSha, target, manifest: 'ACK4_RECOVERY_V1',
+  });
+  beginAck4RootOperation(recoveryLease, 'CLEANUP_SCHEMA_RECOVERY', {
+    commitSha: recoveryLease.commitSha, target, manifest: 'ACK4_RECOVERY_V1',
+  });
+  if (!cleanupProven || !childrenExited) throw new Ack4BlockedError('recovery cleanup is unverified', 'ACK4_RECOVERY_UNVERIFIED');
+  rmSync(markerPath);
+  recoveryLease.state = 'FINISHED';
+  recoveryLease.finishedAt = new Date().toISOString();
+  return Object.freeze({ recoveredRunId: marker.runId, recoveryRunId: recoveryLease.runId, state: 'FINISHED' });
 }
 
 export function blockUnmigratedAck4Entry(entry) {

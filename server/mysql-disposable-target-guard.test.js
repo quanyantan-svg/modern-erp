@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { generateKeyPairSync } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,12 +33,15 @@ before(() => {
     rootStartedAt: 'root-start', commitSha: 'b'.repeat(40), target, manifest: 'TEST_RESET_V1',
     operations: ['CLEANUP_SCHEMA_POST_RUN'], nonce: 'unit-test-root-nonce',
   };
+  const keys = generateKeyPairSync('ed25519');
+  root.childLeasePrivateKey = keys.privateKey;
+  root.childLeasePublicKey = keys.publicKey.export({ type: 'spki', format: 'pem' });
   const childStartedAt = 'child-start';
   const child = issuePortableChildLease(root, { childPid: process.pid, childStartedAt, operation: 'CLEANUP_SCHEMA_POST_RUN' });
   leaseDir = mkdtempSync(join(tmpdir(), 'modern-erp-reset-lease-'));
   const leasePath = join(leaseDir, 'lease.json'); writeFileSync(leasePath, JSON.stringify(child));
   consumePortableChildLease({
-    leasePath, consumedDir: join(leaseDir, 'consumed'), rootNonce: root.nonce,
+    leasePath, consumedDir: join(leaseDir, 'consumed'), rootPublicKey: root.childLeasePublicKey,
     expected: { rootPid: process.ppid, childPid: process.pid, childStartedAt, commitSha: root.commitSha, target, manifest: root.manifest, operation: 'CLEANUP_SCHEMA_POST_RUN' },
   });
 });

@@ -1,23 +1,22 @@
-// M1-Core G07 is the only root runner currently assigned an approved ACK-4
-// operation manifest. This file intentionally performs no database work until
-// the one-time capability has been validated and atomically consumed.
+// M1-Core G07 root orchestrator. Only read-only preflight occurs before the
+// one-time ACK-4 capability is atomically consumed.
 
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { consumeAck4Record, M1_CORE_MANIFEST, assertNoAck4Quarantine } from './ack4/ack4-runtime.mjs';
+import { setTimeout as delay } from 'node:timers/promises';
+import { assertNoAck4Quarantine, consumeAck4Record, M1_CORE_MANIFEST } from './ack4/ack4-runtime.mjs';
+import { runM1CoreG07Lifecycle } from './m1-core-g07-root-lifecycle.mjs';
+import { buildM1CoreG07HttpFixtures } from '../../server/test-support/m1-core-g07-http-fixture-builder.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const manifest = 'M1_CORE_G07_V1';
-const registeredSuites = Object.freeze([
-  'server/mysql-m1-core-g07.integration.js',
-]);
+const registeredSuites = Object.freeze(['server/mysql-m1-core-g07.integration.js']);
 
-function argument(name) {
-  const index = process.argv.indexOf(name);
-  return index >= 0 ? process.argv[index + 1] : null;
-}
+function argument(name) { const index = process.argv.indexOf(name); return index >= 0 ? process.argv[index + 1] : null; }
+function requiredArgument(name) { const value = argument(name); if (!value) throw new Error(`ACK-4 BLOCKED: ${name} is required`); return value; }
+function gitText(args) { return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8', windowsHide: true }).trim(); }
 
 function decryptDpapi(bytes) {
   const encoded = bytes.toString('base64');
@@ -30,42 +29,118 @@ function decryptDpapi(bytes) {
   return JSON.parse(execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true }));
 }
 
-function gitText(args) {
-  return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8', windowsHide: true }).trim();
+async function waitForHttp(baseUrl, child) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error(`M1_G07_APP_EXITED:${child.exitCode}`);
+    try { const response = await fetch(`${baseUrl}/api/health`); if (response.status < 500) return; } catch {}
+    await delay(50);
+  }
+  throw new Error(`M1_G07_APP_START_TIMEOUT:${baseUrl}`);
 }
 
-const runId = argument('--run-id');
-const capabilityPath = argument('--ack4-capability');
-if (!runId || !capabilityPath) throw new Error('ACK-4 BLOCKED: --run-id and --ack4-capability are required');
-const commitSha = gitText(['rev-parse', 'HEAD']);
-if (gitText(['status', '--porcelain'])) throw new Error('ACK-4 BLOCKED: the Git worktree must be clean');
+function waitForExit(child) {
+  if (child.exitCode !== null) return Promise.resolve(child.exitCode);
+  return new Promise((done, reject) => { child.once('exit', done); child.once('error', reject); });
+}
 
-// The executor remains deliberately sealed until the production-HTTP fixture
-// builder and root-managed child lifecycle have completed independent safety
-// review. Refuse before reading/decrypting/renaming the one-time capability so
-// a readiness probe cannot burn an approved run or strand it in CONSUMED.
-throw Object.assign(new Error(`M1 G07 BLOCKED_BEFORE_CONSUMPTION: registered ${registeredSuites.join(', ')}; root execution lifecycle is not activated`), {
-  code: 'M1_G07_EXECUTION_NOT_AUTHORIZED',
-});
+async function main() {
+  const runId = requiredArgument('--run-id');
+  const capabilityPath = requiredArgument('--ack4-capability');
+  const targetPath = resolve(requiredArgument('--target-proof'));
+  const fixturePlanPath = resolve(requiredArgument('--fixture-plan'));
+  const portA = Number(requiredArgument('--app-port-a'));
+  const portB = Number(requiredArgument('--app-port-b'));
+  if (![portA, portB].every((port) => Number.isSafeInteger(port) && port >= 1024 && port <= 65535) || portA === portB) throw new Error('M1_G07_APP_PORTS_INVALID');
 
-// The launcher writes this read-only result after target preflight. It contains
-// no password and is bound into the approved capability. Reading it does not
-// open a database from this process.
-const targetPath = argument('--target-proof');
-if (!targetPath) throw new Error('ACK-4 BLOCKED: --target-proof is required');
-const target = JSON.parse(readFileSync(resolve(targetPath), 'utf8'));
-const storeRoot = resolve(process.env.LOCALAPPDATA || '', 'ModernERP', 'mysql-gate', 'ack4');
-assertNoAck4Quarantine(join(storeRoot, 'quarantine'), target);
-const lease = consumeAck4Record({
-  issuedPath: resolve(capabilityPath), consumedDir: join(storeRoot, 'consumed'), decrypt: decryptDpapi,
-  expected: { runId, commitSha, manifest, operations: M1_CORE_MANIFEST, target, sid: process.env.USER_SID || process.env.USERNAME },
-  rootPid: process.pid, rootStartedAt: new Date().toISOString(),
-});
+  const commitSha = gitText(['rev-parse', 'HEAD']);
+  if (gitText(['status', '--porcelain'])) throw new Error('ACK-4 BLOCKED: the Git worktree must be clean');
+  const target = JSON.parse(readFileSync(targetPath, 'utf8'));
+  const storeRoot = resolve(process.env.LOCALAPPDATA || '', 'ModernERP', 'mysql-gate', 'ack4');
+  const quarantineDir = join(storeRoot, 'quarantine');
+  assertNoAck4Quarantine(quarantineDir, target);
+  const expected = { commitSha, target, manifest };
+  const childDir = join(storeRoot, 'children', runId);
+  mkdirSync(childDir, { recursive: true });
+  const children = [];
+  let rootLease;
 
-// WP7-COMBINED prepares the runner and suites but does not authorize a real
-// MySQL execution. A future exact run approval will replace this readiness
-// boundary with the reset/bootstrap/suite/cleanup orchestration after an
-// independent security review of the implementation commit.
-throw Object.assign(new Error(`M1 G07 READY_TO_EXECUTE: ACK-4 run ${lease.runId} consumed for ${registeredSuites.join(', ')}; execution remains independently disabled`), {
-  code: 'M1_G07_EXECUTION_NOT_AUTHORIZED',
-});
+  const spawnRegistered = async (context, { mode, operation, extraEnv = {} }) => {
+    const childStartedAt = new Date().toISOString();
+    const leasePath = join(childDir, `${mode}-${children.length}.lease.json`);
+    const child = spawn(process.execPath, [join(repoRoot, 'scripts/gates/m1-core-g07-child.mjs'), '--mode', mode], {
+      cwd: repoRoot, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: {
+        ...process.env, ...extraEnv, ERP_M1_G07_ACK4_CHILD_LEASE: leasePath,
+        ERP_M1_G07_ACK4_CHILD_CONSUMED_DIR: join(childDir, 'consumed'),
+        ERP_M1_G07_ACK4_ROOT_PUBLIC_KEY: rootLease.childLeasePublicKey,
+        ERP_M1_G07_ROOT_PID: String(process.pid), ERP_M1_G07_CHILD_STARTED_AT: childStartedAt,
+        ERP_M1_G07_COMMIT_SHA: commitSha, ERP_M1_G07_TARGET_PROOF: targetPath, ERP_M1_G07_OPERATION: operation,
+      },
+    });
+    const lease = context.issuePortableChild({ childPid: child.pid, childStartedAt });
+    writeFileSync(leasePath, JSON.stringify(lease), { flag: 'wx', mode: 0o600 });
+    const entry = { child, context, childStartedAt, stdout: '', stderr: '' };
+    child.stdout.on('data', (chunk) => { entry.stdout += chunk; });
+    child.stderr.on('data', (chunk) => { entry.stderr += chunk; });
+    children.push(entry);
+    return entry;
+  };
+  const finishChild = async (entry) => {
+    const code = await waitForExit(entry.child);
+    entry.context.markChildExited(entry.child.pid, entry.childStartedAt);
+    if (code !== 0) throw new Error(`M1_G07_CHILD_FAILED:${code}:${entry.stderr}`);
+    return entry.stdout;
+  };
+
+  const report = await runM1CoreG07Lifecycle({
+    consumeRoot: async () => {
+      rootLease = consumeAck4Record({
+        issuedPath: resolve(capabilityPath), consumedDir: join(storeRoot, 'consumed'), decrypt: decryptDpapi,
+        expected: { runId, commitSha, manifest, operations: M1_CORE_MANIFEST, target, sid: process.env.USER_SID || process.env.USERNAME },
+        rootPid: process.pid, rootStartedAt: new Date().toISOString(),
+      });
+      return rootLease;
+    }, expected, quarantineDir,
+    reset: async (context) => finishChild(await spawnRegistered(context, { mode: 'operation', operation: 'RESET_SCHEMA_PRE_RUN' })),
+    bootstrap: async (context) => finishChild(await spawnRegistered(context, { mode: 'operation', operation: 'BOOTSTRAP_CURRENT_SCHEMA' })),
+    runHttpFixtures: async (context) => {
+      const appA = await spawnRegistered(context, { mode: 'app', operation: 'RUN_M1_HTTP_FIXTURES', extraEnv: { PORT: String(portA) } });
+      const appB = await spawnRegistered(context, { mode: 'app', operation: 'RUN_M1_HTTP_FIXTURES', extraEnv: { PORT: String(portB) } });
+      const applications = { A: `http://127.0.0.1:${portA}`, B: `http://127.0.0.1:${portB}` };
+      await Promise.all([waitForHttp(applications.A, appA.child), waitForHttp(applications.B, appB.child)]);
+      const plans = JSON.parse(readFileSync(fixturePlanPath, 'utf8'));
+      const fixtureManifest = await buildM1CoreG07HttpFixtures({ applications, plans, request: async (baseUrl, step) => {
+        const response = await fetch(baseUrl + step.path, {
+          method: step.method, headers: { authorization: `Bearer ${step.token}`, 'content-type': 'application/json', ...step.headers },
+          body: JSON.stringify(step.body),
+        });
+        return { status: response.status, data: await response.json().catch(() => ({})) };
+      } });
+      const fixtureManifestPath = join(childDir, 'fixture-manifest.json');
+      writeFileSync(fixtureManifestPath, JSON.stringify(fixtureManifest), { flag: 'wx', mode: 0o600 });
+      try {
+        const suite = await spawnRegistered(context, { mode: 'suite', operation: 'RUN_M1_HTTP_FIXTURES', extraEnv: { ERP_M1_G07_FIXTURE_MANIFEST: fixtureManifestPath } });
+        await finishChild(suite);
+      } finally { rmSync(fixtureManifestPath, { force: true }); }
+      return { passed: true };
+    },
+    stopChildren: async () => {
+      for (const entry of children) if (entry.child.exitCode === null) entry.child.kill('SIGTERM');
+      for (const entry of children) {
+        if (entry.child.exitCode === null) await waitForExit(entry.child);
+        try { entry.context.markChildExited(entry.child.pid, entry.childStartedAt); } catch {}
+      }
+      return children.every((entry) => entry.child.exitCode !== null);
+    },
+    cleanup: async (context) => finishChild(await spawnRegistered(context, { mode: 'operation', operation: 'CLEANUP_SCHEMA_POST_RUN' })),
+    verifyCleanup: async () => {
+      const cleanupChild = [...children].reverse().find((entry) => entry.stdout.includes('CLEANUP_SCHEMA_POST_RUN'));
+      const line = cleanupChild?.stdout.trim().split(/\r?\n/).findLast((item) => item.startsWith('{'));
+      const result = line ? JSON.parse(line) : null;
+      return { clean: Array.isArray(result?.inventory) && result.inventory.length === 0, inventory: result?.inventory || ['UNVERIFIED'] };
+    },
+  });
+  process.stdout.write(`${JSON.stringify({ ...report, suites: registeredSuites, executionStatus: 'EXECUTED_NOT_ACCEPTED' })}\n`);
+}
+
+await main();

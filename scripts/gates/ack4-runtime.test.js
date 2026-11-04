@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import {
-  Ack4BlockedError, ACK4_CONSUME_WINDOW_MS, M1_CORE_MANIFEST, assertNoAck4Quarantine,
+  Ack4BlockedError, ACK4_CONSUME_WINDOW_MS, ACK4_RECOVERY_MANIFEST, M1_CORE_MANIFEST, assertNoAck4Quarantine,
   consumeAck4Record, consumeChildLease, consumePortableChildLease, finalizeAck4Run,
-  issueChildLease, issuePortableChildLease, validateAck4Approval,
+  issueChildLease, issuePortableChildLease, recoverAck4Quarantine, validateAck4Approval,
 } from './ack4/ack4-runtime.mjs';
 
 const target = Object.freeze({
@@ -76,7 +76,7 @@ describe('ACK-4 pure simulation (no database and no MySQL connection)', () => {
       const child = issuePortableChildLease(root, { childPid: 200, childStartedAt: 'child-start', operation: 'RUN_M1_HTTP_FIXTURES' });
       const leasePath = join(dir, 'child.json'); writeFileSync(leasePath, JSON.stringify(child));
       const input = {
-        leasePath, consumedDir: join(dir, 'child-consumed'), rootNonce: root.nonce,
+        leasePath, consumedDir: join(dir, 'child-consumed'), rootPublicKey: root.childLeasePublicKey,
         expected: { rootPid: 100, childPid: 200, childStartedAt: 'child-start', commitSha, target, manifest: 'M1_CORE_G07_V1', operation: 'RUN_M1_HTTP_FIXTURES' },
       };
       assert.equal(consumePortableChildLease(input).operation, 'RUN_M1_HTTP_FIXTURES');
@@ -102,6 +102,32 @@ describe('ACK-4 pure simulation (no database and no MySQL connection)', () => {
       const clean = makeRoot('2');
       assert.equal(finalizeAck4Run(clean, { testsPassed: false, cleanupProven: true, childrenExited: true, quarantineDir: join(dir, 'quarantine') }), 'FAILED');
       assert.equal(clean.state, 'FAILED');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('quarantine recovery requires a distinct one-time recovery approval and exact operation set', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'modern-erp-ack4-recovery-'));
+    try {
+      const failed = { ...record(), runId: '123e4567-e89b-42d3-a456-426614174010' };
+      const failedPath = join(dir, 'failed.issued'); writeFileSync(failedPath, JSON.stringify(failed));
+      const failedLease = consumeAck4Record({ issuedPath: failedPath, consumedDir: join(dir, 'consumed'), expected: { ...expected(), runId: failed.runId }, decrypt: (bytes) => JSON.parse(bytes), rootPid: 100, rootStartedAt: 'failed-root' });
+      finalizeAck4Run(failedLease, { testsPassed: false, cleanupProven: false, childrenExited: false, quarantineDir: join(dir, 'quarantine'), inventory: ['leftover'] });
+
+      const recovery = {
+        ...record(), runId: '123e4567-e89b-42d3-a456-426614174011', manifest: 'ACK4_RECOVERY_V1',
+        operations: [...ACK4_RECOVERY_MANIFEST],
+      };
+      const recoveryPath = join(dir, 'recovery.issued'); writeFileSync(recoveryPath, JSON.stringify(recovery));
+      const recoveryLease = consumeAck4Record({
+        issuedPath: recoveryPath, consumedDir: join(dir, 'consumed'),
+        expected: { ...expected(), runId: recovery.runId, manifest: 'ACK4_RECOVERY_V1', operations: ACK4_RECOVERY_MANIFEST },
+        decrypt: (bytes) => JSON.parse(bytes), rootPid: 101, rootStartedAt: 'recovery-root',
+      });
+      const result = recoverAck4Quarantine(recoveryLease, { quarantineDir: join(dir, 'quarantine'), target, cleanupProven: true, childrenExited: true });
+      assert.equal(result.recoveredRunId, failed.runId);
+      assert.equal(result.state, 'FINISHED');
+      assert.doesNotThrow(() => assertNoAck4Quarantine(join(dir, 'quarantine'), target));
+      assert.throws(() => recoverAck4Quarantine(recoveryLease, { quarantineDir: join(dir, 'quarantine'), target, cleanupProven: true, childrenExited: true }), /active root lease|marker is missing/);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

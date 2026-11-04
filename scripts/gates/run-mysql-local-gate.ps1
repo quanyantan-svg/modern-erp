@@ -28,7 +28,10 @@
 param(
   [string]$Script = 'test:mysql:m1-core',
   [string]$RunId,
-  [string]$Ack4Capability
+  [string]$Ack4Capability,
+  [string]$FixturePlan,
+  [int]$AppPortA = 33101,
+  [int]$AppPortB = 33102
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,8 +41,16 @@ if ($Script -ne 'test:mysql:m1-core') {
   Write-Host "[mysql-gate] BLOCKED: $Script has no independently approved ACK-4 manifest." -ForegroundColor Red
   exit 7
 }
-if ([string]::IsNullOrWhiteSpace($RunId) -or [string]::IsNullOrWhiteSpace($Ack4Capability)) {
-  Write-Host '[mysql-gate] BLOCKED: -RunId and -Ack4Capability are required; the launcher cannot issue approval.' -ForegroundColor Red
+if ([string]::IsNullOrWhiteSpace($RunId) -or [string]::IsNullOrWhiteSpace($Ack4Capability) -or [string]::IsNullOrWhiteSpace($FixturePlan)) {
+  Write-Host '[mysql-gate] BLOCKED: -RunId, -Ack4Capability and -FixturePlan are required; the launcher cannot issue approval or invent fixtures.' -ForegroundColor Red
+  exit 7
+}
+if (-not (Test-Path -LiteralPath $FixturePlan -PathType Leaf)) {
+  Write-Host '[mysql-gate] BLOCKED: -FixturePlan must identify an existing JSON file.' -ForegroundColor Red
+  exit 7
+}
+if ($AppPortA -lt 1024 -or $AppPortA -gt 65535 -or $AppPortB -lt 1024 -or $AppPortB -gt 65535 -or $AppPortA -eq $AppPortB) {
+  Write-Host '[mysql-gate] BLOCKED: M1 application ports must be distinct values in 1024..65535.' -ForegroundColor Red
   exit 7
 }
 
@@ -223,7 +234,8 @@ try {
   # and restored immediately afterwards.
   $previousPreference = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  & $pnpm run $Script -- --run-id $RunId --ack4-capability $Ack4Capability --target-proof $targetProofPath
+  & $pnpm run $Script -- --run-id $RunId --ack4-capability $Ack4Capability --target-proof $targetProofPath `
+    --fixture-plan ([System.IO.Path]::GetFullPath($FixturePlan)) --app-port-a $AppPortA --app-port-b $AppPortB
   $gateExit = $LASTEXITCODE
   $ErrorActionPreference = $previousPreference
 } finally {

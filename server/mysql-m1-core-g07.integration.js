@@ -37,6 +37,10 @@ function validateFixtureManifest(manifest) {
     const fixture = manifest.scenarios?.[definition.id];
     if (!fixture || !Array.isArray(fixture.requests) || fixture.requests.length !== 2) throw new Error(`${definition.id}_FIXTURE_MISSING`);
     if (!fixture.requests.every((request) => request.path?.startsWith('/api/') && ['A', 'B'].includes(request.application))) throw new Error(`${definition.id}_REQUEST_INVALID`);
+    if (!Array.isArray(fixture.businessObjectProvenance) || fixture.businessObjectProvenance.length === 0
+      || fixture.businessObjectProvenance.some((entry) => entry.channel !== 'PRODUCTION_HTTP')) {
+      throw new Error(`${definition.id}_BUSINESS_OBJECT_PROVENANCE_INVALID`);
+    }
     if (!fixture.expectedSnapshot || Object.keys(fixture.expectedSnapshot).sort().join(',') !== [...definition.snapshotTables].sort().join(',')) {
       throw new Error(`${definition.id}_EXPECTED_SNAPSHOT_INCOMPLETE`);
     }
@@ -110,14 +114,14 @@ describe('M1C-G07 — production HTTP / real MySQL handler concurrency', () => {
     consumePortableChildLease({
       leasePath: requiredEnvironment('ERP_M1_G07_ACK4_CHILD_LEASE'),
       consumedDir: resolve(requiredEnvironment('ERP_M1_G07_ACK4_CHILD_CONSUMED_DIR')),
-      rootNonce: requiredEnvironment('ERP_M1_G07_ACK4_ROOT_NONCE'),
+      rootPublicKey: requiredEnvironment('ERP_M1_G07_ACK4_ROOT_PUBLIC_KEY'),
       expected: {
         rootPid: process.ppid, childPid: process.pid,
         childStartedAt: requiredEnvironment('ERP_M1_G07_CHILD_STARTED_AT'),
         commitSha, target, manifest: 'M1_CORE_G07_V1', operation: 'RUN_M1_HTTP_FIXTURES',
       },
     });
-    delete process.env.ERP_M1_G07_ACK4_ROOT_NONCE;
+    delete process.env.ERP_M1_G07_ACK4_ROOT_PUBLIC_KEY;
     if (process.env.ERP_DB_BACKEND !== 'mysql' || process.env.ERP_TEST_DB_BACKEND !== 'mysql') throw new Error('M1_G07_BLOCKED:MYSQL_BACKEND_REQUIRED');
     assertCompleteG07Contract();
     manifest = validateFixtureManifest(JSON.parse(readFileSync(requiredEnvironment('ERP_M1_G07_FIXTURE_MANIFEST'), 'utf8')));
