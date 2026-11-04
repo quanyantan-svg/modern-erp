@@ -277,6 +277,12 @@ if ($gateExit -eq 0 -and $rootState -eq 'FINISHED' -and $null -ne $rootReport -a
 if ($rootState -eq 'FAILED') {
   Write-Host "[mysql-gate] RESULT = FAIL" -ForegroundColor Red
   Write-Host "[mysql-gate] ACK-4 STATE = FAILED (tests failed; cleanup was proven)"
+  if ($gateStderr) {
+    Write-Host "[mysql-gate] ROOT FAILURE DETAILS:"
+    $gateStderr.Trim() -split "`r?`n" |
+      Select-Object -Last 40 |
+      ForEach-Object { Write-Host "    $_" }
+  }
   exit 5
 }
 if ($gateStderr) { $gateStderr.Trim() -split "`r?`n" | Select-Object -Last 10 | ForEach-Object { Write-Host "    $_" } }
