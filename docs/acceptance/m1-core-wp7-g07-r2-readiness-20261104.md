@@ -87,3 +87,57 @@ M-15 历史 Migration、MySQL 连接/create/drop/reset、ACK-4 capability 签发
 ```text
 M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
 ```
+
+## 9. M1C-G07-EXECUTION-READINESS-FINAL 最终集成闭环（2026-11-04）
+
+本节追加保存本轮离线 Implementation 证据；文档用途、Owner、状态和权威来源沿用文件头声明。本节不签发
+G07 PASS，不把 SQLite Setup 当作 MySQL 并发证明。
+
+### 9.1 提交链与同源 Setup
+
+- 基线：`58a1c2bb587bd51ce918db9821ea347bae9df680`；分支：`work/m1-core-rebaseline-20261102`；
+- `efb5e52`：同源正式 Builder、动态业务日期、GET 无 body、逐步状态/DTO/状态/来源校验，以及九项 SQLite HTTP Setup；
+- `ad14cbd`：真实 MySQL 全表前后快照 Oracle、A/B waiter 分别归属、请求级拒绝审计及成功/失败键幂等证明；
+- `346444c`：ACK-4 消费前静态预检、无 DDL App/Suite 连接、Root/Child/Launcher 全终态及独立 postflight 边界。
+
+九项同源 Setup 实际结果均为 `FIXED_FIXTURE_SQLITE_HTTP_SETUP_PASS`：CR-01 初始 PO/排程 10、已占 0；
+CR-02 DRAFT 收货 10；CR-03 待检收货 4、WIP 10、IQC PASS；CR-04/05 来源库存 10、WIP 0；
+CR-06 WIP 10、来源库存 0；CR-07 两张待检收货各 4、WIP 6、两张 IQC PASS；CR-08 LOT 身份 WIP 1、IQC PASS；
+CR-09 RELEASED 委外订单 10、加工费 PO 0。业务主数据和单据均由正式 HTTP 生成；CR-08 物理数量/LOT 也由正式
+HTTP 生成，仅匹配估值池经列明的 `SOURCE_INVENTORY_SEED` canonical L2 准入。
+
+### 9.2 Oracle、补充 Oracle 与负向控制
+
+真实调用路径固定为两个 `createApp(existingAdapter)` HTTP App → 正式 route/handler → 已 bootstrap 的 MySQL schema；
+Suite 不调用 MySQL `createDatabase()`。每个 CR 读取竞争前/后的权威表完整快照，直接从业务表证明唯一成功效果和败方零
+业务效果；成功请求键恰一条 `SUCCEEDED`，失败请求键零条（现行 schema 只允许 `SUCCEEDED`），不再从幂等数量推导败方
+副作用。库存腿、WIP、成本、PO Item、拒绝审计、业务来源六类篡改负控均实际 FAIL。
+
+真实 Suite 已注册并将在取得 MySQL/ACK-4 授权后实际运行：Schema Parity、PO Item Stable、通用 PO 注入拒绝、
+PO Change ADD/MODIFY/CANCEL 拒绝、UAT-14 VMI create=201/confirm=200、G03 L1/L2 和 Safe Integer cents。
+
+### 9.3 ACK-4、Runner 与治理边界
+
+`assertM1CoreG07StaticPreflight` 在 capability 消费前验证固定 digest、九个 CR、路由/body、环境变量名、主体、L2、
+四操作 manifest 和目标证明绑定。App/Suite 只用无 migration/DDL 的 existing adapter；Bootstrap 仍是唯一 schema 初始化操作。
+Root 只有 `FINISHED + testsPassed + childrenExited + cleanupProven + exit 0` 才允许 Launcher 返回 0；`UNKNOWN`、`FAILED`、
+`CLEANUP_UNVERIFIED` 均非零且隔离保留；未证明全部子进程退出时不进入 destructive cleanup；独立会话核对
+tables/views/triggers/routines/events 五类对象均为零。令牌只存在于受限临时 manifest，finally 删除，不写长期日志/报告。
+
+M1-P-03 复核结论：`OUTSOURCING_MANAGE` / `OUTSOURCING_MATERIAL_EXECUTE`、
+`OUTSOURCING_RECEIVING_MANAGE`、`IQC_MANAGE` 均有对应非 admin 测试主体；`RECEIPT_NOTICE_MANAGE`、
+`PO_CHANGE_MANAGE`、`PROCUREMENT_CONFIG_MANAGE`（以及本 Fixture 所需 `ENGINEERING_BOM_MANAGE`）仍为 admin-only 授权差距。
+本轮未扩大正式角色，admin 路径不作为职责分离证据。
+
+### 9.4 本轮离线门禁
+
+| 门禁 | 本轮实际结果 |
+|---|---|
+| 固定 digest | `2202e6c21142528bd2b21f276abcacbf250af06624a456b84ec12263e15c808c` |
+| focused G07 | 30/30 PASS |
+| FAST | 546/546 PASS |
+| FULL | 3282/3282 PASS（400 suites） |
+| Build | PASS（1968 modules） |
+
+真实 MySQL 连接、CR-01～CR-09 真实并发、真实 information_schema、真实 postflight、ACK-4 签发/消费、Migration
+仍为 `NOT_RUN`；Push/Merge/Tag/Release/Deploy 未发生。

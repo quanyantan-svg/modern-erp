@@ -1625,6 +1625,30 @@ M1C_WP7_R1_READY_FOR_INDEPENDENT_REVIEW
 M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
 ```
 
+### 37.35 M1C-G07-EXECUTION-READINESS-FINAL 最终集成闭环（2026-11-04）
+
+- 当前状态：`IMPLEMENTED / READY_FOR_INDEPENDENT_REVIEW`；`M1C-G07` 继续为 `NOT_RUN`，未签发 Gate PASS、
+  M1-Core Acceptance、Domain Closure、Freeze 或 Release Readiness。
+- 基线/分支：`58a1c2bb587bd51ce918db9821ea347bae9df680` / `work/m1-core-rebaseline-20261102`。
+- 本轮提交：`efb5e52`（同源 Fixture + 九项 SQLite HTTP Setup）、`ad14cbd`（权威全快照 Oracle）、
+  `346444c`（ACK-4 静态预检和 Root/Child/Launcher 边界）。`package.json` 仍为 `1.6.2`，release tag 未变。
+- 九项 Setup：CR-01～CR-09 均为 `FIXED_FIXTURE_SQLITE_HTTP_SETUP_PASS`；仅证明正式 HTTP Setup 可达，
+  不证明 MySQL 并发。
+- Oracle：败方零业务效果由权威业务表差分证明，不再从幂等记录数推导；六类篡改负控（库存腿、WIP、成本、
+  PO Item、拒绝审计、业务来源）均 fail-closed；真实 Suite 注册 Schema Parity、PO Stable/Injection/Change、
+  UAT-14、G03 L1/L2、Safe Integer。
+- ACK-4：固定 digest/九 CR/route+body/env+subjects+L2/operation manifest/target binding 全部在消费前静态校验；
+  App/Suite 不初始化 schema；Root 仅在进程退出、测试通过、独立五类零对象 cleanup 证明及 exit 0 全部成立时进入
+  `FINISHED` 并允许 Launcher 返回 0。
+- 权限治理：委外业务、委外收货、IQC 存在非 admin 主体；`RECEIPT_NOTICE_MANAGE`、`PO_CHANGE_MANAGE`、
+  `PROCUREMENT_CONFIG_MANAGE`、`ENGINEERING_BOM_MANAGE` 仍为 admin-only 差距。本轮未扩大角色，admin 行为不作为 SOD 证据。
+- 本轮离线门禁：focused 30/30、FAST 546/546、FULL 3282/3282（400 suites）、Build 1968 modules，全部 PASS。
+- 未发生：MySQL 连接、ACK-4 签发/消费、Migration、数据库 reset/create/drop、Push、Merge、Tag、Release、Deploy。
+- 仍需真实 MySQL：CR-01～CR-09 并发、A/B lock waiter、information_schema parity、补充 Oracle、独立 postflight
+  五类零对象及最终 Root `FINISHED`；在独立授权前均保持 `NOT_RUN`。
+
+详细证据：`docs/acceptance/m1-core-wp7-g07-r2-readiness-20261104.md §9`。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
