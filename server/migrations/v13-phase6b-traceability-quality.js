@@ -104,6 +104,7 @@ export function migrateV13Phase6BTraceabilityQuality(db) {
       quantity REAL NOT NULL CHECK(quantity > 0),
       lot_id TEXT REFERENCES inventory_lots(id),
       serial_id TEXT REFERENCES inventory_serials(id),
+      identity_key TEXT NOT NULL DEFAULT '',
       business_date TEXT NOT NULL,
       reversed INTEGER NOT NULL DEFAULT 0 CHECK(reversed IN (0,1)),
       created_at TEXT NOT NULL
@@ -220,4 +221,17 @@ export function migrateV13Phase6BTraceabilityQuality(db) {
       SELECT 'qcp-global-outgoing-v1','QCP-OUT-GLOBAL','出货检验默认规则','SALES_DELIVERY','GLOBAL',NULL,1,'FULL',NULL,1,'2000-01-01',NULL,1,'Phase 3 安全默认：必须检验','user-admin',datetime('now')
       WHERE EXISTS(SELECT 1 FROM users WHERE id='user-admin');
   `);
+
+  // M-15 current-schema bootstrap: only a genuinely empty table may acquire
+  // the new partial UNIQUE automatically. Existing historical databases are
+  // left untouched and must run the separately authorized five-step M-15
+  // migration in m15-tracked-identity-key.js.
+  const trackedColumns = db.prepare('PRAGMA table_info(tracked_inventory_movements)').all();
+  const hasIdentityKey = trackedColumns.some((column) => column.name === 'identity_key');
+  const trackedRows = Number(db.prepare('SELECT COUNT(*) n FROM tracked_inventory_movements').get().n);
+  if (hasIdentityKey && trackedRows === 0) {
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_tracked_outsourcing_identity
+      ON tracked_inventory_movements(source_type,source_id,source_item_id,identity_key,direction)
+      WHERE source_type IN ('OUTSOURCING_ISSUE','OUTSOURCING_SUPPLEMENT','OUTSOURCING_RETURN','OUTSOURCING_BACKFLUSH','OUTSOURCING_RECEIPT','OUTSOURCING_FINISHED_RETURN') AND reversed=0`);
+  }
 }

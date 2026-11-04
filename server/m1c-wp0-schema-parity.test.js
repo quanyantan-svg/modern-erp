@@ -75,11 +75,13 @@ describe('M1C-WP0-R1 — WP-0 schema dual-engine contract member sets', () => {
     }
   });
 
-  test('R1-D M-15 严格排除：tracked_inventory_movements 未新增 identity_key', () => {
+  test('R1-D M-15 current schema 已纳入 identity_key 与委外部分唯一索引', () => {
     const table = snapshotTables.get('tracked_inventory_movements');
     assert.ok(table);
     const names = table.columns.map((column) => column.name);
-    assert.equal(names.includes('identity_key'), false, 'M-15 未获 Migration 授权，不得进入 WP-0');
+    assert.equal(names.includes('identity_key'), true, 'M-15 离线 Implementation 已进入 current schema');
+    assert.ok(table.indexes.some((index) => index.name === 'uq_tracked_outsourcing_identity' && index.unique),
+      'current schema 必须具备委外身份部分唯一索引；历史库仍需单独 Migration 授权');
   });
 
   for (const tableName of WP0_NEW_TABLES) {

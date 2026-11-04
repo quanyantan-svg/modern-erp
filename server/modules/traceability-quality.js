@@ -1,5 +1,8 @@
 import { id, transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
+import {
+  assertM15ReadyForOutsourcingTracking, hasM15IdentityColumn, OUTSOURCING_SOURCE_TYPES,
+} from '../migrations/m15-tracked-identity-key.js';
 import { HttpError, allow, allowAny, readJson, send } from '../lib/http.js';
 
 const EPS = 1e-9;
@@ -251,26 +254,43 @@ export function postCanonicalTrackedLeg(db, {
   const product = productTracking(db, productId);
   const qty = num(quantity, 'quantity', true);
   const at = nowIso();
+  const strictOutsourcing = OUTSOURCING_SOURCE_TYPES.includes(sourceType);
+  if (strictOutsourcing) assertM15ReadyForOutsourcingTracking(db);
+  let identityKey = '';
   if (product.tracking_policy === 'LOT') {
     if (!lotId || serialId) throw trackingError(409, 'TRACKING_POLICY_MISMATCH', 'LOT position evidence is incomplete', 'Select an exact LOT partition');
     const lot = db.prepare('SELECT * FROM inventory_lots WHERE id=?').get(lotId);
     if (!lot || lot.product_id !== productId) throw trackingError(409, 'LOT_NOT_AVAILABLE', 'LOT does not match product', 'Refresh LOT availability');
     if (direction === 'OUT') assertAvailableLot(lot, businessDate);
+    identityKey = `LOT:${lotId}`;
     changeLotBalance(db, warehouseId, productId, lotId, direction === 'IN' ? qty : -qty, at);
   } else if (product.tracking_policy === 'SERIAL') {
     if (!serialId || lotId || qty !== 1) throw trackingError(409, 'TRACKING_POLICY_MISMATCH', 'SERIAL position must identify exactly one serial', 'Use one mutation per serial');
     transitionSerialForInventoryMovement(db, { serialId, productId, warehouseId, direction, sourceType, at });
+    identityKey = `SERIAL:${serialId}`;
   } else if (lotId || serialId) {
     throw trackingError(409, 'TRACKING_POLICY_MISMATCH', 'Untracked product cannot carry LOT/SERIAL identity', 'Remove tracking identity');
+  } else {
+    identityKey = 'NONE';
   }
   const movementId = id();
-  db.prepare(`INSERT INTO tracked_inventory_movements(
-    id,transaction_id,source_type,source_id,source_item_id,product_id,warehouse_id,
-    direction,quantity,lot_id,serial_id,business_date,reversed,created_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0,?)`).run(
-    movementId, transactionId, sourceType, sourceId, sourceItemId, productId,
-    warehouseId, direction, qty, lotId, serialId, businessDate, at,
-  );
+  if (hasM15IdentityColumn(db)) {
+    db.prepare(`INSERT INTO tracked_inventory_movements(
+      id,transaction_id,source_type,source_id,source_item_id,product_id,warehouse_id,
+      direction,quantity,lot_id,serial_id,identity_key,business_date,reversed,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)`).run(
+      movementId, transactionId, sourceType, sourceId, sourceItemId, productId,
+      warehouseId, direction, qty, lotId, serialId, strictOutsourcing ? identityKey : '', businessDate, at,
+    );
+  } else {
+    db.prepare(`INSERT INTO tracked_inventory_movements(
+      id,transaction_id,source_type,source_id,source_item_id,product_id,warehouse_id,
+      direction,quantity,lot_id,serial_id,business_date,reversed,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0,?)`).run(
+      movementId, transactionId, sourceType, sourceId, sourceItemId, productId,
+      warehouseId, direction, qty, lotId, serialId, businessDate, at,
+    );
+  }
   return db.prepare('SELECT * FROM tracked_inventory_movements WHERE id=?').get(movementId);
 }
 
