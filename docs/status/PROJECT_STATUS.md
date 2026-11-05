@@ -1726,6 +1726,37 @@ M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
 集中候审记录：
 [`docs/acceptance/m1-core-g01-g06-consolidated-review-20261105.md`](../acceptance/m1-core-g01-g06-consolidated-review-20261105.md)。
 
+### 37.40 M1-Core G05 Owner Acceptance 与 M1C-G07 最终执行（2026-11-05）
+
+- **授权与范围**：项目所有者明确批准 G05 Owner Acceptance（签发 `M1C-G05 PASS`），并基于固定 SHA
+  `02f0cce70a73134b31f36a16067a633384e1c175`、Run `94e2e0c7-dba8-4aa4-95de-9767712cf5d5` 与唯一 disposable
+  MySQL 目标 `modern_erp_domain_test` 最后执行一次 M1C-G07；G02/G06 继续候审；不自动重试 G07、不追加诊断
+  修复循环。
+- **Preflight**：本地/GitHub/Gitee SHA 一致、工作树 clean；MySQL `8.0.37`、八字段身份、最小权限、五类空对象、
+  `log_bin_trust_function_creators=1`、`performance_schema.data_lock_waits` 可读、无 quarantine、端口空闲、
+  固定 digest/9 CR/6 主体/5 L2/四操作均 PASS。两个 `mysqld` 进程与启动配置缺失风险保持 OPEN。
+- **ACK-4**：新 Capability 在 14 分钟窗口内签发并原子消费，未复用旧 Run/Capability；6 个 child lease 全消费。
+- **G07 真实执行**：Reset / Bootstrap / App-A / App-B / 六主体登录 / Fixture builder 已越过上次 `CR-08.issue`
+  阻断并创建 Suite；Suite child exit `1`，Root `FAILED`、Launcher exit `5`。stdout 空、仅两行无害警告、逐项
+  TAP 不可恢复，故 CR-01～CR-09、lock-wait、Parity、Oracle 均 `INCONCLUSIVE`，G07=`FAIL`。
+- **根因候选（离线复现确认）**：`scripts/gates/m1-core-g07-child.mjs::suiteProcess()` 用
+  `stream.pipe(process.stdout)` 捕获输出，但 `node:test` 的 `run({ isolation:'none' })` 流**不产出 TAP 文本**、
+  只产出结构化事件（`test:pass` / `test:fail` / `test:diagnostic`）。离线复现证明：通过、断言失败、`before()`
+  抛异常三种场景均得到「exit 1 + stdout 空」。故 §37.39 基于「解析 stdout 的 node:test TAP」的诊断链看不到
+  失败测试名称与断言；该缺口与前次 Run `a4c97802` 的「stdout 丢失」同源、未闭合。具体业务失败点被该诊断
+  缺口掩蔽，未放宽任何 CR / Oracle。
+- **G05 Owner Acceptance**：`M1C-G05 PASS` 已签发（依据 `M1C_G05_INDEPENDENT_REVIEW_PASS`、修复后 Browser
+  `24/24`、320/390/430/680 四宽度与两工作面、服务端来源级 RBAC、本轮 Owner 明确批准）；原始 `16/24` 失败历史
+  完整保留；本次登记不等于重新执行 Browser；仅批准 G05、不依赖 G07 MySQL。
+- **七 Gate 矩阵**：G05=`PASS`；G02/G06=`PENDING_OWNER_DECISION`；G01/G03/G04=`INCONCLUSIVE`（真实 MySQL
+  逐项证据缺失）；G07=`FAIL`。
+- **候审结论**：`M1_CORE_ACCEPTANCE_BLOCKED`。未签发 M1-Core 包级 PASS、Domain Closure、Freeze、Release 或
+  Deploy；不提出第五次自动执行计划；G07 诊断链修复与 G01/G03/G04 真实 MySQL 验证各自需独立授权与新 Run ID。
+
+正式证据：
+[`docs/acceptance/m1-core-g05-owner-acceptance-20261105.md`](../acceptance/m1-core-g05-owner-acceptance-20261105.md)、
+[`docs/acceptance/m1-core-g07-final-execution-and-acceptance-20261105.md`](../acceptance/m1-core-g07-final-execution-and-acceptance-20261105.md)。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
