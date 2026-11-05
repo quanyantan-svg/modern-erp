@@ -1671,6 +1671,22 @@ M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
 详细脱敏证据与七项 Gate 矩阵：
 [`docs/acceptance/m1-core-g07-execution-and-acceptance-review-20261105.md`](../acceptance/m1-core-g07-execution-and-acceptance-review-20261105.md)。
 
+### 37.37 M1C-G07 CR-08 MySQL 幂等键长度离线修复候审（2026-11-05）
+
+- 基线与证据边界：真实失败仍锚定 `9bcbedab078d5cc707e2af0f928452042c74e6f3`；该次运行只证明
+  `CR-08.issue` 返回 HTTP 500 / `ER_DATA_TOO_LONG`，未动态证明具体超长列。
+- 离线根因核查：`outsourcing-inventory.js` 生成的 CR-08 LOT 发料 mutation key 为 137 字符；现行委外
+  UUIDv4 模板最长为 SERIAL 补料 145 字符。该完整键原样写入
+  `inventory_mutation_log.idempotency_key`，而 SQLite `TEXT NOT NULL UNIQUE` 经既有 MySQL 通用规则生成
+  `VARCHAR(128)`，形成与失败完全一致的确定性 Schema 缺陷链。同一路径的 WIP effect key 最长 128 字符、
+  request fingerprint 固定 67 字符；现有真实错误未返回列名，具体运行时列仍待新授权的真实 MySQL 验证。
+- 最小修复：仅将 `inventory_mutation_log.idempotency_key` 的 MySQL 物理类型限定为 `VARCHAR(191)`；
+  完整键与 `UNIQUE` 保持不变，SQLite 逻辑 Schema、其他表同名列及通用类型规则均未改变。
+- 离线验证：M1C Schema parity 15/15 PASS；既有 MySQL Schema、inventory mutation、委外核心及 G07
+  SQLite smoke focused 测试合计 77/77 PASS；`git diff --check` PASS。
+- 状态：`M1C_G07_CR08_MYSQL_LENGTH_FIX_READY_FOR_REVIEW`。真实 MySQL Gate 未重跑，G07 仍为 `FAIL`，
+  M1-Core Acceptance 仍为 `BLOCKED`；后续真实验证必须使用新 SHA、新 Run ID 与独立 ACK-4 授权。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。

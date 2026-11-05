@@ -92,6 +92,10 @@ function mysqlType(column, indexed, tableName) {
   // heuristic below. Both paths must materialize the same physical schema.
   const wave10 = WAVE10_MYSQL_COLUMN_TYPES[tableName]?.[name];
   if (wave10) return wave10;
+  // Inventory mutation keys preserve the complete source event, item and
+  // LOT/SERIAL identity. Current outsourcing UUIDv4 keys can exceed the
+  // generic 128-character indexed-text bound, while remaining below 191.
+  if (tableName === 'inventory_mutation_log' && name === 'idempotency_key') return 'VARCHAR(191)';
   if (name === 'evidence_schema_version') return 'TINYINT UNSIGNED';
   if (declared.includes('INT')) return 'BIGINT';
   if (declared.includes('REAL') || declared.includes('FLOA') || declared.includes('DOUB') || declared.includes('NUM')) return 'DECIMAL(24,6)';

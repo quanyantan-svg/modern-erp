@@ -67,6 +67,54 @@ describe('M1C-WP0-R1 — WP-0 schema dual-engine contract member sets', () => {
   const emitted = captureMySqlDdl(snapshot);
   const snapshotTables = new Map(snapshot.tables.map((table) => [table.name, table]));
 
+  test('inventory mutation idempotency key preserves current outsourcing LOT and SERIAL identities', () => {
+    const uuid = '123e4567-e89b-42d3-a456-426614174000';
+    const key = (sourceType, movementKind, identityType) => (
+      `${sourceType}:${uuid}:${uuid}:${movementKind}:${identityType}:${uuid}`
+    );
+    const currentOutsourcingKeys = [
+      key('OUTSOURCING_ISSUE', 'MOVE', 'LOT'),
+      key('OUTSOURCING_ISSUE', 'MOVE', 'SERIAL'),
+      key('OUTSOURCING_SUPPLEMENT', 'MOVE', 'LOT'),
+      key('OUTSOURCING_SUPPLEMENT', 'MOVE', 'SERIAL'),
+      key('OUTSOURCING_RETURN', 'MOVE', 'LOT'),
+      key('OUTSOURCING_RETURN', 'MOVE', 'SERIAL'),
+      key('OUTSOURCING_BACKFLUSH', 'OUT', 'LOT'),
+      key('OUTSOURCING_BACKFLUSH', 'OUT', 'SERIAL'),
+      key('OUTSOURCING_RECEIPT', 'IN', 'LOT'),
+      key('OUTSOURCING_RECEIPT', 'IN', 'SERIAL'),
+    ];
+
+    assert.equal(currentOutsourcingKeys[0].length, 137, 'CR-08 LOT issue key must reproduce the failing boundary');
+    assert.equal(Math.max(...currentOutsourcingKeys.map((value) => value.length)), 145);
+    assert.ok(currentOutsourcingKeys.every((value) => value.length > 128 && value.length <= 191));
+
+    const effectKey = (eventType, identityType) => `${eventType}:${uuid}:${uuid}:${identityType}:${uuid}`;
+    const currentEffectKeys = ['ISSUE', 'SUPPLEMENT', 'RETURN', 'BACKFLUSH']
+      .flatMap((eventType) => ['LOT', 'SERIAL'].map((identityType) => effectKey(eventType, identityType)));
+    assert.equal(Math.max(...currentEffectKeys.map((value) => value.length)), 128);
+    assert.ok(currentEffectKeys.every((value) => value.length <= 128));
+
+    const sqliteTable = snapshotTables.get('inventory_mutation_log');
+    const sqliteColumn = sqliteTable.columns.find((column) => column.name === 'idempotency_key');
+    assert.equal(String(sqliteColumn.type).toUpperCase(), 'TEXT', 'SQLite logical schema must remain TEXT');
+    assert.ok(sqliteTable.indexes.some((index) => index.unique && index.columns.length === 1
+      && index.columns[0] === 'idempotency_key'), 'SQLite UNIQUE contract must remain present');
+
+    const mysqlTable = parseMySqlCreateTable(emitted.createTables.get('inventory_mutation_log'));
+    assert.equal(mysqlTable.columns.get('idempotency_key').type, 'VARCHAR(191)');
+    assert.ok(mysqlTable.uniques.some((columns) => columns.length === 1 && columns[0] === 'idempotency_key'),
+      'generated MySQL DDL must retain the single-column UNIQUE constraint');
+
+    const effectTable = parseMySqlCreateTable(emitted.createTables.get('outsourcing_wip_identity_effects'));
+    assert.equal(effectTable.columns.get('idempotency_key').type, 'VARCHAR(128)');
+    assert.equal(effectTable.columns.get('request_fingerprint').type, 'CHAR(67)');
+
+    const controlTable = parseMySqlCreateTable(emitted.createTables.get('receipt_notices'));
+    assert.equal(controlTable.columns.get('idempotency_key').type, 'VARCHAR(128)',
+      'the exception must not widen the same column name in another table');
+  });
+
   test('R1-D 快照包含 M-01..M-07 的五张新表且历史行数为零', () => {
     for (const table of WP0_NEW_TABLES) {
       const entry = snapshotTables.get(table);
