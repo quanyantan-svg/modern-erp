@@ -23,6 +23,7 @@
 | [`m1-core-g07-rerun-a4c97802-20261105.md`](./m1-core-g07-rerun-a4c97802-20261105.md) | 新 SHA 单次 G07 重跑：Fixture Setup 已越过 CR-08，Suite 已启动但 child exit 1；逐项 stdout 未保留，清理已证明，结论仍为 `M1_CORE_ACCEPTANCE_BLOCKED` |
 | [`m1-core-g01-g06-consolidated-review-20261105.md`](./m1-core-g01-g06-consolidated-review-20261105.md) | G07 Suite 失败证据链最终离线收口，以及 G01～G06 精确证据矩阵、G05 Owner 决策包与最小剩余阻塞；只供候审，不签发 Gate PASS |
 | [`m1-core-g05-owner-acceptance-20261105.md`](./m1-core-g05-owner-acceptance-20261105.md) | M1-Core G05 正式 Owner Acceptance（`M1C-G05 PASS`，2026-11-05）；原始 16/24 失败历史保留、24/24 修复证据、仅批准 G05、不依赖 G07 |
+| [`m1-core-g02-g06-owner-acceptance-20261105.md`](./m1-core-g02-g06-owner-acceptance-20261105.md) | M1-Core G02/G06 正式 Owner Acceptance（`M1C-G02 PASS` / `M1C-G06 PASS`，2026-11-05）；接受两 Gate 无单独真实 MySQL 证据的残余风险，不豁免 G01/G03/G04/G07 |
 | [`m1-core-g07-final-execution-and-acceptance-20261105.md`](./m1-core-g07-final-execution-and-acceptance-20261105.md) | M1C-G07 最终一次性真实 MySQL 执行（Run `94e2e0c7`）与七 Gate 候审矩阵；Suite exit 1、逐项证据不可恢复、G07=`FAIL`、`M1_CORE_ACCEPTANCE_BLOCKED` |
 | [`sales-customer/`](./sales-customer/) | Sales & Customer 各 Wave 的 Acceptance / Freeze 记录与实施证据 |
 

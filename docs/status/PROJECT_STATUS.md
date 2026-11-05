@@ -1772,6 +1772,19 @@ M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
   G01/G03/G04 仍为 `INCONCLUSIVE`，M1-Core Acceptance 仍为 `BLOCKED`；真实 MySQL 是否暴露新的业务失败点
   未验证，任何真实复验仍须新 SHA、新 Run ID 与独立 ACK-4 授权。
 
+### 37.42 M1C-G02 / M1C-G06 Owner Acceptance（2026-11-05）
+
+- **Owner 决定**：业务所有者在本轮明确签发 `M1C-G02 PASS` 与 `M1C-G06 PASS`。正式记录：
+  [`docs/acceptance/m1-core-g02-g06-owner-acceptance-20261105.md`](../acceptance/m1-core-g02-g06-owner-acceptance-20261105.md)。
+- **证据边界**：决定基于正式 Requirement、Active Design、WP7-A 历史 HTTP/SQLite 证据、原始实施 SHA 与独立复核；
+  本轮未重跑历史业务测试。Owner 接受 G02/G06 无单独真实 MySQL 验证的残余风险，但不豁免 G01/G03/G04/G07
+  的真实 MySQL 与并发要求。
+- **七 Gate 状态**：G02/G05/G06=`PASS`；G01/G03/G04=`INCONCLUSIVE`；G07=`FAIL`。
+- **包级状态**：`M1_CORE_ACCEPTANCE_BLOCKED` 保持；未签发 M1-Core 包级 PASS、Domain Closure、Freeze、Release
+  或 Deploy。
+- **未发生**：Requirement/Design/业务代码/Gate 结论修改，MySQL 连接，真实 G07，ACK-4 签发或消费，
+  Reset/Bootstrap/Cleanup/Migration，以及任何远端写入。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
