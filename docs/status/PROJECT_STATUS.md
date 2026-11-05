@@ -1705,6 +1705,27 @@ M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
 详细脱敏证据与 Gate 矩阵：
 [`docs/acceptance/m1-core-g07-rerun-a4c97802-20261105.md`](../acceptance/m1-core-g07-rerun-a4c97802-20261105.md)。
 
+### 37.39 M1C-G07 最终诊断与 G01～G06 Acceptance 集中候审（2026-11-05）
+
+- 基线：保留已推送 `2ed357123a4ef5501575eeca266ec9a20d4341e9` 与失败证据提交
+  `ccb3aa1b4cffffb15013e7273db43e4a74441e5c`；G07 诊断实现提交为
+  `c9e63f268055fbdd64b3daf07e0bf4ad8e65bc93`，未重写历史。
+- 诊断收口：Suite 非零退出会在 stdout/stderr drain 后解析全部 node:test TAP 失败，向 Root/Launcher 输出
+  完整标记摘要；完整脱敏证据写入当前用户受限本地文件。FAILED exit 5、Cleanup、Quarantine、ACK-4
+  生命周期及 Suite PASS/FAIL 判定不变。
+- 离线验证：G07/ACK-4/lifecycle 35/35、suite governance 20/20、PowerShell 5.1 parser PASS；未连接
+  MySQL、未签发 ACK-4、未执行 Gate/Reset/Bootstrap/Cleanup/Migration，未运行 FULL/Build。
+- G01～G06 集中审查：G02/G05/G06 技术证据已归并为 `OWNER_DECISION_ONLY`；G05 已有
+  `M1C_G05_INDEPENDENT_REVIEW_PASS` 与 Browser 24/24。真正技术缺口收敛为 G01 MySQL、G03 MySQL
+  current-schema/parity、G04 真实并发，以及 G07 可恢复的 CR/lock-wait/Oracle 结果。
+- 边界：延期 WIP/VMI/GL 政策不无条件成为首期阻塞，G06 的首期 fail-closed 合同仍有效且已有证据；
+  空库 current-schema 不冒充历史 M-15 Migration Acceptance。两个 mysqld 与启动配置缺失风险保持 OPEN。
+- 候审结论仍为 `M1_CORE_ACCEPTANCE_BLOCKED`；未签发任何 Gate PASS、包级 Acceptance、Freeze 或
+  Domain Closure，下一次真实 Gate 仍须新 SHA、新 Run ID 与独立 ACK-4 授权。
+
+集中候审记录：
+[`docs/acceptance/m1-core-g01-g06-consolidated-review-20261105.md`](../acceptance/m1-core-g01-g06-consolidated-review-20261105.md)。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
