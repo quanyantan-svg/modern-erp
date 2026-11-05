@@ -1649,6 +1649,28 @@ M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
 
 详细证据：`docs/acceptance/m1-core-wp7-g07-r2-readiness-20261104.md §9`。
 
+### 37.36 M1C-G07 一次性真实 MySQL 执行与 M1-Core Acceptance 候审（2026-11-05）
+
+- 授权与基线：项目所有者授权仅对 `work/m1-core-rebaseline-20261102` @
+  `9bcbedab078d5cc707e2af0f928452042c74e6f3` 执行一次 G07；Run ID
+  `1197f81a-4a9c-4587-944c-64f11cbad47c`，目标仅为 `modern_erp_domain_test`，四项操作 manifest 不变。
+- Preflight：本地/GitHub/Gitee SHA 一致，工作树干净；MySQL 8.0.37、八字段身份、最小权限、
+  五类空对象、`log_bin_trust_function_creators=1`、`performance_schema.data_lock_waits` 可读、无 quarantine、
+  端口空闲、固定 digest/9 CR/四操作均 PASS。两个 mysqld 与启动配置缺失风险保持 `OPEN`。
+- ACK-4：新 Capability 在 10 分钟窗口内签发并原子消费，未复用旧 Run/Capability；5 个 child lease 均已消费。
+- 真实结果：Fixture Setup 在 `CR-08.issue` 的
+  `POST /api/procurement/outsourcing/orders/{orderId}/issues` 返回 HTTP 500 / `ER_DATA_TOO_LONG`；Suite 未启动，
+  CR-01～CR-07 与 CR-09 的并发/lock-wait/parity/oracle 均不得记 PASS。Root = `FAILED`，
+  `testsPassed=false`、`childrenExited=true`、`cleanupProven=true`，cleanup 1 次、无 quarantine。
+- 事后只读 postflight：tables/views/triggers/routines/events 再次为 `0/0/0/0/0`；HTTP 端口已释放；
+  Capability 已消费，严禁同 Run 重跑。
+- Acceptance 候审：G01～G04/G06 = `INCONCLUSIVE`，G05 = `INCONCLUSIVE`（独立技术审查 PASS，
+  Owner Acceptance 待定），G07 = `FAIL`；本轮结论为 `M1_CORE_ACCEPTANCE_BLOCKED`，未签发任何
+  Gate PASS、M1-Core Acceptance、Domain Closure、Freeze 或 Release Readiness。
+
+详细脱敏证据与七项 Gate 矩阵：
+[`docs/acceptance/m1-core-g07-execution-and-acceptance-review-20261105.md`](../acceptance/m1-core-g07-execution-and-acceptance-review-20261105.md)。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
