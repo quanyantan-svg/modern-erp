@@ -20,6 +20,7 @@
 | [`m1-core-wp7-r1-closure-20261104.md`](./m1-core-wp7-r1-closure-20261104.md) | M1C-WP7-R1 收口证据：N7 根因与历史修正、G07 生命周期收口、Ed25519 Child Lease、N7 前置治理与回归耗时优化；真实 MySQL/Migration 未运行，非 Acceptance/Freeze |
 | [`m1-core-wp7-g07-r2-readiness-20261104.md`](./m1-core-wp7-g07-r2-readiness-20261104.md) | M1C-WP7-G07-R2 执行准备收口证据：固定 Fixture、独立 Oracle、独立 postflight、子进程生命周期修复；真实 MySQL/Migration 未运行，非 Acceptance/Freeze |
 | [`m1-core-g07-execution-and-acceptance-review-20261105.md`](./m1-core-g07-execution-and-acceptance-review-20261105.md) | M1C-G07 一次性真实 MySQL 执行与 M1-Core 候审包；G07 在 `CR-08.issue` Setup 失败，清理已证明，结论 `M1_CORE_ACCEPTANCE_BLOCKED`，待 Owner 复核 |
+| [`m1-core-g07-rerun-a4c97802-20261105.md`](./m1-core-g07-rerun-a4c97802-20261105.md) | 新 SHA 单次 G07 重跑：Fixture Setup 已越过 CR-08，Suite 已启动但 child exit 1；逐项 stdout 未保留，清理已证明，结论仍为 `M1_CORE_ACCEPTANCE_BLOCKED` |
 | [`sales-customer/`](./sales-customer/) | Sales & Customer 各 Wave 的 Acceptance / Freeze 记录与实施证据 |
 
 ## 规则

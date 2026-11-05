@@ -1687,6 +1687,24 @@ M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
 - 状态：`M1C_G07_CR08_MYSQL_LENGTH_FIX_READY_FOR_REVIEW`。真实 MySQL Gate 未重跑，G07 仍为 `FAIL`，
   M1-Core Acceptance 仍为 `BLOCKED`；后续真实验证必须使用新 SHA、新 Run ID 与独立 ACK-4 授权。
 
+### 37.38 M1C-G07 新 SHA 单次真实 MySQL 重跑（2026-11-05）
+
+- 授权基线：`2ed357123a4ef5501575eeca266ec9a20d4341e9`；Run
+  `a4c97802-cc79-42e0-9c1b-c2e2a7e019df`；GitHub/Gitee/本地 SHA 一致，执行前工作树 clean。
+- Preflight：固定身份、最小权限、五类空对象、`trust=1`、performance_schema 锁观测、端口、quarantine、
+  Fixture digest / 9 CR / 6 主体 / 5 L2 / 四操作合同全部 PASS；既知双 mysqld 与配置缺失风险保持 OPEN。
+- 真实执行：ACK-4 已签发并消费；Reset、Bootstrap、App 启动、六主体登录与 Fixture builder 已越过上次
+  `CR-08.issue` Setup 阻断并创建 Suite。Suite child 退出 `1`，Root=`FAILED`，Launcher exit=`5`。
+- 证据限制：Root 仅持久化 child stderr，逐项 TAP/stdout 丢失，故 CR-01～CR-09、lock-wait、Parity 与
+  Oracle 不得记 PASS，逐项均为 `INCONCLUSIVE`；G07 聚合为 `FAIL`。
+- 安全终态：`cleanupProven=true`、`childrenExited=true`、cleanup 1 次、6 个 lease 全消费；独立 postflight
+  `0/0/0/0/0`，端口释放，无 quarantine，未重试。
+- 候审结论：`M1_CORE_ACCEPTANCE_BLOCKED`。G05 Owner Acceptance 及 G01～G04/G06 完整证据/裁定仍开放；
+  未签发 Gate PASS、M1-Core Acceptance、Freeze、Domain Closure、Release 或 Deploy。
+
+详细脱敏证据与 Gate 矩阵：
+[`docs/acceptance/m1-core-g07-rerun-a4c97802-20261105.md`](../acceptance/m1-core-g07-rerun-a4c97802-20261105.md)。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
