@@ -4,6 +4,7 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { finished } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { assertNoAck4Quarantine, consumeAck4Record, M1_CORE_MANIFEST } from './ack4/ack4-runtime.mjs';
@@ -14,6 +15,7 @@ import { openM1CoreG07ExistingAdapter } from '../../server/test-utils/m1-core-g0
 import { changeValuationMethod, receiveValue } from '../../server/modules/financial-inventory.js';
 import { postCanonicalTrackedLeg } from '../../server/modules/traceability-quality.js';
 import { assertM1CoreG07StaticPreflight } from './m1-core-g07-static-preflight.mjs';
+import { createChildFailureError } from './m1-core-g07-diagnostics.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const manifest = 'M1_CORE_G07_V1';
@@ -104,7 +106,7 @@ async function main() {
     });
     const lease = context.issuePortableChild({ childPid: child.pid, childStartedAt });
     writeFileSync(leasePath, JSON.stringify(lease), { flag: 'wx', mode: 0o600 });
-    const entry = { child, context, childStartedAt, stdout: '', stderr: '' };
+    const entry = { child, context, childStartedAt, mode, operation, stdout: '', stderr: '' };
     child.stdout.on('data', (chunk) => { entry.stdout += chunk; });
     child.stderr.on('data', (chunk) => { entry.stderr += chunk; });
     children.push(entry);
@@ -112,8 +114,17 @@ async function main() {
   };
   const finishChild = async (entry) => {
     const code = await waitForExit(entry.child);
+    // `exit` may precede the final stdout/stderr `end`. Wait for both streams
+    // so a failing node:test TAP tail is never lost before it is parsed.
+    await Promise.all([entry.child.stdout, entry.child.stderr]
+      .filter(Boolean).map((stream) => finished(stream, { cleanup: true }).catch(() => {})));
     entry.context.markChildExited(entry.child.pid, entry.childStartedAt);
-    if (code !== 0) throw new Error(`M1_G07_CHILD_FAILED:${code}:${entry.stderr}`);
+    if (code !== 0) {
+      throw createChildFailureError({
+        exitCode: code ?? entry.child.signalCode ?? 'UNKNOWN', mode: entry.mode, operation: entry.operation,
+        stdout: entry.stdout, stderr: entry.stderr,
+      }, { evidenceRoot: join(resolve(process.env.LOCALAPPDATA || '', 'ModernERP', 'mysql-gate'), 'evidence'), runId, childPid: entry.child.pid });
+    }
     return entry.stdout;
   };
 

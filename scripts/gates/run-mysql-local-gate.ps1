@@ -112,6 +112,28 @@ function Invoke-NodeHelper {
   }
 }
 
+# A failing G07 child emits a bounded, sanitized marker block containing all
+# parsed TAP failures and the path to the full local restricted evidence file.
+# Prefer that block over a tail slice so multiple assertions cannot be lost.
+function Write-RootFailureDiagnostics([string]$stderrText, [int]$fallbackLines) {
+  if ([string]::IsNullOrWhiteSpace($stderrText)) { return }
+  $capturing = $false
+  $summary = New-Object System.Collections.Generic.List[string]
+  foreach ($line in ($stderrText -split "`r?`n")) {
+    $trimmed = $line.Trim()
+    if ($trimmed -eq 'M1_G07_DIAGNOSTIC_SUMMARY_BEGIN') { $capturing = $true }
+    if ($capturing) { $summary.Add($trimmed) }
+    if ($capturing -and $trimmed -eq 'M1_G07_DIAGNOSTIC_SUMMARY_END') { break }
+  }
+  if ($summary.Count -gt 0) {
+    Write-Host '[mysql-gate] ROOT FAILURE SUMMARY:'
+    $summary | ForEach-Object { Write-Host "    $_" }
+    return
+  }
+  Write-Host '[mysql-gate] ROOT FAILURE DETAILS:'
+  $stderrText.Trim() -split "`r?`n" | Select-Object -Last $fallbackLines | ForEach-Object { Write-Host "    $_" }
+}
+
 # Every schema-clearing gate runs under one machine-wide lock, so two gates
 # can never clean the same schema at the same time. The lock is a named mutex
 # because the operating system releases it when the holder dies.
@@ -277,15 +299,17 @@ if ($gateExit -eq 0 -and $rootState -eq 'FINISHED' -and $null -ne $rootReport -a
 if ($rootState -eq 'FAILED') {
   Write-Host "[mysql-gate] RESULT = FAIL" -ForegroundColor Red
   Write-Host "[mysql-gate] ACK-4 STATE = FAILED (tests failed; cleanup was proven)"
-  if ($gateStderr) {
-    Write-Host "[mysql-gate] ROOT FAILURE DETAILS:"
-    $gateStderr.Trim() -split "`r?`n" |
-      Select-Object -Last 40 |
-      ForEach-Object { Write-Host "    $_" }
-  }
+  Write-RootFailureDiagnostics $gateStderr 40
   exit 5
 }
-if ($gateStderr) { $gateStderr.Trim() -split "`r?`n" | Select-Object -Last 10 | ForEach-Object { Write-Host "    $_" } }
+if ($rootState -eq 'CLEANUP_UNVERIFIED') {
+  Write-Host "[mysql-gate] RESULT = FAIL" -ForegroundColor Red
+  Write-Host "[mysql-gate] ACK-4 STATE = CLEANUP_UNVERIFIED (target quarantined; recovery approval required)"
+  Write-RootFailureDiagnostics $gateStderr 40
+  if ($gateExit -eq 0) { exit 8 }
+  exit $gateExit
+}
+Write-RootFailureDiagnostics $gateStderr 10
 Write-Host "[mysql-gate] RESULT = FAIL" -ForegroundColor Red
 Write-Host "[mysql-gate] ACK-4 STATE = $rootState (gate exit $gateExit)"
 if ($gateExit -eq 0) { exit 8 }

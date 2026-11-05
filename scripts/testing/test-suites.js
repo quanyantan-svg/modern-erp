@@ -696,6 +696,7 @@ const FULL = [
   'scripts/git/check-commit-traceability.test.js',
   'scripts/gates/ack4-runtime.test.js',
   'scripts/gates/m1-core-g07-child-lifecycle.test.js',
+  'scripts/gates/m1-core-g07-diagnostics.test.js',
 
   // ----- V22 — Finance Operations Domain Closure -----
   // Wave A foundation: parameters, recognition policy, payment terms,

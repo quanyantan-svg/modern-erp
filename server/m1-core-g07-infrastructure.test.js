@@ -15,6 +15,7 @@ import {
 } from './test-support/m1-core-g07-fixtures.js';
 import { buildM1CoreG07HttpFixtures } from './test-support/m1-core-g07-http-fixture-builder.js';
 import { runM1CoreG07Lifecycle } from '../scripts/gates/m1-core-g07-root-lifecycle.mjs';
+import { createChildFailureError } from '../scripts/gates/m1-core-g07-diagnostics.mjs';
 import { assertM1CoreG07StaticPreflight, M1_G07_REQUIRED_ENVIRONMENT } from '../scripts/gates/m1-core-g07-static-preflight.mjs';
 import { assertNoAck4Quarantine, consumeAck4Record, M1_CORE_MANIFEST } from '../scripts/gates/ack4/ack4-runtime.mjs';
 
@@ -113,6 +114,11 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
     assert.match(launcher, /\$rootReport\.cleanupProven -eq \$true/);
     assert.match(launcher, /\$rootReport\.childrenExited -eq \$true/);
     assert.match(launcher, /if \(\$gateExit -eq 0\) \{ exit 8 \}/, 'UNKNOWN/CLEANUP_UNVERIFIED may never inherit exit 0');
+    assert.match(launcher, /Write-RootFailureDiagnostics/);
+    assert.match(launcher, /M1_G07_DIAGNOSTIC_SUMMARY_BEGIN/);
+    assert.match(launcher, /\$rootState -eq 'CLEANUP_UNVERIFIED'/);
+    assert.doesNotMatch(launcher, /ROOT FAILURE DETAILS:[\s\S]*Select-Object -Last 40[\s\S]*exit 5/,
+      'FAILED must prefer the complete marked summary instead of blindly tailing 40 lines');
   });
 
   test('ACK-4 static preflight binds digest, nine CRs, routes/bodies, roles, L2, environment, operations and target before consumption', () => {
@@ -350,6 +356,49 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
         && error.m1G07Lifecycle.childrenExited === true
         && error.m1G07Lifecycle.cleanupProven === true);
       assert.deepEqual(events, ['stop', 'cleanup', 'postflight']);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('diagnostic TAP failure survives Root FAILED with cleanupProven', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'm1-g07-diagnostic-failed-'));
+    const diagnosticError = createChildFailureError({
+      exitCode: 1, mode: 'suite', operation: 'RUN_M1_HTTP_FIXTURES',
+      stdout: "not ok 1 - CR-08 conservation\n  ---\n  failureType: 'testCodeFailure'\n  error: |-\n    expected non-negative LOT balance\n  code: 'ERR_ASSERTION'\n  stack: |-\n    at oracle (suite.js:88:4)\n  ...\n# fail 1\n",
+      stderr: '',
+    }, { evidenceRoot: dir, runId: '123e4567-e89b-42d3-a456-426614174066', restrictFile: () => {} });
+    try {
+      await assert.rejects(() => runM1CoreG07Lifecycle({
+        consumeRoot: async () => simulatedRoot(dir, '123e4567-e89b-42d3-a456-426614174066'),
+        expected: { commitSha, target, manifest: 'M1_CORE_G07_V1' }, quarantineDir: join(dir, 'quarantine'),
+        reset: async () => {}, bootstrap: async () => {}, runHttpFixtures: async () => { throw diagnosticError; },
+        stopChildren: async () => true, cleanup: async () => {}, verifyCleanup: async () => ({ clean: true, inventory: [] }),
+      }), (error) => error.message.includes('CR-08 conservation')
+        && error.message.includes('expected non-negative LOT balance')
+        && error.m1G07Lifecycle.state === 'FAILED'
+        && error.m1G07Lifecycle.cleanupProven === true
+        && error.m1G07Lifecycle.childrenExited === true);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('diagnostic TAP failure survives Root CLEANUP_UNVERIFIED without becoming PASS', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'm1-g07-diagnostic-cleanup-'));
+    const diagnosticError = createChildFailureError({
+      exitCode: 1, mode: 'suite', operation: 'RUN_M1_HTTP_FIXTURES',
+      stdout: "not ok 1 - SCHEMA-PARITY drift\n  ---\n  failureType: 'testCodeFailure'\n  error: |-\n    idempotency_key type mismatch\n  code: 'ERR_ASSERTION'\n  ...\n# fail 1\n",
+      stderr: 'worker warning',
+    }, { evidenceRoot: dir, runId: '123e4567-e89b-42d3-a456-426614174055', restrictFile: () => {} });
+    try {
+      await assert.rejects(() => runM1CoreG07Lifecycle({
+        consumeRoot: async () => simulatedRoot(dir, '123e4567-e89b-42d3-a456-426614174055'),
+        expected: { commitSha, target, manifest: 'M1_CORE_G07_V1' }, quarantineDir: join(dir, 'quarantine'),
+        reset: async () => {}, bootstrap: async () => {}, runHttpFixtures: async () => { throw diagnosticError; },
+        stopChildren: async () => true, cleanup: async () => {},
+        verifyCleanup: async () => ({ clean: false, inventory: ['tables=1'] }),
+      }), (error) => error.message.includes('SCHEMA-PARITY drift')
+        && error.m1G07Lifecycle.state === 'CLEANUP_UNVERIFIED'
+        && error.m1G07Lifecycle.testsPassed === false
+        && error.m1G07Lifecycle.cleanupProven === false);
+      assert.throws(() => assertNoAck4Quarantine(join(dir, 'quarantine'), target), /quarantined/);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
