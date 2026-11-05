@@ -13,6 +13,7 @@ import {
 import { assertFixedFixtureManifest } from './test-support/m1-core-g07-fixtures.js';
 import { assertM1CoreInformationSchemaParity } from './test-utils/m1-core-schema-parity.js';
 import { openM1CoreG07ExistingAdapter } from './test-utils/m1-core-g07-existing-adapter.js';
+import { runG07GateRace } from './test-utils/m1-core-g07-lock-wait.js';
 import { assertRealG07Oracle } from './test-utils/m1-core-g07-oracle.js';
 import { consumePortableChildLease } from '../scripts/gates/ack4/ack4-runtime.mjs';
 
@@ -42,21 +43,14 @@ function primaryKeyColumns(db, table) { return db.prepare("SELECT COLUMN_NAME co
 function quoteIdentifier(value) { if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value)) throw new Error(`M1_G07_UNSAFE_IDENTIFIER:${value}`); return `\`${value}\``; }
 function fullSnapshot(db, tables) { return Object.fromEntries(tables.map((table) => { const order = primaryKeyColumns(db, table); if (!order.length) throw new Error(`M1_G07_SNAPSHOT_PRIMARY_KEY_REQUIRED:${table}`); return [table, canonical(db.prepare(`SELECT * FROM ${quoteIdentifier(table)} ORDER BY ${order.map(quoteIdentifier).join(',')}`).all())]; })); }
 
-function gateWaiterIds(db) {
-  return new Set(db.prepare(`SELECT DISTINCT w.REQUESTING_THREAD_ID thread_id FROM performance_schema.data_lock_waits w JOIN performance_schema.data_locks rl ON rl.ENGINE_LOCK_ID=w.REQUESTING_ENGINE_LOCK_ID WHERE rl.TABLE_NAME='mysql_transaction_gates' AND rl.INDEX_NAME='PRIMARY'`).all().map((row) => String(row.thread_id)));
-}
-async function waitForNewTransaction(db, excluded, label, timeoutMs = 30_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) { const found = [...gateWaiterIds(db)].filter((id) => !excluded.has(id)); if (found.length === 1) return found[0]; if (found.length > 1) throw new Error(`M1_G07_${label}_WAITER_AMBIGUOUS`); await new Promise((done) => setTimeout(done, 25)); }
-  throw new Error(`M1_G07_${label}_HTTP_TRANSACTION_NOT_BLOCKING_ON_GATE`);
-}
 async function executeRace(db, manifest, definition) {
   const fixture = manifest.scenarios[definition.id]; const before = fullSnapshot(db, definition.snapshotTables);
-  db.exec('START TRANSACTION'); db.prepare('SELECT gate_id FROM mysql_transaction_gates WHERE gate_id=1 FOR UPDATE').get();
-  const baseline = gateWaiterIds(db); const pendingA = httpRequest(manifest.applications.A, fixture.requests[0]); const waiterA = await waitForNewTransaction(db, baseline, `${definition.id}_A`);
-  const pendingB = httpRequest(manifest.applications.B, fixture.requests[1]); const waiterB = await waitForNewTransaction(db, new Set([...baseline, waiterA]), `${definition.id}_B`);
-  try { assert.notEqual(waiterA, waiterB); } finally { db.exec('COMMIT'); }
-  const responses = await Promise.all([pendingA, pendingB]); const after = fullSnapshot(db, definition.snapshotTables);
+  const { responses } = await runG07GateRace({
+    db, label: definition.id,
+    requestA: () => httpRequest(manifest.applications.A, fixture.requests[0]),
+    requestB: () => httpRequest(manifest.applications.B, fixture.requests[1]),
+  });
+  const after = fullSnapshot(db, definition.snapshotTables);
   assertRealG07Oracle(definition, { before, after, fixture, responses });
 }
 

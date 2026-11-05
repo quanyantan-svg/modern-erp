@@ -1785,6 +1785,27 @@ M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
 - **未发生**：Requirement/Design/业务代码/Gate 结论修改，MySQL 连接，真实 G07，ACK-4 签发或消费，
   Reset/Bootstrap/Cleanup/Migration，以及任何远端写入。
 
+### 37.43 M1C-G07 SQL 兼容性与事务安全修复（2026-11-05）
+
+- **历史执行保持**：`master` @ `ef973f6dc12235bf98c2fe2db62f24a94d50b9e3`、Run
+  `c5ce2158-b165-4a7a-93bb-9fd649379fa5` 的真实 G07 为 `0/11 FAIL`；Root/Launcher 已证明 Cleanup，独立
+  Postflight 五类对象均为 0、无 Quarantine。该失败记录不覆盖、不改写，G07 继续为 `FAIL`。
+- **根因**：Schema Parity 的外键 JOIN 选择了未限定的 `CONSTRAINT_NAME`；G07 锁观测错误引用
+  `performance_schema.data_locks.TABLE_NAME`；`executeRace()` 在锁观测/等待异常时存在持锁事务与 pending HTTP
+  Promise 未可靠收束的风险。CR-09 supplemental failure 是前序 CR-09 未执行成功后的连带结果，未登记为独立业务缺陷。
+- **修复边界**：外键列分别明确绑定 `KEY_COLUMN_USAGE k` 与 `REFERENTIAL_CONSTRAINTS r`；锁观测改为
+  `OBJECT_SCHEMA=DATABASE()` + `OBJECT_NAME='mysql_transaction_gates'`，并绑定 requesting lock 的 ENGINE、
+  lock/transaction/thread identity、`WAITING` 与 `PRIMARY`；成功路径只在观察到两个不同等待者后 COMMIT，异常路径
+  ROLLBACK 并收束已启动请求，且清理异常不覆盖原始错误。未改生产 Handler、Fixture/digest、CR/Oracle、Root、
+  Launcher、ACK-4、Cleanup 或 Quarantine 合同。
+- **离线证据**：G07 infrastructure / diagnostics / child lifecycle `37/37 PASS`；同源 SQLite HTTP Fixture
+  `9/9 PASS`；FAST `552/552 PASS`；生产 Build PASS；相关 Node `--check` PASS。所有结果均为离线证据，
+  不冒充真实 MySQL 验证。
+- **状态边界**：`READY_FOR_INDEPENDENT_REVIEW`。G02/G05/G06=`PASS`；G01/G03/G04=`INCONCLUSIVE`；
+  G07=`FAIL`；`M1_CORE_ACCEPTANCE_BLOCKED` 保持。任何真实复验仍须新 SHA、新 Run ID、双远端同步与独立 ACK-4 授权。
+- **未发生**：MySQL 连接、真实 G07、Reset/Bootstrap/Cleanup/Migration、旧 Run ID/ACK-4 复用、Push/Merge/Tag/
+  Release/Deploy 或历史重写。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。

@@ -26,9 +26,9 @@ export function readMySqlInformationSchemaContract(db, tableName) {
     FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? ORDER BY ORDINAL_POSITION`).all(tableName);
   const indexes = db.prepare(`SELECT INDEX_NAME index_name,COLUMN_NAME column_name,SEQ_IN_INDEX seq_in_index,NON_UNIQUE non_unique
     FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? ORDER BY INDEX_NAME,SEQ_IN_INDEX`).all(tableName);
-  const foreignKeys = db.prepare(`SELECT CONSTRAINT_NAME constraint_name,COLUMN_NAME column_name,
-      REFERENCED_TABLE_NAME referenced_table_name,REFERENCED_COLUMN_NAME referenced_column_name,
-      UPDATE_RULE update_rule,DELETE_RULE delete_rule,ORDINAL_POSITION ordinal_position
+  const foreignKeys = db.prepare(`SELECT k.CONSTRAINT_NAME constraint_name,k.COLUMN_NAME column_name,
+      k.REFERENCED_TABLE_NAME referenced_table_name,k.REFERENCED_COLUMN_NAME referenced_column_name,
+      r.UPDATE_RULE update_rule,r.DELETE_RULE delete_rule,k.ORDINAL_POSITION ordinal_position
     FROM information_schema.KEY_COLUMN_USAGE k
     JOIN information_schema.REFERENTIAL_CONSTRAINTS r
       ON r.CONSTRAINT_SCHEMA=k.CONSTRAINT_SCHEMA AND r.TABLE_NAME=k.TABLE_NAME AND r.CONSTRAINT_NAME=k.CONSTRAINT_NAME

@@ -9,6 +9,7 @@ import {
   G07_SUPPLEMENTAL_ORACLES, M1_CORE_G07_SCENARIOS,
 } from './test-support/m1-core-g07-contract.js';
 import { compareTableParity, readMySqlInformationSchemaContract } from './test-utils/m1-core-schema-parity.js';
+import { gateWaiterIds, M1_G07_GATE_WAITER_SQL, runG07GateRace } from './test-utils/m1-core-g07-lock-wait.js';
 import {
   assertFixedFixtureManifest, computeM1CoreG07FixtureDigest, M1_CORE_G07_FIXED_FIXTURE_DIGEST,
   M1_CORE_G07_FIXED_SCENARIOS, M1_CORE_G07_TECHNICAL_L2_PREREQUISITES,
@@ -139,13 +140,111 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
 
   test('information_schema reader queries columns, indexes, FK rules and CHECK clauses', () => {
     const calls = [];
-    const db = { prepare(sql) { calls.push(sql); return { all: () => [] }; } };
-    readMySqlInformationSchemaContract(db, 'tracked_inventory_movements');
+    const foreignKey = {
+      constraint_name: 'fk_item', column_name: 'item_id', referenced_table_name: 'items',
+      referenced_column_name: 'id', update_rule: 'CASCADE', delete_rule: 'RESTRICT', ordinal_position: 1,
+    };
+    const db = { prepare(sql) { calls.push(sql); return { all: () => (/REFERENTIAL_CONSTRAINTS/.test(sql) ? [foreignKey] : []) }; } };
+    const contract = readMySqlInformationSchemaContract(db, 'tracked_inventory_movements');
     assert.equal(calls.length, 4);
     assert.ok(calls.some((sql) => /information_schema\.COLUMNS/.test(sql)));
     assert.ok(calls.some((sql) => /information_schema\.STATISTICS/.test(sql)));
     assert.ok(calls.some((sql) => /REFERENTIAL_CONSTRAINTS/.test(sql)));
     assert.ok(calls.some((sql) => /CHECK_CONSTRAINTS/.test(sql)));
+    const foreignKeySql = calls.find((sql) => /REFERENTIAL_CONSTRAINTS/.test(sql));
+    for (const column of ['CONSTRAINT_NAME', 'COLUMN_NAME', 'REFERENCED_TABLE_NAME', 'REFERENCED_COLUMN_NAME', 'ORDINAL_POSITION']) {
+      assert.match(foreignKeySql, new RegExp(`k\\.${column}\\b`), `${column} must come from KEY_COLUMN_USAGE k`);
+    }
+    for (const column of ['UPDATE_RULE', 'DELETE_RULE']) {
+      assert.match(foreignKeySql, new RegExp(`r\\.${column}\\b`), `${column} must come from REFERENTIAL_CONSTRAINTS r`);
+    }
+    assert.deepEqual(contract.foreignKeys, [foreignKey], 'the existing foreign-key comparison shape must be preserved');
+  });
+
+  test('G07 lock observation binds the requesting InnoDB waiter to the current schema, gate table and PRIMARY index', () => {
+    const rows = [
+      { thread_id: 11, lock_thread_id: 11, engine: 'INNODB', lock_status: 'WAITING', object_schema: 'target_db', selected_database: 'target_db', object_name: 'mysql_transaction_gates', index_name: 'PRIMARY' },
+      { thread_id: 12, lock_thread_id: 12, engine: 'INNODB', lock_status: 'WAITING', object_schema: 'other_db', selected_database: 'target_db', object_name: 'mysql_transaction_gates', index_name: 'PRIMARY' },
+      { thread_id: 13, lock_thread_id: 13, engine: 'INNODB', lock_status: 'WAITING', object_schema: 'target_db', selected_database: 'target_db', object_name: 'other_table', index_name: 'PRIMARY' },
+      { thread_id: 14, lock_thread_id: 14, engine: 'INNODB', lock_status: 'WAITING', object_schema: 'target_db', selected_database: 'target_db', object_name: 'mysql_transaction_gates', index_name: 'other_index' },
+      { thread_id: 15, lock_thread_id: 15, engine: 'INNODB', lock_status: 'GRANTED', object_schema: 'target_db', selected_database: 'target_db', object_name: 'mysql_transaction_gates', index_name: 'PRIMARY' },
+      { thread_id: 16, lock_thread_id: 99, engine: 'INNODB', lock_status: 'WAITING', object_schema: 'target_db', selected_database: 'target_db', object_name: 'mysql_transaction_gates', index_name: 'PRIMARY' },
+    ];
+    const db = { prepare(sql) { assert.equal(sql, M1_G07_GATE_WAITER_SQL); return { all: () => rows }; } };
+    assert.deepEqual([...gateWaiterIds(db)], ['11']);
+    assert.doesNotMatch(M1_G07_GATE_WAITER_SQL, /rl\.TABLE_NAME/);
+    assert.match(M1_G07_GATE_WAITER_SQL, /rl\.OBJECT_SCHEMA=DATABASE\(\)/);
+    assert.match(M1_G07_GATE_WAITER_SQL, /rl\.OBJECT_NAME='mysql_transaction_gates'/);
+    assert.match(M1_G07_GATE_WAITER_SQL, /rl\.INDEX_NAME='PRIMARY'/);
+    assert.match(M1_G07_GATE_WAITER_SQL, /rl\.ENGINE=w\.ENGINE/);
+    assert.match(M1_G07_GATE_WAITER_SQL, /rl\.ENGINE_LOCK_ID=w\.REQUESTING_ENGINE_LOCK_ID/);
+    assert.match(M1_G07_GATE_WAITER_SQL, /rl\.ENGINE_TRANSACTION_ID=w\.REQUESTING_ENGINE_TRANSACTION_ID/);
+    assert.match(M1_G07_GATE_WAITER_SQL, /rl\.THREAD_ID=w\.REQUESTING_THREAD_ID/);
+    assert.match(M1_G07_GATE_WAITER_SQL, /rl\.LOCK_STATUS='WAITING'/);
+  });
+
+  test('G07 gate race proves two distinct waiters and commits only after both are observed', async () => {
+    const events = [];
+    const db = {
+      exec(sql) { events.push(sql); },
+      prepare(sql) {
+        if (sql === M1_G07_GATE_WAITER_SQL) return { all: () => [] };
+        assert.match(sql, /FOR UPDATE/); return { get: () => events.push('GATE_HELD') };
+      },
+    };
+    const observed = [];
+    const result = await runG07GateRace({
+      db, label: 'CR-TEST',
+      requestA: async () => { events.push('REQUEST_A'); return { status: 201 }; },
+      requestB: async () => { events.push('REQUEST_B'); return { status: 409 }; },
+      observeWaiter: async (_db, excluded, label) => {
+        await Promise.resolve();
+        observed.push({ label, excluded: [...excluded] });
+        events.push(`OBSERVED_${label}`);
+        return label.endsWith('_A') ? 'thread-a' : 'thread-b';
+      },
+    });
+    assert.deepEqual(result.responses, [{ status: 201 }, { status: 409 }]);
+    assert.deepEqual(observed, [
+      { label: 'CR-TEST_A', excluded: [] },
+      { label: 'CR-TEST_B', excluded: ['thread-a'] },
+    ]);
+    assert.ok(events.indexOf('COMMIT') > events.indexOf('OBSERVED_CR-TEST_B'));
+    assert.ok(events.indexOf('REQUEST_A') < events.indexOf('OBSERVED_CR-TEST_A'));
+    assert.ok(events.indexOf('REQUEST_B') < events.indexOf('OBSERVED_CR-TEST_B'));
+    assert.ok(!events.includes('ROLLBACK'));
+  });
+
+  test('G07 gate race rolls back and drains pending requests when lock observation fails', async () => {
+    const original = new Error('LOCK_OBSERVATION_FAILED');
+    const events = [];
+    const db = {
+      exec(sql) { events.push(sql); },
+      prepare(sql) {
+        if (sql === M1_G07_GATE_WAITER_SQL) return { all: () => [] };
+        return { get: () => events.push('GATE_HELD') };
+      },
+    };
+    await assert.rejects(() => runG07GateRace({
+      db, label: 'CR-FAIL',
+      requestA: async () => { events.push('REQUEST_A'); return { status: 409 }; },
+      requestB: async () => { throw new Error('MUST_NOT_START'); },
+      observeWaiter: async () => { await Promise.resolve(); throw original; },
+    }), (error) => error === original);
+    assert.deepEqual(events, ['START TRANSACTION', 'GATE_HELD', 'REQUEST_A', 'ROLLBACK']);
+  });
+
+  test('G07 gate release failure never replaces the original observation error', async () => {
+    const original = new Error('WAITER_TIMEOUT');
+    const releaseFailure = new Error('ROLLBACK_FAILED');
+    const db = {
+      exec(sql) { if (sql === 'ROLLBACK') throw releaseFailure; },
+      prepare(sql) { return sql === M1_G07_GATE_WAITER_SQL ? { all: () => [] } : { get: () => ({ gate_id: 1 }) }; },
+    };
+    await assert.rejects(() => runG07GateRace({
+      db, label: 'CR-FAIL', requestA: async () => ({ status: 0 }), requestB: async () => ({ status: 0 }),
+      observeWaiter: async () => { throw original; },
+    }), (error) => error === original && error.m1G07GateReleaseError === releaseFailure);
   });
 
   test('field-level parity reports exact column drift instead of accepting table presence', () => {
