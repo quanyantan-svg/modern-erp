@@ -1825,6 +1825,18 @@ M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
 - **未发生**：MySQL 连接、真实 G07、ACK-4、Reset/Bootstrap/Cleanup/Migration、Push/Merge/Tag/Release/Deploy
   或历史重写。
 
+### 37.45 M1C-G07 超时请求迟到成功拒绝（2026-11-05）
+
+- **复核输入**：独立复核对 `93646ff1e2881790f3fec2179b5ba8a14bce4834` 指出唯一剩余阻塞：请求触发超时取消后，
+  若底层 Promise 忽略 signal 并迟到 fulfilled，旧 tracker 仍可能把该响应作为成功结果。
+- **修复边界**：request tracker 将首次超时/取消及其原因固化为不可逆状态；底层随后 fulfilled 或 rejected 均不能覆盖该状态。
+  Race 正常返回前再次确认全部请求均未超时、未取消。HTTP JSON 解析仅对普通非 JSON 响应保留 `{}` 兼容，signal 已取消或
+  `AbortError` 必须继续抛出。未改 SQL、锁身份、事务释放、Fixture、CR/Oracle、Root、ACK-4 或 Quarantine 合同。
+- **离线证据**：迟到成功负控实际观察到 abort 后返回 `201`，Race 仍以 `M1_G07_HTTP_REQUEST_TIMEOUT` FAIL；G07
+  infrastructure / diagnostics / child lifecycle `40/40 PASS`；FAST `555/555 PASS`；生产 Build 与相关 Node `--check` PASS。
+- **状态边界**：`READY_FOR_INDEPENDENT_REVIEW`。历史 G07=`FAIL`、`M1_CORE_ACCEPTANCE_BLOCKED` 均保持；未连接 MySQL，
+  未执行真实 G07、ACK-4、Reset/Bootstrap/Cleanup/Migration 或任何远端写入。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。

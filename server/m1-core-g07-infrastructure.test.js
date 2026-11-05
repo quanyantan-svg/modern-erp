@@ -288,6 +288,35 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
     assert.ok(!events.includes('COMMIT'));
   });
 
+  test('G07 request that ignores timeout abort and later returns 201 is permanently rejected', async () => {
+    const events = [];
+    let abortObserved = false;
+    let lateSuccessObserved = false;
+    const db = {
+      exec(sql) { events.push(sql); },
+      prepare(sql) {
+        if (sql === M1_G07_GATE_WAITER_SQL) return { all: () => [] };
+        return { get: () => events.push('GATE_HELD') };
+      },
+    };
+    await assert.rejects(() => runG07GateRace({
+      db, label: 'CR-LATE-SUCCESS', requestTimeoutMs: 10, settlementTimeoutMs: 100,
+      requestA: (signal) => new Promise((resolve) => {
+        signal.addEventListener('abort', () => { abortObserved = true; }, { once: true });
+        setTimeout(() => { lateSuccessObserved = true; resolve({ status: 201 }); }, 30);
+      }),
+      requestB: async () => ({ status: 409 }),
+      observeWaiter: async (_db, _excluded, waiterLabel) => waiterLabel.endsWith('_A') ? 'thread-a' : 'thread-b',
+    }), (error) => error.code === 'M1_G07_HTTP_REQUEST_TIMEOUT'
+      && error.message.includes('CR-LATE-SUCCESS_A_HTTP_REQUEST_TIMEOUT:10')
+      && error.m1G07RequestSettlement.status === 'REQUEST_PROMISES_SETTLED'
+      && error.m1G07RequestSettlement.cleanupProven === false);
+    assert.equal(abortObserved, true, 'the timed-out request must receive abort');
+    assert.equal(lateSuccessObserved, true, 'the negative control must really produce a late 201');
+    assert.ok(events.includes('COMMIT'), 'both waiters were observed before the request timed out');
+    assert.ok(!events.includes('ROLLBACK'), 'the already committed test gate is not reported as rolled back');
+  });
+
   test('G07 HTTP rejection preserves the original error and releases the gate', async () => {
     const original = new Error('SYNTHETIC_HTTP_REJECTION');
     original.code = 'SYNTHETIC_HTTP_REJECTION';

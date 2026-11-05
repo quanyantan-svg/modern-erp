@@ -37,7 +37,12 @@ function validateFixtureManifest(manifest) {
 
 async function httpRequest(baseUrl, request, signal = undefined) {
   const response = await fetch(baseUrl + request.path, { method: request.method, headers: { authorization: `Bearer ${request.token}`, ...(request.body === undefined ? {} : { 'content-type': 'application/json' }), ...request.headers }, body: request.body === undefined ? undefined : JSON.stringify(request.body), signal });
-  return { status: response.status, data: await response.json().catch(() => ({})) };
+  let data;
+  try { data = await response.json(); } catch (error) {
+    if (signal?.aborted || error?.name === 'AbortError') throw error;
+    data = {};
+  }
+  return { status: response.status, data };
 }
 function primaryKeyColumns(db, table) { return db.prepare("SELECT COLUMN_NAME column_name FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND CONSTRAINT_NAME='PRIMARY' ORDER BY ORDINAL_POSITION").all(table).map((row) => row.column_name); }
 function quoteIdentifier(value) { if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value)) throw new Error(`M1_G07_UNSAFE_IDENTIFIER:${value}`); return `\`${value}\``; }

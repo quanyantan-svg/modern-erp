@@ -84,19 +84,22 @@ function requestTimeoutError(label, timeoutMs) {
 function trackRequest(factory, label, timeoutMs) {
   const controller = new AbortController();
   const state = {
-    label, controller, settled: false, outcome: null, abortRequested: false, timeout: null, done: null,
+    label, controller, settled: false, outcome: null, abortRequested: false, abortReason: null, timeout: null, done: null,
   };
   state.abort = (reason) => {
     if (state.settled || controller.signal.aborted) return;
     state.abortRequested = true;
+    state.abortReason = reason;
     if (state.timeout) clearTimeout(state.timeout);
     controller.abort(reason);
   };
   state.timeout = setTimeout(() => state.abort(requestTimeoutError(label, timeoutMs)), timeoutMs);
   state.timeout.unref?.();
   state.done = Promise.resolve().then(() => factory(controller.signal)).then(
-    (value) => ({ status: 'fulfilled', value }),
-    (reason) => ({ status: 'rejected', reason }),
+    (value) => state.abortRequested
+      ? ({ status: 'rejected', reason: state.abortReason })
+      : ({ status: 'fulfilled', value }),
+    (reason) => ({ status: 'rejected', reason: state.abortRequested ? state.abortReason : reason }),
   ).then((outcome) => {
     state.settled = true;
     state.outcome = outcome;
@@ -179,6 +182,9 @@ export async function runG07GateRace({
     transactionOpen = false;
     const settled = await settleRequests(pending, requestTimeoutMs + settlementTimeoutMs);
     if (!settled.settled) throw new Error(`M1_G07_${label}_HTTP_SETTLEMENT_UNVERIFIED_AFTER_COMMIT`);
+    const interrupted = pending.find((request) => request.abortRequested || request.controller.signal.aborted);
+    if (interrupted) throw interrupted.abortReason || interrupted.controller.signal.reason
+      || new Error(`M1_G07_${interrupted.label}_HTTP_INTERRUPTED_WITHOUT_REASON`);
     const rejected = settled.outcomes.find((result) => result.status === 'rejected');
     if (rejected) throw rejected.reason;
     return Object.freeze({
