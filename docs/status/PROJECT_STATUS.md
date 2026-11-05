@@ -1757,6 +1757,21 @@ M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
 [`docs/acceptance/m1-core-g05-owner-acceptance-20261105.md`](../acceptance/m1-core-g05-owner-acceptance-20261105.md)、
 [`docs/acceptance/m1-core-g07-final-execution-and-acceptance-20261105.md`](../acceptance/m1-core-g07-final-execution-and-acceptance-20261105.md)。
 
+### 37.41 M1C-G07 Runner Diagnostic Fix（2026-11-05）
+
+- **授权与范围**：仅在 `master` @ `16a8b35270392cfa879dc2886604dcd9655f3d7e` 本地实施
+  `M1C-G07-RUNNER-DIAGNOSTIC-FIX` 与完全离线验证；未连接数据库、未执行真实 G07、Reset、Bootstrap、
+  Migration 或部署，未修改 CR-01～CR-09、Suite 成败标准、ACK-4、Cleanup、Quarantine 或生产业务逻辑。
+- **根因与修复**：`node:test run({ isolation:'none' })` 返回结构化事件流，原 `stream.pipe(process.stdout)`
+  未把事件转换为 TAP，导致 Root 的既有脱敏 TAP 解析链收到空 stdout。Suite child 现先经 Node 内置 `tap`
+  reporter 将事件转换为 TAP，再交 Root 捕获；`test:fail` 仍独立控制非零退出，Root / Launcher 生命周期未改。
+- **离线证据**：临时合成测试覆盖全通过、普通断言失败、`before` hook 失败、多个失败；失败名称、断言值与
+  operator、hook 原因、必要 stack 均可恢复，Bearer/password 合成秘密在 Root 诊断层被替换为 `[REDACTED]`。
+  G07 diagnostics / child lifecycle / infrastructure focused tests `33/33 PASS`；相关 Node 静态检查 PASS。
+- **状态边界**：本修复为 `READY_FOR_INDEPENDENT_REVIEW`，不签发新的 Gate PASS。历史 G07 仍为 `FAIL`，
+  G01/G03/G04 仍为 `INCONCLUSIVE`，M1-Core Acceptance 仍为 `BLOCKED`；真实 MySQL 是否暴露新的业务失败点
+  未验证，任何真实复验仍须新 SHA、新 Run ID 与独立 ACK-4 授权。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。

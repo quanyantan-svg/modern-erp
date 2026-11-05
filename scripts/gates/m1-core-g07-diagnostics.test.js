@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
@@ -18,6 +19,33 @@ function createError({ stdout, stderr = '', exitCode = 1 }) {
     evidenceRoot: directory, runId: '123e4567-e89b-42d3-a456-426614174000', childPid: 42, restrictFile: () => {},
   });
   return { directory, error };
+}
+
+async function runSyntheticSuite(source) {
+  const directory = mkdtempSync(join(tmpdir(), 'm1-g07-suite-events-'));
+  const filePath = join(directory, 'synthetic.test.mjs');
+  writeFileSync(filePath, source);
+  try {
+    const runner = [
+      '(async () => {',
+      "const { run } = await import('node:test');",
+      "const { emitNodeTestTap } = await import('./scripts/gates/m1-core-g07-suite-reporter.mjs');",
+      'const result = await emitNodeTestTap(run({ files: [process.argv[1]], isolation: \'none\' }));',
+      'if (result.failed) process.exitCode = 1;',
+      '})().catch((error) => { console.error(error); process.exitCode = 2; });',
+    ].join('\n');
+    const child = spawn(process.execPath, ['-e', runner, filePath], {
+      cwd: process.cwd(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    const exitCode = await new Promise((resolve, reject) => {
+      child.on('error', reject);
+      child.on('close', resolve);
+    });
+    return { failed: exitCode !== 0, exitCode, stdout, stderr };
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 }
 
 describe('M1C-G07 child failure diagnostics (pure Node, no MySQL)', () => {
@@ -91,5 +119,65 @@ describe('M1C-G07 child failure diagnostics (pure Node, no MySQL)', () => {
       assert.doesNotMatch(evidence, /should-not-survive/);
       assert.match(evidence, /\[REDACTED\]/);
     } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test('node:test event reporter emits readable TAP and preserves successful suite behavior', async () => {
+    const result = await runSyntheticSuite(`
+      import test from 'node:test';
+      test('synthetic pass', () => {});
+    `);
+    assert.equal(result.failed, false, result.stderr || result.stdout);
+    assert.match(result.stdout, /ok 1 - synthetic pass/);
+    assert.match(result.stdout, /# pass 1/);
+    assert.equal(parseNodeTestTapFailures(result.stdout).identifiableFailureCount, 0);
+  });
+
+  test('node:test event reporter preserves assertion name, values, operator and stack', async () => {
+    const result = await runSyntheticSuite(`
+      import assert from 'node:assert/strict';
+      import test from 'node:test';
+      test('CR-SYNTH assertion fidelity', () => assert.equal(409, 200));
+    `);
+    const parsed = parseNodeTestTapFailures(result.stdout);
+    assert.equal(result.failed, true);
+    assert.equal(parsed.declaredFailureCount, 1);
+    assert.equal(parsed.identifiableFailureCount, 1);
+    assert.equal(parsed.failures[0].name, 'CR-SYNTH assertion fidelity');
+    assert.equal(parsed.failures[0].code, 'ERR_ASSERTION');
+    assert.equal(parsed.failures[0].assertion, 'expected=200 actual=409 operator=strictEqual');
+    assert.match(parsed.failures[0].stack, /synthetic\.test\.mjs/);
+  });
+
+  test('node:test event reporter preserves before hook failures', async () => {
+    const result = await runSyntheticSuite(`
+      import { before, test } from 'node:test';
+      before(() => { throw new Error('synthetic before hook failure'); });
+      test('CR-SYNTH blocked by before', () => {});
+    `);
+    const parsed = parseNodeTestTapFailures(result.stdout);
+    assert.equal(result.failed, true);
+    assert.equal(parsed.failures[0].name, 'CR-SYNTH blocked by before');
+    assert.equal(parsed.failures[0].failureType, 'hookFailed');
+    assert.equal(parsed.failures[0].error, 'synthetic before hook failure');
+    assert.match(parsed.failures[0].stack, /synthetic\.test\.mjs/);
+  });
+
+  test('node:test event reporter preserves multiple failures and sanitizes captured output', async () => {
+    const result = await runSyntheticSuite(`
+      import assert from 'node:assert/strict';
+      import test from 'node:test';
+      test('CR-SYNTH first failure', () => assert.deepEqual({ status: 409 }, { status: 200 }));
+      test('CR-SYNTH secret failure', () => { throw new Error('Bearer synthetic-secret password=synthetic-password'); });
+    `);
+    const diagnostic = diagnoseChildResult({
+      exitCode: 1, mode: 'suite', operation: 'RUN_M1_HTTP_FIXTURES', stdout: result.stdout,
+    });
+    assert.equal(result.failed, true);
+    assert.equal(diagnostic.tap.declaredFailureCount, 2);
+    assert.deepEqual(diagnostic.tap.failures.map((item) => item.name), [
+      'CR-SYNTH first failure', 'CR-SYNTH secret failure',
+    ]);
+    assert.doesNotMatch(diagnostic.sanitizedStdout, /synthetic-secret|synthetic-password/);
+    assert.match(diagnostic.sanitizedStdout, /\[REDACTED\]/);
   });
 });

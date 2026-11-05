@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { run } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { consumePortableChildLease } from './ack4/ack4-runtime.mjs';
+import { emitNodeTestTap } from './m1-core-g07-suite-reporter.mjs';
 
 function required(name) {
   const value = String(process.env[name] || '').trim();
@@ -114,10 +115,7 @@ async function suiteProcess() {
   const leasePath = resolve(required('ERP_M1_G07_ACK4_CHILD_LEASE'));
   await waitForLease(leasePath);
   const stream = run({ files: [resolve('server/mysql-m1-core-g07.integration.js')], isolation: 'none' });
-  let failed = false;
-  stream.on('test:fail', () => { failed = true; });
-  stream.pipe(process.stdout);
-  await new Promise((resolveDone, reject) => { stream.on('end', resolveDone); stream.on('error', reject); });
+  const { failed } = await emitNodeTestTap(stream);
   if (failed) process.exitCode = 1;
 }
 
