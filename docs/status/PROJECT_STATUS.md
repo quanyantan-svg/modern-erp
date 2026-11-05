@@ -1806,6 +1806,25 @@ M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
 - **未发生**：MySQL 连接、真实 G07、Reset/Bootstrap/Cleanup/Migration、旧 Run ID/ACK-4 复用、Push/Merge/Tag/
   Release/Deploy 或历史重写。
 
+### 37.44 M1C-G07 异常路径 HTTP 收束安全修复（2026-11-05）
+
+- **复核输入**：独立复核对 `fc7bdfe79a8c4f2cd238889a6538f1ca2208e798` 给出 `CHANGES_REQUIRED`；唯一阻塞为
+  `runG07GateRace()` 在异常路径无界等待 pending HTTP。37.43 已通过的 Schema Parity、锁查询、双等待者证明及正常
+  COMMIT/ROLLBACK 路径未重构。
+- **修复边界**：真实 G07 的两个 `fetch` 请求接入独立 `AbortSignal` 和请求超时；锁观测、HTTP 拒绝或其他异常发生时先请求
+  取消，再尝试 ROLLBACK，并仅在明确上界内等待请求收束。若请求不响应取消，主错误保持不变，同时追加
+  `M1_G07_HTTP_SETTLEMENT_UNVERIFIED`，并固定记录 `businessEffectsProven=false`、`cleanupProven=false`；ROLLBACK
+  失败另附 `M1_G07_GATE_RELEASE_FAILED`，不得冒充安全清理或 PASS。
+- **成功合同保持**：仍须观察两个不同的真实等待者后才 COMMIT；随后仍按原 HTTP 结果和既有 Oracle 判定。未改生产 Handler、
+  Fixture/digest、CR-01～CR-09、Root、Launcher、ACK-4、全局 Cleanup 或 Quarantine。
+- **离线证据**：G07 infrastructure / diagnostics / child lifecycle `39/39 PASS`；同源 SQLite HTTP Fixture `9/9 PASS`；
+  FAST `554/554 PASS`；生产 Build PASS；相关 Node `--check` PASS。沙箱内既有 Windows ACL 用例因权限限制失败，获准在
+  沙箱外完全离线复跑后通过；不属于本次代码回归。
+- **状态边界**：`READY_FOR_INDEPENDENT_REVIEW`。历史 G07 继续为 `FAIL`，`M1_CORE_ACCEPTANCE_BLOCKED` 保持；本轮证据不
+  构成真实 MySQL 验证或 Cleanup 证明。
+- **未发生**：MySQL 连接、真实 G07、ACK-4、Reset/Bootstrap/Cleanup/Migration、Push/Merge/Tag/Release/Deploy
+  或历史重写。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。

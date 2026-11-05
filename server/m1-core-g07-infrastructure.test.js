@@ -227,24 +227,80 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
     };
     await assert.rejects(() => runG07GateRace({
       db, label: 'CR-FAIL',
-      requestA: async () => { events.push('REQUEST_A'); return { status: 409 }; },
+      requestA: (signal) => new Promise((resolve) => {
+        events.push('REQUEST_A');
+        signal.addEventListener('abort', () => { events.push('ABORT_A'); resolve({ status: 499 }); }, { once: true });
+      }),
       requestB: async () => { throw new Error('MUST_NOT_START'); },
       observeWaiter: async () => { await Promise.resolve(); throw original; },
     }), (error) => error === original);
-    assert.deepEqual(events, ['START TRANSACTION', 'GATE_HELD', 'REQUEST_A', 'ROLLBACK']);
+    assert.deepEqual(events, ['START TRANSACTION', 'GATE_HELD', 'REQUEST_A', 'ABORT_A', 'ROLLBACK']);
+    assert.deepEqual(original.m1G07RequestSettlement, {
+      status: 'REQUEST_PROMISES_SETTLED', pendingLabels: [], timeoutMs: 5000,
+      abortRequested: true, businessEffectsProven: false, cleanupProven: false,
+    });
   });
 
-  test('G07 gate release failure never replaces the original observation error', async () => {
+  test('G07 rollback failure plus permanently pending HTTP ends bounded and reports settlement unverified', async () => {
     const original = new Error('WAITER_TIMEOUT');
     const releaseFailure = new Error('ROLLBACK_FAILED');
+    releaseFailure.code = 'ROLLBACK_FAILED';
+    let aborted = false;
     const db = {
       exec(sql) { if (sql === 'ROLLBACK') throw releaseFailure; },
       prepare(sql) { return sql === M1_G07_GATE_WAITER_SQL ? { all: () => [] } : { get: () => ({ gate_id: 1 }) }; },
     };
+    const startedAt = Date.now();
     await assert.rejects(() => runG07GateRace({
-      db, label: 'CR-FAIL', requestA: async () => ({ status: 0 }), requestB: async () => ({ status: 0 }),
+      db, label: 'CR-FAIL', settlementTimeoutMs: 25,
+      requestA: (signal) => new Promise(() => { signal.addEventListener('abort', () => { aborted = true; }, { once: true }); }),
+      requestB: async () => ({ status: 0 }),
       observeWaiter: async () => { throw original; },
-    }), (error) => error === original && error.m1G07GateReleaseError === releaseFailure);
+    }), (error) => error === original
+      && error.m1G07GateReleaseError === releaseFailure
+      && error.message.includes('M1_G07_HTTP_SETTLEMENT_UNVERIFIED')
+      && error.message.includes('M1_G07_GATE_RELEASE_FAILED code=ROLLBACK_FAILED')
+      && error.m1G07RequestSettlement.status === 'UNVERIFIED'
+      && error.m1G07RequestSettlement.cleanupProven === false);
+    assert.equal(aborted, true, 'the permanent request must receive an abort request');
+    assert.ok(Date.now() - startedAt < 500, 'the failure path must not wait forever');
+  });
+
+  test('G07 HTTP request timeout aborts the request, preserves its diagnostic and cannot become PASS', async () => {
+    const events = [];
+    const db = {
+      exec(sql) { events.push(sql); },
+      prepare(sql) {
+        if (sql === M1_G07_GATE_WAITER_SQL) return { all: () => [] };
+        return { get: () => events.push('GATE_HELD') };
+      },
+    };
+    await assert.rejects(() => runG07GateRace({
+      db, label: 'CR-TIMEOUT', requestTimeoutMs: 15, settlementTimeoutMs: 50,
+      requestA: (signal) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })),
+      requestB: async () => ({ status: 0 }),
+    }), (error) => error.code === 'M1_G07_HTTP_REQUEST_TIMEOUT'
+      && error.message.includes('CR-TIMEOUT_A_HTTP_REQUEST_TIMEOUT:15')
+      && error.m1G07RequestSettlement.status === 'REQUEST_PROMISES_SETTLED'
+      && error.m1G07RequestSettlement.businessEffectsProven === false
+      && error.m1G07RequestSettlement.cleanupProven === false);
+    assert.ok(events.includes('ROLLBACK'));
+    assert.ok(!events.includes('COMMIT'));
+  });
+
+  test('G07 HTTP rejection preserves the original error and releases the gate', async () => {
+    const original = new Error('SYNTHETIC_HTTP_REJECTION');
+    original.code = 'SYNTHETIC_HTTP_REJECTION';
+    const events = [];
+    const db = {
+      exec(sql) { events.push(sql); },
+      prepare(sql) { return sql === M1_G07_GATE_WAITER_SQL ? { all: () => [] } : { get: () => events.push('GATE_HELD') }; },
+    };
+    await assert.rejects(() => runG07GateRace({
+      db, label: 'CR-REJECT', requestA: async () => { throw original; }, requestB: async () => ({ status: 0 }),
+    }), (error) => error === original && error.m1G07RequestSettlement.cleanupProven === false);
+    assert.ok(events.includes('ROLLBACK'));
+    assert.ok(!events.includes('COMMIT'));
   });
 
   test('field-level parity reports exact column drift instead of accepting table presence', () => {

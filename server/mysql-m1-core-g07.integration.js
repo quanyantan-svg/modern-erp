@@ -35,8 +35,8 @@ function validateFixtureManifest(manifest) {
   return manifest;
 }
 
-async function httpRequest(baseUrl, request) {
-  const response = await fetch(baseUrl + request.path, { method: request.method, headers: { authorization: `Bearer ${request.token}`, ...(request.body === undefined ? {} : { 'content-type': 'application/json' }), ...request.headers }, body: request.body === undefined ? undefined : JSON.stringify(request.body) });
+async function httpRequest(baseUrl, request, signal = undefined) {
+  const response = await fetch(baseUrl + request.path, { method: request.method, headers: { authorization: `Bearer ${request.token}`, ...(request.body === undefined ? {} : { 'content-type': 'application/json' }), ...request.headers }, body: request.body === undefined ? undefined : JSON.stringify(request.body), signal });
   return { status: response.status, data: await response.json().catch(() => ({})) };
 }
 function primaryKeyColumns(db, table) { return db.prepare("SELECT COLUMN_NAME column_name FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND CONSTRAINT_NAME='PRIMARY' ORDER BY ORDINAL_POSITION").all(table).map((row) => row.column_name); }
@@ -47,8 +47,8 @@ async function executeRace(db, manifest, definition) {
   const fixture = manifest.scenarios[definition.id]; const before = fullSnapshot(db, definition.snapshotTables);
   const { responses } = await runG07GateRace({
     db, label: definition.id,
-    requestA: () => httpRequest(manifest.applications.A, fixture.requests[0]),
-    requestB: () => httpRequest(manifest.applications.B, fixture.requests[1]),
+    requestA: (signal) => httpRequest(manifest.applications.A, fixture.requests[0], signal),
+    requestB: (signal) => httpRequest(manifest.applications.B, fixture.requests[1], signal),
   });
   const after = fullSnapshot(db, definition.snapshotTables);
   assertRealG07Oracle(definition, { before, after, fixture, responses });
