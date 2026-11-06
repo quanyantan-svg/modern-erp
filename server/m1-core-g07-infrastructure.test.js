@@ -166,6 +166,40 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
     assert.deepEqual(contract.foreignKeys, [foreignKey], 'the existing foreign-key comparison shape must be preserved');
   });
 
+  test('the information_schema foreign-key query stays bound to the requested table', () => {
+    // The foreign-key read must stay scoped to the requested table. An
+    // unscoped query would pull the foreign keys of every other table in the
+    // schema into the comparison and fail FOREIGN_KEYS for reasons that have
+    // nothing to do with the table under test.
+    //
+    // The binding is verified from the query and its bound parameter, not from
+    // a mock that returns a preset foreign-key array.
+    const readForeignKeyBinding = (tableName) => {
+      const bindings = [];
+      const db = {
+        prepare(sql) {
+          return { all: (...params) => { bindings.push({ sql, params }); return []; } };
+        },
+      };
+      readMySqlInformationSchemaContract(db, tableName);
+      const foreignKeyCall = bindings.find((entry) => /REFERENTIAL_CONSTRAINTS/.test(entry.sql));
+      assert.ok(foreignKeyCall, `the foreign-key query must be issued for ${tableName}`);
+      return foreignKeyCall;
+    };
+
+    for (const tableName of ['tracked_inventory_movements', 'purchase_orders']) {
+      const binding = readForeignKeyBinding(tableName);
+      assert.match(binding.sql, /k\.TABLE_SCHEMA=DATABASE\(\)/,
+        'the foreign-key query must stay bound to the current schema');
+      assert.match(binding.sql, /k\.TABLE_NAME=\?/,
+        'the foreign-key query must stay bound to the current table');
+      assert.equal((binding.sql.match(/\?/g) || []).length, 1,
+        'the foreign-key query must bind exactly one placeholder');
+      assert.deepEqual(binding.params, [tableName],
+        'the bound value must be the requested table name');
+    }
+  });
+
   test('G07 lock observation binds the requesting InnoDB waiter to the current schema, gate table and PRIMARY index', () => {
     const rows = [
       { thread_id: 11, lock_thread_id: 11, engine: 'INNODB', lock_status: 'WAITING', object_schema: 'target_db', selected_database: 'target_db', object_name: 'mysql_transaction_gates', index_name: 'PRIMARY' },

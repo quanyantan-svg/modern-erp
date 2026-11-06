@@ -158,3 +158,27 @@ M1C_G07_PARITY_R3_IMPLEMENTED_READY_FOR_INDEPENDENT_REVIEW
 
 历史 G07 仍为 `FAIL`，`M1_CORE_ACCEPTANCE_BLOCKED` 保持不变；本轮不签发 G07 PASS、
 M1-Core Acceptance、Freeze、Domain Closure 或 Release Readiness。
+
+## 9. 独立复核发现与修复（2026-11-06）
+
+- **独立复核基线**：`0b7cf2fe5b05bf292a5cb143c43ac748f5e35a68`，结论
+  `M1C_G07_PARITY_R3_REVIEW_BLOCKED`：发现一处**与 Parity 方言修复无关的确定性回归**。
+- **回归内容**：R3 重写 `readMySqlInformationSchemaContract()` 时，外键查询丢失了当前表范围
+  条件 `k.TABLE_NAME=?`。该条件在 GitHub 原基线 `9b2afc17` 中存在，属**意外删除**。
+  未恢复时，`information_schema.KEY_COLUMN_USAGE` 会把全库其他表的外键读入目标表合同，
+  造成 `FOREIGN_KEYS` 失败。
+- **修复**：外键查询恢复为
+  `WHERE k.TABLE_SCHEMA=DATABASE() AND k.TABLE_NAME=? AND k.REFERENCED_TABLE_NAME IS NOT NULL`，
+  绑定调用保持 `.all(tableName)`。仅此一处，未扩大范围。
+- **回归测试**：`server/m1-core-g07-infrastructure.test.js` 新增「外键查询保持绑定到被请求的表」，
+  断言查询含 `k.TABLE_SCHEMA=DATABASE()`、含 `k.TABLE_NAME=?`、**恰有一个**绑定占位符、
+  绑定值等于传入的 `tableName`，并用**两个不同表名**复验以排除误用固定表名。
+  该测试**不使用**无条件返回预设外键数组的 Mock 来代替绑定验证，而是从查询文本与实际绑定参数取证。
+  已验证其**在回归存在时必然失败**（移除修复后该用例 FAIL），修复后 PASS。
+- **不变项复核**：R3 的目录字面量解析不变（离线端到端复算仍 **16/16 表 PASS**）；
+  DEFAULT、CHECK、生成列负控保持通过；CR-01～CR-09（9）与 Supplemental Oracle（7）不变；
+  Fixture digest `9816affb…d71091` 不变；**生产 DDL 不变**（645 条语句，SHA-256 `bc56b56a…c4688`）。
+- **复验结果**：R3 focused `58/58 PASS`；FAST `564/564 PASS`，0 fail / 0 skipped / 0 todo；
+  Build PASS；Node `--check` PASS；`git diff --check` PASS；docs current 与 migration PASS。
+- **未发生**：未改 issuer、生产 Handler、Schema、Migration、Fixture 或 Oracle；未运行 MySQL Gate、
+  Reset、Bootstrap、Cleanup；未签发 ACK-4；未复用历史 Run ID；未 Force Push；未推送 master。
