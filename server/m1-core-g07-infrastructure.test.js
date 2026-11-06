@@ -1121,6 +1121,100 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
       'a changed digest separator must fail');
   });
 
+  // ---------------------------------------------------------------------------
+  // R4-R1 — the independent source review blocked R4 on two defects of the
+  // scope-limited AST: the literal CLASS was dropped (a string and a numeric
+  // literal of the same text rendered alike) and the CAST type parameters
+  // were read but discarded (a length or precision never showed up in the
+  // canonical tree). Both are closed here.
+  // ---------------------------------------------------------------------------
+
+  test('R4-R1 a string literal, a numeric literal and NULL never normalise to the same expression', () => {
+    const pairs = [
+      ["status='1'", 'status=1'],
+      ["x='0'", 'x=0'],
+      ["x='01'", 'x=1'],
+      ["s='DRAFT'", "s='draft'"],
+      ["s IN ('1')", 's IN (1)'],
+      ["s IN ('1','2')", 's IN (1,2)'],
+      ["s IN ('1',2)", "s IN ('1','2')"],
+      ['x = NULL', "x = 'NULL'"],
+    ];
+    for (const [left, right] of pairs) {
+      assert.notEqual(
+        R4_CANONICAL(left, 'sql_standard'),
+        R4_CANONICAL(right, 'sql_standard'),
+        `${left} and ${right} must never normalise to the same expression`,
+      );
+    }
+    // The same holds on the catalogue side, where a string literal carries the
+    // `_utf8mb4` introducer and the escaped delimiter.
+    assert.notEqual(R4_CANONICAL("(_utf8mb4\\'1\\' = `x`)", 'mysql_catalog'), R4_CANONICAL('(1 = `x`)', 'mysql_catalog'));
+    // The literal class is explicit in the canonical tree.
+    assert.match(R4_CANONICAL("status='1'", 'sql_standard'), /\(str "1"\)/);
+    assert.match(R4_CANONICAL('status=1', 'sql_standard'), /\(num "1"\)/);
+    assert.match(R4_CANONICAL('x = NULL', 'sql_standard'), /\(null\)/);
+    assert.match(R4_CANONICAL("s IN ('1',2)", 'sql_standard'), /\(in \(id s\) \(\(str "1"\) \(num "2"\)\)\)/);
+  });
+
+  test('R4-R1 a CAST length or precision never normalises away', () => {
+    const pairs = [
+      ['CAST(x AS CHAR(8))', 'CAST(x AS CHAR(64))'],
+      ['CAST(x AS CHAR)', 'CAST(x AS CHAR(8))'],
+      ['CAST(x AS CHAR(8))', 'CAST(x AS CHAR)'],
+      ['CAST(x AS DECIMAL(10,2))', 'CAST(x AS DECIMAL(10,3))'],
+      ['CAST(x AS DECIMAL(10,2))', 'CAST(x AS DECIMAL(12,2))'],
+    ];
+    for (const [left, right] of pairs) {
+      assert.notEqual(
+        R4_CANONICAL(left, 'sql_standard'),
+        R4_CANONICAL(right, 'sql_standard'),
+        `${left} and ${right} must never normalise to the same expression`,
+      );
+    }
+    // A cast without a length is NOT the same expression as a cast with one:
+    // the length truncates, so equating them would be an unfounded rule.
+    assert.match(R4_CANONICAL('CAST(x AS CHAR)', 'sql_standard'), /\(cast \(id x\) char\)$/);
+    assert.match(R4_CANONICAL('CAST(x AS CHAR(8))', 'sql_standard'), /\(cast \(id x\) char \(num "8"\)\)$/);
+    assert.match(R4_CANONICAL('CAST(x AS DECIMAL(10,2))', 'sql_standard'), /\(cast \(id x\) decimal \(num "10"\) \(num "2"\)\)$/);
+  });
+
+  test('R4-R1 a changed CAST length in the digest expression fails the generated column comparison', () => {
+    const indexName = 'uq_r4_digest_active';
+    const generated = mysqlGeneratedPartialIndexColumnName(indexName);
+    const sqlite = {
+      name: 'r4_digest', sql: 'CREATE TABLE r4_digest(id TEXT PRIMARY KEY, state TEXT NOT NULL)',
+      columns: [
+        { name: 'id', type: 'TEXT', notnull: 0, dflt_value: null, pk: 1 },
+        { name: 'state', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+      ],
+      indexes: [{
+        name: indexName, unique: true, origin: 'c', columns: ['id', 'state'],
+        expressions: ['id', 'state'], where: "state='ACTIVE'",
+      }],
+      foreignKeys: [],
+    };
+    const expected = generatedExpression('r4_digest', sqlite.indexes[0]);
+    const contract = (expression) => ({
+      tableName: 'r4_digest',
+      columns: [
+        { column_name: 'id', data_type: 'varchar', is_nullable: 'NO', column_default: null, column_key: '', extra: '', generation_expression: '' },
+        { column_name: 'state', data_type: 'varchar', is_nullable: 'NO', column_default: null, column_key: '', extra: '', generation_expression: '' },
+        {
+          column_name: generated, data_type: 'char', is_nullable: 'YES', column_default: null,
+          extra: 'STORED GENERATED', generation_expression: expression,
+        },
+      ],
+      indexes: [{ index_name: indexName, column_name: generated, seq_in_index: 1, non_unique: 0 }],
+      foreignKeys: [], checks: [],
+    });
+    assert.deepEqual(compareTableParity(sqlite, contract(expected)), [], 'the production expression must compare equal');
+    assert.ok(compareTableParity(sqlite, contract(expected.replace('AS CHAR)', 'AS CHAR(8))'))).includes(`GENERATED_COLUMN_EXPRESSION:${generated}`),
+      'a CAST length added to the digest expression must fail');
+    assert.ok(compareTableParity(sqlite, contract(expected.replace('AS CHAR)', 'AS CHAR(64))'))).includes(`GENERATED_COLUMN_EXPRESSION:${generated}`),
+      'a changed CAST length in the digest expression must fail');
+  });
+
   // --- R4 offline replay: the MySQL side is production's OWN emitted DDL ------
   function r4SplitTopLevel(body) {
     const parts = [];

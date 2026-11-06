@@ -7,6 +7,8 @@
 > Outsourcing Domain Owner（Fixture 与 CR/Oracle 决定）。
 > 状态：`PENDING_APPROVAL` —— 离线实施与验证已完成，真实 MySQL Gate 未重跑，历史
 > G07=`FAIL` 与 `M1_CORE_ACCEPTANCE_BLOCKED` 保持不变。
+> 独立源码复核结论为 `M1C_G07_PARITY_R4_REVIEW_BLOCKED`；两处 AST 确定性缺陷已由
+> **R4-R1** 定向修复并复验（见 §8），本候选据此重新进入待审状态。
 > 权威来源：Requirement
 > [`docs/requirements/procurement-outsourcing.md`](../requirements/procurement-outsourcing.md)
 > §31.13.5；Active Design
@@ -104,7 +106,7 @@ R3 已把 DEFAULT 类差异清零；剩余差异**同源**：MySQL 8.0.37 的目
 
 | 要求 | 实现 |
 |---|---|
-| 字符串字面量内容与大小写 | 字面量以 JSON 原样进入树，`(lit "DRAFT")` 与 `(lit "draft")` 不同 |
+| 字符串字面量内容与大小写 | 字面量以 JSON 原样进入树，`(str "DRAFT")` 与 `(str "draft")` 不同；字面量**类别**亦进入树（`(str "1")` / `(num "1")` / `(null)`），由 R4-R1 补齐，见 §8 |
 | charset 语义 | 目录侧的 `_utf8mb4` introducer 在词法层按方言解码；`CAST(x AS CHAR CHARSET utf8mb4)` 由既有的 `normalizeGeneratedCastCharset` 归一（两侧同时应用） |
 | 标识符 | 沿用既有比较口径（词法层小写），未改变 |
 | CASE WHEN / 函数参数 / 算术 / 比较 / IS NULL / IN / BETWEEN | 均在解析层有独立节点，未被折叠或丢弃 |
@@ -163,6 +165,8 @@ Supplemental Oracle、ACK-4 安全合同、已验证成功的 DEFAULT 规范化�
 
 ## 5. 离线复验与门禁
 
+本节记录 **R4 轮**的离线复验结果；R4-R1 修复后的复验见 §8.4。
+
 | 项 | 结果 |
 |---|---|
 | 真实日志接地的 16 表离线回放 | **16/16 PASS**，其中 **5 张表**使用上次真实 Run 导出的原始目录输出，其余 11 张使用生产自身 DDL |
@@ -192,9 +196,86 @@ Supplemental Oracle、ACK-4 安全合同、已验证成功的 DEFAULT 规范化�
 ## 7. 候审结论
 
 ```text
-M1C_G07_PARITY_R4_IMPLEMENTED_READY_FOR_INDEPENDENT_REVIEW
+M1C_G07_PARITY_R4_R1_IMPLEMENTED_READY_FOR_INDEPENDENT_REVIEW
 ```
+
+R4 的实现方向经独立源码复核通过；复核提出的两处 AST 确定性缺陷（A 字面量类别丢失、
+B CAST 长度丢失）已由 R4-R1 定向修复并复验，明细与证据见 §8。
 
 历史 G07 仍为 `FAIL`，`M1_CORE_ACCEPTANCE_BLOCKED` 保持不变；本轮不签发 G07 PASS、
 M1-Core Acceptance、Freeze、Domain Closure 或 Release Readiness。下一次真实 MySQL Gate
 须另行申请新的 Run ID 与新的 commit SHA。
+
+## 8. 独立源码复核结论与 R4-R1 定向修复
+
+### 8.1 复核结论
+
+独立源码复核候审提交 `ffbb0e81be8923343b5d8d0d2b059f493e3eecb2`，结论：
+
+```text
+M1C_G07_PARITY_R4_REVIEW_BLOCKED
+```
+
+R4 的整体方向（以表达式树取代 token 流比较）通过；阻塞项为 AST 解析器中两处
+**会误判表达式等价**的确定性缺陷。二者只影响比较器的严格性，不涉及生产代码、
+Fixture、DDL、Migration 与已批准 digest。
+
+| 编号 | 缺陷 | 误判 | R4-R1 修复 |
+|---|---|---|---|
+| A | 字面量**类别**丢失：字符串 Token 与数值 Token 都生成 `kind=lit` 且 `value` 为字符串 | `status='1'` 与 `status=1` 渲染成同一形态；`x='0'` 与 `x=0` 同理；IN 列表同样合并 | 字面量类别进入 AST：`str` / `num` / `null` 三类节点，渲染分别为 `(str …)` / `(num …)` / `(null)` |
+| B | `parseCast()` 读取类型长度后**未保存** | `CAST(x AS CHAR(8))` 与 `CAST(x AS CHAR(64))` 渲染相同；`CAST(x AS CHAR)` 与 `CAST(x AS CHAR(8))` 也相同 | 类型参数（长度、精度、标度）逐项保存在 AST 并进入规范形；无参数与有参数的渲染不同 |
+
+### 8.2 修复边界
+
+- **只改比较器与负向测试**：`server/test-utils/m1-core-schema-parity.js` 的
+  `parseExpressionTokens()` / `renderExpressionAst()`，以及
+  `server/m1-core-g07-infrastructure.test.js` 新增的 3 个 R4-R1 负向测试。
+- **未重写 R4 AST**：解析范围、括号在解析时被消耗、优先级建树、`R:` fail closed 形态、
+  既有 `normalizeGeneratedCastCharset` 归一规则**全部保持不变**。
+- **未引入新的无依据等价规则**：字面量类别与 CAST 参数只会让比较**更严格**，不会让任何
+  两个此前不相等的表达式变得相等。
+- **既有的等价规则保留**：R3/R4 已证明的 MySQL 目录 charset 表示等价（两侧同时应用的
+  `normalizeGeneratedCastCharset`）与 `parseCast()` 对 `CHAR … CHARSET utf8mb4` 的既有
+  消费逻辑**均未改动**；字面量内容的大小写显著性**未改动**。
+
+### 8.3 新增负向控制
+
+| 负控 | 断言 |
+|---|---|
+| 字符串字面量与数值字面量文本相同 | `status='1'` ≠ `status=1`；`x='0'` ≠ `x=0`；`x='01'` ≠ `x=1` |
+| 字符串大小写 | `s='DRAFT'` ≠ `s='draft'`（继续失败） |
+| IN 列表不合并字符串与数值 | `s IN ('1')` ≠ `s IN (1)`；`s IN ('1','2')` ≠ `s IN (1,2)` |
+| 目录方言同样不合并 | `(_utf8mb4\'1\' = \`x\`)` ≠ `(1 = \`x\`)` |
+| NULL 是字面量 | `x = NULL` ≠ `x = 'NULL'` |
+| CAST 长度 | `CAST(x AS CHAR(8))` ≠ `CAST(x AS CHAR(64))` |
+| CAST 无长度与有长度 | `CAST(x AS CHAR)` ≠ `CAST(x AS CHAR(8))` |
+| CAST 精度与标度 | `CAST(x AS DECIMAL(10,2))` ≠ `CAST(x AS DECIMAL(10,3))` / `DECIMAL(12,2)` |
+| 生成列 digest 的 CAST 长度改变 | `GENERATED_COLUMN_EXPRESSION` |
+
+三项新测试在**修复前**（比较器回退到 `ffbb0e8`）实测全部 FAIL，修复后全部 PASS；
+既有 41 项测试在两个版本下均 PASS。
+
+### 8.4 修复后的离线复验
+
+| 项 | 结果 |
+|---|---|
+| 四张真实失败表的原始目录子句逐条规范形相等 | **PASS** |
+| 真实导出的生成列表达式与生产派生表达式相等 | **PASS** |
+| 16 张 Parity 表离线回放（其中 5 张使用真实 Run 导出的原始目录输出） | **16/16 PASS** |
+| AND/OR 分组、NOT 作用范围、算术优先级、比较运算符负控 | **PASS**（既有 R4 负控未变） |
+| DEFAULT 规范化 | **完全不变**：修复前后 256 组 `canonicalDefault()` / `canonicalSqliteDefault()` 规范形逐组相同（差异 0），`sqlExpressionTokens()` 输出不变 |
+| 生产 DDL 指纹 | **不变**：645 条语句，SHA-256 `bc56b56a28d515ffacfa22c658c126f589f3ee0812240ba0e9ea88f2494c4688`（与 R3/R4 基线逐字节相同） |
+| Fixture digest 重算 | `9816affb5a94108723929cf8844ea1a640a71a210c604cea6cdd73fdb0d71091`（= 批准值，不变） |
+| Focused（`server/m1-core-g07-infrastructure.test.js`） | **44/44 PASS**（R4 的 41 项 + R4-R1 的 3 项） |
+| FAST | **574/574 PASS**，0 fail / 0 skipped / 0 todo |
+| Build | PASS |
+| Node `--check` | PASS |
+| `git diff --check` | PASS |
+
+### 8.5 未发生
+
+未运行真实 MySQL G07；未签发或消费 ACK-4；未执行 Reset / Bootstrap / Cleanup / Migration；
+未修改生产 Handler、DDL、Migration、Fixture、已批准 digest、CR-01～CR-09、Supplemental Oracle；
+未复用历史 Run ID；未 Force Push；未推送 master；未 Merge / Tag / Release / Deploy。
+仅按授权将修复提交 Fast-forward 推送至原 R4 审查分支
+`review/m1c-g07-parity-r4-20261106`。

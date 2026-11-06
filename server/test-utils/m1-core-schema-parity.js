@@ -188,7 +188,13 @@ function sqlExpressionTokenList(value, {
 // match an identical one.
 //
 // A literal keeps its content verbatim, so the case of a business string
-// literal stays significant.
+// literal stays significant. The literal CLASS is part of the tree as well:
+// a string literal, a numeric literal and NULL are three different nodes, so
+// `status = '1'` can never render like `status = 1`, and an IN list can never
+// merge a string element with a numeric one.
+//
+// A CAST keeps its type parameters (length, precision, scale): `CHAR` and
+// `CHAR(8)` are different expressions, because the length truncates.
 // ---------------------------------------------------------------------------
 
 const M1_CORE_EXPRESSION_WORD = 'WORD:';
@@ -285,10 +291,10 @@ function parseExpressionTokens(tokens) {
     for (;;) {
       const token = peek();
       if (token && token.startsWith('STRING:')) {
-        values.push({ kind: 'lit', value: JSON.parse(token.slice('STRING:'.length)) });
+        values.push({ kind: 'str', value: JSON.parse(token.slice('STRING:'.length)) });
         position += 1;
       } else if (token && token.startsWith('NUMBER:')) {
-        values.push({ kind: 'lit', value: token.slice('NUMBER:'.length) });
+        values.push({ kind: 'num', value: token.slice('NUMBER:'.length) });
         position += 1;
       } else {
         return null;
@@ -351,11 +357,11 @@ function parseExpressionTokens(tokens) {
     if (!token) return null;
     if (token.startsWith('STRING:')) {
       position += 1;
-      return { kind: 'lit', value: JSON.parse(token.slice('STRING:'.length)) };
+      return { kind: 'str', value: JSON.parse(token.slice('STRING:'.length)) };
     }
     if (token.startsWith('NUMBER:')) {
       position += 1;
-      return { kind: 'lit', value: token.slice('NUMBER:'.length) };
+      return { kind: 'num', value: token.slice('NUMBER:'.length) };
     }
     if (symbol('(')) {
       position += 1;
@@ -390,6 +396,9 @@ function parseExpressionTokens(tokens) {
       return { kind: 'fn', name, args };
     }
     position += 1;
+    // NULL is a literal, not an identifier: it must never compare equal to a
+    // column reference, and it must never be confused with the string 'NULL'.
+    if (name === 'null') return { kind: 'null' };
     return { kind: 'id', name };
   }
 
@@ -401,13 +410,24 @@ function parseExpressionTokens(tokens) {
     const type = tokenWord(peek());
     if (type === null) return null;
     position += 1;
+    let typeParameters = null;
     if (symbol('(')) {
       position += 1;
-      const length = peek();
-      if (!length || !length.startsWith('NUMBER:')) return null;
-      position += 1;
+      // The type parameters (length, precision, scale) are part of the
+      // semantics: `CHAR(8)` truncates where `CHAR` does not. They are kept
+      // verbatim, so two casts of different arity can never render alike.
+      const parameters = [];
+      for (;;) {
+        const parameter = peek();
+        if (!parameter || !parameter.startsWith('NUMBER:')) return null;
+        parameters.push(parameter.slice('NUMBER:'.length));
+        position += 1;
+        if (symbol(',')) { position += 1; continue; }
+        break;
+      }
       if (!symbol(')')) return null;
       position += 1;
+      typeParameters = parameters;
     }
     if (word('charset') || word('character')) {
       position += 1;
@@ -417,7 +437,7 @@ function parseExpressionTokens(tokens) {
     }
     if (!symbol(')')) return null;
     position += 1;
-    return { kind: 'cast', item, type };
+    return { kind: 'cast', item, type, parameters: typeParameters };
   }
 
   function parseCase() {
@@ -462,10 +482,12 @@ function renderExpressionAst(node) {
     case 'like': return `(${node.negated ? 'notlike' : 'like'} ${render(node.item)} ${render(node.pattern)})`;
     case 'arith': return `(${node.op} ${render(node.left)} ${render(node.right)})`;
     case 'neg': return `(neg ${render(node.item)})`;
-    case 'lit': return `(lit ${JSON.stringify(node.value)})`;
+    case 'str': return `(str ${JSON.stringify(node.value)})`;
+    case 'num': return `(num ${JSON.stringify(node.value)})`;
+    case 'null': return '(null)';
     case 'id': return `(id ${node.name})`;
     case 'fn': return `(fn ${node.name}${node.args.length ? ` ${node.args.map(render).join(' ')}` : ''})`;
-    case 'cast': return `(cast ${render(node.item)} ${node.type})`;
+    case 'cast': return `(cast ${render(node.item)} ${node.type}${node.parameters ? ` ${node.parameters.map((value) => `(num ${JSON.stringify(value)})`).join(' ')}` : ''})`;
     case 'case': return `(case ${node.whens.map((entry) => `(when ${render(entry.condition)} ${render(entry.value)})`).join(' ')}${node.alternate ? ` (else ${render(node.alternate)})` : ''})`;
     default: throw new Error('M1_SCHEMA_PARITY_AST_INVALID');
   }
