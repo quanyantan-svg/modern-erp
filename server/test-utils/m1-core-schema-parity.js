@@ -195,6 +195,12 @@ function sqlExpressionTokenList(value, {
 //
 // A CAST keeps its type parameters (length, precision, scale): `CHAR` and
 // `CHAR(8)` are different expressions, because the length truncates.
+//
+// A CAST keeps its charset too: only `utf8mb4` — the charset the MySQL
+// catalogue names REDUNDANTLY on a cast whose target charset was not spelled
+// out — is equivalent to no charset clause at all. Any other charset
+// (`latin1`, `ascii`, ...) changes what the cast produces, so its name is
+// part of the expression.
 // ---------------------------------------------------------------------------
 
 const M1_CORE_EXPRESSION_WORD = 'WORD:';
@@ -411,6 +417,7 @@ function parseExpressionTokens(tokens) {
     if (type === null) return null;
     position += 1;
     let typeParameters = null;
+    let castCharset = null;
     if (symbol('(')) {
       position += 1;
       // The type parameters (length, precision, scale) are part of the
@@ -432,12 +439,19 @@ function parseExpressionTokens(tokens) {
     if (word('charset') || word('character')) {
       position += 1;
       if (word('set')) position += 1;
-      if (tokenWord(peek()) === null) return null;
+      const charset = tokenWord(peek());
+      if (charset === null) return null;
       position += 1;
+      // Only `utf8mb4` is a REDUNDANT charset clause: the MySQL catalogue
+      // names the connection charset on a cast whose target charset was not
+      // spelled out, and that rendering is proven equivalent to the plain
+      // form. Every other charset changes what the cast produces, so its name
+      // is part of the expression and must never be dropped.
+      if (charset !== 'utf8mb4') castCharset = charset;
     }
     if (!symbol(')')) return null;
     position += 1;
-    return { kind: 'cast', item, type, parameters: typeParameters };
+    return { kind: 'cast', item, type, parameters: typeParameters, charset: castCharset };
   }
 
   function parseCase() {
@@ -487,7 +501,7 @@ function renderExpressionAst(node) {
     case 'null': return '(null)';
     case 'id': return `(id ${node.name})`;
     case 'fn': return `(fn ${node.name}${node.args.length ? ` ${node.args.map(render).join(' ')}` : ''})`;
-    case 'cast': return `(cast ${render(node.item)} ${node.type}${node.parameters ? ` ${node.parameters.map((value) => `(num ${JSON.stringify(value)})`).join(' ')}` : ''})`;
+    case 'cast': return `(cast ${render(node.item)} ${node.type}${node.parameters ? ` ${node.parameters.map((value) => `(num ${JSON.stringify(value)})`).join(' ')}` : ''}${node.charset ? ` charset ${node.charset}` : ''})`;
     case 'case': return `(case ${node.whens.map((entry) => `(when ${render(entry.condition)} ${render(entry.value)})`).join(' ')}${node.alternate ? ` (else ${render(node.alternate)})` : ''})`;
     default: throw new Error('M1_SCHEMA_PARITY_AST_INVALID');
   }

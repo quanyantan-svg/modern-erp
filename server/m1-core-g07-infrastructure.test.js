@@ -1215,6 +1215,88 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
       'a changed CAST length in the digest expression must fail');
   });
 
+  // ---------------------------------------------------------------------------
+  // R4-R2 — a further independent review found that parseCast() read ANY
+  // charset clause and then dropped it, so `CAST(x AS CHAR CHARSET utf8mb4)`
+  // and `CAST(x AS CHAR CHARSET latin1)` rendered alike. Only the redundant
+  // `utf8mb4` is an approved equivalent of no charset clause at all.
+  // ---------------------------------------------------------------------------
+
+  test('R4-R2 a CAST charset other than the approved utf8mb4 never normalises away', () => {
+    // The APPROVED equivalence: the MySQL catalogue names the connection
+    // charset redundantly on a cast whose target charset was not spelled out.
+    assert.equal(
+      R4_CANONICAL('CAST(x AS CHAR)', 'sql_standard'),
+      R4_CANONICAL('CAST(x AS CHAR CHARSET utf8mb4)', 'sql_standard'),
+      'the approved redundant charset must stay equivalent to no charset clause',
+    );
+    assert.equal(
+      R4_CANONICAL('CAST(x AS CHAR)', 'sql_standard'),
+      R4_CANONICAL('CAST(x AS CHAR CHARACTER SET utf8mb4)', 'sql_standard'),
+      'the approved redundant charset must stay equivalent in the long form too',
+    );
+    // Every other charset changes what the cast produces, so it is part of the
+    // expression and must never be dropped.
+    const pairs = [
+      ['CAST(x AS CHAR CHARSET utf8mb4)', 'CAST(x AS CHAR CHARSET latin1)'],
+      ['CAST(x AS CHAR CHARSET utf8mb4)', 'CAST(x AS CHAR CHARSET ascii)'],
+      ['CAST(x AS CHAR CHARSET latin1)', 'CAST(x AS CHAR CHARSET ascii)'],
+      ['CAST(x AS CHAR)', 'CAST(x AS CHAR CHARSET latin1)'],
+      ['CAST(x AS CHAR)', 'CAST(x AS CHAR CHARSET ascii)'],
+      ['CAST(x AS CHAR(8) CHARSET utf8mb4)', 'CAST(x AS CHAR(8) CHARSET latin1)'],
+    ];
+    for (const [left, right] of pairs) {
+      assert.notEqual(
+        R4_CANONICAL(left, 'sql_standard'),
+        R4_CANONICAL(right, 'sql_standard'),
+        `${left} and ${right} must never normalise to the same expression`,
+      );
+    }
+    assert.match(R4_CANONICAL('CAST(x AS CHAR CHARSET latin1)', 'sql_standard'), /\(cast \(id x\) char charset latin1\)$/);
+    assert.match(R4_CANONICAL('CAST(x AS CHAR CHARSET utf8mb4)', 'sql_standard'), /\(cast \(id x\) char\)$/);
+  });
+
+  test('R4-R2 a wrong charset in the digest expression fails the generated column comparison', () => {
+    const indexName = 'uq_r4_digest_active';
+    const generated = mysqlGeneratedPartialIndexColumnName(indexName);
+    const sqlite = {
+      name: 'r4_digest', sql: 'CREATE TABLE r4_digest(id TEXT PRIMARY KEY, state TEXT NOT NULL)',
+      columns: [
+        { name: 'id', type: 'TEXT', notnull: 0, dflt_value: null, pk: 1 },
+        { name: 'state', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+      ],
+      indexes: [{
+        name: indexName, unique: true, origin: 'c', columns: ['id', 'state'],
+        expressions: ['id', 'state'], where: "state='ACTIVE'",
+      }],
+      foreignKeys: [],
+    };
+    const expected = generatedExpression('r4_digest', sqlite.indexes[0]);
+    const contract = (expression) => ({
+      tableName: 'r4_digest',
+      columns: [
+        { column_name: 'id', data_type: 'varchar', is_nullable: 'NO', column_default: null, column_key: '', extra: '', generation_expression: '' },
+        { column_name: 'state', data_type: 'varchar', is_nullable: 'NO', column_default: null, column_key: '', extra: '', generation_expression: '' },
+        {
+          column_name: generated, data_type: 'char', is_nullable: 'YES', column_default: null,
+          extra: 'STORED GENERATED', generation_expression: expression,
+        },
+      ],
+      indexes: [{ index_name: indexName, column_name: generated, seq_in_index: 1, non_unique: 0 }],
+      foreignKeys: [], checks: [],
+    });
+    assert.deepEqual(compareTableParity(sqlite, contract(expected)), [], 'the production expression must compare equal');
+    assert.ok(compareTableParity(sqlite, contract(expected.replace('AS CHAR)', 'AS CHAR CHARSET latin1)'))).includes(`GENERATED_COLUMN_EXPRESSION:${generated}`),
+      'a wrong charset in the digest expression must fail');
+    assert.ok(compareTableParity(sqlite, contract(expected.replace('AS CHAR)', 'AS CHAR CHARSET ascii)'))).includes(`GENERATED_COLUMN_EXPRESSION:${generated}`),
+      'a wrong charset in the digest expression must fail');
+    assert.deepEqual(
+      compareTableParity(sqlite, contract(expected.replace('AS CHAR)', 'AS CHAR CHARSET utf8mb4)'))),
+      [],
+      'the approved redundant charset must still compare equal',
+    );
+  });
+
   // --- R4 offline replay: the MySQL side is production's OWN emitted DDL ------
   function r4SplitTopLevel(body) {
     const parts = [];
