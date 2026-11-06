@@ -12,6 +12,7 @@ import { compareTableParity, readMySqlInformationSchemaContract } from './test-u
 import { gateWaiterIds, M1_G07_GATE_WAITER_SQL, runG07GateRace } from './test-utils/m1-core-g07-lock-wait.js';
 import {
   assertFixedFixtureManifest, computeM1CoreG07FixtureDigest, M1_CORE_G07_FIXED_FIXTURE_DIGEST,
+  M1_CORE_G07_CR02_IQC_CANDIDATE_DIGEST, M1_CORE_G07_CR02_IQC_CANDIDATE_SCENARIOS,
   M1_CORE_G07_FIXED_SCENARIOS, M1_CORE_G07_TECHNICAL_L2_PREREQUISITES,
 } from './test-support/m1-core-g07-fixtures.js';
 import { buildM1CoreG07HttpFixtures } from './test-support/m1-core-g07-http-fixture-builder.js';
@@ -350,6 +351,62 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
     assert.deepEqual(compareTableParity(sqlite, mysql), ['NULLABLE:amount', 'DEFAULT:amount']);
   });
 
+  test('parity accepts only verified MySQL metadata representations for defaults, inline UNIQUE and CHECK strings', () => {
+    const sqlite = {
+      name: 'sample',
+      sql: "CREATE TABLE sample(id TEXT PRIMARY KEY, code TEXT NOT NULL UNIQUE, amount REAL NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'DRAFT' CHECK(status IN ('DRAFT','POSTED')))",
+      columns: [
+        { name: 'id', type: 'TEXT', notnull: 0, dflt_value: null, pk: 1 },
+        { name: 'code', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+        { name: 'amount', type: 'REAL', notnull: 1, dflt_value: '0', pk: 0 },
+        { name: 'status', type: 'TEXT', notnull: 1, dflt_value: "'DRAFT'", pk: 0 },
+      ],
+      indexes: [{ name: 'sqlite_autoindex_sample_2', unique: true, origin: 'u', columns: ['code'], expressions: [], where: '' }],
+      foreignKeys: [],
+    };
+    const mysql = {
+      columns: [
+        { column_name: 'id', data_type: 'varchar', is_nullable: 'NO', column_default: null },
+        { column_name: 'code', data_type: 'varchar', is_nullable: 'NO', column_default: null },
+        { column_name: 'amount', data_type: 'decimal', is_nullable: 'NO', column_default: '0.000000' },
+        { column_name: 'status', data_type: 'longtext', is_nullable: 'NO', column_default: 'DRAFT' },
+      ],
+      indexes: [{ index_name: 'code', column_name: 'code', seq_in_index: 1, non_unique: 0 }],
+      foreignKeys: [],
+      checks: [{ check_clause: "(`status` in (_utf8mb4'DRAFT',_utf8mb4'POSTED'))" }],
+    };
+    assert.deepEqual(compareTableParity(sqlite, mysql), []);
+  });
+
+  test('parity still fails on a real missing column, missing UNIQUE, missing CHECK and wrong default', () => {
+    const sqlite = {
+      name: 'negative_sample',
+      sql: "CREATE TABLE negative_sample(id TEXT PRIMARY KEY, code TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'DRAFT' CHECK(status IN ('DRAFT','POSTED')))",
+      columns: [
+        { name: 'id', type: 'TEXT', notnull: 0, dflt_value: null, pk: 1 },
+        { name: 'code', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+        { name: 'status', type: 'TEXT', notnull: 1, dflt_value: "'DRAFT'", pk: 0 },
+      ],
+      indexes: [{ name: 'sqlite_autoindex_negative_sample_2', unique: true, origin: 'u', columns: ['code'], expressions: [], where: '' }],
+      foreignKeys: [],
+    };
+    const valid = {
+      columns: [
+        { column_name: 'id', data_type: 'varchar', is_nullable: 'NO', column_default: null },
+        { column_name: 'code', data_type: 'varchar', is_nullable: 'NO', column_default: null },
+        { column_name: 'status', data_type: 'longtext', is_nullable: 'NO', column_default: 'DRAFT' },
+      ],
+      indexes: [{ index_name: 'code', column_name: 'code', seq_in_index: 1, non_unique: 0 }],
+      foreignKeys: [],
+      checks: [{ check_clause: "status in (_utf8mb4'DRAFT',_utf8mb4'POSTED')" }],
+    };
+    assert.ok(compareTableParity(sqlite, { ...valid, columns: valid.columns.filter((column) => column.column_name !== 'code') }).includes('COLUMN_SEQUENCE'));
+    assert.ok(compareTableParity(sqlite, { ...valid, indexes: [] }).includes('UNIQUE_MISSING:code'));
+    assert.ok(compareTableParity(sqlite, { ...valid, checks: [] }).includes('CHECKS'));
+    const wrongDefault = valid.columns.map((column) => column.column_name === 'status' ? { ...column, column_default: 'POSTED' } : column);
+    assert.ok(compareTableParity(sqlite, { ...valid, columns: wrongDefault }).includes('DEFAULT:status'));
+  });
+
   test('fixed fixture builder runs the embedded HTTP chain and pins the SHA digest', async () => {
     const calls = [];
     // Rich mock data satisfies every array-indexed $ref path (order.items.0.id,
@@ -395,6 +452,23 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
     assert.deepEqual(manifest.technicalL2Prerequisites, M1_CORE_G07_TECHNICAL_L2_PREREQUISITES.map((item) => item.id));
     assert.deepEqual(M1_CORE_G07_FIXED_SCENARIOS.map((item) => item.id), ['CR-01', 'CR-02', 'CR-03', 'CR-04', 'CR-05', 'CR-06', 'CR-07', 'CR-08', 'CR-09']);
     assert.ok(M1_CORE_G07_TECHNICAL_L2_PREREQUISITES.length >= 4, 'technical L2 prerequisites must be enumerated');
+  });
+
+  test('CR-02 IQC repair remains an inactive Owner-approval candidate with an independently pinned digest', () => {
+    const active = M1_CORE_G07_FIXED_SCENARIOS.find((scenario) => scenario.id === 'CR-02');
+    const candidate = M1_CORE_G07_CR02_IQC_CANDIDATE_SCENARIOS.find((scenario) => scenario.id === 'CR-02');
+    assert.deepEqual(active.setup.map((step) => step.id).slice(-2), ['noticeGet', 'convert']);
+    assert.deepEqual(candidate.setup.map((step) => step.id).slice(-4), ['noticeGet', 'convert', 'iqc', 'iqcComplete']);
+    assert.deepEqual(candidate.setup.at(-2), {
+      id: 'iqc', subject: 'warehouse', method: 'POST', route: '/api/iqc', headers: {},
+      body: { purchase_receipt_id: { $ref: 'setup.convert.receipts.0.id' } },
+    });
+    assert.equal(candidate.setup.at(-1).subject, 'warehouse');
+    assert.equal(candidate.setup.at(-1).route, '/api/iqc/{setup.iqc.id}/complete');
+    assert.deepEqual(candidate.setup.at(-1).body, { result: 'PASS', inspection_quantity: 10, passed_quantity: 10, failed_quantity: 0 });
+    assert.equal(computeM1CoreG07FixtureDigest(M1_CORE_G07_CR02_IQC_CANDIDATE_SCENARIOS), M1_CORE_G07_CR02_IQC_CANDIDATE_DIGEST);
+    assert.notEqual(M1_CORE_G07_CR02_IQC_CANDIDATE_DIGEST, M1_CORE_G07_FIXED_FIXTURE_DIGEST);
+    assert.equal(computeM1CoreG07FixtureDigest(), M1_CORE_G07_FIXED_FIXTURE_DIGEST, 'active fixture must remain unchanged before Owner approval');
   });
 
   test('assertG07Result negative controls: double success, wrong code, duplicate audit, extra idempotency and loser side effect all FAIL', () => {

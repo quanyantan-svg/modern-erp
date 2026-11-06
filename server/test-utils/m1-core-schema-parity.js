@@ -1,4 +1,7 @@
-import { mysqlTypeFamily } from '../database/mysql-schema.js';
+import {
+  mysqlGeneratedPartialIndexColumnName,
+  mysqlTypeFamily,
+} from '../database/mysql-schema.js';
 
 export const M1_CORE_PARITY_TABLES = Object.freeze([
   'receipt_notice_item_sources', 'schedule_consumption_effects',
@@ -8,16 +11,72 @@ export const M1_CORE_PARITY_TABLES = Object.freeze([
   'purchase_orders', 'purchase_order_items', 'purchase_receipts', 'purchase_receipt_items',
 ]);
 
-function normalizedDefault(value) {
-  if (value === null || value === undefined) return null;
-  let text = String(value).trim().replace(/^\((.*)\)$/s, '$1').trim();
-  if (/^current_timestamp(?:\(\))?$/i.test(text)) return 'CURRENT_TIMESTAMP';
-  if (/^current_date(?:\(\))?$/i.test(text)) return 'CURRENT_DATE';
+function unwrapOuterParentheses(value) {
+  let text = String(value).trim();
+  while (text.startsWith('(') && text.endsWith(')')) {
+    let depth = 0; let quote = ''; let wrapsWholeExpression = true;
+    for (let index = 0; index < text.length; index += 1) {
+      const character = text[index];
+      if (quote) {
+        if (character === quote && text[index + 1] === quote) index += 1;
+        else if (character === quote) quote = '';
+      } else if (character === "'" || character === '"') quote = character;
+      else if (character === '(') depth += 1;
+      else if (character === ')' && --depth === 0 && index !== text.length - 1) { wrapsWholeExpression = false; break; }
+    }
+    if (!wrapsWholeExpression || depth !== 0) break;
+    text = text.slice(1, -1).trim();
+  }
   return text;
 }
 
+function unquoteSqlString(value) {
+  const text = String(value);
+  if (text.length < 2 || !["'", '"'].includes(text[0]) || text.at(-1) !== text[0]) return null;
+  const quote = text[0];
+  return text.slice(1, -1).replaceAll(quote + quote, quote);
+}
+
+function normalizedNumericDefault(value) {
+  const match = String(value).match(/^([+-]?)(\d+)(?:\.(\d+))?$/);
+  if (!match) return null;
+  const integer = match[2].replace(/^0+(?=\d)/, '');
+  const fraction = String(match[3] || '').replace(/0+$/, '');
+  const zero = integer === '0' && !fraction;
+  if (zero) return '0';
+  return `${match[1] === '-' ? '-' : ''}${integer}${fraction ? `.${fraction}` : ''}`;
+}
+
+function normalizedDefault(value, column) {
+  if (value === null || value === undefined) return null;
+  let text = unwrapOuterParentheses(value).replace(/^_[a-z0-9]+\s*(?=['"])/i, '');
+  if (/^null$/i.test(text)) return null;
+  if (/^current_timestamp(?:\(\))?$/i.test(text)) return 'KEYWORD:CURRENT_TIMESTAMP';
+  if (/^current_date(?:\(\))?$/i.test(text)) return 'KEYWORD:CURRENT_DATE';
+  const unquoted = unquoteSqlString(text);
+  const declared = String(column?.type || '').toUpperCase();
+  const numeric = declared.includes('INT') || declared.includes('REAL') || declared.includes('FLOA')
+    || declared.includes('DOUB') || declared.includes('NUM');
+  if (numeric) {
+    const normalized = normalizedNumericDefault(unquoted ?? text);
+    return normalized === null ? `EXPR:${text}` : `NUMBER:${normalized}`;
+  }
+  return `STRING:${unquoted ?? text}`;
+}
+
 function normalizedExpression(value) {
-  return String(value || '').replace(/[`"\s()]/g, '').toLowerCase();
+  return String(value || '')
+    .replace(/_[a-z0-9]+\s*(?=['"])/gi, '')
+    .replace(/[`"\s()]/g, '')
+    .toLowerCase();
+}
+
+
+function requiresGeneratedDigest(index) {
+  return Boolean(index.where)
+    || index.columns.length > 4
+    || index.columns.some((column) => typeof column !== 'string' || !column)
+    || (index.expressions || []).some((expression, position) => expression && expression !== index.columns[position]);
 }
 
 export function readMySqlInformationSchemaContract(db, tableName) {
@@ -69,9 +128,12 @@ function extractSqliteChecks(sql) {
 
 export function compareTableParity(sqliteTable, mysqlContract) {
   const errors = [];
-  const mysqlColumns = new Map(mysqlContract.columns.map((column) => [column.column_name, column]));
+  const expectedGeneratedColumns = new Set(sqliteTable.indexes.filter(requiresGeneratedDigest)
+    .map((index) => mysqlGeneratedPartialIndexColumnName(index.name)));
+  const logicalMySqlColumns = mysqlContract.columns.filter((column) => !expectedGeneratedColumns.has(column.column_name));
+  const mysqlColumns = new Map(logicalMySqlColumns.map((column) => [column.column_name, column]));
   const expectedNames = sqliteTable.columns.map((column) => column.name);
-  const actualNames = mysqlContract.columns.map((column) => column.column_name);
+  const actualNames = logicalMySqlColumns.map((column) => column.column_name);
   if (JSON.stringify(actualNames) !== JSON.stringify(expectedNames)) errors.push('COLUMN_SEQUENCE');
   const indexed = new Set([...sqliteTable.indexes.flatMap((index) => index.columns), ...sqliteTable.foreignKeys.map((fk) => fk.from)]);
   for (const column of sqliteTable.columns) {
@@ -80,7 +142,7 @@ export function compareTableParity(sqliteTable, mysqlContract) {
     if (String(actual.data_type).toLowerCase() !== mysqlTypeFamily(column, indexed.has(column.name), sqliteTable.name)) errors.push(`TYPE:${column.name}`);
     const expectedNullable = column.notnull || column.pk ? 'NO' : 'YES';
     if (actual.is_nullable !== expectedNullable) errors.push(`NULLABLE:${column.name}`);
-    if (normalizedDefault(actual.column_default) !== normalizedDefault(column.dflt_value)) errors.push(`DEFAULT:${column.name}`);
+    if (normalizedDefault(actual.column_default, column) !== normalizedDefault(column.dflt_value, column)) errors.push(`DEFAULT:${column.name}`);
   }
 
   const groupedIndexes = new Map();
@@ -89,11 +151,18 @@ export function compareTableParity(sqliteTable, mysqlContract) {
     entry.columns.push(row.column_name); groupedIndexes.set(row.index_name, entry);
   }
   for (const index of sqliteTable.indexes.filter((item) => item.origin !== 'pk' && item.columns.length)) {
+    const generated = requiresGeneratedDigest(index);
+    if (index.origin === 'u' && !generated) {
+      const actual = [...groupedIndexes.values()].find((candidate) => candidate.unique
+        && JSON.stringify(candidate.columns) === JSON.stringify(index.columns));
+      if (!actual) errors.push(`UNIQUE_MISSING:${index.columns.join('+')}`);
+      continue;
+    }
     const actual = groupedIndexes.get(index.name);
-    if (!actual) { errors.push(`INDEX_MISSING:${index.name}`); continue; }
+    if (!actual) { errors.push(`${index.unique ? 'UNIQUE' : 'INDEX'}_MISSING:${index.name}`); continue; }
     if (actual.unique !== Boolean(index.unique)) errors.push(`INDEX_UNIQUE:${index.name}`);
-    // Partial indexes are represented by one generated digest column on MySQL.
-    if (!index.where && JSON.stringify(actual.columns) !== JSON.stringify(index.columns)) errors.push(`INDEX_COLUMNS:${index.name}`);
+    const expectedColumns = generated ? [mysqlGeneratedPartialIndexColumnName(index.name)] : index.columns;
+    if (JSON.stringify(actual.columns) !== JSON.stringify(expectedColumns)) errors.push(`INDEX_COLUMNS:${index.name}`);
   }
 
   const actualFks = mysqlContract.foreignKeys.map((fk) => `${fk.column_name}->${fk.referenced_table_name}.${fk.referenced_column_name}:${fk.update_rule}:${fk.delete_rule}`).sort();

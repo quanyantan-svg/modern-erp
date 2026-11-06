@@ -140,8 +140,7 @@ function mysqlDefault(value, type) {
 }
 
 export function generatedPartialIndex(tableName, index) {
-  const suffix = Buffer.from(index.name).toString('hex').slice(-16);
-  const generated = `__partial_${suffix}`;
+  const generated = mysqlGeneratedPartialIndexColumnName(index.name);
   const parts = index.columns.map((column, position) => {
     if (isValidColumnName(column)) {
       return `COALESCE(CAST(${quote(column)} AS CHAR),CHAR(30))`;
@@ -161,6 +160,11 @@ export function generatedPartialIndex(tableName, index) {
     `ALTER TABLE ${quote(tableName)} ADD COLUMN ${quote(generated)} CHAR(64) GENERATED ALWAYS AS (CASE WHEN ${predicate} THEN SHA2(CONCAT_WS(CHAR(31),${parts}),256) ELSE NULL END) STORED`,
     `CREATE UNIQUE INDEX ${quote(index.name)} ON ${quote(tableName)} (${quote(generated)})`,
   ];
+}
+
+export function mysqlGeneratedPartialIndexColumnName(indexName) {
+  const suffix = Buffer.from(String(indexName)).toString('hex').slice(-16);
+  return `__partial_${suffix}`;
 }
 
 function indexExpressions(sql) {
