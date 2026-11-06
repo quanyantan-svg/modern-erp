@@ -9,7 +9,7 @@ import {
   G07_SUPPLEMENTAL_ORACLES, M1_CORE_G07_SCENARIOS,
 } from './test-support/m1-core-g07-contract.js';
 import { compareTableParity, readMySqlInformationSchemaContract } from './test-utils/m1-core-schema-parity.js';
-import { mysqlGeneratedPartialIndexColumnName } from './database/mysql-schema.js';
+import { mysqlGeneratedPartialIndexColumnName, usesGeneratedDigest } from './database/mysql-schema.js';
 import { gateWaiterIds, M1_G07_GATE_WAITER_SQL, runG07GateRace } from './test-utils/m1-core-g07-lock-wait.js';
 import {
   assertFixedFixtureManifest, computeM1CoreG07FixtureDigest, M1_CORE_G07_FIXED_FIXTURE_DIGEST,
@@ -458,6 +458,133 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
       indexes: [{ index_name: indexName, column_name: 'state', seq_in_index: 1, non_unique: 0 }],
     }).includes(`INDEX_COLUMNS:${indexName}`));
     assert.ok(compareTableParity(sqlite, { ...valid, indexes: [] }).includes(`UNIQUE_MISSING:${indexName}`));
+  });
+
+  // A plain non-unique multi-column index is the shape that the live Gate
+  // rejected: inventory_valuation_movements.idx_valuation_movements_identity_status_created
+  // spans seven plain columns, is not unique, has no partial predicate and
+  // bears no expression. Production realises it as a PLAIN physical index, so
+  // the comparator must verify its ordered columns instead of demanding a
+  // __partial_* digest column that the generator never creates.
+  const PLAIN_MULTI_COLUMN_INDEX = 'idx_valuation_movements_identity_status_created';
+  const PLAIN_MULTI_COLUMN_COLUMNS = ['product_id', 'warehouse_id', 'lot_id', 'serial_id', 'status', 'created_at', 'id'];
+
+  function plainMultiColumnSqlite() {
+    return {
+      name: 'inventory_valuation_movements',
+      sql: 'CREATE TABLE inventory_valuation_movements(product_id TEXT, warehouse_id TEXT, lot_id TEXT, serial_id TEXT, status TEXT, created_at TEXT, id TEXT PRIMARY KEY)',
+      columns: PLAIN_MULTI_COLUMN_COLUMNS.map((name) => ({
+        name, type: 'TEXT', notnull: 0, dflt_value: null, pk: name === 'id' ? 1 : 0,
+      })),
+      indexes: [{
+        name: PLAIN_MULTI_COLUMN_INDEX, unique: false, origin: 'c',
+        columns: [...PLAIN_MULTI_COLUMN_COLUMNS], expressions: [...PLAIN_MULTI_COLUMN_COLUMNS], where: '',
+      }],
+      foreignKeys: [],
+    };
+  }
+
+  function plainMultiColumnContract(columns = PLAIN_MULTI_COLUMN_COLUMNS, unique = false) {
+    return {
+      tableName: 'inventory_valuation_movements',
+      columns: PLAIN_MULTI_COLUMN_COLUMNS.map((name) => ({
+        column_name: name, data_type: 'varchar', is_nullable: name === 'id' ? 'NO' : 'YES', column_default: null,
+        column_key: '', extra: '', generation_expression: '',
+      })),
+      indexes: columns.map((name, position) => ({
+        index_name: PLAIN_MULTI_COLUMN_INDEX, column_name: name, seq_in_index: position + 1, non_unique: unique ? 0 : 1,
+      })),
+      foreignKeys: [], checks: [],
+    };
+  }
+
+  test('a plain non-unique multi-column index stays a plain physical index and its ordered columns are verified', () => {
+    const sqlite = plainMultiColumnSqlite();
+    assert.equal(usesGeneratedDigest(sqlite.indexes[0]), false,
+      'a plain non-unique multi-column index must never take the digest path');
+    assert.deepEqual(compareTableParity(sqlite, plainMultiColumnContract()), [],
+      'the real ordered columns of a plain multi-column index must be accepted');
+  });
+
+  test('a plain multi-column index still fails on a missing column, a wrong column order and a wrong UNIQUE attribute', () => {
+    const sqlite = plainMultiColumnSqlite();
+    const missing = PLAIN_MULTI_COLUMN_COLUMNS.filter((name) => name !== 'created_at');
+    assert.ok(compareTableParity(sqlite, plainMultiColumnContract(missing)).includes(`INDEX_COLUMNS:${PLAIN_MULTI_COLUMN_INDEX}`),
+      'a missing index column must fail');
+    const reordered = [...PLAIN_MULTI_COLUMN_COLUMNS];
+    [reordered[4], reordered[5]] = [reordered[5], reordered[4]];
+    assert.ok(compareTableParity(sqlite, plainMultiColumnContract(reordered)).includes(`INDEX_COLUMNS:${PLAIN_MULTI_COLUMN_INDEX}`),
+      'a wrong index column order must fail');
+    assert.ok(compareTableParity(sqlite, plainMultiColumnContract(PLAIN_MULTI_COLUMN_COLUMNS, true)).includes(`INDEX_UNIQUE:${PLAIN_MULTI_COLUMN_INDEX}`),
+      'a wrong UNIQUE attribute must fail');
+  });
+
+  test('the live MySQL catalogue rendering of an expression default, a CHECK clause and a generated expression is accepted', () => {
+    // The live MySQL 8.0.37 catalogue renders a string literal with its
+    // delimiters backslash-escaped and prefixes it with a charset introducer.
+    const sqlite = {
+      name: 'catalogue_sample',
+      sql: "CREATE TABLE catalogue_sample(id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'DRAFT' CHECK(status IN ('DRAFT','POSTED')))",
+      columns: [
+        { name: 'id', type: 'TEXT', notnull: 0, dflt_value: null, pk: 1 },
+        { name: 'status', type: 'TEXT', notnull: 1, dflt_value: "'DRAFT'", pk: 0 },
+      ],
+      indexes: [], foreignKeys: [],
+    };
+    const mysql = {
+      tableName: 'catalogue_sample',
+      columns: [
+        { column_name: 'id', data_type: 'varchar', is_nullable: 'NO', column_default: null, column_key: '', extra: '', generation_expression: '' },
+        {
+          column_name: 'status', data_type: 'longtext', is_nullable: 'NO',
+          column_default: "(\\'DRAFT\\')", column_key: '', extra: 'DEFAULT_GENERATED', generation_expression: '',
+        },
+      ],
+      indexes: [], foreignKeys: [],
+      checks: [{ check_clause: "(`status` in (_utf8mb4\\'DRAFT\\',_utf8mb4\\'POSTED\\'))", enforced: 'YES' }],
+    };
+    assert.deepEqual(compareTableParity(sqlite, mysql), [],
+      'the catalogue rendering of a literal must compare equal to the canonical SQLite literal');
+  });
+
+  test('a DEFAULT still distinguishes no default, the empty string, the text 0 and the number 0, and a constant from an expression', () => {
+    const sqlite = {
+      name: 'default_sample',
+      sql: 'CREATE TABLE default_sample(id TEXT PRIMARY KEY, note TEXT DEFAULT \'\', code TEXT DEFAULT \'0\', amount INTEGER DEFAULT 0, stamp TEXT DEFAULT CURRENT_TIMESTAMP)',
+      columns: [
+        { name: 'id', type: 'TEXT', notnull: 0, dflt_value: null, pk: 1 },
+        { name: 'note', type: 'TEXT', notnull: 0, dflt_value: "''", pk: 0 },
+        { name: 'code', type: 'TEXT', notnull: 0, dflt_value: "'0'", pk: 0 },
+        { name: 'amount', type: 'INTEGER', notnull: 0, dflt_value: '0', pk: 0 },
+        { name: 'stamp', type: 'TEXT', notnull: 0, dflt_value: 'CURRENT_TIMESTAMP', pk: 0 },
+      ],
+      indexes: [], foreignKeys: [],
+    };
+    const base = {
+      tableName: 'default_sample',
+      columns: [
+        { column_name: 'id', data_type: 'varchar', is_nullable: 'NO', column_default: null, column_key: '', extra: '', generation_expression: '' },
+        { column_name: 'note', data_type: 'longtext', is_nullable: 'YES', column_default: '', column_key: '', extra: '', generation_expression: '' },
+        { column_name: 'code', data_type: 'longtext', is_nullable: 'YES', column_default: '0', column_key: '', extra: '', generation_expression: '' },
+        { column_name: 'amount', data_type: 'bigint', is_nullable: 'YES', column_default: '0', column_key: '', extra: '', generation_expression: '' },
+        { column_name: 'stamp', data_type: 'longtext', is_nullable: 'YES', column_default: 'CURRENT_TIMESTAMP', column_key: '', extra: '', generation_expression: '' },
+      ],
+      indexes: [], foreignKeys: [], checks: [],
+    };
+    assert.deepEqual(compareTableParity(sqlite, base), [], 'the canonical defaults must compare equal');
+    const replace = (name, column) => ({ ...base, columns: base.columns.map((item) => (item.column_name === name ? column : item)) });
+    assert.ok(compareTableParity(sqlite, replace('note', { ...base.columns[1], column_default: null })).includes('DEFAULT:note'),
+      'no default must not compare equal to the empty string default');
+    assert.ok(compareTableParity(sqlite, replace('note', { ...base.columns[1], column_default: 'x' })).includes('DEFAULT:note'),
+      'a different empty-string default must fail');
+    assert.ok(compareTableParity(sqlite, replace('code', { ...base.columns[2], column_default: '1' })).includes('DEFAULT:code'),
+      "the text default '0' must not compare equal to the text default '1'");
+    assert.ok(compareTableParity(sqlite, replace('amount', { ...base.columns[3], column_default: '1' })).includes('DEFAULT:amount'),
+      'a different numeric default must fail');
+    assert.ok(compareTableParity(sqlite, replace('stamp', { ...base.columns[4], column_default: 'now()' })).includes('DEFAULT:stamp'),
+      'a dynamic expression default must not compare equal to a constant default');
+    assert.ok(compareTableParity(sqlite, replace('code', { ...base.columns[2], column_default: null, extra: 'DEFAULT_GENERATED' })).includes('DEFAULT:code'),
+      "the text default '0' must not compare equal to the numeric expression default 0");
   });
 
   test('fixed fixture builder runs the embedded HTTP chain and pins the SHA digest', async () => {

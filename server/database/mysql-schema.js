@@ -39,6 +39,30 @@ export function hasExpressionColumns(index) {
   return false;
 }
 
+// The physical implementation plan for one snapshot index: does MySQL realise
+// it as a plain physical index, or through the digest path (a STORED generated
+// column plus a UNIQUE index over it)?
+//
+// This is the ONE rule. The generator and the schema-parity comparator both
+// read it, so the comparator can never demand a digest column that the
+// generator never creates, nor accept a plain index where the generator
+// creates a digest.
+//
+// The digest path is required when:
+//   - the index bears an expression column (MySQL has no expression index),
+//   - the index is UNIQUE and partial (a partial UNIQUE has no MySQL
+//     equivalent), or
+//   - the index is UNIQUE and spans more than four columns (the inline UNIQUE
+//     limit).
+//
+// A plain non-unique multi-column index is NOT a digest index, however many
+// columns it spans and however many of them are expressions.
+export function usesGeneratedDigest(index) {
+  if (hasExpressionColumns(index)) return true;
+  if (!index?.unique) return false;
+  return Boolean(index.where) || (index.columns?.length ?? 0) > 4;
+}
+
 export function mysqlIndexColumnList(tableName, index) {
   if (!index || !Array.isArray(index.columns)) {
     throw new Error(`MySQL index ${tableName}.${index?.name ?? '<unnamed>'} is missing its column list`);
@@ -449,7 +473,7 @@ export function bootstrapMySql(adapter, snapshot) {
           // expression position. The plain CREATE INDEX path would otherwise emit
           // `` `null` `` as a literal column name and MySQL would reject it with
           // ER_KEY_COLUMN_DOES_NOT_EXITS.
-          const useDigest = hasExpressionColumns(index) || (index.unique && (Boolean(index.where) || index.columns.length > 4));
+          const useDigest = usesGeneratedDigest(index);
           const statements = useDigest
             ? generatedPartialIndex(table.name, { ...index, where: index.where || '1=1' })
             : [`CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${quote(index.name)} ON ${quote(table.name)} (${mysqlIndexColumnList(table.name, index)})`];
