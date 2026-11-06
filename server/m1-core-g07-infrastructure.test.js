@@ -3,13 +3,18 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
+import { createDatabase } from './db.js';
 import {
   assertCompleteG07Contract, assertG03EvidenceLayering, assertG07AuthoritativeEvidence, assertG07RaceOutcome, assertG07Result,
   assertProcessingPoItemStable, assertProcessingPoRejected, assertSafeIntegerCents, assertUat14VmiReceiptOracle,
   G07_SUPPLEMENTAL_ORACLES, M1_CORE_G07_SCENARIOS,
 } from './test-support/m1-core-g07-contract.js';
-import { compareTableParity, readMySqlInformationSchemaContract } from './test-utils/m1-core-schema-parity.js';
-import { mysqlGeneratedPartialIndexColumnName, usesGeneratedDigest } from './database/mysql-schema.js';
+import {
+  canonicalExpression, compareTableParity, generatedExpression, M1_CORE_PARITY_TABLES, readMySqlInformationSchemaContract,
+} from './test-utils/m1-core-schema-parity.js';
+import {
+  bootstrapMySql, captureSqliteSnapshot, mysqlGeneratedPartialIndexColumnName, usesGeneratedDigest,
+} from './database/mysql-schema.js';
 import { gateWaiterIds, M1_G07_GATE_WAITER_SQL, runG07GateRace } from './test-utils/m1-core-g07-lock-wait.js';
 import {
   assertFixedFixtureManifest, computeM1CoreG07FixtureDigest, M1_CORE_G07_FIXED_FIXTURE_DIGEST,
@@ -872,5 +877,405 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
         && error.m1G07Lifecycle.cleanupProven === false);
       assert.throws(() => assertNoAck4Quarantine(join(dir, 'quarantine'), target), /quarantined/);
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  // ---------------------------------------------------------------------------
+  // R4 — the MySQL catalogue parenthesises every operand of a boolean
+  // expression. The fixtures below are the RAW clauses captured by the real
+  // G07 run `a78b0d3e-6919-4632-b2e4-5ee436da8d4b` in its sanitised
+  // structural evidence block, paired with the canonical SQLite expression of
+  // the same CHECK. They are real server output, not an idealisation.
+  // ---------------------------------------------------------------------------
+
+  const R4_REAL_CLAUSE_PAIRS = [
+    {
+      table: 'receipt_notice_item_sources',
+      sqlite: [
+        'allocated_quantity > 0',
+        'converted_quantity IS NULL OR (converted_quantity >= 0 AND converted_quantity <= allocated_quantity)',
+      ],
+      mysql: [
+        '(`allocated_quantity` > 0)',
+        '((`converted_quantity` is null) or ((`converted_quantity` >= 0) and (`converted_quantity` <= `allocated_quantity`)))',
+      ],
+    },
+    {
+      table: 'schedule_consumption_effects',
+      sqlite: [
+        'signed_quantity <> 0',
+        "effect_state IN ('EFFECTIVE','VOIDED')",
+        "(signed_quantity > 0 AND reverses_effect_id IS NULL AND reverses_effect_key = '')"
+          + " OR (signed_quantity < 0 AND reverses_effect_id IS NOT NULL AND reverses_effect_key <> '')",
+      ],
+      mysql: [
+        '(`signed_quantity` <> 0)',
+        "(`effect_state` in (_utf8mb4\\'EFFECTIVE\\',_utf8mb4\\'VOIDED\\'))",
+        "(((`signed_quantity` > 0) and (`reverses_effect_id` is null) and (`reverses_effect_key` = _utf8mb4\\'\\'))"
+          + " or ((`signed_quantity` < 0) and (`reverses_effect_id` is not null) and (`reverses_effect_key` <> _utf8mb4\\'\\')))",
+      ],
+    },
+    {
+      table: 'outsourcing_wip_identity_effects',
+      sqlite: [
+        "identity_type IN ('LOT','SERIAL','NONE')",
+        "effect_direction IN ('SUPPLY','CONSUME')",
+        "event_type IN ('ISSUE','SUPPLEMENT','TRANSFER_IN','RETURN','BACKFLUSH','TRANSFER_OUT')",
+        "(identity_type='LOT' AND lot_id IS NOT NULL AND serial_id IS NULL)"
+          + " OR (identity_type='SERIAL' AND serial_id IS NOT NULL AND lot_id IS NULL)"
+          + " OR (identity_type='NONE' AND lot_id IS NULL AND serial_id IS NULL)",
+        "(effect_direction='SUPPLY' AND signed_quantity > 0) OR (effect_direction='CONSUME' AND signed_quantity < 0)",
+      ],
+      mysql: [
+        "(`identity_type` in (_utf8mb4\\'LOT\\',_utf8mb4\\'SERIAL\\',_utf8mb4\\'NONE\\'))",
+        "(`effect_direction` in (_utf8mb4\\'SUPPLY\\',_utf8mb4\\'CONSUME\\'))",
+        "(`event_type` in (_utf8mb4\\'ISSUE\\',_utf8mb4\\'SUPPLEMENT\\',_utf8mb4\\'TRANSFER_IN\\',_utf8mb4\\'RETURN\\',_utf8mb4\\'BACKFLUSH\\',_utf8mb4\\'TRANSFER_OUT\\'))",
+        "(((`identity_type` = _utf8mb4\\'LOT\\') and (`lot_id` is not null) and (`serial_id` is null))"
+          + " or ((`identity_type` = _utf8mb4\\'SERIAL\\') and (`serial_id` is not null) and (`lot_id` is null))"
+          + " or ((`identity_type` = _utf8mb4\\'NONE\\') and (`lot_id` is null) and (`serial_id` is null)))",
+        "(((`effect_direction` = _utf8mb4\\'SUPPLY\\') and (`signed_quantity` > 0))"
+          + " or ((`effect_direction` = _utf8mb4\\'CONSUME\\') and (`signed_quantity` < 0)))",
+      ],
+    },
+    {
+      table: 'outsourcing_wip_identity_balances',
+      sqlite: [
+        "identity_type IN ('LOT','SERIAL','NONE')",
+        "evidence_state IN ('TRACKED','QUANTITY_ONLY')",
+        'supplied_quantity >= 0',
+        'consumed_quantity >= 0',
+        'available_quantity >= 0',
+        "(identity_type='LOT' AND lot_id IS NOT NULL AND serial_id IS NULL AND evidence_state='TRACKED')"
+          + " OR (identity_type='SERIAL' AND serial_id IS NOT NULL AND lot_id IS NULL AND evidence_state='TRACKED')"
+          + " OR (identity_type='NONE' AND lot_id IS NULL AND serial_id IS NULL AND evidence_state='QUANTITY_ONLY')",
+        'available_quantity = supplied_quantity - consumed_quantity',
+      ],
+      mysql: [
+        "(`identity_type` in (_utf8mb4\\'LOT\\',_utf8mb4\\'SERIAL\\',_utf8mb4\\'NONE\\'))",
+        "(`evidence_state` in (_utf8mb4\\'TRACKED\\',_utf8mb4\\'QUANTITY_ONLY\\'))",
+        '(`supplied_quantity` >= 0)',
+        '(`consumed_quantity` >= 0)',
+        '(`available_quantity` >= 0)',
+        "(((`identity_type` = _utf8mb4\\'LOT\\') and (`lot_id` is not null) and (`serial_id` is null) and (`evidence_state` = _utf8mb4\\'TRACKED\\'))"
+          + " or ((`identity_type` = _utf8mb4\\'SERIAL\\') and (`serial_id` is not null) and (`lot_id` is null) and (`evidence_state` = _utf8mb4\\'TRACKED\\'))"
+          + " or ((`identity_type` = _utf8mb4\\'NONE\\') and (`lot_id` is null) and (`serial_id` is null) and (`evidence_state` = _utf8mb4\\'QUANTITY_ONLY\\')))",
+        '(`available_quantity` = (`supplied_quantity` - `consumed_quantity`))',
+      ],
+    },
+  ];
+
+  // The raw generated-column expression captured by the same real run.
+  const R4_REAL_GENERATED_EXPRESSION =
+    "(case when ((`source_type` in (_utf8mb4\\'OUTSOURCING_ISSUE\\',_utf8mb4\\'OUTSOURCING_SUPPLEMENT\\',"
+    + "_utf8mb4\\'OUTSOURCING_RETURN\\',_utf8mb4\\'OUTSOURCING_BACKFLUSH\\',_utf8mb4\\'OUTSOURCING_RECEIPT\\',"
+    + "_utf8mb4\\'OUTSOURCING_FINISHED_RETURN\\')) and (`reversed` = 0)) then sha2(concat_ws(char(31),"
+    + 'coalesce(cast(`source_type` as char charset utf8mb4),char(30)),coalesce(cast(`source_id` as char charset utf8mb4),char(30)),'
+    + 'coalesce(cast(`source_item_id` as char charset utf8mb4),char(30)),coalesce(cast(`identity_key` as char charset utf8mb4),char(30)),'
+    + 'coalesce(cast(`direction` as char charset utf8mb4),char(30))),256) else NULL end)';
+
+  const R4_CANONICAL = (value, dialect) => canonicalExpression(value, { dialect });
+
+  test('R4 the raw catalogue clauses of the four real failing tables normalise equal to the canonical SQLite clauses', () => {
+    for (const pair of R4_REAL_CLAUSE_PAIRS) {
+      assert.equal(pair.sqlite.length, pair.mysql.length, `${pair.table}: the captured clause count must match`);
+      pair.sqlite.forEach((sqliteClause, index) => {
+        const mysqlClause = pair.mysql[index];
+        assert.equal(
+          R4_CANONICAL(sqliteClause, 'sql_standard'),
+          R4_CANONICAL(mysqlClause, 'mysql_catalog'),
+          `${pair.table}: clause ${index} must normalise to the same expression tree`,
+        );
+      });
+    }
+  });
+
+  test('R4 the real captured generated-column expression normalises equal to the production-derived expression', () => {
+    const snapshot = captureSqliteSnapshot((path) => createDatabase(path), false);
+    const table = snapshot.tables.find((entry) => entry.name === 'tracked_inventory_movements');
+    const index = table.indexes.find((entry) => entry.name === 'uq_tracked_outsourcing_identity');
+    const expected = R4_CANONICAL(generatedExpression('tracked_inventory_movements', index), 'sql_standard');
+    const actual = R4_CANONICAL(R4_REAL_GENERATED_EXPRESSION, 'mysql_catalog');
+    assert.equal(actual, expected, 'the captured digest expression must normalise to the production-derived tree');
+    assert.match(actual, /^C:/, 'the captured expression must be parsed, not refused');
+  });
+
+  test('R4 a regrouped predicate, a changed NOT scope, a changed arithmetic precedence and a changed operator never normalise away', () => {
+    const pairs = [
+      ['a AND (b OR c)', '(a AND b) OR c'],
+      ['(a AND b) OR c', 'a AND (b OR c)'],
+      ['NOT (a AND b)', 'NOT a AND b'],
+      ['NOT (a OR b)', 'NOT a OR b'],
+      ['a = b + c * d', 'a = (b + c) * d'],
+      ['a = b * c + d', 'a = b * (c + d)'],
+      ['a > 0', 'a >= 0'],
+      ['a <> 0', 'a != 0'],
+      ["s = 'DRAFT'", "s = 'draft'"],
+      ["s IN ('A','B')", "s IN ('A','C')"],
+      ['a IS NULL', 'a IS NOT NULL'],
+      ['a BETWEEN 1 AND 2', 'a BETWEEN 2 AND 1'],
+    ];
+    for (const [left, right] of pairs) {
+      assert.notEqual(
+        R4_CANONICAL(left, 'sql_standard'),
+        R4_CANONICAL(right, 'sql_standard'),
+        `${left} and ${right} must never normalise to the same expression`,
+      );
+    }
+    // The dangerous regrouping is explicitly pinned.
+    assert.notEqual(R4_CANONICAL('a AND (b OR c)', 'sql_standard'), R4_CANONICAL('(a AND b) OR c', 'sql_standard'));
+    assert.match(R4_CANONICAL('a AND (b OR c)', 'sql_standard'), /\(and \(id a\) \(or \(id b\) \(id c\)\)\)/);
+    assert.match(R4_CANONICAL('(a AND b) OR c', 'sql_standard'), /\(or \(and \(id a\) \(id b\)\) \(id c\)\)/);
+  });
+
+  test('R4 an expression the scope-limited parser cannot read is refused and can only match itself', () => {
+    const refused = R4_CANONICAL('a MATCH (b) AGAINST (c)', 'sql_standard');
+    assert.match(refused, /^R:/, 'an unsupported construct must be refused');
+    assert.equal(refused, R4_CANONICAL('a MATCH (b) AGAINST (c)', 'sql_standard'), 'the same refused expression still matches itself');
+    assert.notEqual(refused, R4_CANONICAL('a MATCH (b) AGAINST (d)', 'sql_standard'), 'a refused expression must not match a different one');
+    assert.notEqual(refused, R4_CANONICAL('a > 0', 'sql_standard'), 'a refused expression must not match a parsed one');
+  });
+
+  test('R4 a missing CHECK, an extra CHECK, a NOT ENFORCED CHECK and a changed literal case still fail', () => {
+    const sqlite = {
+      name: 'r4_sample',
+      sql: "CREATE TABLE r4_sample(id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'DRAFT' CHECK(status IN ('DRAFT','POSTED')))",
+      columns: [
+        { name: 'id', type: 'TEXT', notnull: 0, dflt_value: null, pk: 1 },
+        { name: 'status', type: 'TEXT', notnull: 1, dflt_value: "'DRAFT'", pk: 0 },
+      ],
+      indexes: [], foreignKeys: [],
+    };
+    const base = {
+      tableName: 'r4_sample',
+      columns: [
+        { column_name: 'id', data_type: 'varchar', is_nullable: 'NO', column_default: null, column_key: '', extra: '', generation_expression: '' },
+        { column_name: 'status', data_type: 'longtext', is_nullable: 'NO', column_default: 'DRAFT', column_key: '', extra: '', generation_expression: '' },
+      ],
+      indexes: [], foreignKeys: [],
+      checks: [{ check_clause: "(`status` in (_utf8mb4\\'DRAFT\\',_utf8mb4\\'POSTED\\'))", enforced: 'YES' }],
+    };
+    assert.deepEqual(compareTableParity(sqlite, base), [], 'the catalogue rendering of the CHECK must compare equal');
+    assert.ok(compareTableParity(sqlite, { ...base, checks: [] }).includes('CHECKS'), 'a missing CHECK must fail');
+    assert.ok(compareTableParity(sqlite, {
+      ...base,
+      checks: [...base.checks, { check_clause: '(`status` <> \'X\')', enforced: 'YES' }],
+    }).includes('CHECKS'), 'an extra CHECK must fail');
+    assert.ok(compareTableParity(sqlite, {
+      ...base,
+      checks: base.checks.map((check) => ({ ...check, enforced: 'NO' })),
+    }).includes('CHECK_NOT_ENFORCED'), 'a NOT ENFORCED CHECK must fail');
+    assert.ok(compareTableParity(sqlite, {
+      ...base,
+      checks: [{ check_clause: "(`status` in (_utf8mb4\\'draft\\',_utf8mb4\\'POSTED\\'))", enforced: 'YES' }],
+    }).includes('CHECKS'), 'a changed literal case must fail');
+    assert.ok(compareTableParity(sqlite, {
+      ...base,
+      checks: [{ check_clause: "(`status` in (_utf8mb4\\'DRAFT\\',_utf8mb4\\'CANCELLED\\'))", enforced: 'YES' }],
+    }).includes('CHECKS'), 'a changed literal value must fail');
+    assert.ok(compareTableParity(sqlite, {
+      ...base,
+      checks: [{ check_clause: "(`status` not in (_utf8mb4\\'DRAFT\\',_utf8mb4\\'POSTED\\'))", enforced: 'YES' }],
+    }).includes('CHECKS'), 'a changed predicate must fail');
+  });
+
+  test('R4 a changed partial predicate, a changed digest algorithm and a changed field reference still fail', () => {
+    const indexName = 'uq_r4_digest_active';
+    const generated = mysqlGeneratedPartialIndexColumnName(indexName);
+    const sqlite = {
+      name: 'r4_digest', sql: 'CREATE TABLE r4_digest(id TEXT PRIMARY KEY, state TEXT NOT NULL)',
+      columns: [
+        { name: 'id', type: 'TEXT', notnull: 0, dflt_value: null, pk: 1 },
+        { name: 'state', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+      ],
+      indexes: [{
+        name: indexName, unique: true, origin: 'c', columns: ['id', 'state'],
+        expressions: ['id', 'state'], where: "state='ACTIVE'",
+      }],
+      foreignKeys: [],
+    };
+    const expected = generatedExpression('r4_digest', sqlite.indexes[0]);
+    const contract = (expression) => ({
+      tableName: 'r4_digest',
+      columns: [
+        { column_name: 'id', data_type: 'varchar', is_nullable: 'NO', column_default: null, column_key: '', extra: '', generation_expression: '' },
+        { column_name: 'state', data_type: 'varchar', is_nullable: 'NO', column_default: null, column_key: '', extra: '', generation_expression: '' },
+        {
+          column_name: generated, data_type: 'char', is_nullable: 'YES', column_default: null,
+          extra: 'STORED GENERATED', generation_expression: expression,
+        },
+      ],
+      indexes: [{ index_name: indexName, column_name: generated, seq_in_index: 1, non_unique: 0 }],
+      foreignKeys: [], checks: [],
+    });
+    assert.deepEqual(compareTableParity(sqlite, contract(expected)), [], 'the production expression must compare equal');
+    assert.ok(compareTableParity(sqlite, contract(expected.replace("'ACTIVE'", "'INACTIVE'"))).includes(`GENERATED_COLUMN_EXPRESSION:${generated}`),
+      'a changed partial predicate must fail');
+    assert.ok(compareTableParity(sqlite, contract(expected.replace('SHA2(', 'SHA1('))).includes(`GENERATED_COLUMN_EXPRESSION:${generated}`),
+      'a changed digest algorithm must fail');
+    assert.ok(compareTableParity(sqlite, contract(expected.replace('CONCAT_WS(', 'CONCAT('))).includes(`GENERATED_COLUMN_EXPRESSION:${generated}`),
+      'a changed digest concatenation must fail');
+    assert.ok(compareTableParity(sqlite, contract(expected.replace('COALESCE(', 'IFNULL('))).includes(`GENERATED_COLUMN_EXPRESSION:${generated}`),
+      'a changed digest coalesce must fail');
+    assert.ok(compareTableParity(sqlite, contract(expected.replace('`id`', '`state`'))).includes(`GENERATED_COLUMN_EXPRESSION:${generated}`),
+      'a changed digest field reference must fail');
+    assert.ok(compareTableParity(sqlite, contract(expected.replace('CHAR(31)', 'CHAR(30)'))).includes(`GENERATED_COLUMN_EXPRESSION:${generated}`),
+      'a changed digest separator must fail');
+  });
+
+  // --- R4 offline replay: the MySQL side is production's OWN emitted DDL ------
+  function r4SplitTopLevel(body) {
+    const parts = [];
+    let depth = 0; let quote = ''; let current = '';
+    for (const character of body) {
+      if (quote) {
+        current += character;
+        if (character === quote) quote = '';
+        continue;
+      }
+      if (character === "'" || character === '"' || character === '`') { quote = character; current += character; continue; }
+      if (character === '(') depth += 1;
+      if (character === ')') depth -= 1;
+      if (character === ',' && depth === 0) { parts.push(current.trim()); current = ''; continue; }
+      current += character;
+    }
+    if (current.trim()) parts.push(current.trim());
+    return parts;
+  }
+
+  function r4CaptureProductionDdl(snapshot) {
+    const statements = [];
+    const adapter = {
+      prepare: () => ({ all: () => [], get: () => undefined, run: () => ({ changes: 0 }) }),
+      exec: (sql) => { statements.push(String(sql)); },
+    };
+    try { bootstrapMySql(adapter, snapshot); } catch { /* the reader stops at the information_schema assertions */ }
+    const createTables = new Map();
+    const indexes = new Map();
+    const generated = new Map();
+    for (const statement of statements) {
+      if (statement.startsWith('CREATE TABLE IF NOT EXISTS')) {
+        const match = statement.match(/^CREATE TABLE IF NOT EXISTS `([^`]+)`/);
+        if (match) createTables.set(match[1], statement);
+        continue;
+      }
+      const generatedColumn = statement.match(/^ALTER TABLE `([^`]+)` ADD COLUMN `(__partial_[0-9a-f]+)` (.+?) GENERATED ALWAYS AS \((.+)\) STORED$/);
+      if (generatedColumn) {
+        const list = generated.get(generatedColumn[1]) || [];
+        list.push({ name: generatedColumn[2], expression: generatedColumn[4] });
+        generated.set(generatedColumn[1], list);
+        continue;
+      }
+      const index = statement.match(/^CREATE (UNIQUE )?INDEX `([^`]+)` ON `([^`]+)` \((.*)\)$/);
+      if (index) {
+        const list = indexes.get(index[3]) || [];
+        list.push({
+          name: index[2],
+          unique: Boolean(index[1]),
+          columns: r4SplitTopLevel(index[4]).map((column) => column.replace(/`/g, '').replace(/\(\d+\)$/, '').trim()),
+        });
+        indexes.set(index[3], list);
+      }
+    }
+    return { createTables, indexes, generated };
+  }
+
+  // The catalogue renders a string literal with its delimiters backslash-escaped
+  // and prefixes it with a charset introducer; a LITERAL default is reported as
+  // its bare value.
+  const r4CatalogueLiteral = (text) => String(text).replace(/'/g, "\\'");
+
+  function r4CatalogueContract(ddl, snapshot, tableName, realChecks) {
+    const ddlText = ddl.createTables.get(tableName);
+    const sqliteTable = snapshot.tables.find((table) => table.name === tableName);
+    const body = ddlText.slice(ddlText.indexOf('(') + 1, ddlText.lastIndexOf(')'));
+    const columns = [];
+    const checks = [];
+    const foreignKeys = [];
+    const inlineUniques = [];
+    for (const part of r4SplitTopLevel(body)) {
+      if (/^PRIMARY KEY/i.test(part)) continue;
+      if (/^UNIQUE/i.test(part)) {
+        inlineUniques.push(r4SplitTopLevel(part.slice(part.indexOf('(') + 1, part.lastIndexOf(')'))));
+        continue;
+      }
+      if (/^FOREIGN KEY/i.test(part)) {
+        const match = part.match(/^FOREIGN KEY\s*\(([^)]*)\)\s*REFERENCES\s+`([^`]+)`\s*\(([^)]*)\)\s+ON UPDATE\s+(.+?)\s+ON DELETE\s+(.+?)$/i);
+        if (match) {
+          foreignKeys.push({
+            constraint_name: `fk_${tableName}_${match[1].trim()}`,
+            column_name: match[1].trim().replace(/`/g, ''),
+            referenced_table_name: match[2],
+            referenced_column_name: match[3].trim().replace(/`/g, ''),
+            update_rule: match[4].trim().toUpperCase(),
+            delete_rule: match[5].trim().toUpperCase(),
+          });
+        }
+        continue;
+      }
+      if (/^CHECK/i.test(part)) {
+        checks.push(part.slice(part.indexOf('(') + 1, part.lastIndexOf(')')).trim());
+        continue;
+      }
+      const match = part.match(/^`([^`]+)`\s+([A-Za-z]+(?:\([^)]*\))?)([\s\S]*)$/);
+      if (!match) continue;
+      const rest = match[3] || '';
+      const defaultMatch = rest.match(/\bDEFAULT\s+([\s\S]+?)(?:\s+AUTO_INCREMENT)?$/);
+      const defaultExpression = defaultMatch ? defaultMatch[1].trim() : null;
+      const expressionDefault = Boolean(defaultExpression && /^\(.*\)$/.test(defaultExpression));
+      columns.push({
+        column_name: match[1],
+        data_type: match[2].split('(')[0].toLowerCase(),
+        is_nullable: /\bNOT NULL\b/i.test(rest) ? 'NO' : 'YES',
+        column_default: defaultExpression === null ? null
+          : expressionDefault ? `(${r4CatalogueLiteral(defaultExpression)})` : defaultExpression.replace(/^'(.*)'$/, '$1'),
+        column_key: '',
+        extra: expressionDefault ? 'DEFAULT_GENERATED' : '',
+        generation_expression: '',
+      });
+    }
+    for (const generatedColumn of ddl.generated.get(tableName) || []) {
+      columns.push({
+        column_name: generatedColumn.name, data_type: 'char', is_nullable: 'YES',
+        column_default: null, column_key: '', extra: 'STORED GENERATED',
+        generation_expression: `(${r4CatalogueLiteral(generatedColumn.expression)})`,
+      });
+    }
+    const indexRows = [];
+    for (const [position, uniqueColumns] of inlineUniques.entries()) {
+      uniqueColumns.forEach((column, offset) => {
+        indexRows.push({
+          index_name: `${tableName}_${position + 1}`, column_name: column.replace(/`/g, '').trim(),
+          seq_in_index: offset + 1, non_unique: 0,
+        });
+      });
+    }
+    for (const index of ddl.indexes.get(tableName) || []) {
+      index.columns.forEach((column, offset) => {
+        indexRows.push({
+          index_name: index.name, column_name: column,
+          seq_in_index: offset + 1, non_unique: index.unique ? 0 : 1,
+        });
+      });
+    }
+    const checkClauses = realChecks || checks.map((check) => `(${r4CatalogueLiteral(check)})`);
+    return {
+      tableName,
+      columns,
+      indexes: indexRows,
+      foreignKeys,
+      checks: checkClauses.map((clause) => ({ check_clause: clause, enforced: 'YES' })),
+    };
+  }
+
+  test('R4 the sixteen parity tables replay offline against production DDL and the captured catalogue clauses', () => {
+    const snapshot = captureSqliteSnapshot((path) => createDatabase(path), false);
+    const ddl = r4CaptureProductionDdl(snapshot);
+    const snapshotTables = new Map(snapshot.tables.map((table) => [table.name, table]));
+    const realChecks = new Map(R4_REAL_CLAUSE_PAIRS.map((pair) => [pair.table, pair.mysql]));
+    for (const tableName of M1_CORE_PARITY_TABLES) {
+      const sqlite = snapshotTables.get(tableName);
+      assert.ok(sqlite, `${tableName} must exist in the canonical snapshot`);
+      const contract = r4CatalogueContract(ddl, snapshot, tableName, realChecks.get(tableName) || null);
+      assert.deepEqual(compareTableParity(sqlite, contract), [], `${tableName} must replay without a difference`);
+    }
   });
 });

@@ -27,6 +27,7 @@
 | [`m1-core-g07-final-execution-and-acceptance-20261105.md`](./m1-core-g07-final-execution-and-acceptance-20261105.md) | M1C-G07 最终一次性真实 MySQL 执行（Run `94e2e0c7`）与七 Gate 候审矩阵；Suite exit 1、逐项证据不可恢复、G07=`FAIL`、`M1_CORE_ACCEPTANCE_BLOCKED` |
 | [`m1-core-g07-final-fix-review-20261106.md`](./m1-core-g07-final-fix-review-20261106.md) | Run `dcfbf040` 两项阻塞的离线闭合证据；CR-02 IQC digest 已获 Owner 批准并激活为唯一固定 Fixture，历史 G07 FAIL 保持 |
 | [`m1-core-g07-parity-r3-review-20261106.md`](./m1-core-g07-parity-r3-review-20261106.md) | Run `df0202b6` 唯一失败（Schema Parity，14 表 4 类差异）的根因与离线修复候审证据；统一索引 digest 规则、方言感知目录解码、脱敏结构证据采集；未重跑真实 G07，历史 G07 FAIL 保持 |
+| [`m1-core-g07-parity-r4-review-20261106.md`](./m1-core-g07-parity-r4-review-20261106.md) | Run `a78b0d3e` 唯一失败（Schema Parity，5 张表目录表达式括号）的真实根因与保义括号规范化候审证据；范围受限表达式 AST、S 表达式树形比较、真实导出夹具与 16 表离线回放；未重跑真实 G07，历史 G07 FAIL 保持 |
 | [`sales-customer/`](./sales-customer/) | Sales & Customer 各 Wave 的 Acceptance / Freeze 记录与实施证据 |
 
 ## 规则

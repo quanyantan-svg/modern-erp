@@ -164,6 +164,329 @@ function sqlExpressionTokenList(value, {
   return tokens;
 }
 
+// ---------------------------------------------------------------------------
+// The canonical expression form.
+//
+// The MySQL catalogue re-renders an expression: it parenthesises every
+// operand of a boolean expression, wraps a whole clause, and parenthesises an
+// arithmetic operand of a comparison. Those are representation differences,
+// not semantic ones, so the comparison must be made on the EXPRESSION TREE,
+// not on the raw token stream.
+//
+// The tree is rendered as an S-expression, so the structure IS the semantics:
+//   `a AND (b OR c)`  ->  (and a (or b c))
+//   `(a AND b) OR c`  ->  (or (and a b) c)
+// The two can never render alike, so a regrouped predicate can never be
+// normalised away.
+//
+// The parser is deliberately scope-limited to the constructs the M1-Core
+// parity set actually uses: boolean composition, NOT, comparisons, IS [NOT]
+// NULL, [NOT] IN, [NOT] BETWEEN, [NOT] LIKE, arithmetic, unary minus,
+// literals, identifiers, function calls, CAST ... AS and the searched CASE
+// WHEN form. ANY construct it cannot parse is REFUSED: the caller then
+// compares the raw token streams, so an unrecognised expression can only ever
+// match an identical one.
+//
+// A literal keeps its content verbatim, so the case of a business string
+// literal stays significant.
+// ---------------------------------------------------------------------------
+
+const M1_CORE_EXPRESSION_WORD = 'WORD:';
+const M1_CORE_EXPRESSION_SYMBOL = 'SYMBOL:';
+
+function wordToken(token, word) {
+  return token === `${M1_CORE_EXPRESSION_WORD}${word}`;
+}
+
+function symbolToken(token, symbol) {
+  return token === `${M1_CORE_EXPRESSION_SYMBOL}${symbol}`;
+}
+
+function tokenWord(token) {
+  return token && token.startsWith(M1_CORE_EXPRESSION_WORD) ? token.slice(M1_CORE_EXPRESSION_WORD.length) : null;
+}
+
+function tokenSymbol(token) {
+  return token && token.startsWith(M1_CORE_EXPRESSION_SYMBOL) ? token.slice(M1_CORE_EXPRESSION_SYMBOL.length) : null;
+}
+
+const COMPARISON_OPERATORS = Object.freeze(['=', '<>', '<', '<=', '>', '>=']);
+
+function parseExpressionTokens(tokens) {
+  let position = 0;
+  const peek = (offset = 0) => tokens[position + offset];
+  const word = (value, offset = 0) => wordToken(peek(offset), value);
+  const symbol = (value, offset = 0) => symbolToken(peek(offset), value);
+
+  function parseOr() {
+    const items = [parseAnd()];
+    if (!items[0]) return null;
+    while (word('or')) {
+      position += 1;
+      const item = parseAnd();
+      if (!item) return null;
+      items.push(item);
+    }
+    return items.length === 1 ? items[0] : { kind: 'or', items };
+  }
+
+  function parseAnd() {
+    const items = [parseNot()];
+    if (!items[0]) return null;
+    while (word('and')) {
+      position += 1;
+      const item = parseNot();
+      if (!item) return null;
+      items.push(item);
+    }
+    return items.length === 1 ? items[0] : { kind: 'and', items };
+  }
+
+  function parseNot() {
+    if (word('not')) {
+      position += 1;
+      const item = parseNot();
+      return item ? { kind: 'not', item } : null;
+    }
+    return parseComparison();
+  }
+
+  function parseComparison() {
+    const left = parseAdditive();
+    if (!left) return null;
+    const operator = tokenSymbol(peek());
+    if (operator && COMPARISON_OPERATORS.includes(operator)) {
+      position += 1;
+      const right = parseAdditive();
+      return right ? { kind: 'cmp', op: operator, left, right } : null;
+    }
+    if (word('is')) {
+      position += 1;
+      const negated = word('not');
+      if (negated) position += 1;
+      if (!word('null')) return null;
+      position += 1;
+      return { kind: 'isnull', item: left, negated };
+    }
+    if (word('not') && (word('in', 1) || word('between', 1) || word('like', 1))) {
+      position += 1;
+      return parseMembership(left, true);
+    }
+    if (word('in')) { position += 1; return parseMembership(left, false); }
+    if (word('between')) { position += 1; return parseBetween(left, false); }
+    if (word('like')) { position += 1; const pattern = parseAdditive(); return pattern ? { kind: 'like', item: left, pattern, negated: false } : null; }
+    return left;
+  }
+
+  function parseMembership(left, negated) {
+    if (!symbol('(')) return null;
+    position += 1;
+    const values = [];
+    for (;;) {
+      const token = peek();
+      if (token && token.startsWith('STRING:')) {
+        values.push({ kind: 'lit', value: JSON.parse(token.slice('STRING:'.length)) });
+        position += 1;
+      } else if (token && token.startsWith('NUMBER:')) {
+        values.push({ kind: 'lit', value: token.slice('NUMBER:'.length) });
+        position += 1;
+      } else {
+        return null;
+      }
+      if (symbol(',')) { position += 1; continue; }
+      break;
+    }
+    if (!symbol(')')) return null;
+    position += 1;
+    return { kind: 'in', item: left, values, negated };
+  }
+
+  function parseBetween(left, negated) {
+    const low = parseAdditive();
+    if (!low || !word('and')) return null;
+    position += 1;
+    const high = parseAdditive();
+    return high ? { kind: 'between', item: left, low, high, negated } : null;
+  }
+
+  function parseAdditive() {
+    let left = parseMultiplicative();
+    if (!left) return null;
+    for (;;) {
+      const operator = tokenSymbol(peek());
+      if (operator !== '+' && operator !== '-') break;
+      position += 1;
+      const right = parseMultiplicative();
+      if (!right) return null;
+      left = { kind: 'arith', op: operator, left, right };
+    }
+    return left;
+  }
+
+  function parseMultiplicative() {
+    let left = parseUnary();
+    if (!left) return null;
+    for (;;) {
+      const operator = tokenSymbol(peek());
+      if (operator !== '*' && operator !== '/' && operator !== '%') break;
+      position += 1;
+      const right = parseUnary();
+      if (!right) return null;
+      left = { kind: 'arith', op: operator, left, right };
+    }
+    return left;
+  }
+
+  function parseUnary() {
+    if (symbol('-')) {
+      position += 1;
+      const item = parseUnary();
+      return item ? { kind: 'neg', item } : null;
+    }
+    return parsePrimary();
+  }
+
+  function parsePrimary() {
+    const token = peek();
+    if (!token) return null;
+    if (token.startsWith('STRING:')) {
+      position += 1;
+      return { kind: 'lit', value: JSON.parse(token.slice('STRING:'.length)) };
+    }
+    if (token.startsWith('NUMBER:')) {
+      position += 1;
+      return { kind: 'lit', value: token.slice('NUMBER:'.length) };
+    }
+    if (symbol('(')) {
+      position += 1;
+      const inner = parseOr();
+      if (!inner || !symbol(')')) return null;
+      position += 1;
+      return inner;
+    }
+    if (symbol('-')) {
+      position += 1;
+      const item = parseUnary();
+      return item ? { kind: 'neg', item } : null;
+    }
+    const name = tokenWord(token);
+    if (name === null) return null;
+    if (name === 'case') return parseCase();
+    if (symbol('(', 1)) {
+      if (name === 'cast') return parseCast();
+      position += 2;
+      const args = [];
+      if (!symbol(')')) {
+        for (;;) {
+          const arg = parseOr();
+          if (!arg) return null;
+          args.push(arg);
+          if (symbol(',')) { position += 1; continue; }
+          break;
+        }
+      }
+      if (!symbol(')')) return null;
+      position += 1;
+      return { kind: 'fn', name, args };
+    }
+    position += 1;
+    return { kind: 'id', name };
+  }
+
+  function parseCast() {
+    position += 2;
+    const item = parseOr();
+    if (!item || !word('as')) return null;
+    position += 1;
+    const type = tokenWord(peek());
+    if (type === null) return null;
+    position += 1;
+    if (symbol('(')) {
+      position += 1;
+      const length = peek();
+      if (!length || !length.startsWith('NUMBER:')) return null;
+      position += 1;
+      if (!symbol(')')) return null;
+      position += 1;
+    }
+    if (word('charset') || word('character')) {
+      position += 1;
+      if (word('set')) position += 1;
+      if (tokenWord(peek()) === null) return null;
+      position += 1;
+    }
+    if (!symbol(')')) return null;
+    position += 1;
+    return { kind: 'cast', item, type };
+  }
+
+  function parseCase() {
+    position += 1;
+    const whens = [];
+    while (word('when')) {
+      position += 1;
+      const condition = parseOr();
+      if (!condition || !word('then')) return null;
+      position += 1;
+      const value = parseOr();
+      if (!value) return null;
+      whens.push({ condition, value });
+    }
+    if (!whens.length) return null;
+    let alternate = null;
+    if (word('else')) {
+      position += 1;
+      alternate = parseOr();
+      if (!alternate) return null;
+    }
+    if (!word('end')) return null;
+    position += 1;
+    return { kind: 'case', whens, alternate };
+  }
+
+  const ast = parseOr();
+  if (!ast || position !== tokens.length) return null;
+  return ast;
+}
+
+function renderExpressionAst(node) {
+  const render = (child) => renderExpressionAst(child);
+  switch (node.kind) {
+    case 'or': return `(or ${node.items.map(render).join(' ')})`;
+    case 'and': return `(and ${node.items.map(render).join(' ')})`;
+    case 'not': return `(not ${render(node.item)})`;
+    case 'cmp': return `(${node.op} ${render(node.left)} ${render(node.right)})`;
+    case 'isnull': return `(${node.negated ? 'isnotnull' : 'isnull'} ${render(node.item)})`;
+    case 'in': return `(${node.negated ? 'notin' : 'in'} ${render(node.item)} (${node.values.map(render).join(' ')}))`;
+    case 'between': return `(${node.negated ? 'notbetween' : 'between'} ${render(node.item)} ${render(node.low)} ${render(node.high)})`;
+    case 'like': return `(${node.negated ? 'notlike' : 'like'} ${render(node.item)} ${render(node.pattern)})`;
+    case 'arith': return `(${node.op} ${render(node.left)} ${render(node.right)})`;
+    case 'neg': return `(neg ${render(node.item)})`;
+    case 'lit': return `(lit ${JSON.stringify(node.value)})`;
+    case 'id': return `(id ${node.name})`;
+    case 'fn': return `(fn ${node.name}${node.args.length ? ` ${node.args.map(render).join(' ')}` : ''})`;
+    case 'cast': return `(cast ${render(node.item)} ${node.type})`;
+    case 'case': return `(case ${node.whens.map((entry) => `(when ${render(entry.condition)} ${render(entry.value)})`).join(' ')}${node.alternate ? ` (else ${render(node.alternate)})` : ''})`;
+    default: throw new Error('M1_SCHEMA_PARITY_AST_INVALID');
+  }
+}
+
+// The canonical form of one expression.
+//
+// `C:` marks a parsed expression, `R:` marks an expression the scope-limited
+// parser REFUSED. The two forms can never be equal, so a refused expression
+// can only ever match another refused expression with the very same token
+// stream: an unrecognised expression fails closed.
+export function canonicalExpression(value, {
+  dialect = M1_CORE_SQL_LITERAL_DIALECT.SQL_STANDARD,
+  normalizeGeneratedCastCharset = false,
+} = {}) {
+  const tokens = sqlExpressionTokenList(value, { dialect, normalizeGeneratedCastCharset });
+  const ast = parseExpressionTokens(tokens);
+  if (!ast) return `R:${tokens.join('|')}`;
+  return `C:${renderExpressionAst(ast)}`;
+}
+
 function normalizedNumericDefault(value) {
   const match = String(value).match(/^([+-]?)(\d+)(?:\.(\d+))?$/);
   if (!match) return null;
@@ -259,7 +582,7 @@ export function canonicalSqliteDefault(value) {
   return `EXPR:${tokens.join('|')}`;
 }
 
-function generatedExpression(tableName, index) {
+export function generatedExpression(tableName, index) {
   const ddl = generatedPartialIndex(tableName, index)[0];
   const marker = 'GENERATED ALWAYS AS (';
   const open = ddl.indexOf(marker);
@@ -336,11 +659,11 @@ export function compareTableParity(sqliteTable, mysqlContract) {
     if (String(actual.extra || '').trim().toUpperCase() !== 'STORED GENERATED') {
       errors.push(`GENERATED_COLUMN_KIND:${columnName}`);
     }
-    const expectedExpression = sqlExpressionTokens(generatedExpression(sqliteTable.name, index), {
+    const expectedExpression = canonicalExpression(generatedExpression(sqliteTable.name, index), {
       normalizeGeneratedCastCharset: true,
       dialect: M1_CORE_SQL_LITERAL_DIALECT.SQL_STANDARD,
     });
-    const actualExpression = sqlExpressionTokens(actual.generation_expression, {
+    const actualExpression = canonicalExpression(actual.generation_expression, {
       normalizeGeneratedCastCharset: true,
       dialect: M1_CORE_SQL_LITERAL_DIALECT.MYSQL_CATALOG,
     });
@@ -393,9 +716,9 @@ export function compareTableParity(sqliteTable, mysqlContract) {
 
   if (mysqlContract.checks.some((row) => String(row.enforced || '').toUpperCase() !== 'YES')) errors.push('CHECK_NOT_ENFORCED');
   const expectedChecks = extractSqliteChecks(sqliteTable.sql)
-    .map((check) => sqlExpressionTokens(check, { dialect: M1_CORE_SQL_LITERAL_DIALECT.SQL_STANDARD })).sort();
+    .map((check) => canonicalExpression(check, { dialect: M1_CORE_SQL_LITERAL_DIALECT.SQL_STANDARD })).sort();
   const actualChecks = mysqlContract.checks
-    .map((row) => sqlExpressionTokens(row.check_clause, { dialect: M1_CORE_SQL_LITERAL_DIALECT.MYSQL_CATALOG })).sort();
+    .map((row) => canonicalExpression(row.check_clause, { dialect: M1_CORE_SQL_LITERAL_DIALECT.MYSQL_CATALOG })).sort();
   if (JSON.stringify(actualChecks) !== JSON.stringify(expectedChecks)) errors.push('CHECKS');
   return Object.freeze(errors);
 }
