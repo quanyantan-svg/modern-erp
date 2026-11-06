@@ -28,6 +28,7 @@
 | [`m1-core-g07-final-fix-review-20261106.md`](./m1-core-g07-final-fix-review-20261106.md) | Run `dcfbf040` 两项阻塞的离线闭合证据；CR-02 IQC digest 已获 Owner 批准并激活为唯一固定 Fixture，历史 G07 FAIL 保持 |
 | [`m1-core-g07-parity-r3-review-20261106.md`](./m1-core-g07-parity-r3-review-20261106.md) | Run `df0202b6` 唯一失败（Schema Parity，14 表 4 类差异）的根因与离线修复候审证据；统一索引 digest 规则、方言感知目录解码、脱敏结构证据采集；未重跑真实 G07，历史 G07 FAIL 保持 |
 | [`m1-core-g07-parity-r4-review-20261106.md`](./m1-core-g07-parity-r4-review-20261106.md) | Run `a78b0d3e` 唯一失败（Schema Parity，5 张表目录表达式括号）的真实根因与保义括号规范化候审证据；范围受限表达式 AST、S 表达式树形比较、真实导出夹具与 16 表离线回放；第一轮独立源码复核 `M1C_G07_PARITY_R4_REVIEW_BLOCKED` 的两项 AST 缺陷（字面量类别、CAST 长度）已由 R4-R1 定向修复，第二轮发现的 CAST 字符集无条件丢弃已由 R4-R2 定向修复；未重跑真实 G07，历史 G07 FAIL 保持 |
+| [`m1-core-g07-owner-acceptance-20261107.md`](./m1-core-g07-owner-acceptance-20261107.md) | M1C-G07 正式 Owner Acceptance（`M1C-G07 PASS`，2026-11-07）；Run `b29c3f1f` / SHA `054ebb67` 单次真实 MySQL 执行：11/11 PASS、16 表 Schema Parity 全 MATCHED、CR-01～CR-09、Root FINISHED、五类对象归零、ACK-4 一次性消费；仅批准 G07，不签发包级 Acceptance / Freeze / Release |
 | [`sales-customer/`](./sales-customer/) | Sales & Customer 各 Wave 的 Acceptance / Freeze 记录与实施证据 |
 
 ## 规则

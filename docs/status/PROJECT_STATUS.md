@@ -1875,6 +1875,31 @@ M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
   G07 继续 `FAIL`，`M1_CORE_ACCEPTANCE_BLOCKED` 保持；未执行真实 MySQL G07、ACK-4、Reset、Bootstrap、
   Cleanup、Migration、自动重试或任何远端写入。
 
+### 37.48 M1C-G07 正式 Owner Acceptance（2026-11-07）
+
+- **Owner 决定**：业务所有者在本轮明确签发 `M1C-G07 PASS`。正式记录：
+  [`docs/acceptance/m1-core-g07-owner-acceptance-20261107.md`](../acceptance/m1-core-g07-owner-acceptance-20261107.md)。
+- **执行锚点**：Commit SHA `054ebb67eb7ea5b1a82b0d51a70d54e76aaceb68`；Run ID
+  `b29c3f1f-8175-42ed-9e9c-2f0faff16798`；Manifest `M1_CORE_G07_V1`；Fixture digest
+  `9816affb…d71091`；目标 `modern_erp_domain_test`（`modern_erp_test@127.0.0.1:3306`）；
+  ACK-4 已消费且不可复用（签发 `16:17:55.905Z`，消费 `16:18:06.940Z`，14 分钟窗口内）。
+- **验收证据**：注册套件 11/11 PASS、Suite child exit 0；Schema Parity 16 张表全部 MATCHED；
+  CR-01～CR-09 全部通过真实生产 Handler 与 MySQL 并发 Oracle；Supplemental Oracle PASS；Root
+  `FINISHED`（`testsPassed=true`、`cleanupProven=true`、`childrenExited=true`），四操作严格按序、
+  6 个 child lease 全部消费；Cleanup 一次完成、Postflight PROVEN；五类 Schema 对象归零
+  `0/0/0/0/0`；Quarantine NONE；端口 33101 / 33102 已释放。
+- **证据边界**：逐项 TAP PASS 原文未持久化（11/11 结论由已注册套件与完整执行链的成功机器状态支持）；
+  最小权限下 `information_schema.INNODB_TRX` 不可直接读取，「无残留活动事务」由
+  `data_lock_waits=0` / `data_locks=0` / `PROCESSLIST=1` 间接证明，风险保留；历史失败 Run
+  `94e2e0c7` / `a4c97802` / `c5ce2158` / `dcfbf040` / `df0202b6` / `a78b0d3e` 的原始结果与脱敏
+  证据完整保留，不覆盖、不改写。
+- **七 Gate 状态**：G02/G05/G06/G07=`PASS`；G01/G03/G04=`INCONCLUSIVE`。
+- **包级状态**：`M1_CORE_ACCEPTANCE_BLOCKED` 保持。本决定**仅**签发 `M1C-G07 PASS`，
+  不签发 M1-Core 包级 Acceptance、Capability Freeze、Domain Acceptance 或 Release Readiness。
+- **未发生**：本轮未执行 Requirement/Design/业务代码/Fixture/DDL/Oracle 修改，未重启 MySQL、
+  未改变数据库权限、未修改目标身份、未签发第二份 ACK-4、未复用历史 Run ID、未自动重跑、
+  未执行额外 Migration。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
