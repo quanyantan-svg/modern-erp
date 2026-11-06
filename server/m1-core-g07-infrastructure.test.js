@@ -9,6 +9,7 @@ import {
   G07_SUPPLEMENTAL_ORACLES, M1_CORE_G07_SCENARIOS,
 } from './test-support/m1-core-g07-contract.js';
 import { compareTableParity, readMySqlInformationSchemaContract } from './test-utils/m1-core-schema-parity.js';
+import { mysqlGeneratedPartialIndexColumnName } from './database/mysql-schema.js';
 import { gateWaiterIds, M1_G07_GATE_WAITER_SQL, runG07GateRace } from './test-utils/m1-core-g07-lock-wait.js';
 import {
   assertFixedFixtureManifest, computeM1CoreG07FixtureDigest, M1_CORE_G07_FIXED_FIXTURE_DIGEST,
@@ -139,7 +140,7 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
     assert.throws(() => assertM1CoreG07StaticPreflight({ target: { ...target, selectedDatabase: 'other' }, environment, subjectCredentials: credentials }), /TARGET_BINDING/);
   });
 
-  test('information_schema reader queries columns, indexes, FK rules and CHECK clauses', () => {
+  test('information_schema reader queries generated columns, indexes, FK rules and enforced CHECK clauses', () => {
     const calls = [];
     const foreignKey = {
       constraint_name: 'fk_item', column_name: 'item_id', referenced_table_name: 'items',
@@ -152,6 +153,10 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
     assert.ok(calls.some((sql) => /information_schema\.STATISTICS/.test(sql)));
     assert.ok(calls.some((sql) => /REFERENTIAL_CONSTRAINTS/.test(sql)));
     assert.ok(calls.some((sql) => /CHECK_CONSTRAINTS/.test(sql)));
+    const columnSql = calls.find((sql) => /information_schema\.COLUMNS/.test(sql));
+    assert.match(columnSql, /EXTRA extra/);
+    assert.match(columnSql, /GENERATION_EXPRESSION generation_expression/);
+    assert.match(calls.find((sql) => /CHECK_CONSTRAINTS/.test(sql)), /tc\.ENFORCED enforced/);
     const foreignKeySql = calls.find((sql) => /REFERENTIAL_CONSTRAINTS/.test(sql));
     for (const column of ['CONSTRAINT_NAME', 'COLUMN_NAME', 'REFERENCED_TABLE_NAME', 'REFERENCED_COLUMN_NAME', 'ORDINAL_POSITION']) {
       assert.match(foreignKeySql, new RegExp(`k\\.${column}\\b`), `${column} must come from KEY_COLUMN_USAGE k`);
@@ -346,7 +351,7 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
       columns: [
         { column_name: 'id', data_type: 'varchar', is_nullable: 'NO', column_default: null },
         { column_name: 'amount', data_type: 'bigint', is_nullable: 'YES', column_default: '1' },
-      ], indexes: [], foreignKeys: [], checks: [{ check_clause: 'amount >= 0' }],
+      ], indexes: [], foreignKeys: [], checks: [{ check_clause: 'amount >= 0', enforced: 'YES' }],
     };
     assert.deepEqual(compareTableParity(sqlite, mysql), ['NULLABLE:amount', 'DEFAULT:amount']);
   });
@@ -373,7 +378,7 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
       ],
       indexes: [{ index_name: 'code', column_name: 'code', seq_in_index: 1, non_unique: 0 }],
       foreignKeys: [],
-      checks: [{ check_clause: "(`status` in (_utf8mb4'DRAFT',_utf8mb4'POSTED'))" }],
+      checks: [{ check_clause: "(`status` in (_utf8mb4'DRAFT',_utf8mb4'POSTED'))", enforced: 'YES' }],
     };
     assert.deepEqual(compareTableParity(sqlite, mysql), []);
   });
@@ -398,13 +403,62 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
       ],
       indexes: [{ index_name: 'code', column_name: 'code', seq_in_index: 1, non_unique: 0 }],
       foreignKeys: [],
-      checks: [{ check_clause: "status in (_utf8mb4'DRAFT',_utf8mb4'POSTED')" }],
+      checks: [{ check_clause: "status in (_utf8mb4'DRAFT',_utf8mb4'POSTED')", enforced: 'YES' }],
     };
     assert.ok(compareTableParity(sqlite, { ...valid, columns: valid.columns.filter((column) => column.column_name !== 'code') }).includes('COLUMN_SEQUENCE'));
     assert.ok(compareTableParity(sqlite, { ...valid, indexes: [] }).includes('UNIQUE_MISSING:code'));
     assert.ok(compareTableParity(sqlite, { ...valid, checks: [] }).includes('CHECKS'));
+    assert.ok(compareTableParity(sqlite, {
+      ...valid,
+      checks: [{ check_clause: "status in (_utf8mb4'draft',_utf8mb4'POSTED')", enforced: 'YES' }],
+    }).includes('CHECKS'), 'business string literal case changes must not normalize away');
+    assert.ok(compareTableParity(sqlite, {
+      ...valid,
+      checks: valid.checks.map((check) => ({ ...check, enforced: 'NO' })),
+    }).includes('CHECK_NOT_ENFORCED'));
     const wrongDefault = valid.columns.map((column) => column.column_name === 'status' ? { ...column, column_default: 'POSTED' } : column);
     assert.ok(compareTableParity(sqlite, { ...valid, columns: wrongDefault }).includes('DEFAULT:status'));
+  });
+
+  test('parity validates the approved digest generated column kind, expression and exact UNIQUE index reference', () => {
+    const indexName = 'uq_digest_sample_active';
+    const generated = mysqlGeneratedPartialIndexColumnName(indexName);
+    const sqlite = {
+      name: 'digest_sample', sql: 'CREATE TABLE digest_sample(id TEXT PRIMARY KEY, state TEXT NOT NULL)',
+      columns: [
+        { name: 'id', type: 'TEXT', notnull: 0, dflt_value: null, pk: 1 },
+        { name: 'state', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+      ],
+      indexes: [{
+        name: indexName, unique: true, origin: 'c', columns: ['id', 'state'],
+        expressions: ['id', 'state'], where: "state='ACTIVE'",
+      }],
+      foreignKeys: [],
+    };
+    const valid = {
+      columns: [
+        { column_name: 'id', data_type: 'varchar', is_nullable: 'NO', column_default: null, extra: '', generation_expression: '' },
+        { column_name: 'state', data_type: 'varchar', is_nullable: 'NO', column_default: null, extra: '', generation_expression: '' },
+        {
+          column_name: generated, data_type: 'char', is_nullable: 'YES', column_default: null,
+          extra: 'STORED GENERATED',
+          generation_expression: "CASE WHEN (`state` = 'ACTIVE') THEN SHA2(CONCAT_WS(CHAR(31),COALESCE(CAST(`id` AS CHAR CHARSET utf8mb4),CHAR(30)),COALESCE(CAST(`state` AS CHAR CHARSET utf8mb4),CHAR(30))),256) ELSE NULL END",
+        },
+      ],
+      indexes: [{ index_name: indexName, column_name: generated, seq_in_index: 1, non_unique: 0 }],
+      foreignKeys: [], checks: [],
+    };
+    assert.deepEqual(compareTableParity(sqlite, valid), []);
+    const ordinary = valid.columns.map((column) => column.column_name === generated ? { ...column, extra: '' } : column);
+    assert.ok(compareTableParity(sqlite, { ...valid, columns: ordinary }).includes(`GENERATED_COLUMN_KIND:${generated}`));
+    const wrongExpression = valid.columns.map((column) => column.column_name === generated
+      ? { ...column, generation_expression: column.generation_expression.replace("'ACTIVE'", "'INACTIVE'") } : column);
+    assert.ok(compareTableParity(sqlite, { ...valid, columns: wrongExpression }).includes(`GENERATED_COLUMN_EXPRESSION:${generated}`));
+    assert.ok(compareTableParity(sqlite, {
+      ...valid,
+      indexes: [{ index_name: indexName, column_name: 'state', seq_in_index: 1, non_unique: 0 }],
+    }).includes(`INDEX_COLUMNS:${indexName}`));
+    assert.ok(compareTableParity(sqlite, { ...valid, indexes: [] }).includes(`UNIQUE_MISSING:${indexName}`));
   });
 
   test('fixed fixture builder runs the embedded HTTP chain and pins the SHA digest', async () => {

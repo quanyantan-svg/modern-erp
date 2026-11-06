@@ -6,7 +6,14 @@ import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import { createProcurementFixture } from './test-support/procurement-http-fixture.js';
 import { buildM1CoreG07HttpFixtures } from './test-support/m1-core-g07-http-fixture-builder.js';
+import {
+  computeM1CoreG07FixtureDigest,
+  M1_CORE_G07_CR02_IQC_CANDIDATE_DIGEST,
+  M1_CORE_G07_CR02_IQC_CANDIDATE_SCENARIOS,
+  resolveRoute,
+} from './test-support/m1-core-g07-fixtures.js';
 import { changeValuationMethod, receiveValue } from './modules/financial-inventory.js';
+import { deriveQualityState } from './modules/quality-gates.js';
 import { postCanonicalTrackedLeg } from './modules/traceability-quality.js';
 
 function scalar(db, sql, ...params) {
@@ -61,12 +68,42 @@ describe('M1C-G07 same-source SQLite HTTP setup', () => {
     assert.equal(scalar(fx.db, 'SELECT COUNT(*) value FROM receipt_notice_item_sources WHERE purchase_order_item_id=?', itemId), 0);
   });
 
-  test('CR-02: FIXED_FIXTURE_SQLITE_HTTP_SETUP_PASS', () => {
+  test('CR-02: inactive IQC candidate passes real production SQLite HTTP before receipt confirm', async () => {
     const s = manifest.scenarios['CR-02'].setup;
     const receiptId = s.convert.receipts[0].id;
     const receipt = fx.db.prepare('SELECT status FROM purchase_receipts WHERE id=?').get(receiptId);
     assert.deepEqual({ status: receipt.status, quantity: scalar(fx.db, 'SELECT SUM(quantity) value FROM purchase_receipt_items WHERE receipt_id=?', receiptId) }, { status: 'DRAFT', quantity: 10 });
     assert.equal(scalar(fx.db, 'SELECT converted_quantity value FROM receipt_notice_item_sources WHERE id=?', s.noticeGet.receiptNotice.items[0].sources[0].id), 10);
+
+    const candidate = M1_CORE_G07_CR02_IQC_CANDIDATE_SCENARIOS.find((scenario) => scenario.id === 'CR-02');
+    const [createStep, completeStep] = candidate.setup.slice(-2);
+    assert.equal(computeM1CoreG07FixtureDigest(M1_CORE_G07_CR02_IQC_CANDIDATE_SCENARIOS), M1_CORE_G07_CR02_IQC_CANDIDATE_DIGEST);
+    assert.deepEqual(candidate.setup.map((step) => step.id).slice(-4), ['noticeGet', 'convert', 'iqc', 'iqcComplete']);
+    assert.deepEqual(createStep.body, { purchase_receipt_id: { $ref: 'setup.convert.receipts.0.id' } });
+    assert.deepEqual(completeStep.body, {
+      result: 'PASS', inspection_quantity: 10, passed_quantity: 10, failed_quantity: 0,
+    });
+
+    const createBody = { purchase_receipt_id: receiptId };
+    const created = await fx.request(createStep.method, createStep.route, fx.tokens[createStep.subject], createBody, createStep.headers);
+    assert.equal(created.status, 201, JSON.stringify(created.data));
+    assert.ok(created.data.id);
+    const fetched = await fx.request('GET', `/api/iqc/${created.data.id}`, fx.tokens.warehouse);
+    assert.equal(fetched.status, 200, JSON.stringify(fetched.data));
+    assert.equal(fetched.data.inspection.purchase_receipt_id, receiptId);
+
+    const completePath = resolveRoute(completeStep.route, { setup: { ...s, iqc: created.data } });
+    const completed = await fx.request(completeStep.method, completePath, fx.tokens[completeStep.subject], completeStep.body, completeStep.headers);
+    assert.equal(completed.status, 200, JSON.stringify(completed.data));
+    assert.deepEqual(completed.data, { ok: true, result: 'PASS' });
+    assert.equal(deriveQualityState(fx.db, 'IQC', receiptId).code, 'PASS');
+
+    const confirmStep = candidate.raceRequests[0];
+    const confirmPath = resolveRoute(confirmStep.route, { setup: s });
+    const confirmed = await fx.request(confirmStep.method, confirmPath, fx.tokens[confirmStep.subject], confirmStep.body, confirmStep.headers);
+    assert.equal(confirmed.status, 200, JSON.stringify(confirmed.data));
+    assert.deepEqual(confirmed.data, { ok: true });
+    assert.equal(fx.db.prepare('SELECT status FROM purchase_receipts WHERE id=?').get(receiptId).status, 'CONFIRMED');
   });
 
   test('CR-03: FIXED_FIXTURE_SQLITE_HTTP_SETUP_PASS', () => {

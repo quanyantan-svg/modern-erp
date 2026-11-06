@@ -1,4 +1,5 @@
 import {
+  generatedPartialIndex,
   mysqlGeneratedPartialIndexColumnName,
   mysqlTypeFamily,
 } from '../database/mysql-schema.js';
@@ -64,11 +65,81 @@ function normalizedDefault(value, column) {
   return `STRING:${unquoted ?? text}`;
 }
 
-function normalizedExpression(value) {
-  return String(value || '')
-    .replace(/_[a-z0-9]+\s*(?=['"])/gi, '')
-    .replace(/[`"\s()]/g, '')
-    .toLowerCase();
+function sqlExpressionTokens(value, { normalizeGeneratedCastCharset = false } = {}) {
+  const text = unwrapOuterParentheses(value);
+  const tokens = [];
+  for (let index = 0; index < text.length;) {
+    const rest = text.slice(index);
+    const whitespace = rest.match(/^\s+/);
+    if (whitespace) { index += whitespace[0].length; continue; }
+    const charsetIntroducer = rest.match(/^_(?:utf8mb4|utf8|binary)\s*(?=')/i);
+    if (charsetIntroducer) { index += charsetIntroducer[0].length; continue; }
+    if (text[index] === "'") {
+      let content = '';
+      let closed = false;
+      index += 1;
+      while (index < text.length) {
+        if (text[index] === "'" && text[index + 1] === "'") { content += "'"; index += 2; continue; }
+        if (text[index] === "'") { index += 1; closed = true; break; }
+        content += text[index]; index += 1;
+      }
+      tokens.push(closed ? `STRING:${JSON.stringify(content)}` : `UNTERMINATED_STRING:${JSON.stringify(content)}`);
+      continue;
+    }
+    if (text[index] === '`' || text[index] === '"') {
+      const quote = text[index];
+      let identifier = '';
+      index += 1;
+      while (index < text.length && text[index] !== quote) { identifier += text[index]; index += 1; }
+      if (text[index] === quote) index += 1;
+      tokens.push(`WORD:${identifier.toLowerCase()}`);
+      continue;
+    }
+    const word = rest.match(/^[A-Za-z_][A-Za-z0-9_$]*/);
+    if (word) { tokens.push(`WORD:${word[0].toLowerCase()}`); index += word[0].length; continue; }
+    const number = rest.match(/^(?:\d+(?:\.\d*)?|\.\d+)/);
+    if (number) { tokens.push(`NUMBER:${number[0]}`); index += number[0].length; continue; }
+    const operator = rest.match(/^(?:<>|!=|<=|>=|==|[-+*/%=<>,().])/);
+    if (operator) { tokens.push(`SYMBOL:${operator[0]}`); index += operator[0].length; continue; }
+    tokens.push(`CHAR:${text[index]}`); index += 1;
+  }
+  if (normalizeGeneratedCastCharset) {
+    for (let index = 0; index < tokens.length; index += 1) {
+      if (tokens[index] !== 'WORD:char') continue;
+      if (tokens[index + 1] === 'WORD:charset' && tokens[index + 2] === 'WORD:utf8mb4') tokens.splice(index + 1, 2);
+      if (tokens[index + 1] === 'WORD:character' && tokens[index + 2] === 'WORD:set'
+          && tokens[index + 3] === 'WORD:utf8mb4') tokens.splice(index + 1, 3);
+    }
+    for (let index = 0; index < tokens.length - 2; index += 1) {
+      if (tokens[index] !== 'WORD:when' || tokens[index + 1] !== 'SYMBOL:(') continue;
+      let depth = 0;
+      for (let cursor = index + 1; cursor < tokens.length; cursor += 1) {
+        if (tokens[cursor] === 'SYMBOL:(') depth += 1;
+        else if (tokens[cursor] === 'SYMBOL:)' && --depth === 0) {
+          if (tokens[cursor + 1] === 'WORD:then') {
+            tokens.splice(cursor, 1);
+            tokens.splice(index + 1, 1);
+          }
+          break;
+        }
+      }
+    }
+  }
+  return tokens.join('|');
+}
+
+function generatedExpression(tableName, index) {
+  const ddl = generatedPartialIndex(tableName, index)[0];
+  const marker = 'GENERATED ALWAYS AS (';
+  const open = ddl.indexOf(marker);
+  if (open < 0) throw new Error(`SCHEMA_PARITY_GENERATED_RULE_INVALID:${tableName}.${index.name}`);
+  const start = open + marker.length - 1;
+  let depth = 0;
+  for (let cursor = start; cursor < ddl.length; cursor += 1) {
+    if (ddl[cursor] === '(') depth += 1;
+    else if (ddl[cursor] === ')' && --depth === 0) return ddl.slice(start + 1, cursor);
+  }
+  throw new Error(`SCHEMA_PARITY_GENERATED_RULE_INVALID:${tableName}.${index.name}`);
 }
 
 
@@ -81,7 +152,8 @@ function requiresGeneratedDigest(index) {
 
 export function readMySqlInformationSchemaContract(db, tableName) {
   const columns = db.prepare(`SELECT COLUMN_NAME column_name,DATA_TYPE data_type,IS_NULLABLE is_nullable,
-      COLUMN_DEFAULT column_default,ORDINAL_POSITION ordinal_position,COLUMN_KEY column_key
+      COLUMN_DEFAULT column_default,ORDINAL_POSITION ordinal_position,COLUMN_KEY column_key,
+      EXTRA extra,GENERATION_EXPRESSION generation_expression
     FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? ORDER BY ORDINAL_POSITION`).all(tableName);
   const indexes = db.prepare(`SELECT INDEX_NAME index_name,COLUMN_NAME column_name,SEQ_IN_INDEX seq_in_index,NON_UNIQUE non_unique
     FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? ORDER BY INDEX_NAME,SEQ_IN_INDEX`).all(tableName);
@@ -93,7 +165,7 @@ export function readMySqlInformationSchemaContract(db, tableName) {
       ON r.CONSTRAINT_SCHEMA=k.CONSTRAINT_SCHEMA AND r.TABLE_NAME=k.TABLE_NAME AND r.CONSTRAINT_NAME=k.CONSTRAINT_NAME
     WHERE k.TABLE_SCHEMA=DATABASE() AND k.TABLE_NAME=? AND k.REFERENCED_TABLE_NAME IS NOT NULL
     ORDER BY k.CONSTRAINT_NAME,k.ORDINAL_POSITION`).all(tableName);
-  const checks = db.prepare(`SELECT cc.CHECK_CLAUSE check_clause
+  const checks = db.prepare(`SELECT cc.CHECK_CLAUSE check_clause,tc.ENFORCED enforced
     FROM information_schema.CHECK_CONSTRAINTS cc JOIN information_schema.TABLE_CONSTRAINTS tc
       ON tc.CONSTRAINT_SCHEMA=cc.CONSTRAINT_SCHEMA AND tc.CONSTRAINT_NAME=cc.CONSTRAINT_NAME
     WHERE tc.TABLE_SCHEMA=DATABASE() AND tc.TABLE_NAME=? AND tc.CONSTRAINT_TYPE='CHECK'
@@ -128,8 +200,20 @@ function extractSqliteChecks(sql) {
 
 export function compareTableParity(sqliteTable, mysqlContract) {
   const errors = [];
-  const expectedGeneratedColumns = new Set(sqliteTable.indexes.filter(requiresGeneratedDigest)
-    .map((index) => mysqlGeneratedPartialIndexColumnName(index.name)));
+  const generatedIndexes = sqliteTable.indexes.filter(requiresGeneratedDigest);
+  const expectedGeneratedColumns = new Set(generatedIndexes.map((index) => mysqlGeneratedPartialIndexColumnName(index.name)));
+  const physicalColumns = new Map(mysqlContract.columns.map((column) => [column.column_name, column]));
+  for (const index of generatedIndexes) {
+    const columnName = mysqlGeneratedPartialIndexColumnName(index.name);
+    const actual = physicalColumns.get(columnName);
+    if (!actual) { errors.push(`GENERATED_COLUMN_MISSING:${columnName}`); continue; }
+    if (String(actual.extra || '').trim().toUpperCase() !== 'STORED GENERATED') {
+      errors.push(`GENERATED_COLUMN_KIND:${columnName}`);
+    }
+    const expectedExpression = sqlExpressionTokens(generatedExpression(sqliteTable.name, index), { normalizeGeneratedCastCharset: true });
+    const actualExpression = sqlExpressionTokens(actual.generation_expression, { normalizeGeneratedCastCharset: true });
+    if (actualExpression !== expectedExpression) errors.push(`GENERATED_COLUMN_EXPRESSION:${columnName}`);
+  }
   const logicalMySqlColumns = mysqlContract.columns.filter((column) => !expectedGeneratedColumns.has(column.column_name));
   const mysqlColumns = new Map(logicalMySqlColumns.map((column) => [column.column_name, column]));
   const expectedNames = sqliteTable.columns.map((column) => column.name);
@@ -169,8 +253,9 @@ export function compareTableParity(sqliteTable, mysqlContract) {
   const expectedFks = sqliteTable.foreignKeys.map((fk) => `${fk.from}->${fk.table}.${fk.to}:${fk.on_update || 'NO ACTION'}:${fk.on_delete || 'NO ACTION'}`).sort();
   if (JSON.stringify(actualFks) !== JSON.stringify(expectedFks)) errors.push('FOREIGN_KEYS');
 
-  const expectedChecks = extractSqliteChecks(sqliteTable.sql).map(normalizedExpression).sort();
-  const actualChecks = mysqlContract.checks.map((row) => normalizedExpression(row.check_clause)).sort();
+  if (mysqlContract.checks.some((row) => String(row.enforced || '').toUpperCase() !== 'YES')) errors.push('CHECK_NOT_ENFORCED');
+  const expectedChecks = extractSqliteChecks(sqliteTable.sql).map((check) => sqlExpressionTokens(check)).sort();
+  const actualChecks = mysqlContract.checks.map((row) => sqlExpressionTokens(row.check_clause)).sort();
   if (JSON.stringify(actualChecks) !== JSON.stringify(expectedChecks)) errors.push('CHECKS');
   return Object.freeze(errors);
 }
