@@ -1859,6 +1859,22 @@ M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
 详细 14 表差异、候选 digest 与审批边界见
 [`docs/acceptance/m1-core-g07-final-fix-review-20261106.md`](../acceptance/m1-core-g07-final-fix-review-20261106.md)。
 
+### 37.47 M1C-G07 CR-02 Fixture Owner 批准与激活（2026-11-06）
+
+- **批准来源与范围**：Modern ERP 项目 Owner 明确批准 digest
+  `9816affb5a94108723929cf8844ea1a640a71a210c604cea6cdd73fdb0d71091`，仅批准在 CR-02
+  `convert` 后由 `warehouse` 主体创建采购入库 IQC 并完成 PASS。
+- **唯一运行时版本**：上述两步已并入 `M1_CORE_G07_FIXED_SCENARIOS`，该 digest 已成为唯一批准固定值；
+  独立候选导出已移除。旧 digest `2202e6c2…c808c` 仅保留为历史追溯，不再由 Builder、Static Preflight
+  或测试消费。ACK-4 定义会引用同一固定版本，但本轮没有签发或消费 ACK-4。
+- **离线验证**：同源 disposable SQLite Fixture 通过真实生产 HTTP 得到 IQC 创建 `201`、PASS 完成
+  `200`、质量状态 `PASS`、采购入库确认 `200`；9 个 CR fixture 全量通过。focused `78/78 PASS`；
+  FAST `559/559 PASS`；Build PASS；相关 Node `--check` 与 digest 一致性校验 PASS。
+- **状态边界**：本节只记录已批准 Fixture 的激活实施，不重写历史 Run
+  `dcfbf040-240c-4630-b2cb-31e2e8eaa062` 的 `9 PASS / 2 FAIL` 与 Cleanup `PROVEN`。
+  G07 继续 `FAIL`，`M1_CORE_ACCEPTANCE_BLOCKED` 保持；未执行真实 MySQL G07、ACK-4、Reset、Bootstrap、
+  Cleanup、Migration、自动重试或任何远端写入。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。

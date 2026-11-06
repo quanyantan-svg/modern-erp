@@ -4,8 +4,9 @@
 > 两项失败根因、最小离线修复和审批边界。
 > Owner：Procurement & Outsourcing Domain Owner（Fixture 决定）；Platform / Database Safety / QA
 > （Parity 实施与证据维护）。
-> 状态：`PENDING_APPROVAL` —— Parity 修复已离线实施；CR-02 新 Fixture 仍是未启用候选，
-> 等待 Owner 批准新 digest。
+> 状态：`IMPLEMENTED` —— Parity 修复已离线实施；Owner 已明确批准并激活 CR-02 固定 Fixture
+> digest `9816affb5a94108723929cf8844ea1a640a71a210c604cea6cdd73fdb0d71091`。真实 G07 尚未重跑，
+> 历史 G07=`FAIL` 与 `M1_CORE_ACCEPTANCE_BLOCKED` 保持不变。
 > 权威来源：Requirement
 > [`docs/requirements/procurement-outsourcing.md`](../requirements/procurement-outsourcing.md) §31.13.5；Active Design
 > [`docs/design/procurement-outsourcing-m1-core.md`](../design/procurement-outsourcing-m1-core.md) §13.1；当前项目状态仅由
@@ -22,13 +23,13 @@
 - 本轮未重跑真实 Gate，未签发/消费 ACK-4，未连接 MySQL，未执行 Reset、Bootstrap、
   Cleanup 或 Migration。历史 G07=`FAIL` 与 Cleanup 证明保持不变。
 
-## 2. CR-02 最小候选修复（未启用）
+## 2. CR-02 最小修复（Owner 已批准并激活）
 
 失败证据为两个并发确认均返回 `409 BUSINESS_RULE_BLOCKED`，消息为采购入库单未通过
 IQC。生产 Handler `confirmPurchaseReceiptCore()` 先校验重复确认，再执行权威 IQC 门禁；因此
 Fixture 必须在 `convert` 后先构建并完成 PASS IQC，不得修改生产门禁或改弱并发断言。
 
-待审候选只增加两个生产 HTTP 步骤，均使用 `warehouse` 主体：
+Owner 批准的固定 Fixture 只增加两个生产 HTTP 步骤，均使用 `warehouse` 主体：
 
 1. `POST /api/iqc`，body = `{ purchase_receipt_id: setup.convert.receipts[0].id }`；
 2. `POST /api/iqc/{setup.iqc.id}/complete`，body =
@@ -36,14 +37,13 @@ Fixture 必须在 `convert` 后先构建并完成 PASS IQC，不得修改生产�
 
 | 项 | 值 |
 |---|---|
-| 当前已批准/仍启用 digest | `2202e6c21142528bd2b21f276abcacbf250af06624a456b84ec12263e15c808c` |
-| CR-02 IQC 候选 digest | `9816affb5a94108723929cf8844ea1a640a71a210c604cea6cdd73fdb0d71091` |
-| 当前 builder/static preflight/ACK-4 消费对象 | 仍为旧 Fixture；候选不可达 |
-| Owner 决定 | `PENDING_APPROVAL` |
+| 当前唯一批准/启用 digest | `9816affb5a94108723929cf8844ea1a640a71a210c604cea6cdd73fdb0d71091` |
+| 被取代的历史 digest | `2202e6c21142528bd2b21f276abcacbf250af06624a456b84ec12263e15c808c`（仅保留历史追溯，不再是运行时版本） |
+| 当前 builder/static preflight/测试消费对象 | 同一份 `M1_CORE_G07_FIXED_SCENARIOS` 与唯一固定 digest |
+| Owner 决定 | `APPROVED / ACTIVATED`（2026-11-06） |
 
-Owner 批准前，不得将候选步骤并入 `M1_CORE_G07_FIXED_SCENARIOS`，不得替换已批准 digest，
-也不得以本轮离线证据宣称 CR-02 真实 MySQL PASS。批准后仍需单独完成激活变更与离线验证；
-本轮未获得真实 Gate 授权。
+激活后不再保留独立的候选运行时导出；Builder、Static Preflight 与相关测试只引用唯一固定版本。
+本次批准不授权真实 MySQL Gate 或 ACK-4，因此不得以本轮离线证据宣称 CR-02 真实 MySQL PASS。
 
 ## 3. Schema Parity 的 14 表逐项差异
 
@@ -83,9 +83,9 @@ MySQL 物理实现差异；`REAL_DEFECT` = 真实缺失/不一致。
 
 ## 5. 离线验证与交付边界
 
-- focused：`77/77 PASS`（G07 infrastructure + WP0 parity + SQLite same-source fixture + MySQL schema
+- focused：`78/78 PASS`（G07 infrastructure + WP0 parity + SQLite same-source fixture + MySQL schema
   digest implementation）。
-- FAST：`558/558 PASS`，0 fail / 0 skipped / 0 todo。
+- FAST：`559/559 PASS`，0 fail / 0 skipped / 0 todo。
 - Build：PASS（Vite 7 production build，1968 modules transformed）。
 - syntax：全部相关 Node `--check` PASS。
 - docs current：N1、N3–N9 PASS；N2 按治理决定为 `RETIRED`，不计 PASS/FAIL。
@@ -96,7 +96,7 @@ MySQL 物理实现差异；`REAL_DEFECT` = 真实缺失/不一致。
 
 ## 6. 暂停点
 
-1. Owner 审批新 CR-02 候选 digest 前，Fixture 保持旧版且不可执行候选链。
+1. Owner 已批准并激活 CR-02 固定 Fixture digest；后续真实 G07 仍须另行授权。
 2. 本轮 Parity 只修正已验证的元数据/物理表示差异，未弱化真实 schema 缺陷检测。
 3. 历史 G07 仍为 `FAIL`；本轮不签发 G07 PASS、M1-Core Acceptance、Freeze 或 Release Readiness。
 

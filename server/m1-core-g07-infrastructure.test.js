@@ -13,7 +13,6 @@ import { mysqlGeneratedPartialIndexColumnName } from './database/mysql-schema.js
 import { gateWaiterIds, M1_G07_GATE_WAITER_SQL, runG07GateRace } from './test-utils/m1-core-g07-lock-wait.js';
 import {
   assertFixedFixtureManifest, computeM1CoreG07FixtureDigest, M1_CORE_G07_FIXED_FIXTURE_DIGEST,
-  M1_CORE_G07_CR02_IQC_CANDIDATE_DIGEST, M1_CORE_G07_CR02_IQC_CANDIDATE_SCENARIOS,
   M1_CORE_G07_FIXED_SCENARIOS, M1_CORE_G07_TECHNICAL_L2_PREREQUISITES,
 } from './test-support/m1-core-g07-fixtures.js';
 import { buildM1CoreG07HttpFixtures } from './test-support/m1-core-g07-http-fixture-builder.js';
@@ -508,21 +507,18 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
     assert.ok(M1_CORE_G07_TECHNICAL_L2_PREREQUISITES.length >= 4, 'technical L2 prerequisites must be enumerated');
   });
 
-  test('CR-02 IQC repair remains an inactive Owner-approval candidate with an independently pinned digest', () => {
+  test('CR-02 approved IQC repair is the unique fixed fixture and pins the Owner-approved digest', () => {
     const active = M1_CORE_G07_FIXED_SCENARIOS.find((scenario) => scenario.id === 'CR-02');
-    const candidate = M1_CORE_G07_CR02_IQC_CANDIDATE_SCENARIOS.find((scenario) => scenario.id === 'CR-02');
-    assert.deepEqual(active.setup.map((step) => step.id).slice(-2), ['noticeGet', 'convert']);
-    assert.deepEqual(candidate.setup.map((step) => step.id).slice(-4), ['noticeGet', 'convert', 'iqc', 'iqcComplete']);
-    assert.deepEqual(candidate.setup.at(-2), {
+    assert.deepEqual(active.setup.map((step) => step.id).slice(-4), ['noticeGet', 'convert', 'iqc', 'iqcComplete']);
+    assert.deepEqual(active.setup.at(-2), {
       id: 'iqc', subject: 'warehouse', method: 'POST', route: '/api/iqc', headers: {},
       body: { purchase_receipt_id: { $ref: 'setup.convert.receipts.0.id' } },
     });
-    assert.equal(candidate.setup.at(-1).subject, 'warehouse');
-    assert.equal(candidate.setup.at(-1).route, '/api/iqc/{setup.iqc.id}/complete');
-    assert.deepEqual(candidate.setup.at(-1).body, { result: 'PASS', inspection_quantity: 10, passed_quantity: 10, failed_quantity: 0 });
-    assert.equal(computeM1CoreG07FixtureDigest(M1_CORE_G07_CR02_IQC_CANDIDATE_SCENARIOS), M1_CORE_G07_CR02_IQC_CANDIDATE_DIGEST);
-    assert.notEqual(M1_CORE_G07_CR02_IQC_CANDIDATE_DIGEST, M1_CORE_G07_FIXED_FIXTURE_DIGEST);
-    assert.equal(computeM1CoreG07FixtureDigest(), M1_CORE_G07_FIXED_FIXTURE_DIGEST, 'active fixture must remain unchanged before Owner approval');
+    assert.equal(active.setup.at(-1).subject, 'warehouse');
+    assert.equal(active.setup.at(-1).route, '/api/iqc/{setup.iqc.id}/complete');
+    assert.deepEqual(active.setup.at(-1).body, { result: 'PASS', inspection_quantity: 10, passed_quantity: 10, failed_quantity: 0 });
+    assert.equal(M1_CORE_G07_FIXED_FIXTURE_DIGEST, '9816affb5a94108723929cf8844ea1a640a71a210c604cea6cdd73fdb0d71091');
+    assert.equal(computeM1CoreG07FixtureDigest(), M1_CORE_G07_FIXED_FIXTURE_DIGEST);
   });
 
   test('assertG07Result negative controls: double success, wrong code, duplicate audit, extra idempotency and loser side effect all FAIL', () => {

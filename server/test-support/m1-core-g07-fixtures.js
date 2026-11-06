@@ -170,6 +170,12 @@ export const M1_CORE_G07_FIXED_SCENARIOS = Object.freeze([
         headers: { 'idempotency-key': 'cr02-convert' },
         body: { items: [{ sourceId: { $ref: 'setup.noticeGet.receiptNotice.items.0.sources.0.id' }, quantity: 10 }] },
       }),
+      step('iqc', 'warehouse', 'POST', '/api/iqc', {
+        body: { purchase_receipt_id: { $ref: 'setup.convert.receipts.0.id' } },
+      }),
+      step('iqcComplete', 'warehouse', 'POST', '/api/iqc/{setup.iqc.id}/complete', {
+        body: { result: 'PASS', inspection_quantity: 10, passed_quantity: 10, failed_quantity: 0 },
+      }),
     ],
     raceRequests: [
       race('warehouse', 'A', 'POST', '/api/purchase-receipts/{setup.convert.receipts.0.id}', { headers: { 'idempotency-key': 'cr02-confirm-a' }, body: { action: 'confirm' } }),
@@ -395,32 +401,10 @@ export function computeM1CoreG07FixtureDigest(scenarios = M1_CORE_G07_FIXED_SCEN
   }))).digest('hex');
 }
 
-// CR-02 quality-gate repair candidate. This is deliberately NOT part of
-// M1_CORE_G07_FIXED_SCENARIOS and therefore cannot be consumed by the builder,
-// static preflight or ACK-4 path before Owner approval. On approval, these two
-// production-HTTP steps can be inserted after `convert` and the approved fixed
-// digest can be replaced with the candidate digest below.
-export const M1_CORE_G07_CR02_IQC_CANDIDATE_SCENARIOS = Object.freeze(
-  M1_CORE_G07_FIXED_SCENARIOS.map((scenario) => scenario.id !== 'CR-02' ? scenario : Object.freeze({
-    ...scenario,
-    setup: Object.freeze([
-      ...scenario.setup,
-      step('iqc', 'warehouse', 'POST', '/api/iqc', {
-        body: { purchase_receipt_id: { $ref: 'setup.convert.receipts.0.id' } },
-      }),
-      step('iqcComplete', 'warehouse', 'POST', '/api/iqc/{setup.iqc.id}/complete', {
-        body: { result: 'PASS', inspection_quantity: 10, passed_quantity: 10, failed_quantity: 0 },
-      }),
-    ]),
-  })),
-);
-
-export const M1_CORE_G07_CR02_IQC_CANDIDATE_DIGEST = '9816affb5a94108723929cf8844ea1a640a71a210c604cea6cdd73fdb0d71091';
-
 // Independent frozen approved digest. This is NOT recomputed at runtime from
 // the same objects it validates — it is a fixed hex frozen by independent
 // review of these definitions, so any later drift is a tamper signal.
-export const M1_CORE_G07_FIXED_FIXTURE_DIGEST = '2202e6c21142528bd2b21f276abcacbf250af06624a456b84ec12263e15c808c';
+export const M1_CORE_G07_FIXED_FIXTURE_DIGEST = '9816affb5a94108723929cf8844ea1a640a71a210c604cea6cdd73fdb0d71091';
 
 function lookup(context, reference) {
   const parts = String(reference).split('.');
