@@ -1837,6 +1837,28 @@ M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
 - **状态边界**：`READY_FOR_INDEPENDENT_REVIEW`。历史 G07=`FAIL`、`M1_CORE_ACCEPTANCE_BLOCKED` 均保持；未连接 MySQL，
   未执行真实 G07、ACK-4、Reset/Bootstrap/Cleanup/Migration 或任何远端写入。
 
+### 37.46 M1C-G07-FINAL-FIX 两项真实阻塞闭合候审（2026-11-06）
+
+- **代码候选提交**：`6d88db8d7a686f2dd283ef58373f02a6fb53b3ec`（本地，未推送）。
+- **输入与历史边界**：仅读复核历史 Run `dcfbf040-240c-4630-b2cb-31e2e8eaa062` 的已有脱敏失败
+  日志；该 Run 仍为 `9 PASS / 2 FAIL`，Cleanup `PROVEN`，G07=`FAIL`。本轮未重跑真实 Gate。
+- **CR-02**：根因是 convert 产生的 DRAFT 采购入库单尚未完成 IQC，两个确认均被生产质量门禁
+  409 拒绝。已编制只在 convert 后以 `warehouse` 主体调用 `/api/iqc` 创建与 PASS 完成的未启用
+  候选；新 digest `9816affb5a94108723929cf8844ea1a640a71a210c604cea6cdd73fdb0d71091`。当前 builder /
+  static preflight / ACK-4 仍只可消费旧 digest `2202e6c2…c808c`；等待 Owner 批准前不得启用。
+- **Schema Parity**：14 张失败表逐项核对为 default 字面量/DECIMAL 零值表示、SQLite autoindex
+  与 MySQL 约束索引名、CHECK 字符集 introducer，以及已批准 digest 生成列/物理索引差异；
+  未发现真实缺列、缺 UNIQUE、缺 CHECK 或错误 default，未修改 Schema / Migration / DDL。比较器仅对
+  上述已验证表示做语义等价处理，并保留真实缺列、缺唯一约束、缺 CHECK、错误 default 的 FAIL 负控。
+- **离线验证**：focused `77/77 PASS`；FAST `558/558 PASS`；Build PASS；相关 Node `--check` PASS；
+  docs current / migration 与 `git diff --check` 见本逻辑单元最终交付记录。
+- **状态边界**：Parity 修复为 `READY_FOR_INDEPENDENT_REVIEW`；CR-02 Fixture 为 `PENDING_APPROVAL / INACTIVE`。
+  G07 继续 `FAIL`，`M1_CORE_ACCEPTANCE_BLOCKED` 保持；未执行 MySQL Gate、ACK-4、Migration、Reset /
+  Bootstrap / Cleanup，未 Push / Merge / Tag / Release / Deploy。
+
+详细 14 表差异、候选 digest 与审批边界见
+[`docs/acceptance/m1-core-g07-final-fix-review-20261106.md`](../acceptance/m1-core-g07-final-fix-review-20261106.md)。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
