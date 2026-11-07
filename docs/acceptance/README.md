@@ -33,6 +33,7 @@
 | [`m1-core-wp7a-r2-offline-evidence-20261107.md`](./m1-core-wp7a-r2-offline-evidence-20261107.md) | M1-Core 第二批离线补证与候审（WP-C / WP-D / WP-K）：G03 多物料行与 SERIAL 身份的八条物理腿与身份分域补证（三项精准变异实验）；G04 负增量可达性的只读审查与 D-1/D-2 方案推荐；G07 证据边界更正的**未签发草案**与待 Owner 裁定事项；未签发任何 Owner Acceptance，未修改已签发结论 |
 | [`m1-core-g04-negative-increment-reachability-20261107.md`](./m1-core-g04-negative-increment-reachability-20261107.md) | G04「增量倒冲数量小于 0」的合法生产 HTTP 可达性审查（只读）：business_status 单向迁移、backflushed_quantity 单调写入、BOM 快照冻结、累计合格收货不减、并发受 UNIQUE 约束保护；结论为「仅 L3/历史异常可构造」；推荐 D-1 → D-2 组合，待 Owner 裁定 |
 | [`m1-core-g07-evidence-boundary-draft-20261107.md`](./m1-core-g07-evidence-boundary-draft-20261107.md) | G07 证据边界更正的**候审草案（未签发）**：已证明 / 未充分证明 / 恒真或恒等式 / 未启用四类逐项列明，追加式边界说明表述，以及是否采纳、是否接受该偏差用于包级验收、是否启动 Oracle 强度补强等四项待 Owner 裁定事项；不修改已签发的 `M1C-G07 PASS` |
+| [`m1-core-g03-g04-offline-closure-20261107.md`](./m1-core-g03-g04-offline-closure-20261107.md) | G03 收口与 G04 离线防御性补证候审矩阵：四事件精确 Mutation Key / 身份腿、D-G03-001 回归、G04 D-1 L3 异常与 WP-G L1 净供应不足、Windows ACL 环境差异；G03 技术条件候审闭合但未签 PASS，G04 D-2 仍待 Owner 裁定 |
 | [`sales-customer/`](./sales-customer/) | Sales & Customer 各 Wave 的 Acceptance / Freeze 记录与实施证据 |
 
 ## 规则
