@@ -18,6 +18,7 @@
 | [`reviews/`](./reviews/) | 待业务所有者审阅的**候选** Requirement / Design 正文 | **否** —— 候审材料，**不构成 Current Active Contract** |
 | [`decisions/`](./decisions/) | 重大决策登记（开放业务政策 / 设计决策状态） | 是（决策状态），规范正文在 Requirement/Design |
 | [`acceptance/`](./acceptance/) | 验收、冻结与实施证据 | 否（证据） |
+| [`audits/`](./audits/) | 静态代码审计基线与 Issue 台账（索引见 [`audits/README.md`](./audits/README.md)） | 否（审计台账） |
 | [`operations/`](./operations/) | 运维、部署、测试与演示运行手册 | 是（操作规程） |
 | [`evidence/`](./evidence/) | 浏览器与响应式验收截图等原始证据 | 否（证据） |
 | [`releases/`](./releases/) | 版本发布记录与 checklist | 否（历史发布证据） |

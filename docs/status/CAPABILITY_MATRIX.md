@@ -18,11 +18,16 @@
 | `NOT_STARTED` | 尚未实施 |
 | `NOT_APPLICABLE` | 明确不在范围内 |
 
+> 审计台账（[`docs/audits/`](../audits/)）中的 **Issue 级**状态
+> （`DOCUMENTED` / `NEEDS_REVALIDATION` / `AUTHORIZED` / `IMPLEMENTING` / `CODE_COMPLETE` /
+> `TESTED` / `VERIFIED` / `ACCEPTED` / `BLOCKED` / `DEFERRED_NOT_AUTHORIZED`）
+> **不是**本表 `状态` 列的取值；两者**不得**互相替代，也**不得**由 Issue 状态反推 Capability 状态。
+
 ## 矩阵
 
 | Manual | 模块 | Domain | 当前 Requirement | 当前 Design | 实现 / 验收证据 | 状态 |
 |---|---|---|---|---|---|---|
-| B3101 | 采购管理 | Procurement & Outsourcing | [`procurement-outsourcing.md` §31.3.1](../requirements/procurement-outsourcing.md) · PRC-01..26 | [`procurement-outsourcing.md` §26](../design/procurement-outsourcing.md) | Acceptance `NOT READY`（§31.11）；M1 13 个 Gate 全部 `NOT_RUN` | `BLOCKED` |
+| B3101 | 采购管理 | Procurement & Outsourcing | [`procurement-outsourcing.md` §31.3.1](../requirements/procurement-outsourcing.md) · PRC-01..26 | [`procurement-outsourcing.md` §26](../design/procurement-outsourcing.md) + [`procurement-outsourcing-m1-core.md`](../design/procurement-outsourcing-m1-core.md)（M1-Core 首期） | Acceptance `NOT READY`（§31.11）；M1 13 个 Gate 全部 `NOT_RUN`；M1-Core 首期七 Gate 7/7 `PASS` 且包级 Acceptance 已签发（§37.55）；**审计基线** [`v0.1` / `PRELIMINARY_STATIC_REVIEW`](../audits/b3101-b3121-code-audit-baseline-20261107.md) | `BLOCKED` |
 | B3102 | 销售管理 | Sales & Customer | [`sales-customer/01-domain-closure.md` §34.8](../requirements/sales-customer/01-domain-closure.md) · CAP-1..27 | [`sales-customer/01-domain-technical-design.md` §29](../design/sales-customer/01-domain-technical-design.md) | Wave 6/7/8/9 + Gate A 已冻结；**整域未冻结**，Waves 1–2 无验收记录 | `HISTORICAL_EVIDENCE` |
 | B3103 | 信用管理 | Sales & Customer | [`sales-customer/01-domain-closure.md` §34.8](../requirements/sales-customer/01-domain-closure.md) + [`03-wave-9-amendments.md`](../requirements/sales-customer/03-wave-9-amendments.md)（SC82–SC107）· CAP-28..36 | [`sales-customer/04-wave-9-credit-baseline.md` §36](../design/sales-customer/04-wave-9-credit-baseline.md) + [`05-wave-11-stage-c.md` §37.54](../design/sales-customer/05-wave-11-stage-c.md) | Wave 9 / Gate A / Wave 10 已冻结；W11-SEC-01 与 W11-A U1/U2/U3 单元级已冻结；**W11-A 整包未签发** | `HISTORICAL_EVIDENCE` |
 | B3104 | 库存管理 | Inventory & Warehouse | [`inventory-warehouse.md` §32.3](../requirements/inventory-warehouse.md) · INV-01..38 | [`inventory-warehouse.md` §27](../design/inventory-warehouse.md) | 实现 Partial；**未见独立 Domain-Level Acceptance** | `HISTORICAL_EVIDENCE` |
@@ -42,8 +47,47 @@
 | B3118 | 工程数据 | Master & Engineering | [`master-engineering.md` §28.3](../requirements/master-engineering.md) · ME-01..31 | [`master-engineering.md` §23](../design/master-engineering.md) | 实现完成；**未见独立 Domain-Level Acceptance** | `HISTORICAL_EVIDENCE` |
 | B3119 | 生产管理 | Manufacturing & Quality | [`manufacturing-quality.md` §29.3](../requirements/manufacturing-quality.md) · MQ-01..43 | [`manufacturing-quality.md` §24](../design/manufacturing-quality.md) | 实现完成；**未见独立 Domain-Level Acceptance** | `HISTORICAL_EVIDENCE` |
 | B3120 | 计划管理 | Planning | [`planning.md` §30.2](../requirements/planning.md) · PL-01..45 | [`planning.md` §25](../design/planning.md) | `Final Acceptance: PASS`；**有明确用户 Freeze** | `VERIFIED` |
-| B3121 | 委外管理 | Procurement & Outsourcing | [`procurement-outsourcing.md` §31.3.3 + VMI-01..05](../requirements/procurement-outsourcing.md) · OUT-01..23 | [`procurement-outsourcing.md` §26](../design/procurement-outsourcing.md) | Acceptance `NOT READY`；M1 设计在独立分支 `PENDING_REVIEW`，未合并到 `master` | `BLOCKED` |
+| B3121 | 委外管理 | Procurement & Outsourcing | [`procurement-outsourcing.md` §31.3.3 + VMI-01..05](../requirements/procurement-outsourcing.md) · OUT-01..23 | [`procurement-outsourcing.md` §26](../design/procurement-outsourcing.md) + [`procurement-outsourcing-m1-core.md`](../design/procurement-outsourcing-m1-core.md)（M1-Core 首期） | Acceptance `NOT READY`；M1 全范围候选设计仍在待审区 `PENDING_REVIEW`；M1-Core 首期七 Gate 7/7 `PASS` 且包级 Acceptance 已签发（§37.55）；**审计基线** [`v0.1` / `PRELIMINARY_STATIC_REVIEW`](../audits/b3101-b3121-code-audit-baseline-20261107.md) | `BLOCKED` |
 | B3122 | 工作流设计与配置 | Platform | [`document.md` §22.22](../../document.md)（仅手册基线） | **无 Platform Design** | 仍然开放（正确） | `NOT_STARTED` |
+
+## B3101 / B3121 审计基线登记（2026-11-07）
+
+| 项 | 值 |
+|---|---|
+| 审计基线正文 | [`docs/audits/b3101-b3121-code-audit-baseline-20261107.md`](../audits/b3101-b3121-code-audit-baseline-20261107.md) |
+| 审计索引 | [`docs/audits/README.md`](../audits/README.md) |
+| 审计版本 / 审计状态 | `v0.1` / `PRELIMINARY_STATIC_REVIEW`（初步静态代码审查） |
+| 审计基准 SHA | `9b9cb09799aa05ccac43d02ac1718083921c6d04`（`master`） |
+| 覆盖 Capability | PRC-01..PRC-26、VMI-01..VMI-05、OUT-01..OUT-23 |
+| 对应 Domain | Procurement & Outsourcing |
+| 项目状态登记 | [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) §38 |
+
+### 六个验收轴的当前取值（**互不替代**）
+
+| 手册 | Requirement 完成 | Design 完成 | Code 实现 | Test 通过 | Capability Verified | Formal Acceptance |
+|---|---|---|---|---|---|---|
+| **B3101** 采购管理 | **是** —— §31.3.1，PRC-01..26 | **是** —— §26 + M1-Core Active Design | **部分** —— 审计台账登记的 9 个 PRC / VMI Issue 未整改 | **否** —— 本轮未运行任何测试套件，未取得当前 HEAD 的测试证据 | **否** | **否** —— Capability Freeze 未签发；Domain Acceptance 未签发 |
+| **B3121** 委外管理 | **是** —— §31.3.3，OUT-01..23 + VMI-01..05 | **是** —— §26 + M1-Core Active Design | **部分** —— 审计台账登记的 OUT / VMI Issue 未整改 | **否** —— 同上 | **否** | **否** —— 同上 |
+
+### 状态判定纪律
+
+1. **本轮只建立 Audit Baseline。** 审计基线的存在**不**使任何 Capability 变为 `VERIFIED` 或 `PASS`；
+   B3101 / B3121 的矩阵状态**保持 `BLOCKED`**。
+2. `BLOCKED` 的依据**保持不变**：[`PROJECT_STATUS.md`](./PROJECT_STATUS.md) §35.8 的 G-1..G-5、
+   §31.11 的 `NOT READY`，以及 §37.55 明确「仍未授予」的 Capability Freeze / Domain Acceptance /
+   Manual Closure / Release Readiness。本节**不**改变这些历史结论。
+3. 审计台账 §3 的「Requirement 初始覆盖判断」是 Requirement 字段，审计台账 §3 的「本轮代码审计状态」
+   是代码审查判断；**两者都不是 Acceptance**，也**不得**互相替代或据以反推覆盖率。
+4. 审计台账 17 个 Issue 的当前状态：`DOCUMENTED` 14、`NEEDS_REVALIDATION` 2、
+   `DEFERRED_NOT_AUTHORIZED` 1；**无**任何 Issue 处于 `AUTHORIZED` 及以后阶段。
+   Issue 明细见台账 §9，**不在本表复制**。
+5. M1-Core 首期包级 Acceptance（`M1_CORE_ACCEPTANCE_PASS`，2026-11-07）覆盖范围**仅**其七 Gate，
+   **不**覆盖本表的 Capability 粒度，**不**授予 Capability Freeze / Domain Acceptance，
+   **不**使 R-01～R-20 变为已证明或已消除。
+6. B3121 的 VMI-01..VMI-05 与 OUT-22 / OUT-23 涉及延期与政策边界能力，其**当前正确状态是延期未授权**；
+   **不得**因代码存在或审计记录存在而视为可实施。
+7. 审计台账登记的问题**不得**被描述为已修复或已验收；整改必须先经 Requirement / Design / 授权门禁
+   （`AGENTS.md §4`），并按台账 §0.3 / §11 的状态迁移链推进。
 
 ## 覆盖缺口说明
 
@@ -54,7 +98,11 @@
 3. **Inventory & Warehouse / Manufacturing & Quality / Finance Operations / Master & Engineering**
    实现完成但缺**独立 Domain-Level Acceptance token**，故记 `HISTORICAL_EVIDENCE` 而非 `VERIFIED`。
 4. **B3101 / B3121** 的 `BLOCKED` 来自 [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) §35.8 的 G-1..G-5
-   与 §31.11 的 `NOT READY`，不是覆盖率本身为零。
+   与 §31.11 的 `NOT READY`，不是覆盖率本身为零。2026-11-07 登记的静态代码审计基线
+   （见上节）**不改变**该状态，只补充 Issue 级台账。
+5. **B3101 / B3121** 已于 2026-11-07 建立**静态代码审计基线**（17 个 Issue），但该基线
+   **不产生** Capability Verified、Formal Acceptance、Capability Freeze 或 Domain Acceptance；
+   逐 Capability 的运行时结论仍需后续轮次审计补齐（台账 §8）。
 
 ## 追溯规则
 

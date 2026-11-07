@@ -2094,6 +2094,116 @@ M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
   Reset / Bootstrap / Cleanup、未运行 HEAVY、未 Push / Merge / Tag / Release / Deploy；未虚构 WP-I、
   WP-J 或 M-15 的完成状态。
 
+## 38. B3101 / B3121 静态代码审计基线登记（2026-11-07）
+
+```text
+B3101_B3121_AUDIT_BASELINE_REGISTERED
+```
+
+### 38.1 本节定位与边界
+
+本节是 B3101 / B3121 采购与委外**静态代码审计基线**在**项目状态表**中的**唯一增量登记**。
+
+- 本节**不修改、不删除、不重排** §35 / §36 / §37 的任何历史结论；凡与 §35～§37 冲突，
+  按**日期化 supersession** 处理（历史陈述在其自身日期为真，其「当前状态」含义被本节取代）。
+- 本节**不是** Acceptance，**不签发**任何 Acceptance / Freeze / `Design PASS` 标识。
+- 本节**不**把任何 Capability 标记为 `PASS` / `VERIFIED`；**不**授予 Capability Freeze、
+  Domain Acceptance、Manual Closure、Release Readiness、Release 或 Deploy。
+- 本轮**仅**登记审计基线：未实施任何代码整改，`server/`、`src/`、`scripts/` 零改动。
+- 本节编号为 **§38**，按既有「H2 = 日期化顶层章节」规则**追加**在 §37.55 之后；历史编号未重排。
+
+### 38.2 审计基线登记
+
+| 项 | 值 |
+|---|---|
+| 审计基线正文（准确路径） | [`docs/audits/b3101-b3121-code-audit-baseline-20261107.md`](../audits/b3101-b3121-code-audit-baseline-20261107.md) |
+| 审计索引 | [`docs/audits/README.md`](../audits/README.md) |
+| 审计版本 | `v0.1` |
+| 审计基准 SHA | `9b9cb09799aa05ccac43d02ac1718083921c6d04`（`master`，2026-11-07） |
+| 审计状态 | `PRELIMINARY_STATIC_REVIEW`（初步静态代码审查） |
+| 覆盖手册 | B3101《采购管理操作手册 V1.0》、B3121《委外管理操作手册 V1.0》 |
+| 覆盖 Capability | PRC-01..PRC-26、VMI-01..VMI-05、OUT-01..OUT-23（登记于台账 §3） |
+| 对应 Domain | Procurement & Outsourcing |
+| 审计方法 | 远端静态代码审查；**未**运行任何测试套件，**未**连接真实 MySQL，**未**执行 Migration / Reset / Bootstrap / Cleanup |
+| Issue 总数 | 17 |
+
+### 38.3 M1-Core 首期包级 Acceptance 的当前状态（引用，不重复签发）
+
+- M1-Core 首期包级 Acceptance 已于 **2026-11-07** 正式签发：`M1_CORE_ACCEPTANCE_PASS` /
+  `M1_CORE_ACCEPTANCE_PASS_WITH_BOUNDED_RESIDUAL_RISK`，决定 `ACCEPT_WITH_BOUNDED_RESIDUAL_RISK`。
+  正式记录：[`docs/acceptance/m1-core-package-acceptance-20261107.md`](../acceptance/m1-core-package-acceptance-20261107.md)；
+  登记见 §37.55 —— **本节不改变该结论，也不重复签发**。
+- 七 Gate **7 / 7 `PASS`** **保持**；R-01～R-20 仍是已正式接受的**有界残余风险**，
+  **不得**在后续文档中描述为已证明或已消除。
+- **D-01～D-04 继续保持延期、未授权**；WP-I 维持 `NOT_PROVEN / DEFERRED_NOT_AUTHORIZED`；
+  WP-J 维持 `DEFERRED_NOT_AUTHORIZED`；M-15 不在范围。
+- 旧 M1 13 Gate **不**恢复为当前实施和验收要求，继续作为 M1 全域 Closure 的验收合同。
+- Capability Freeze / Domain Acceptance / Manual Closure / Release Readiness **仍未授予**；
+  Procurement & Outsourcing 的 Domain Acceptance **仍未签发**
+  （`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY`）。
+
+### 38.4 17 个审计 Issue 的当前状态统计
+
+| 状态 | 数量 | Issue ID |
+|---|---|---|
+| `DOCUMENTED` | 14 | AUD-PRC-001 / 002 / 003 / 004 / 005 / 006 / 007 / 009；AUD-VMI-001 / 002；AUD-OUT-002；AUD-FE-001 / 002 / 003 |
+| `NEEDS_REVALIDATION` | 2 | AUD-PRC-008、AUD-VMI-003 |
+| `DEFERRED_NOT_AUTHORIZED` | 1 | AUD-OUT-001 |
+| **合计** | **17** | — |
+
+严重度分布：`P0` 5（AUD-PRC-001 / 004 / 005 / 006、AUD-FE-001）、`P1` 11、`P0*` 1
+（AUD-OUT-001 —— 条件性 P0，其**当前正确状态是延期未授权**，不得转成普通 P0 开发任务）。
+
+**当前没有任何 Issue 处于** `AUTHORIZED`、`IMPLEMENTING`、`CODE_COMPLETE`、`TESTED`、`VERIFIED`
+或 `ACCEPTED`。全部 17 项**均未**实施整改。
+
+### 38.5 后续工作必须基于审计 Issue 推进
+
+- 后续所有 B3101 / B3121 开发任务，必须以
+  [`docs/audits/b3101-b3121-code-audit-baseline-20261107.md`](../audits/b3101-b3121-code-audit-baseline-20261107.md)
+  作为**详细 Issue 台账**；本表与 [`docs/audits/README.md`](../audits/README.md) 只维护摘要与链接，
+  **不复制** Issue 清单。
+- 状态迁移链固定为
+  `IDENTIFIED → DOCUMENTED → AUTHORIZED → IMPLEMENTING → CODE_COMPLETE → TESTED → VERIFIED → ACCEPTED`，
+  允许进入 `BLOCKED` 或 `DEFERRED_NOT_AUTHORIZED`（台账另设 `NEEDS_REVALIDATION` 与 `REJECTED`）；
+  **不得跳过必要状态**。
+- `CODE_COMPLETE` ≠ `TESTED`；`TESTED` ≠ `VERIFIED`；`VERIFIED` ≠ `ACCEPTED`；
+  `ACCEPTED` **只能**由正式责任人签发，实施代理自评**不**构成 Acceptance。
+- 一个 Issue 完成**不代表**整个 Capability 或 Domain 完成；延期能力（`DEFERRED_NOT_AUTHORIZED`）
+  **不得**自动转为已授权实施。
+- 每次处理一个 Issue 时的必做项（更新 Status、记录开发 Commit SHA、记录测试命令 / Run ID / 结果、
+  记录业务不变量与回归证据、更新 Last Updated 与 Change History、同步本表、同步 `log/`、
+  仅在达到 Capability 级正式验证条件时更新 `CAPABILITY_MATRIX.md`）见
+  [`docs/audits/README.md`](../audits/README.md)「持续状态更新机制」。
+- 台账 §7 的 Package A～D 只是**建议**，**不是**实施授权；任何整改仍须先经 Requirement / Design /
+  授权门禁（`AGENTS.md §4`）。
+
+### 38.6 本轮明确未发生的事项
+
+- **未**实施任何代码整改；**未**修改 `server/`、`src/`、`scripts/` 下的任何文件；
+- **未**修改数据库 Schema 或 Migration；**未**执行任何数据库写操作、Reset、Bootstrap、Cleanup；
+- **未**修改 M1-Core 已签发的七 Gate Acceptance、WP-K / WP-K-R1 裁定，或 §37.48～§37.55 的任何历史记录；
+- **未**改变 D-01～D-04 的延期状态；**未**开放 WP-I、WP-J 或 M-15；**未**恢复旧 M1 13 Gate
+  为当前实施要求；
+- **未**擅自改变 VMI、WIP、委外财务政策；
+- **未**取得全量 Capability 验证、Domain Acceptance、Capability Freeze、Manual Closure、
+  Release Readiness；**未**签发任何新 Acceptance；
+- **未**执行 Release 或 Deploy；**未** Push / Merge / Tag；本轮只做本地 Git 提交。
+
+### 38.7 交付与校验锚点
+
+| 项 | 值 |
+|---|---|
+| 审计基准（父提交） | `9b9cb09799aa05ccac43d02ac1718083921c6d04` |
+| 变更范围 | 仅治理与文档（`docs/audits/**`、`docs/status/**`、`docs/requirements/README.md`、`docs/design/README.md`、`docs/README.md`、`log/2026-11-07.md`）；**未**修改任何 `src/` / `server/` 生产代码、schema、migration、API、权限、状态机或业务测试 |
+| 交付提交锚点 | 按本表既有惯例，由**后续单独提交**登记（见当天 `log/2026-11-07.md`「B3101 / B3121 审计基线登记」节） |
+| 校验 | `node scripts/docs/check-doc-consistency.mjs`（current 模式）、`node scripts/docs/check-doc-consistency.mjs --mode migration`、`git diff --check` |
+| 远端状态 | **未** Push / Merge / Tag / Release / Deploy |
+
+**边界**：本节登记的是**审计基线**。它**不**使任何 Capability 变为 `VERIFIED` 或 `PASS`，
+**不**授予 Capability Freeze / Domain Acceptance，**不**授权任何 Implementation，
+也**不**恢复旧 M1 13 Gate 为当前实施要求。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。

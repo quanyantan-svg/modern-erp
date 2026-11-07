@@ -15,14 +15,16 @@
 | [`manufacturing-quality.md`](./manufacturing-quality.md) | Manufacturing & Quality | `solution.md` §24 | 已实施 |
 | [`planning.md`](./planning.md) | Planning | `solution.md` §25 | 已实施并冻结 |
 | [`procurement-outsourcing.md`](./procurement-outsourcing.md) | Procurement & Outsourcing | `solution.md` §26 | 原 Domain Design 基线，继续 Active |
-| [`procurement-outsourcing-m1-core.md`](./procurement-outsourcing-m1-core.md) | Procurement & Outsourcing（M1-Core 首期） | §31.13 对应有界后继设计 | `ACTIVE` / `M1_CORE_DESIGN_PASS`；Implementation `NOT_AUTHORIZED` |
+| [`procurement-outsourcing-m1-core.md`](./procurement-outsourcing-m1-core.md) | Procurement & Outsourcing（M1-Core 首期） | §31.13 对应有界后继设计 | `ACTIVE` / `M1_CORE_DESIGN_PASS`；首期 Implementation 已实施，七 Gate 7/7 `PASS` 且包级 Acceptance 已签发（`M1_CORE_ACCEPTANCE_PASS`，2026-11-07）—— **Capability Freeze、Domain Acceptance 仍未签发** |
 | [`inventory-warehouse.md`](./inventory-warehouse.md) | Inventory & Warehouse | `solution.md` §27 | 已实施 |
 | [`finance-operations.md`](./finance-operations.md) | Finance Operations | `solution.md` §28.0–§28.29 | 已实施 |
 | [`sales-customer/`](./sales-customer/) | Sales & Customer | `solution.md` §29 / §30 / Wave 8/9/11 基线 | 已实施；分波次冻结基线 |
 | — | Accounting & Analytics | — | **尚无 Domain Technical Design** |
 | — | Platform | — | **尚无 Domain Technical Design** |
 
-> 状态列依据见 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §35.3。
+> 状态列依据见 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §35.3；
+> M1-Core 首期包级 Acceptance 的当前状态见同表 §37.55，B3101 / B3121 静态代码审计基线见同表 §38
+> 与 [`docs/audits/README.md`](../audits/README.md)。
 > 本表是**导航**，不是第二份状态登记表。
 
 ## 规则
