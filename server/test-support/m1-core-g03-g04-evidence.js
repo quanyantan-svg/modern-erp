@@ -31,6 +31,22 @@ export const G03_BUSINESS_FACT_TABLES = Object.freeze([
   'products',
 ]);
 
+// Active Design §13.1 的 G04 拒绝列要求「业务事实逐字段零变化」。
+// 审计日志不在此表集：拒绝路径必须恰好新增一条 REJECT，由测试独立计数。
+// 本表集覆盖倒冲与成品入库可能触及的业务单据、物理库存、跟踪、估值、
+// WIP 身份、成本证据和幂等事实；拒绝前后的比较不限定订单，因此也能发现
+// 对既有其它行的原地误写。
+export const G04_BUSINESS_FACT_TABLES = Object.freeze([
+  'outsourcing_orders', 'outsourcing_receipts', 'outsourcing_receipt_items',
+  'outsourcing_material_list', 'outsourcing_cost_evidences',
+  'inventory', 'inventory_transactions', 'inventory_mutation_log',
+  'tracked_inventory_movements', 'tracked_source_allocations', 'inventory_lot_balances',
+  'inventory_valuation_movements', 'inventory_valuation_balances',
+  'outsourcing_wip_identity_balances', 'outsourcing_wip_identity_effects',
+  'outsourcing_wip_identity_effect_allocations',
+  'idempotency_records', 'products',
+]);
+
 // G03 业务事实表集的**真实**规模与存在性：由 schema 实际统计。
 //
 // 用途：让「G03 零副作用覆盖多少张表」这一数字始终可核对 —— 证据文档里的表数

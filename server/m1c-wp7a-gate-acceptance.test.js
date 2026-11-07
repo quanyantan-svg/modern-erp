@@ -22,7 +22,7 @@
 //   G04 —— 成品唯一 Writer、企业所有权与物理/跟踪/估值流水关联（G04-R1-1）；
 //          逐批成品估值与成本构成、Movement 与 Balance 逐笔核对（G04-R1-2）。
 //
-// 证据分级：正向来源一律经生产 HTTP API（L1）。只有三处使用直接 SQL（L3），
+// 证据分级：正向来源一律经生产 HTTP API（L1）。基础夹具只有三处使用直接 SQL（L3），
 // 且都是没有生产写入入口的字段：
 //   1) `products.valuation_method` —— 无任何 HTTP 路由写入它；
 //   2) `inventory_valuation_balances` 种子行 —— 估值方法与跟踪策略的绑定关系
@@ -31,6 +31,8 @@
 //      postCanonicalTrackedLeg，原生库存单据确认路径不写它。
 // 其余（LOT / SERIAL 身份、库存入仓、委外 BOM、委外订单、完工通知、收货、
 // 发料 / 补料 / 退料、加工费账单）全部经生产 API 造数。
+// G04-D1 另有一处明确隔离的 L3 历史异常种子：把已倒冲累计量改为大于
+// 当前合法目标累计量；种子只用于证明生产 HTTP Handler 的防御性拒绝。
 //
 // 本套件拥有一次性临时 SQLite 文件，不触碰任何项目 / 开发 / 生产数据库，
 // 也不连接 MySQL。
@@ -41,7 +43,8 @@ import {
   createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource,
 } from './test-support/procurement-http-fixture.js';
 import {
-  G03_BUSINESS_FACT_TABLES, changedTables, g03BusinessFactTableReport, snapshotTables,
+  G03_BUSINESS_FACT_TABLES, G04_BUSINESS_FACT_TABLES,
+  changedTables, g03BusinessFactTableReport, snapshotTables,
 } from './test-support/m1-core-g03-g04-evidence.js';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -163,6 +166,10 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
   // 由各用例单独断言。
   function g03BusinessFacts() {
     return snapshotTables(fixture.db, G03_BUSINESS_FACT_TABLES);
+  }
+
+  function g04BusinessFacts() {
+    return snapshotTables(fixture.db, G04_BUSINESS_FACT_TABLES);
   }
 
   async function qualifySupplier() {
@@ -575,6 +582,86 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
       assert.equal(fixture.db.prepare(
         "SELECT COUNT(*) n FROM inventory_transactions WHERE source_type='OUTSOURCING_BACKFLUSH'",
       ).get().n, backflushAfterFirst, '重复确认不得双扣');
+    });
+
+    test('G04-D1 L3 历史异常：已倒冲累计量大于合法目标时生产 HTTP 409、事实零变化且拒绝审计恰好一条', async () => {
+      const d1ProductId = await createProduct('WP7A-D1-MAT', 'NONE');
+      await receiveStock(d1ProductId, 20);
+      seedValuationBalance({
+        key: `NONE:warehouse-001:${d1ProductId}`, method: 'MOVING_AVERAGE',
+        productId: d1ProductId, warehouseId: 'warehouse-001', quantity: 20, valueCents: 2000,
+      });
+      const d1BomId = await createOutsourceBom('WP7A-D1', [{ productId: d1ProductId, quantity: 1 }]);
+      const d1OrderId = await releaseOrder(d1BomId, 10);
+      const d1MaterialId = (await snapshotMaterials(d1OrderId, [d1ProductId]))[d1ProductId];
+      const issue = await fixture.request('POST', `/api/procurement/outsourcing/orders/${d1OrderId}/issues`, fixture.tokens.outsourcing, {
+        materialListId: d1MaterialId, quantity: 5, issuedDate: isoDate(), idempotencyKey: 'wp7a-d1-issue',
+      });
+      assert.equal(issue.status, 201, issue.data.error);
+
+      // L1：合法 HTTP 建立一张已生效、累计合格量为 2 的收货；正常倒冲累计量也是 2。
+      const source = await prepareOutsourcingReceiptSource(fixture, d1OrderId, 2, 'wp7a-d1');
+      const receipt = await fixture.request('POST', '/api/procurement/outsourcing/receipts', fixture.tokens.outsourcingReceiving, {
+        orderId: d1OrderId, quantity: 2, receivedDate: isoDate(), businessDate: isoDate(), processingPoId: source.processingPoId,
+        sourceNoticeId: source.sourceNoticeId, warehouseId: source.warehouseId, processingFeeCents: 200,
+        ...outsourcingReceiptBody(source, 2, 200),
+      }, { 'idempotency-key': 'wp7a-d1-receipt' });
+      assert.equal(receipt.status, 201, receipt.data.error);
+      const effected = await fixture.request('POST', `/api/procurement/outsourcing/receipts/${receipt.data.id}/confirm`,
+        fixture.tokens.outsourcingReceiving, {}, { 'idempotency-key': 'wp7a-d1-effect' });
+      assert.equal(effected.status, 200, effected.data.error);
+      assert.equal(Number(fixture.db.prepare('SELECT backflushed_quantity q FROM outsourcing_material_list WHERE id=?').get(d1MaterialId).q), 2);
+
+      // L3：受控历史异常种子。当前合法目标累计量仍为 2，但历史已倒冲累计量被置为 3。
+      fixture.db.prepare('UPDATE outsourcing_material_list SET backflushed_quantity=3 WHERE id=?').run(d1MaterialId);
+      const seeded = fixture.db.prepare('SELECT backflushed_quantity FROM outsourcing_material_list WHERE id=?').get(d1MaterialId);
+      assert.equal(Number(seeded.backflushed_quantity), 3, 'L3 种子必须明确制造 target(2) - historical(3) < 0');
+
+      const before = g04BusinessFacts();
+      const rejectsBefore = countRejects('OUTSOURCING_RECEIPT', receipt.data.id);
+      const rejected = await fixture.request('POST', `/api/procurement/outsourcing/orders/${d1OrderId}/backflush`, fixture.tokens.outsourcing, {
+        receiptId: receipt.data.id, identities: [], idempotencyKey: 'wp7a-d1-defensive-backflush',
+      });
+      assert.equal(rejected.status, 409, '负增量防御必须返回 409');
+      assert.equal(rejected.data.code, 'OUTSOURCING_WIP_INSUFFICIENT');
+      assert.deepEqual(changedTables(before, g04BusinessFacts()), [], 'D-1 防御性拒绝后 G04 完整业务事实必须逐字段零变化');
+      assert.equal(countRejects('OUTSOURCING_RECEIPT', receipt.data.id), rejectsBefore + 1,
+        'D-1 防御性拒绝必须恰好新增一条 REJECT 审计');
+    });
+
+    test('G04-WP-G 合法 HTTP 构造净 WIP 供应不足：确认拒绝、完整快照零变化且拒绝审计恰好一条', async () => {
+      const wpGProductId = await createProduct('WP7A-WPG-MAT', 'NONE');
+      await receiveStock(wpGProductId, 20);
+      seedValuationBalance({
+        key: `NONE:warehouse-001:${wpGProductId}`, method: 'MOVING_AVERAGE',
+        productId: wpGProductId, warehouseId: 'warehouse-001', quantity: 20, valueCents: 2000,
+      });
+      const wpGBomId = await createOutsourceBom('WP7A-WPG', [{ productId: wpGProductId, quantity: 1 }]);
+      const wpGOrderId = await releaseOrder(wpGBomId, 10);
+      const wpGMaterialId = (await snapshotMaterials(wpGOrderId, [wpGProductId]))[wpGProductId];
+
+      // L1：只供应 1 单位 WIP，却以合法 HTTP 创建数量 2 的待检收货。
+      const issue = await fixture.request('POST', `/api/procurement/outsourcing/orders/${wpGOrderId}/issues`, fixture.tokens.outsourcing, {
+        materialListId: wpGMaterialId, quantity: 1, issuedDate: isoDate(), idempotencyKey: 'wp7a-wpg-issue',
+      });
+      assert.equal(issue.status, 201, issue.data.error);
+      const source = await prepareOutsourcingReceiptSource(fixture, wpGOrderId, 2, 'wp7a-wpg');
+      const receipt = await fixture.request('POST', '/api/procurement/outsourcing/receipts', fixture.tokens.outsourcingReceiving, {
+        orderId: wpGOrderId, quantity: 2, receivedDate: isoDate(), businessDate: isoDate(), processingPoId: source.processingPoId,
+        sourceNoticeId: source.sourceNoticeId, warehouseId: source.warehouseId, processingFeeCents: 200,
+        ...outsourcingReceiptBody(source, 2, 200),
+      }, { 'idempotency-key': 'wp7a-wpg-receipt' });
+      assert.equal(receipt.status, 201, receipt.data.error);
+
+      const before = g04BusinessFacts();
+      const rejectsBefore = countRejects('OUTSOURCING_RECEIPT', receipt.data.id);
+      const rejected = await fixture.request('POST', `/api/procurement/outsourcing/receipts/${receipt.data.id}/confirm`,
+        fixture.tokens.outsourcingReceiving, {}, { 'idempotency-key': 'wp7a-wpg-effect' });
+      assert.equal(rejected.status, 409, '净 WIP 供应不足必须返回 409');
+      assert.equal(rejected.data.code, 'OUTSOURCING_WIP_INSUFFICIENT');
+      assert.deepEqual(changedTables(before, g04BusinessFacts()), [], 'WP-G 拒绝后 G04 完整业务事实必须逐字段零变化');
+      assert.equal(countRejects('OUTSOURCING_RECEIPT', receipt.data.id), rejectsBefore + 1,
+        'WP-G 拒绝必须恰好新增一条 REJECT 审计');
     });
   });
 

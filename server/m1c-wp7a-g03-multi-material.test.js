@@ -141,6 +141,68 @@ describe('M1C-WP7A-R1 — G03 多物料行与 SERIAL 身份物理腿数', () => 
     ).get(productId, warehouseId).q);
   }
 
+  function expectedIdentity(item) {
+    if (item.name === 'LOT') return { identityKey: `LOT:${lotId}`, lotId, serialId: null };
+    if (item.name === 'NONE') return { identityKey: 'NONE', lotId: null, serialId: null };
+    const serialId = item.identity.serialId;
+    return { identityKey: `SERIAL:${serialId}`, lotId: null, serialId };
+  }
+
+  function readMutationBundle(item) {
+    const mutations = fixture.db.prepare(
+      "SELECT * FROM inventory_mutation_log WHERE source_type='OUTSOURCING_ISSUE' AND source_id=? ORDER BY id",
+    ).all(item.eventId);
+    const legs = fixture.db.prepare(
+      "SELECT * FROM inventory_transactions WHERE source_type='OUTSOURCING_ISSUE' AND source_id=? ORDER BY direction,id",
+    ).all(item.eventId);
+    const tracked = legs.flatMap((leg) => fixture.db.prepare(
+      'SELECT * FROM tracked_inventory_movements WHERE transaction_id=? ORDER BY id',
+    ).all(leg.id));
+    return { mutations, legs, tracked };
+  }
+
+  // 正向断言与负控共用同一验证器。这样负控证明的是实际承重断言，
+  // 而不是另写一套只在负控中使用的镜像条件。
+  function assertMutationBundle(item, bundle) {
+    const expected = expectedIdentity(item);
+    const expectedKey = `OUTSOURCING_ISSUE:${item.eventId}:${item.materialListId}:MOVE:${expected.identityKey}`;
+    assert.equal(bundle.mutations.length, 1, `${item.name} 必须恰好一条内部 Mutation Log`);
+    const mutation = bundle.mutations[0];
+    assert.equal(mutation.source_type, 'OUTSOURCING_ISSUE');
+    assert.equal(mutation.source_id, item.eventId);
+    assert.equal(mutation.source_item_id, item.materialListId);
+    assert.equal(mutation.movement_kind, 'MOVE');
+    assert.equal(mutation.movement_group_id, item.eventId);
+    assert.equal(mutation.idempotency_key, expectedKey, `${item.name} Mutation Key 必须包含自身事件、物料行、MOVE 与身份键`);
+
+    assert.equal(bundle.legs.length, 2, `${item.name} 必须恰好一条 OUT 与一条 IN 物理腿`);
+    const out = bundle.legs.find((leg) => leg.direction === 'OUT');
+    const inbound = bundle.legs.find((leg) => leg.direction === 'IN');
+    assert.ok(out && inbound, `${item.name} 的 OUT / IN 物理腿必须齐全`);
+    assert.equal(mutation.out_inventory_transaction_id, out.id, `${item.name} Mutation Log 必须关联正确 OUT 腿`);
+    assert.equal(mutation.in_inventory_transaction_id, inbound.id, `${item.name} Mutation Log 必须关联正确 IN 腿`);
+
+    const fromIdentity = JSON.parse(mutation.from_position_identity_json);
+    const toIdentity = JSON.parse(mutation.to_position_identity_json);
+    for (const [label, identity, warehouseId] of [
+      ['OUT', fromIdentity, SOURCE_WAREHOUSE], ['IN', toIdentity, WIP_WAREHOUSE],
+    ]) {
+      assert.equal(identity.productId, item.productId, `${item.name} ${label} 物理腿货品必须准确`);
+      assert.equal(identity.warehouseId, warehouseId, `${item.name} ${label} 物理腿仓库必须准确`);
+      assert.equal(identity.lotId, expected.lotId, `${item.name} ${label} 物理腿 lot_id 不得串身份`);
+      assert.equal(identity.serialId, expected.serialId, `${item.name} ${label} 物理腿 serial_id 不得串身份`);
+    }
+
+    assert.equal(bundle.tracked.length, 2, `${item.name} 必须恰好两条跟踪腿`);
+    for (const tracked of bundle.tracked) {
+      assert.equal(tracked.source_id, item.eventId);
+      assert.equal(tracked.source_item_id, item.materialListId);
+      assert.equal(tracked.product_id, item.productId);
+      assert.equal(tracked.lot_id, expected.lotId, `${item.name} 跟踪腿 lot_id 不得串身份`);
+      assert.equal(tracked.serial_id, expected.serialId, `${item.name} 跟踪腿 serial_id 不得串身份`);
+    }
+  }
+
   before(async () => {
     fixture = await createProcurementFixture('modern-erp-m1c-wp7a-m-');
     // 供应商配置 WIP 仓（委外发料的企业所有权仓位）。
@@ -205,10 +267,10 @@ describe('M1C-WP7A-R1 — G03 多物料行与 SERIAL 身份物理腿数', () => 
     // 四次**独立**的合法发料：LOT 一次、NONE 一次、SERIAL 两个不同序列号各一次。
     // SERIAL 每次数量严格为 1 —— 不做批量发料，也不发数量为 2 的 SERIAL。
     const plan = [
-      { name: 'LOT', materialListId: materialIds[lotProductId], quantity: 3, identity: { lotId }, key: 'wp7a-m-lot' },
-      { name: 'NONE', materialListId: materialIds[noneProductId], quantity: 4, identity: {}, key: 'wp7a-m-none' },
-      { name: 'SERIAL-1', materialListId: materialIds[serialProductId], quantity: 1, identity: { serialId: serialIds[0] }, key: 'wp7a-m-sn1' },
-      { name: 'SERIAL-2', materialListId: materialIds[serialProductId], quantity: 1, identity: { serialId: serialIds[1] }, key: 'wp7a-m-sn2' },
+      { name: 'LOT', productId: lotProductId, materialListId: materialIds[lotProductId], quantity: 3, identity: { lotId }, key: 'wp7a-m-lot' },
+      { name: 'NONE', productId: noneProductId, materialListId: materialIds[noneProductId], quantity: 4, identity: {}, key: 'wp7a-m-none' },
+      { name: 'SERIAL-1', productId: serialProductId, materialListId: materialIds[serialProductId], quantity: 1, identity: { serialId: serialIds[0] }, key: 'wp7a-m-sn1' },
+      { name: 'SERIAL-2', productId: serialProductId, materialListId: materialIds[serialProductId], quantity: 1, identity: { serialId: serialIds[1] }, key: 'wp7a-m-sn2' },
     ];
     issues = [];
     for (const step of plan) {
@@ -238,6 +300,7 @@ describe('M1C-WP7A-R1 — G03 多物料行与 SERIAL 身份物理腿数', () => 
         "SELECT * FROM inventory_transactions WHERE source_type='OUTSOURCING_ISSUE' AND source_id=?",
       ).all(item.eventId);
       assert.equal(legs.length, 2, `${item.name} 发料必须恰好两条物理流水（OUT + IN）`);
+      assertMutationBundle(item, readMutationBundle(item));
     }
     assert.equal(
       fixture.db.prepare("SELECT COUNT(*) n FROM outsourcing_issues WHERE order_id=?").get(orderId).n, 4,
@@ -303,6 +366,15 @@ describe('M1C-WP7A-R1 — G03 多物料行与 SERIAL 身份物理腿数', () => 
       assert.equal(effect.identity_key, item.identityKey, '身份效果必须挂在正确的身份键上');
       assert.equal(effect.effect_direction, 'SUPPLY');
       assert.equal(Number(effect.signed_quantity), item.quantity);
+
+      const mutation = readMutationBundle(issues.find((issue) => issue.eventId === item.eventId)).mutations[0];
+      const fromIdentity = JSON.parse(mutation.from_position_identity_json);
+      const toIdentity = JSON.parse(mutation.to_position_identity_json);
+      const expectedIdentityRow = expectedIdentity(issues.find((issue) => issue.eventId === item.eventId));
+      assert.equal(fromIdentity.lotId, expectedIdentityRow.lotId);
+      assert.equal(fromIdentity.serialId, expectedIdentityRow.serialId);
+      assert.equal(toIdentity.lotId, expectedIdentityRow.lotId);
+      assert.equal(toIdentity.serialId, expectedIdentityRow.serialId);
     }
   });
 
@@ -321,6 +393,11 @@ describe('M1C-WP7A-R1 — G03 多物料行与 SERIAL 身份物理腿数', () => 
       assert.equal(tracked[0].product_id, leg.product_id);
       assert.equal(tracked[0].warehouse_id, leg.warehouse_id);
       assert.equal(Number(tracked[0].quantity), Math.abs(Number(leg.quantity_change)));
+      const item = issues.find((issue) => issue.eventId === leg.source_id);
+      const expected = expectedIdentity(item);
+      assert.equal(tracked[0].source_item_id, item.materialListId);
+      assert.equal(tracked[0].lot_id, expected.lotId, `${item.name} 跟踪腿 lot_id 必须匹配事件身份`);
+      assert.equal(tracked[0].serial_id, expected.serialId, `${item.name} 跟踪腿 serial_id 必须匹配事件身份`);
       const valuation = fixture.db.prepare(
         "SELECT * FROM inventory_valuation_movements WHERE inventory_transaction_id=? AND status='POSTED'",
       ).all(leg.id);
@@ -353,6 +430,38 @@ describe('M1C-WP7A-R1 — G03 多物料行与 SERIAL 身份物理腿数', () => 
         assert.equal(position.owner_id, null, '企业所有权不得挂到供应商或第三方');
       }
     }
+  });
+
+  test('G03-M7 负控：错绑 Mutation Key 或 LOT/SERIAL 身份会被同一事件验证器检出', () => {
+    const lotIssue = issues.find((item) => item.name === 'LOT');
+    const serial1 = issues.find((item) => item.name === 'SERIAL-1');
+    const serial2 = issues.find((item) => item.name === 'SERIAL-2');
+
+    const wrongKey = structuredClone(readMutationBundle(lotIssue));
+    wrongKey.mutations[0].idempotency_key = readMutationBundle(serial1).mutations[0].idempotency_key;
+    assert.throws(
+      () => assertMutationBundle(lotIssue, wrongKey),
+      /Mutation Key 必须包含自身事件、物料行、MOVE 与身份键/,
+      '把 LOT 事件错绑到 SERIAL-1 Mutation Key 时，正向承重断言必须失败',
+    );
+
+    const wrongPhysicalIdentity = structuredClone(readMutationBundle(serial1));
+    const wrongFrom = JSON.parse(wrongPhysicalIdentity.mutations[0].from_position_identity_json);
+    wrongFrom.serialId = serial2.identity.serialId;
+    wrongPhysicalIdentity.mutations[0].from_position_identity_json = JSON.stringify(wrongFrom);
+    assert.throws(
+      () => assertMutationBundle(serial1, wrongPhysicalIdentity),
+      /OUT 物理腿 serial_id 不得串身份/,
+      '把 SERIAL-1 的 OUT 物理腿错绑到 SERIAL-2 时必须失败',
+    );
+
+    const wrongTrackedIdentity = structuredClone(readMutationBundle(serial1));
+    wrongTrackedIdentity.tracked[0].serial_id = serial2.identity.serialId;
+    assert.throws(
+      () => assertMutationBundle(serial1, wrongTrackedIdentity),
+      /跟踪腿 serial_id 不得串身份/,
+      '把 SERIAL-1 跟踪腿错绑到 SERIAL-2 时必须失败',
+    );
   });
 
   test('G03-M6 同一外部幂等键同内容重放不产生第二次物理动作，异内容稳定拒绝且业务事实零变化', async () => {
