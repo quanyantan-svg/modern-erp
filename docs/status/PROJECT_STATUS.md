@@ -1979,6 +1979,57 @@ M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
   未执行真实 MySQL、G07、ACK-4、Migration、Reset/Bootstrap/Cleanup、Push、Merge、Tag、Release
   或 Deploy。
 
+### 37.53 M1C-PACKAGE-R1：WP-K-R1 证据边界裁定与 B-2 Active Design 状态指针修订（2026-11-07）
+
+- **授权与范围**：项目 Owner 在当前对话中**总体授权** ChatGPT 主导 M1-Core 剩余验收推进，并**明确批准**
+  ①「WP-K-R1 按有界残余风险接受方案正式落地」、②「B-2 Active Design 的三处纯状态指针修订」、
+  ③本轮必要的本地文件修改、非破坏性校验与**本地 Git commit**；**不要求**重新执行 WP-I、WP-J、M-15
+  或真实 MySQL G07；**本轮不运行 HEAVY**（若发现新的硬性验收条件要求 HEAVY，必须明确报告，不得擅自执行
+  可能具有数据库破坏性的测试）。明确禁止 Push、Merge、Tag、Release、Deploy。
+- **WP-K-R1 裁定**：正式标识 `M1C_G07_WPK_R1_EVIDENCE_BOUNDARY_ACCEPTED_WITH_BOUNDED_RESIDUAL`。
+  记录：[`docs/acceptance/m1-core-g07-wpk-r1-owner-adjudication-20261107.md`](../acceptance/m1-core-g07-wpk-r1-owner-adjudication-20261107.md)。
+  - 机器可复跑口径：断言槽位 **54**（9 CR × 6 effects）＝ **36** 固定期望槽位（9 × 4）＋ **18** 胜败业务行
+    槽位（9 × 2）；**从未重算合计 29** ＝ 原 WP-K 已披露 **25**（18 胜败 ＋ 7 个 `identityDelta`）
+    ＋ 本次新增披露 **4**（`CR-01.amountDeltaCents`、`CR-02/CR-03/CR-07.documentDelta`）；真实重算 **25**。
+  - **35 个 (CR, 表) 组合**在对应真实 MySQL G07 Oracle 中**缺少业务不变量校验**；**完全没有任何测试覆盖的
+    组合为 0 个** —— 涉及的全部 9 张表在 SQLite 层均存在补偿证据。
+  - **口径纪律**：已有 SQLite 测试**仅**作**不同层级**的补偿证据，**不能**证明这些真实 MySQL 场景逐字段
+    无异常，**不**构成跨引擎等价证明。
+  - **继续保留的真实有效断言**：G07 11/11 注册套件、16/16 Schema Parity MATCHED、CR-01～CR-09 的胜败与
+    精确错误码、拒绝审计关联、幂等、来源匹配、Cleanup / Postflight、五类 Schema 对象归零 —— 均**继续具
+    证明力**，不因本裁定被削弱或撤销。
+  - **风险接受边界**：仅处置 Oracle **测量强度**差距的扩大披露；**仅**用于 M1-Core 内部**首期包级验收评估**；
+    **不豁免**真实业务数据丢失、库存估值破坏、未授权写入或未来观测到的生产缺陷；**不授权**正式发布、
+    部署或任何数据库写操作。
+  - **状态保持**：WP-J 继续 `DEFERRED_NOT_AUTHORIZED`；WP-I 继续 `NOT_PROVEN / DEFERRED_NOT_AUTHORIZED`；
+    M-15 不在范围；已签发的 `M1C-G07 PASS` 与原 WP-K 裁定**原样保留**，六个历史失败 Run 记录**未改写**。
+- **B-2 Design 修订**：正式标识 `M1C-DESIGN-STATUS-POINTER`。记录：
+  [`docs/acceptance/m1-core-design-status-pointer-amendment-20261107.md`](../acceptance/m1-core-design-status-pointer-amendment-20261107.md)。
+  - 仅修改 `docs/design/procurement-outsourcing-m1-core.md` 三处：§13.1 标题、§13.1 标题后的指针注记、
+    §13.3 首条 —— 明确 `execution_status` 为 **Design 获批时的历史快照**，当前执行状态以本表为**唯一权威**。
+  - **未**把当前 `PASS` 复制进 Design；**未**修改 §13.1 Gate 表任何一格（七个 Gate 的业务合同与
+    `execution_status` 列取值**原样保留**）；**未**追改文件头部历史日期化注记；**未**扩大 Design 范围；
+    **未**新增第二份状态登记。
+- **回归适用性说明（SHA 差异）**：
+  - 基线 HEAD `83e13e008c851f5a235cb95e6dfa2f08afa0a32b` 上**本轮实测**：FULL `3344/3344 PASS`
+    （405 suites，0 fail / skipped / todo，369.6s，exit 0）、FAST `576/576 PASS`、Build `PASS`
+    （`✓ built in 8.03s`，exit 0）、Docs current `ALL CHECKS PASSED`、Docs migration C1～C6
+    `ALL CHECKS PASSED`、`git diff --check` `PASS`。
+  - 本工作包为**纯文档变更**：`server/`、`src/`、`scripts/` **零改动**，`git diff --name-only` 仅涉
+    `docs/**` 与 `log/**`。因此上述 FULL / FAST / Build 结果**继续适用**，**无需**为纯文档改动重复执行完整
+    FULL；其真实执行 SHA 即 `83e13e00`，本工作包的提交 SHA 与之的差异**仅为文档与日志**。
+  - 执行隔离：FULL / FAST 均在剥离 `ERP_MYSQL_TEST_ALLOW_RESET` 等 12 个 MySQL 指向变量的子进程中运行，
+    `ERP_DB_BACKEND=sqlite`、`ERP_DB_PATH` 缺席；执行身份 `DESKTOP-OVOCP1N\Administrator`（High Integrity），
+    与历史 `3344/3344` 记录令牌一致。
+- **七 Gate 状态**：**7 / 7 `PASS`**（附有界残余风险）——**不变**。
+- **包级状态**：`M1_CORE_ACCEPTANCE_BLOCKED` **保持**。本轮**不**签发 M1-Core 包级 Acceptance、
+  Capability Freeze、Domain Acceptance、Manual Closure、Release Readiness、Tag、Release 或 Deploy。
+- **旧 13 Gate 边界**：**未**恢复为当前验收条件或实施任务；旧 13 Gate 继续作为 **M1 全域 Closure** 的验收
+  合同（Active Design §13.2），未来延期能力必须重新评估产品需要并独立授权。
+- **未发生**：未修改生产代码、DDL、Fixture、G07 Oracle、G07 合同、CR 集、测试或任何已签发 Owner Acceptance；
+  未连接真实 MySQL、未运行 G07、未签发或消费 ACK-4、未执行 Migration、Reset / Bootstrap / Cleanup、
+  未运行 HEAVY、未 Push / Merge / Tag / Release / Deploy；未虚构 WP-I、WP-J 或 M-15 的完成状态。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。

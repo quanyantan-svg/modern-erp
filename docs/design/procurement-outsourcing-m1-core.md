@@ -52,6 +52,13 @@
 >   Owner 批准 G04 可达性与证据层级的 Design-only 修订。§13.1 的 `M1C-G04` 拒绝断言现区分
 >   合法 L1 净供应不足、L3 历史异常负增量防御与不受支持基数；原 409 守卫、严格支持范围、事务、
 >   零副作用及审计要求全部保留。本修订不签发 `M1C-G04 PASS`，不授权 Implementation 或数据库操作。
+> - 本轮（`M1C-DESIGN-STATUS-POINTER`，2026-11-07）：Procurement & Outsourcing Domain Owner 批准
+>   §13.1 / §13.3 的**纯状态指针**修订。下表 `execution_status` 列与 §13.3 首条现明确为 **Design 批准
+>   时点的历史快照**，**当前**执行与验收状态以 `docs/status/PROJECT_STATUS.md` 为**唯一权威**；本文件
+>   **不复制** Gate 的 `PASS` / `FAIL`，七个 Gate 的**业务合同**与该列取值**均未改动**，
+>   文件头部历史日期化注记**未追改**。本修订不签发 `Design PASS`，不授权 Implementation、
+>   MySQL、Migration 或任何数据库操作；修订记录见
+>   [`docs/acceptance/m1-core-design-status-pointer-amendment-20261107.md`](../acceptance/m1-core-design-status-pointer-amendment-20261107.md)。
 
 ## 1. 位置、与旧候选设计的关系
 
@@ -735,7 +742,15 @@ all-permissions 持有权限的管理员命中委外来源后均返回 409
 
 ## 13. M1-Core Gate
 
-### 13.1 首期 Gate 定义（7 个；`execution_status` 全部 `NOT_RUN`）
+### 13.1 首期 Gate 定义（7 个；`execution_status` 列为 **Design 批准时点快照**）
+
+> **`execution_status` 语义与当前状态权威**：下表 `execution_status` 列记录的是 **Design 批准时点**
+> 的执行状态快照（当时 7 个 Gate 均未执行）。该列**不随 Gate 执行结果更新**，本文件**不复制**
+> Gate 的 `PASS` / `FAIL` 状态，也不承载验收执行流水（AGENTS.md §2.1）。
+> **当前**执行与验收状态以 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) 为
+> **唯一权威**；各 Gate 的正式 Acceptance 证据见 [`docs/acceptance/`](../acceptance/)。
+> 七个 Gate 的**业务合同**（前置数据创建方式、证据层、成功断言、拒绝断言、零副作用断言）以下表为准，
+> 不受执行状态影响。
 
 证据层级：`L1` = 生产 API 造数；`L2` = 直接调用领域函数；`L3` = 直接 SQL 造数
 （**不可**作为通路证据）。
@@ -870,7 +885,12 @@ disposable target 上、于 ACK-4 Implementation 和独立安全审查通过后�
 
 ### 13.3 Gate 治理规则
 
-- 7 个 Gate 的 `execution_status` **全部 `NOT_RUN`**；**无任何 PASS**。
+- 7 个 Gate 的 `execution_status` 列记录 **Design 批准时点**的快照（当时全部 `NOT_RUN`）；
+  **当前**执行与验收状态以 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) 为
+  **唯一权威**，本文件不复制 Gate 的 `PASS` / `FAIL`。本节其余规则为**执行前置条件**，
+  与当前执行状态无关：任何 Gate 若以手工 SQL 造数替代业务可达性、以延期能力的未裁定状态冒充通过，
+  或未创建/配置委外收货员便把 `M1C-G02` 的**正向**收货生效断言标记通过，
+  都**不得**签发对应能力的 `COVERED`。
 - **零副作用的统一表述**：按 §9.2 的零副作用域，所有 Gate 的零副作用断言一律为
   "**业务**事实逐字段零变化 + 拒绝审计**恰好 1 条**"；**不得**表述为"审计全零"。
 - 任一 Gate `NOT_RUN` / `FAIL`、以手工 SQL 造数替代业务可达性、以延期能力的未裁定状态冒充通过、
