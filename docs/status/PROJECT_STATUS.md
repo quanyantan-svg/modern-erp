@@ -2363,6 +2363,12 @@ B3101_B3121_PRODUCT_SCOPE_REVIEW_PROPOSED
 
 本轮在 Design 完成后 **HARD STOP**，等待业务所有者审阅 Requirement/Design 并明确批准下一轮 Implementation。`R-01..R-20`、M1-GD01/02、B-P01/02、C-P01..04、M-15 均维持先前记录。
 
+## 42. WP-A1-01 / WP-A1-02 当前状态（2026-11-07）
+
+业务所有者已分别批准 `AUD-FE-001` 与 `AUD-PRC-001` 的有界 Implementation；详证见 [`审计台账 §13`](../audits/b3101-b3121-code-audit-20261107.md)。两项当前为 `TESTED`、**待最终 Acceptance**，不构成 PRC-06 Capability Closure。FE-001 演示写入按钮与固定参数已移除；PRC-001 正式决策写入口对有权普通用户和管理员均返回 409 `SOURCING_DECISION_WRITE_CLOSED`，无业务表变化，合法 Source List/Quota 查询继续可用。两个独立提交为 `6cb514a`、`8fa20a4`。
+
+focused 5/5、FAST 576/576、构建与响应式浏览器回归 24/24 通过；`git diff --check` 通过。旧功能 UAT 仅 UAT-04 的新合同检查通过，全套 15/28，不能记为 PASS；FULL 回归未完成，停止前遇到既有 G07 诊断测试权限失败。`AUD-PRC-002`、`AUD-OUT-001`、VMI、M1-Core 七 Gate 与 R-01～R-20 均不因本轮变化；B3101/B3121 仍 `BLOCKED`，Capability Matrix 未更新。无 Migration、真实数据库或远端 Git 写入。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
