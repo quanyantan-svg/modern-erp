@@ -1932,6 +1932,53 @@ M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
 - **未发生**：未修改 Active Requirement/Design、生产 Handler、测试、Fixture、DDL 或 G07 Oracle；
   未执行真实 MySQL、G07、ACK-4、Migration、Push、Merge、Tag、Release 或 Deploy。
 
+### 37.51 M1-Core G07 WP-K 证据边界与包级验收风险裁定（2026-11-07）
+
+- **Owner 决定**：Procurement & Outsourcing Domain Owner 批准追加式证据边界裁定，正式标识
+  `M1C_G07_WPK_EVIDENCE_BOUNDARY_ACCEPTED_FOR_PACKAGE_REVIEW`。正式记录：
+  [`docs/acceptance/m1-core-g07-wpk-owner-adjudication-20261107.md`](../acceptance/m1-core-g07-wpk-owner-adjudication-20261107.md)。
+- **裁定内容**：采纳候审草案 §3 的追加式证据边界说明；**有条件接受**「竞争败方既有业务行逐字段
+  零变化尚未证明」这一残余证据偏差，允许其**仅**在 M1-Core 内部首期包级验收评估中作为明确例外
+  引用；`M1C-G07 PASS` **保持不变**，不得将未充分证明的断言描述为已证明。
+- **例外范围限定**：仅处理 Oracle **测量强度**差距；不豁免真实业务数据丢失、库存估值破坏、
+  未授权写入或未来观测到的生产缺陷，也不授权正式发布。
+- **WP-J 处置**：本轮**暂不授权**执行，标记 `DEFERRED_NOT_AUTHORIZED`；未来若要求以实证关闭该风险，
+  须取得独立授权、新 Oracle、独立新 Run ID 与新 ACK-4，历史 Run `b29c3f1f` 不可追认。
+  WP-D 的 D-1 / D-2 已在 G04 后续独立流程办理，不再作为 WP-K 的开放裁定事项。
+- **历史不可改写**：已签发 `M1C-G07 PASS`（§37.48）、候审草案 §1.3 恒真项与其余失败 Run 记录保持原样。
+- **七 Gate 状态（本节后不变）**：G02/G03/G04/G05/G06/G07=`PASS`；G01=`INCONCLUSIVE`。
+- **包级状态**：`M1_CORE_ACCEPTANCE_BLOCKED` 保持；本裁定不签发 M1-Core 包级 Acceptance、
+  Capability Freeze、Domain Acceptance、Manual Closure、Release Readiness 或 Release。
+- **未发生**：未修改 Active Requirement/Design、生产 Handler、DDL、Fixture、G07 Oracle、CR 集或
+  ACK-4 合同；未连接真实 MySQL、未运行 G07、未签发或消费 ACK-4、未执行 Reset/Bootstrap/Cleanup/
+  Migration、未 Push、Merge、Tag、Release 或 Deploy。
+
+### 37.52 M1C-G01 正式 Owner Acceptance（2026-11-07）
+
+- **Owner 决定**：Procurement & Outsourcing Domain Owner 选择 `ACCEPT_BOUNDED_RESIDUAL_RISK`，
+  明确接受正式记录 §4 的五项有界残余风险并签发 `M1C-G01 PASS`
+  （`M1C_G01_OWNER_ACCEPTANCE_PASS_WITH_BOUNDED_RESIDUAL`）。正式记录：
+  [`docs/acceptance/m1-core-g01-owner-acceptance-20261107.md`](../acceptance/m1-core-g01-owner-acceptance-20261107.md)。
+- **证据范围**：SQLite L1 生产 HTTP `server/m1c-wp1-procurement-notice-conversion.test.js` 26/26
+  （WP7-A 原始 25 例 + 后补 D0，来源提交 `84bca44`；26/26 基线运行在来源文档中以「本轮基线实测」
+  登记，**不携带独立 Run ID 或专属 HEAD SHA 锚点**）；真实 MySQL 仅 G07 Run `b29c3f1f` 的
+  CR-01（容量 10 / 请求各 6，恰一 `201` 与恰一 `409 RECEIPT_NOTICE_CAPACITY_EXCEEDED`）与
+  CR-02（恰一 `200` 与恰一 `409 PURCHASE_RECEIPT_ALREADY_CONFIRMED`）并发子集；16 张指定表
+  Schema Parity 全 MATCHED。
+- **明确不主张**：**不主张** WP-I 已执行或 G01 全部流程已在真实 MySQL 验证；**不主张** G07 Oracle 的
+  「竞争败方既有业务行逐字段零变化」缺口已消除；**不主张** G01 已完成跨引擎行为对等证明。
+- **残余风险保持显式**：跨引擎等价未证明、真实 MySQL 拒绝路径全字段零业务变化未充分证明、
+  事务交错覆盖有限、历史存量来源与交期未作现场核验、Schema Parity ≠ 行为 Parity。
+- **WP-I 处置**：保持 `NOT_PROVEN / DEFERRED_NOT_AUTHORIZED`，作为**公开残余风险**继续登记，
+  不因本 Gate PASS 标记为 DONE；历史 G07 ACK-4 不可复用。
+- **七 Gate 当前状态**：**7 / 7 `PASS`**（附有界残余风险）。
+- **包级状态**：`M1_CORE_ACCEPTANCE_BLOCKED` **保持**。七 Gate 全 PASS **不自动**签发 M1-Core 包级
+  Acceptance；须另行审查并正式接受全部跨 Gate 残余风险。本决定不签发 Capability Freeze、
+  Domain Acceptance、Manual Closure、Release Readiness 或 Release。
+- **未发生**：未修改 Active Requirement/Design、生产 Handler、测试、Fixture、DDL 或 G07 Oracle；
+  未执行真实 MySQL、G07、ACK-4、Migration、Reset/Bootstrap/Cleanup、Push、Merge、Tag、Release
+  或 Deploy。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。

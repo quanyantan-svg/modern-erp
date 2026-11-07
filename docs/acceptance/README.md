@@ -37,6 +37,8 @@
 | [`m1-core-g03-owner-acceptance-20261107.md`](./m1-core-g03-owner-acceptance-20261107.md) | M1C-G03 正式 Owner Acceptance（`M1C-G03 PASS`，2026-11-07）；明确接受真实 MySQL 四事件完整重演未证明、16 表 Parity 不含 `inventory_mutation_log` 等有界残余风险；不签发包级 Acceptance / Freeze / Release |
 | [`m1-core-g04-d2-design-amendment-20261107.md`](./m1-core-g04-d2-design-amendment-20261107.md) | G04 D-2 正式 Design 修订记录：Active Design §13.1 区分合法 L1 净供应不足与 L3 历史异常负增量防御证据，保留 409、严格支持范围、零副作用与审计合同；不构成 `M1C-G04 PASS` |
 | [`m1-core-g04-owner-acceptance-20261107.md`](./m1-core-g04-owner-acceptance-20261107.md) | M1C-G04 正式 Owner Acceptance（`M1C-G04 PASS`，2026-11-07）；接受 MySQL 败方全字段零副作用未充分证明、并发覆盖有限、L3 负增量防御及历史/浮点边界等六项有界残余风险；不签发包级 Acceptance / Freeze / Release |
+| [`m1-core-g07-wpk-owner-adjudication-20261107.md`](./m1-core-g07-wpk-owner-adjudication-20261107.md) | M1-Core G07 WP-K 正式 Owner 裁定（`M1C_G07_WPK_EVIDENCE_BOUNDARY_ACCEPTED_FOR_PACKAGE_REVIEW`，2026-11-07）；追加式证据边界说明获采纳，有条件接受「竞争败方既有业务行逐字段零变化未证明」用于 M1-Core 首期包级验收评估，`M1C-G07 PASS` 保持不变、WP-J 标记 `DEFERRED_NOT_AUTHORIZED`；不签发包级 Acceptance / Freeze / Release |
+| [`m1-core-g01-owner-acceptance-20261107.md`](./m1-core-g01-owner-acceptance-20261107.md) | M1C-G01 正式 Owner Acceptance（`M1C-G01 PASS`，2026-11-07）；以 SQLite L1 26/26 与真实 MySQL G07 CR-01/CR-02 有限并发子集为依据，有界接受跨引擎等价未证明等五项残余风险；**不主张** WP-I 已执行或 G01 全部流程已在真实 MySQL 验证，WP-I 保持 `NOT_PROVEN / DEFERRED_NOT_AUTHORIZED`；七 Gate 全 PASS，包级仍 `M1_CORE_ACCEPTANCE_BLOCKED` |
 | [`sales-customer/`](./sales-customer/) | Sales & Customer 各 Wave 的 Acceptance / Freeze 记录与实施证据 |
 
 ## 规则
