@@ -253,6 +253,19 @@ VMI-03 / VMI-05）。这与「modern-erp 不复刻金蝶、按需建设最小完
   **不得**由开发者或 AI 宣告；
 - 本表**不**登记「哪个 Domain 完成了多少」，那属于 `PROJECT_STATUS.md`。
 
+### 4.1 Package A1 Owner Decision Addendum（2026-11-07）
+
+授权来源：本轮用户粘贴的《Package A1 — Sourcing Safe Closure & VMI Minimum Scope Alignment》§1；仅授权决策记录、Requirement、Design，Implementation 未授权。本条保留 §4 原始提案，不把 `SCP-16` 十七项或 `SCP-11` 全量提案整体判为已批准。
+
+| 决策对象 | 当前有效 Owner 决定 | 未决边界 |
+|---|---|---|
+| `AUD-FE-001` | `SAFE_CLOSE`：移除演示写入操作 | 不新增 Preview API；未实施、未测试 |
+| `AUD-PRC-001` | `SAFE_CLOSE`：服务端关闭正式寻源决策写入口 | `AUD-PRC-002` Hash 独立追踪；查询与配置保留；未实施、未测试 |
+| `AUD-OUT-001` | `SAFE_CLOSE` 意图已批准，但须先与 M1-Core 数量归属转移合同协调 | 不能据「无 canonical Inventory movement」关闭逻辑转移；成本与身份不支持路径继续拒绝；Gate 影响待专项判定 |
+| `SCP-11` VMI 范围 | 原「五项全部暂缓」提案由本决定**部分取代**：VMI-01 协议、02 收货、03 消耗、04 只读数量汇总保留；VMI-05 物权转移及 Supplier Bill 交接暂缓 | `D-P01/D-P02` 仍 `PENDING`；VMI 供应商资格规则 `OWNER_DECISION_PENDING`；不得把 VMI 结算作为已批准能力 |
+
+`SCP-16` 其余 Issue 及 `SCP-01..10/SCP-12..15` 保持原提案状态。`AUD-OUT-001` 的原审计事实仍保留在审计台账；新的合同核验结论见台账 §12。M1-Core 七 Gate 既有 7/7 PASS、R-01～R-20、M1-GD01/02、B-P01/02、C-P01..04、M-15 均不因本决定改变。
+
 ## 5. 不在本表范围
 
 > **编号映射（2026-11-07）**：为把 §4 让给新增的「产品范围裁剪决策」，
