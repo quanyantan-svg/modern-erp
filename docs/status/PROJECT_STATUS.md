@@ -2058,6 +2058,42 @@ M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
   未连接真实 MySQL、未运行 G07、未签发或消费 ACK-4、未执行 Migration、Reset / Bootstrap / Cleanup、
   未运行 HEAVY、未 Push / Merge / Tag / Release / Deploy；未虚构 WP-I、WP-J 或 M-15 的完成状态。
 
+### 37.55 M1-Core 首期包级 Acceptance 正式签发（2026-11-07）
+
+- **Owner 决定**：业务所有者于 2026-11-07 在当前对话中**明确选择选项 A**，按 AGENTS.md §4.5 正式批准
+  M1-Core 首期包级 Acceptance，决定 **`ACCEPT_WITH_BOUNDED_RESIDUAL_RISK`**。正式标识：
+  `M1_CORE_ACCEPTANCE_PASS` / `M1_CORE_ACCEPTANCE_PASS_WITH_BOUNDED_RESIDUAL_RISK`。正式记录：
+  [`docs/acceptance/m1-core-package-acceptance-20261107.md`](../acceptance/m1-core-package-acceptance-20261107.md)。
+  该来源为对话中的 Owner 决策记录；**不存在**虚构的手写签名、电子签章或外部审批单。
+- **批准范围（逐条承接）**：① 正式接受 `M1C-G01`～`M1C-G07` 七项 Gate 的包级验收结果，七 Gate 原有
+  `PASS` 状态**保持有效**；② 正式接受候签记录 §3 的 **R-01～R-20** 全部跨 Gate 有界残余风险，明确其
+  属于**尚未充分证明或已知限制**，**不得**在后续文档中描述为已证明或已消除；③ **D-01～D-04 继续保持
+  延期、未授权**，不视为本次验收已交付能力；④ 库存、跟踪、估值、财务及历史数据安全约束**继续全部执行**，
+  发现实际业务数据不一致、库存错误、成本错误、越权或数据损坏时**必须停止受影响业务路径并整改**，
+  **不得**以本次风险接受记录豁免真实缺陷；⑤ **不授予** Capability Freeze、Domain Acceptance、
+  Manual Closure、Release Readiness、Release 或 Deploy 权限；⑥ 旧 M1 13 Gate 全范围 Design **不恢复**为
+  当前实施和验收要求，后续延期能力按实际产品需求**独立评估和授权**。
+- **验收范围**：**仅** M1-Core 首期七 Gate（Procurement & Outsourcing）。**M1-Core 首期包级 Acceptance 已
+  签发，但不得被扩大解释为整个 Procurement & Outsourcing Domain 已完成、已验收或已冻结。**
+- **残余风险引用纪律**：R-01～R-20 在任何后续文档、状态登记、能力矩阵、Capability Freeze 材料或发布
+  说明中**不得**被描述为已证明或已消除，也**不得**据此反推任何单条残余风险已被关闭。
+- **历史不可改写**：七 Gate 正式 Owner Acceptance、WP-K 裁定、WP-K-R1 裁定、§37.48～§37.54 及全部历史
+  测试与失败 Run 记录**一律原样保留，不覆盖、不改写**。候签记录的 `PENDING_APPROVAL` 状态是对其撰写
+  时点的真实记录，**保留不删**；其「当前状态」含义被本节取代。
+- **七 Gate 状态**：**7 / 7 `PASS`** —— **不变**。
+- **包级状态**：`M1_CORE_ACCEPTANCE_BLOCKED` → **`M1_CORE_ACCEPTANCE_PASS`**
+  （`M1_CORE_ACCEPTANCE_PASS_WITH_BOUNDED_RESIDUAL_RISK`）。WP-J 维持 `DEFERRED_NOT_AUTHORIZED`；
+  WP-I 维持 `NOT_PROVEN / DEFERRED_NOT_AUTHORIZED`；M-15 不在范围。
+- **仍未授予**：Capability Freeze、Domain Acceptance、Manual Closure、Release Readiness、Release、
+  Deploy；新增 Run ID、ACK-4、数据库写操作、Reset / Bootstrap / Cleanup / Migration 授权。
+- **剩余动作**：① 本地提交同步到 `github/master`（Push）—— **本轮未授权**；② Capability Freeze /
+  Domain Acceptance / Manual Closure / Release Readiness 需**另行裁定**，不在本包内；③ 旧 13 Gate 的
+  M1 全域 Closure 合同继续独立存在，未来延期能力按实际产品需求重新评估并独立授权。
+- **未发生**：未修改 Active Requirement / Design、生产代码、DDL、Fixture、G07 Oracle、G07 合同、测试或
+  任何已签发 Owner Acceptance；未连接真实 MySQL、未运行 G07、未签发或消费 ACK-4、未执行 Migration、
+  Reset / Bootstrap / Cleanup、未运行 HEAVY、未 Push / Merge / Tag / Release / Deploy；未虚构 WP-I、
+  WP-J 或 M-15 的完成状态。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
