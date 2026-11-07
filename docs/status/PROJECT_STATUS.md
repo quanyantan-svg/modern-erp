@@ -2320,6 +2320,18 @@ B3101_B3121_PRODUCT_SCOPE_REVIEW_PROPOSED
 **边界**：本节登记的是**建议**。它**不**改变任何已批准合同、验收状态或延期政策，
 **不**使任何 Capability 变为 `VERIFIED` 或 `PASS`，**不**授权任何 Implementation。
 
+### 39.9 交付与校验锚点
+
+| 项 | 值 |
+|---|---|
+| 主体交付提交 | `de0619eedb51587344255e7a033f9576754a2eda`（`登记 B3101 / B3121 产品范围重定基线建议与 Scope Change Proposal`；10 个文件，+899 / −26；含审计基线文件更名 `…-code-audit-baseline-20261107.md` → `…-code-audit-20261107.md`） |
+| 变更范围 | 仅治理与文档（`docs/audits/**`、`docs/decisions/**`、`docs/status/**`、`docs/requirements/README.md`、`docs/design/README.md`、`log/2026-11-07.md`）；**未**修改任何 `src/` / `server/` 生产代码、schema、migration、API、权限、状态机或业务测试 |
+| 交付规模 | 新增 1 个文件（`docs/decisions/product-scope-rebaseline-proposal-20261107.md`）；修改 8 个文件；审计基线正文按用户侧 v0.2 更名入库 |
+| 审计基线正文处理 | 内容**未改写**（用户侧提供的 v0.2 全文原样入库）；仅对其抬头 8 行做**行尾空白规范化**（删除 Markdown 硬换行用的两个尾随空格），与仓库既有 `docs/**` 无行尾空白的约定一致 |
+| 校验 | `node scripts/docs/check-doc-consistency.mjs`（current 模式）：N1 / N3–N9 `PASS`，N2 `RETIRED`；`node scripts/docs/check-doc-consistency.mjs --mode migration`：C1–C6 `ALL CHECKS PASSED`；`git diff --check`：exit 0 |
+| 远端状态 | **未** Push / Merge / Tag / Release / Deploy；`github/master` 仍为 `9b9cb09799aa05ccac43d02ac1718083921c6d04`，`origin/master` 仍为 `1de469217ce0ebf83b8c5a2df69c2d6df63a1718`；本地 `master` 领先 |
+| `package.json` / release tag | **未**变化 |
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
