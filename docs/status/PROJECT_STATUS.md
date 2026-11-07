@@ -2344,6 +2344,8 @@ B3101_B3121_PRODUCT_SCOPE_REVIEW_PROPOSED
 | 验收边界 | M1-Core 七 Gate 原有 7/7 PASS 与 R-01～R-20 风险记录保持其既有范围；本轮未重新签发受影响 Gate，Procurement & Outsourcing Domain Acceptance 仍 `NOT READY` |
 | 产品范围 | `SCP-01`～`SCP-16` 全部 `PENDING`；B3101/B3121 未获 Capability Freeze 或 Manual Closure |
 
+17 项当前状态汇总：`TESTED` 2、`BLOCKED` 9、`NEEDS_REVALIDATION` 3、`DEFERRED_NOT_AUTHORIZED` 1、`DOCUMENTED` 2；明细以审计台账 §9/§11 为准。
+
 本轮不涉及 schema/migration、真实数据库写入、MySQL Gate、发布或远端 Git 写操作。测试与本地提交锚点见台账 §11 交付记录和 `log/2026-11-07.md`；未运行的 Gate 不记为 PASS。
 
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
