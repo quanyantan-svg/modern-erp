@@ -28,6 +28,8 @@
 > - OUT-21 = MISSING；
 > - OUT-23 = MISSING → NEW / INTEGRATE。
 
+> **2026-11-07 范围增补**：本文件 §31.14 记录本轮 Owner 已决定的 A1 SAFE_CLOSE 与 VMI 最小范围；它仅在所列能力上取代 §31.3.2、§31.8 中「VMI 五项全部完成 / 不得延期 VMI-05」的旧目标。§31.12、§31.13 的历史批准及 M1-Core Gate 状态不被重写。§31.14 为待验收 Requirement，不能授权 Implementation。
+
 ### 31.1 范围与 ownership
 
 Procurement & Outsourcing 拥有：
@@ -1005,3 +1007,28 @@ PRE-A / PRE-B / PRE-C 基于真实目标数据的结果；只对明确一致身�
   其中被 §31.13 承接的子项**以 §31.13.5 的 Gate 为关闭依据**，未承接的保持开放。
 
 ---
+
+### 31.14 Package A1 SAFE_CLOSE 与 VMI 最小闭环 Requirement（2026-11-07；待验收）
+
+**授权与状态**：业务所有者在本轮任务说明 §1 明确决定 `AUD-FE-001`、`AUD-PRC-001`、`AUD-OUT-001` 的有界 `SAFE_CLOSE` 意图及 VMI 最小范围，并授权连续起草 Requirement → Design。此节是待业务所有者验收的 Requirement 增补，**不授权 Implementation**。其范围仅限下列 A1、VMI-01..05；其余 PRC/OUT 能力、`SCP-01..10/12..15` 不变。决策索引为 `OPEN-BUSINESS-DECISIONS.md` §4.1。
+
+#### 31.14.1 A1 寻源危险写入
+
+- `AUD-FE-001`：寻源定价页不得保留以 `PR-DEMO-001`、`product-001` 或固定数量调用正式写 API 的演示操作；移除「模拟寻源分配」及其可调用写入函数。现有合法 Source List、Quota、定价查询和独立获批功能保持可用；不借此新增 Preview API。
+- `AUD-PRC-001`：`POST /api/procurement/sourcing-decisions` 由服务端对通过适用身份和权限检查的所有角色（含管理员）稳定返回 409 业务拒绝；未授权者仍遵循既有 403 门禁。拒绝时 `sourcing_decisions`、`sourcing_decision_allocations`、PR/PO、库存、采购与财务事实逐字段零变化，按现有拒绝审计合同恰好一次记录，不重复审计。不得以假 PR 来源、临时正式状态机或仅隐藏前端控件替代关闭。`AUD-PRC-002` Hash 单独保留。
+
+#### 31.14.2 委外 WIP 数量归属与延期边界
+
+M1-Core §7.5 对 `M1C-G03/G06` 的首期合同保留**数量归属守恒**、拒绝跨订单/跨期成本携带。仅在 Supplier WIP 订单归属变更、源减目标增、总量守恒且物理位置不变时，属于逻辑数量转移，**不要求虚构 canonical Inventory movement**。改变真实仓位时才属于物理转移，必须由 canonical Inventory 写者证明来源、身份、数量守恒；成本携带属于 `B-P01` 延期。现有 `createWipTransfer()` 的合同核验不得以缺少物理 movement 为唯一缺陷，也不得为 `SAFE_CLOSE` 禁用已批准的合法数量转移。身份余额不明、历史 WIP 不可证明、成本语义不可证明、数量越界或并发冲突须 fail closed、业务零副作用与拒绝审计；真实缺陷与 Gate 影响以专项审计 §12 的逐项证据追踪，不改写既有 7/7 PASS。
+
+#### 31.14.3 VMI-01..05 当前产品范围
+
+| Capability | 当前有界目标与验收义务 |
+|---|---|
+| VMI-01 | 最小 Agreement：supplier、warehouse、product、生效起止日、active/inactive。业务日期内唯一有效绑定；VMI 供应商资格**尚无已批准专属依据**，必须由 Owner 裁定，不能等同委外资格或假设新字段。 |
+| VMI-02 | Receipt Draft → Confirm；创建与确认都须复核真实 Agreement 的 supplier/warehouse/product/日期，零个或多个有效候选均拒绝；确认仅通过 canonical `applyInventoryMutation()` 写 `SUPPLIER` owner 位置，来源可追溯，重复确认不双收入库，创建及确认具备业务幂等。 |
+| VMI-03 | 只从已确认 Receipt 发起 Consumption；复核 Agreement 与身份、累计消耗不超过该 Receipt 可用量，Supplier-owned 位置足额；库存扣减、Consumption 事实及审计原子完成，并发不超额。相同 Idempotency-Key + 相同 payload 精确重放，异 payload 409；失败无半完成事实。 |
+| VMI-04 | 只读数量汇总 Received、Consumed、Remaining Supplier-owned；`Remaining = Received − Consumed` 应与已确认 canonical 库存事实及合法退回/调整对账；不显示已结算数量、金额、物权转移金额或自动应付。 |
+| VMI-05 | 物权转移、结算、Supplier Bill Handoff 延期；`POST /api/procurement/vmi/ownership-transfers` 保持 409 `VMI_SETTLEMENT_POLICY_PENDING`，库存、物权、结算单、账单、AP/GL 均零变化。`D-P01/D-P02` 继续 `PENDING`。 |
+
+`SCP-11` 原「五项全部延期」提案仅在上述决定范围内被**部分取代**，不是整体批准，也不把 VMI-05 宣称 `COVERED`。§31.8 A 的旧完整闭环目标在 VMI-04 结算窗口与 VMI-05 上由本节有界取代；历史正文与批准事实保留。VMI 的供应商所有权不变量保持：企业仓内 `SUPPLIER` owner 的货物不得计入企业所有权；Receipt 与 Consumption 分别记录，不用 `CONSUMED` Receipt 状态表示消耗。`M1-F-07/M1-F-11` 风险仍受延期结算边界约束。B3101/B3121 仍 `BLOCKED`，无 Capability Closure、Domain Acceptance 或 Freeze。
