@@ -24,6 +24,9 @@
 > 状态列的完整依据见 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §35.3；
 > M1-Core 首期包级 Acceptance 的当前状态见同表 §37.55，B3101 / B3121 静态代码审计基线见同表 §38
 > 与 [`docs/audits/README.md`](../audits/README.md)。
+> §31.3 / §31.4 / §31.8 / §31.10 的「54 项能力全部 `COVERED`」验收口径**正在被复核**：
+> 见 [`docs/decisions/product-scope-rebaseline-proposal-20261107.md`](../decisions/product-scope-rebaseline-proposal-20261107.md)
+> （`PENDING`，待业务所有者批准）与同表 §39。**该复核未获批准前，本目录正文与上述验收口径原样有效。**
 > 本表是**导航**，不是第二份状态登记表。
 
 ## 规则

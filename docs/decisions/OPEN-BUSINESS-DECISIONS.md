@@ -211,7 +211,53 @@ Freeze、Domain Closure 或 Release Readiness。
 | `W11_A_ACCEPTANCE_PASS` | W11-A 整包 Acceptance | 未签发 | 标识保留给完整 W11-A 包；签发是业务所有者的**独立**决定，不是既有单元冻结的自动汇总。另有两项需先处理：W11-A OVERDUE 冻结记录未记载 Git SHA；所有单元冻结记录都把 "W11-A Package" 列入排除项。见 `PROJECT_STATUS.md` §35.6 / §35.11.4。 |
 | G-5 | UAT-14 旧 Test Oracle 与当前 V21 Contract 冲突 | **Gap 仍开放；业务政策待决已消解** | **Gap 本身未关闭**：仍见 `PROJECT_STATUS.md` §35.8。**但「修 test 还是修 contract」这一问题已由**已批准**的 Requirement 条款 `document.md §31.12.6`（D-REQ-03）**裁定**——UAT-14 必须针对当前 V21 合同（创建 `201` / 确认 `200`），拒绝恢复过时 409 作为测试捷径。因此 G-5 **不再是**业务政策待决项，而是 **Implementation 内的已批准纠正动作**（候选设计 §26.33.14.3，归 WP-6 / `M1-GT02`）。在 Implementation 完成并通过对应 Gate 前，G-5 不得被记为已关闭；本表不改写 §35.8 的历史登记。 |
 
-## 4. 不在本表范围
+## 4. Procurement & Outsourcing —— 产品范围裁剪决策（2026-11-07）
+
+规范来源：[`docs/decisions/product-scope-rebaseline-proposal-20261107.md`](./product-scope-rebaseline-proposal-20261107.md)
+（`PENDING`）。审计依据：[`docs/audits/b3101-b3121-code-audit-20261107.md`](../audits/b3101-b3121-code-audit-20261107.md) §0.5～§0.7。
+
+**背景**：现行 Requirement §31.3 / §31.4 / §31.8 / §31.10 与 Design §26.27 / §26.31 把金蝶手册的
+几乎全部功能**无条件**列为必须实现（54 项全部 `COVERED` 目标、49 项必须闭环、明文禁止 defer
+VMI-03 / VMI-05）。这与「modern-erp 不复刻金蝶、按需建设最小完整业务闭环」的产品目标**不一致**。
+下表登记**待业务所有者逐项裁定**的范围变更提案。
+
+| ID | 范围变更提案 | 涉及 Capability | 状态 | 与现行合同的冲突 |
+|---|---|---|---|---|
+| `SCP-01` | 验收单位由「54 项能力全覆盖」改为「已裁剪集合全覆盖」；删除以手册能力条数为验收项 | 全部 54 项 | `PENDING` | 与 §31.4 / §31.8 A / §31.10 / §26.27 / §26.31 冲突 |
+| `SCP-02` | 自动配额暂缓；货源与寻源简化为可解释的手工分配 | PRC-04 / 05 / 06 | `PENDING` | 与 §31.3.1 PRC-05 `NEW`、§31.4 对应行冲突 |
+| `SCP-03` | 采购员 / 采购组简化为单据级归属 | PRC-03 | `PENDING` | 与 §31.3.1 PRC-03 `NEW` 冲突 |
+| `SCP-04` | 独立调价实体并入价格版本；折扣只保留单级 | PRC-07 / 08 / 09 / 10 | `PENDING` | 与 §31.3.1 PRC-10 `NEW`、§31.4 对应行冲突 |
+| `SCP-05` | 请购来源收敛为「手工 + 计划」；拆并简化 | PRC-11 / 12 | `PENDING` | 与 §31.3.1 对应行冲突 |
+| `SCP-06` | 赠品与扫码归入可选 | PRC-15 / 26 | `PENDING` | 与 §31.3.1 对应行冲突 |
+| `SCP-07` | 预付款需求暂缓 | PRC-17 | `PENDING` | 与 §31.3.1 PRC-17 `NEW`、§31.4 对应行冲突 |
+| `SCP-08` | 采购订单变更限定为 `MODIFY` + `CANCEL` | PRC-18 | `PENDING` | 与 §31.3.1 PRC-18 `NEW`、§31.4 对应行冲突 |
+| `SCP-09` | canonical 采购执行口径**不裁剪**，但把 P0 修复义务显式化 | PRC-19 | `PENDING`（**仅确认修复义务**，无需范围裁剪） | 无冲突 |
+| `SCP-10` | 退货申请单级化 | PRC-24 | `PENDING` | 与 §31.3.1 PRC-24 `NEW` 冲突 |
+| `SCP-11` | **VMI 五项全部暂缓** | VMI-01 ~ VMI-05 | `PENDING` | **直接冲突**：§31.8 A.1 明文「VMI-01~05 全部归本 Domain 完成」且「不得将 VMI-03 / VMI-05 整个 capability defer」——**须显式突破该条款** |
+| `SCP-12` | 委外侧全部复用 canonical 供应商 / 货源 / 价格 / 采购单据；计划交接归入可选 | OUT-01 / 02 / 03 / 05 / 07 / 10 | `PENDING` | 与 §31.3.3 对应行冲突 |
+| `SCP-13` | 倒冲与成本证据限定为 M1-Core 已批准的有界实现 | OUT-16 / 21 | `PENDING` | 与 §31.3.3 对应行冲突；**不新增**延期，与 D-01 一致 |
+| `SCP-14` | 委外 AP/GL 过账与成品退货维持延期 | OUT-20 / 22 | `PENDING` | 与 §31.3.3 对应行冲突；与已生效延期一致 |
+| `SCP-15` | 委外期初 / 期末与报表限定为少量关键报表 | OUT-23 | `PENDING` | 与 §31.3.3 OUT-23 冲突 |
+
+**另需裁定**：`SCP-16` —— 审计台账 §5 中 17 个审计 Issue 对应的**危险写入路径处置类别**
+（`FIX` / `FIX_OR_CLOSE` / `SAFE_CLOSE` / `REPORT_ONLY`）。其中
+`AUD-FE-001`（演示按钮直连正式写 API）、`AUD-OUT-001`（跨委外订单 WIP 转移未走 canonical Inventory）
+为 P0 级；`AUD-VMI-001`～`AUD-VMI-003` 随 `SCP-11` 一并处置。
+
+**纪律**：
+
+- 全部 54 项能力的当前 `Product Scope` = **`SCOPE_REVIEW_PENDING`**；
+- `SCP-01`～`SCP-16` **一律未生效**；已批准 Requirement / Design / Acceptance / 延期政策
+  （含 D-01～D-04、WP-I / WP-J / M-15、旧 M1 13 Gate）**全部维持原状**；
+- `Product Scope` 的任何具体取值**只能**由业务所有者的 Scope Decision 确立，
+  **不得**由开发者或 AI 宣告；
+- 本表**不**登记「哪个 Domain 完成了多少」，那属于 `PROJECT_STATUS.md`。
+
+## 5. 不在本表范围
+
+> **编号映射（2026-11-07）**：为把 §4 让给新增的「产品范围裁剪决策」，
+> 原 **§4「不在本表范围」→ 现 §5「不在本表范围」**。正文内容**未改写**；
+> 仓库内**无**任何指向原 §4 的深引用，故无失效引用。
 
 - 已获批业务政策不重复登记（见 §31.12.8 的「不再重新征询」清单）；
 - 已冻结能力的历史裁定保留在 [`docs/acceptance/`](../acceptance/)；

@@ -2116,9 +2116,9 @@ B3101_B3121_AUDIT_BASELINE_REGISTERED
 
 | 项 | 值 |
 |---|---|
-| 审计基线正文（准确路径） | [`docs/audits/b3101-b3121-code-audit-baseline-20261107.md`](../audits/b3101-b3121-code-audit-baseline-20261107.md) |
+| 审计基线正文（准确路径） | [`docs/audits/b3101-b3121-code-audit-20261107.md`](../audits/b3101-b3121-code-audit-20261107.md) |
 | 审计索引 | [`docs/audits/README.md`](../audits/README.md) |
-| 审计版本 | `v0.1` |
+| 审计版本 | `v0.2`（增加产品范围裁剪原则；保留 v0.1 审计事实） |
 | 审计基准 SHA | `9b9cb09799aa05ccac43d02ac1718083921c6d04`（`master`，2026-11-07） |
 | 审计状态 | `PRELIMINARY_STATIC_REVIEW`（初步静态代码审查） |
 | 覆盖手册 | B3101《采购管理操作手册 V1.0》、B3121《委外管理操作手册 V1.0》 |
@@ -2126,6 +2126,7 @@ B3101_B3121_AUDIT_BASELINE_REGISTERED
 | 对应 Domain | Procurement & Outsourcing |
 | 审计方法 | 远端静态代码审查；**未**运行任何测试套件，**未**连接真实 MySQL，**未**执行 Migration / Reset / Bootstrap / Cleanup |
 | Issue 总数 | 17 |
+| 版本沿革 | `v0.1` → **`v0.2`**（2026-11-07 补充「参考金蝶、按需建设、非 1:1 复刻」的产品范围原则，台账 §0.5～§0.7）；文件由 `b3101-b3121-code-audit-baseline-20261107.md` 更名为 `b3101-b3121-code-audit-20261107.md`。**v0.1 的 17 个 Issue 审计事实、状态统计与审计基准 SHA 全部不变**；产品范围建议另见 §39 |
 
 ### 38.3 M1-Core 首期包级 Acceptance 的当前状态（引用，不重复签发）
 
@@ -2160,7 +2161,7 @@ B3101_B3121_AUDIT_BASELINE_REGISTERED
 ### 38.5 后续工作必须基于审计 Issue 推进
 
 - 后续所有 B3101 / B3121 开发任务，必须以
-  [`docs/audits/b3101-b3121-code-audit-baseline-20261107.md`](../audits/b3101-b3121-code-audit-baseline-20261107.md)
+  [`docs/audits/b3101-b3121-code-audit-20261107.md`](../audits/b3101-b3121-code-audit-20261107.md)
   作为**详细 Issue 台账**；本表与 [`docs/audits/README.md`](../audits/README.md) 只维护摘要与链接，
   **不复制** Issue 清单。
 - 状态迁移链固定为
@@ -2204,6 +2205,120 @@ B3101_B3121_AUDIT_BASELINE_REGISTERED
 **边界**：本节登记的是**审计基线**。它**不**使任何 Capability 变为 `VERIFIED` 或 `PASS`，
 **不**授予 Capability Freeze / Domain Acceptance，**不**授权任何 Implementation，
 也**不**恢复旧 M1 13 Gate 为当前实施要求。
+
+---
+
+## 39. 产品范围重定基线建议登记（2026-11-07）
+
+```text
+B3101_B3121_PRODUCT_SCOPE_REVIEW_PROPOSED
+```
+
+### 39.1 本节定位与边界
+
+本节是 B3101 / B3121 **产品范围重定基线建议**在**项目状态表**中的**唯一增量登记**。
+
+- 本节**不修改、不删除、不重排** §35 / §36 / §37 / §38 的任何历史结论。
+- 本节**不是** Acceptance，**不签发**任何 Acceptance / Freeze / `Design PASS` 标识。
+- 本节登记的是**建议**：`SCP-01`～`SCP-16` **全部 `PENDING`**，**未获业务所有者批准**。
+  在批准前，已批准 Requirement / Design / Acceptance / 延期政策**全部原样有效**。
+- 本节**未**实施任何代码整改；`server/`、`src/`、`scripts/` 零改动。
+- 本节编号为 **§39**，按既有「H2 = 日期化顶层章节」规则**追加**在 §38 之后；历史编号未重排。
+
+### 39.2 建议文档与依据
+
+| 项 | 值 |
+|---|---|
+| 建议文档 | [`docs/decisions/product-scope-rebaseline-proposal-20261107.md`](../decisions/product-scope-rebaseline-proposal-20261107.md) —— 状态 `PENDING` |
+| 决策登记 | [`docs/decisions/OPEN-BUSINESS-DECISIONS.md`](../decisions/OPEN-BUSINESS-DECISIONS.md) §4（`SCP-01`～`SCP-16`） |
+| 审计依据 | [`docs/audits/b3101-b3121-code-audit-20261107.md`](../audits/b3101-b3121-code-audit-20261107.md) §0.5～§0.7（v0.2 新增产品范围裁剪原则） |
+| 能力矩阵登记 | [`docs/status/CAPABILITY_MATRIX.md`](./CAPABILITY_MATRIX.md)「产品范围建议（待业务所有者裁定）」 |
+| 覆盖能力 | PRC-01..PRC-26、VMI-01..VMI-05、OUT-01..OUT-23 共 **54 项** |
+| 授权来源 | 用户于 2026-11-07 在当前对话中补充「Product Scope Rebaseline」要求：**只提出建议**，不擅自改变已批准的 Requirement / Design / Acceptance / 延期政策 |
+
+### 39.3 范围审查结论：现行合同确实无条件要求实现全部手册功能
+
+| 层级 | 证据 | 性质 |
+|---|---|---|
+| Requirement §31.3.1～§31.3.3 | 54 项逐条给出 `Implementation Decision`（`NEW` / `ENHANCE` / `KEEP` / `CONVERGE`） | 逐项无条件实现决策 |
+| Requirement §31.4 | 每一项的落地后 Coverage 目标写死为 `COVERED`；OUT 行写明「**23 capability 全部落地**」 | 无条件全覆盖目标 |
+| Requirement §31.8 A | 「**所有 49 项必须达到 Requirement 定义的目标闭环**」；「**VMI-01~05 全部归本 Domain 完成**……**不得**将 VMI-03 / VMI-05 整个 capability defer」 | 强制闭环 + 显式禁止 VMI 延期 |
+| Requirement §31.10 | 「本节 Requirement 包含 26 + 5 + 23 = 54 项 Capability / 10 个 Wave」 | 以手册能力条数为验收单位 |
+| Design §26.2～§26.20 / §26.27 / §26.31 | 逐能力设计 + Wave A–J 全覆盖 + 「54-capability trace preserved」列入设计验收项 | 逐项无条件实施计划 |
+
+**结论**：现行口径的验收单位是**手册能力条数**，而不是**业务闭环价值**；任何裁剪都会被自动判定为不合格。
+这与项目既定产品目标（最小完整业务闭环，而非 1:1 复刻）**不一致**，
+也与已生效的 `M1-SRD-01`（2026-11-02）所采用的「有界首期 + 显式延期」方法**不自洽**。
+
+### 39.4 产品范围建议矩阵（**建议值，未批准**）
+
+| 建议 Product Scope | 数量 | 占比 |
+|---|---|---|
+| `CORE_REQUIRED` | **26** | 48.1% |
+| `SIMPLIFIED` | **14** | 25.9% |
+| `OPTIONAL` | **3** | 5.6% |
+| `DEFERRED` | **9** | 16.7% |
+| `OUT_OF_SCOPE` | **2** | 3.7% |
+| **合计** | **54** | 100% |
+| **`SCOPE_REVIEW_PENDING`（当前生效值）** | **54** | 100% |
+
+逐能力的建议值、理由、裁剪边界与关联 SCP 见建议文档 §3；
+**本表不复制该矩阵**。
+
+### 39.5 Scope Change Proposal（**全部待业务所有者批准**）
+
+| ID | 范围变更 | 涉及能力 | 与现行合同的冲突 |
+|---|---|---|---|
+| `SCP-01` | 验收单位由「54 项全覆盖」改为「已裁剪集合全覆盖」；删除以手册能力条数为验收项 | 全部 54 项 | 与 §31.4 / §31.8 A / §31.10 / §26.27 / §26.31 冲突 |
+| `SCP-02` | 自动配额暂缓；货源与寻源简化为手工分配 | PRC-04 / 05 / 06 | 与 §31.3.1、§31.4 冲突 |
+| `SCP-03` | 采购员 / 采购组简化为单据级归属 | PRC-03 | 同上 |
+| `SCP-04` | 独立调价实体并入价格版本；折扣只保留单级 | PRC-07 / 08 / 09 / 10 | 同上 |
+| `SCP-05` | 请购来源收敛为「手工 + 计划」；拆并简化 | PRC-11 / 12 | 同上 |
+| `SCP-06` | 赠品与扫码归入可选 | PRC-15 / 26 | 同上 |
+| `SCP-07` | 预付款需求暂缓 | PRC-17 | 同上 |
+| `SCP-08` | 采购订单变更限定为 `MODIFY` + `CANCEL` | PRC-18 | 同上 |
+| `SCP-09` | canonical 采购执行口径**不裁剪**，把 P0 修复义务显式化 | PRC-19 | 无冲突（仅确认修复义务） |
+| `SCP-10` | 退货申请单级化 | PRC-24 | 与 §31.3.1、§31.4 冲突 |
+| `SCP-11` | **VMI 五项全部暂缓** | VMI-01 ~ VMI-05 | **直接冲突**：§31.8 A.1 明文禁止 defer VMI-03 / VMI-05 —— 须显式突破该条款 |
+| `SCP-12` | 委外侧全部复用 canonical 供应商 / 货源 / 价格 / 采购单据；计划交接归入可选 | OUT-01 / 02 / 03 / 05 / 07 / 10 | 与 §31.3.3、§31.4 冲突 |
+| `SCP-13` | 倒冲与成本证据限定为 M1-Core 已批准的有界实现 | OUT-16 / 21 | 与 §31.3.3 冲突；**不新增**延期，与 D-01 一致 |
+| `SCP-14` | 委外 AP/GL 过账与成品退货维持延期 | OUT-20 / 22 | 与 §31.3.3 冲突；与已生效延期一致 |
+| `SCP-15` | 委外期初 / 期末与报表限定为少量关键报表 | OUT-23 | 与 §31.3.3 冲突 |
+| `SCP-16` | 17 个审计 Issue 对应的**危险写入路径处置类别**（`FIX` / `FIX_OR_CLOSE` / `SAFE_CLOSE` / `REPORT_ONLY`） | 见建议文档 §5 | 不改变已批准合同，但决定活跃写入口的安全处置 |
+
+**范围裁剪与 M1-Core 已交付范围无冲突**：26 项 `CORE_REQUIRED` 中 16 项直接落在 M1-Core 首期
+已批准范围内，10 项属 §31 Domain Closure 已批准范围且已有实现；本建议**未缩小**任何已交付或
+已批准能力，裁剪只发生在未交付部分。
+
+### 39.6 危险写入路径的处置原则（不得以「暂时不需要」容忍不安全写入）
+
+- 审计台账中**活跃**的高风险写入口必须**修复**或**安全封锁**（服务端 fail closed / 停用 / 只读），
+  **不得**因产品裁剪而无限期保持风险暴露；
+- 裁剪若使某能力不再需要，其现有写入口的正确处置是**安全关闭**（明确 status + error code、
+  零业务副作用、留拒绝审计），**不是**保留一个能写错的接口；
+- 处置类别的逐项建议见建议文档 §5；**本节不复制**该清单，也**不**改变任何 Issue 的证据状态。
+
+### 39.7 交付标准与复用约束（建议）
+
+- **禁止**把金蝶原版的**菜单数量、表单数量、操作步骤数量**作为开发完成标准；
+  交付单位是**业务闭环**（端到端可追溯且账务正确），不是能力条目数；
+- 范围裁剪**不得**放宽库存数量与物权、金额与估值、权限 fail closed、来源可追溯、事务、
+  幂等、审计等核心正确性约束（继承 §31.13.1 `INV-1`~`INV-12`）；
+- **不得**为匹配手册而新建第二套库存、质量、财务、审批、计划、UOM、BOM 引擎，
+  也**不得**新建第二套供应商 / 货源 / 价格 / 采购单据 / 仓库主数据（详见建议文档 §6）。
+
+### 39.8 本轮明确未发生的事项
+
+- **未**修改任何已批准的 Requirement / Design 正文、Acceptance、Gate 状态或延期政策；
+- **未**实施任何代码整改；**未**修改 `server/`、`src/`、`scripts/` 下的任何文件；
+- **未**修改数据库 Schema 或 Migration；**未**执行任何数据库写操作、Reset、Bootstrap、Cleanup；
+- **未**把任何能力的 `Product Scope` 写成已裁剪；全部 54 项仍为 `SCOPE_REVIEW_PENDING`；
+- **未**签发任何 Acceptance / Freeze / `Design PASS`；**未**授权任何 Implementation；
+- **未**改变 D-01～D-04 的延期状态；**未**开放 WP-I、WP-J 或 M-15；**未**恢复旧 M1 13 Gate；
+- **未**执行 Release 或 Deploy；**未** Push / Merge / Tag。
+
+**边界**：本节登记的是**建议**。它**不**改变任何已批准合同、验收状态或延期政策，
+**不**使任何 Capability 变为 `VERIFIED` 或 `PASS`，**不**授权任何 Implementation。
 
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 

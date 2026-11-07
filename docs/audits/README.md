@@ -14,7 +14,7 @@
 
 | 审计基线 | 手册 | Domain | 审计版本 | 审计基准 SHA | 审计状态 | 详细台账 |
 |---|---|---|---|---|---|---|
-| B3101 / B3121 采购与委外代码审计基线（2026-11-07） | B3101 采购管理、B3121 委外管理 | Procurement & Outsourcing | `v0.1` | `9b9cb09799aa05ccac43d02ac1718083921c6d04` | `PRELIMINARY_STATIC_REVIEW` | [`b3101-b3121-code-audit-baseline-20261107.md`](./b3101-b3121-code-audit-baseline-20261107.md) |
+| B3101 / B3121 采购与委外代码审计基线（2026-11-07） | B3101 采购管理、B3121 委外管理 | Procurement & Outsourcing | `v0.2` | `9b9cb09799aa05ccac43d02ac1718083921c6d04` | `PRELIMINARY_STATIC_REVIEW` | [`b3101-b3121-code-audit-20261107.md`](./b3101-b3121-code-audit-20261107.md) |
 
 ## 登记条目
 
@@ -22,17 +22,18 @@
 
 | 项 | 值 |
 |---|---|
-| 详细台账 | [`b3101-b3121-code-audit-baseline-20261107.md`](./b3101-b3121-code-audit-baseline-20261107.md) |
+| 详细台账 | [`b3101-b3121-code-audit-20261107.md`](./b3101-b3121-code-audit-20261107.md) |
 | 覆盖手册 | B3101《采购管理操作手册 V1.0》、B3121《委外管理操作手册 V1.0》 |
 | 覆盖 Capability | PRC-01..PRC-26、VMI-01..VMI-05、OUT-01..OUT-23（登记于台账 §3） |
 | 对应 Domain | Procurement & Outsourcing |
-| 审计版本 | `v0.1` |
+| 审计版本 | `v0.2`（增加产品范围裁剪原则；保留 v0.1 审计事实） |
 | 审计基准 SHA | `9b9cb09799aa05ccac43d02ac1718083921c6d04`（`master`，2026-11-07） |
 | 审计状态 | `PRELIMINARY_STATIC_REVIEW`（初步静态代码审查） |
 | 审计方法 | 远端静态代码审查；**未**运行任何测试套件，**未**连接真实 MySQL |
 | Issue 总数 | 17 |
 | Issue 状态统计 | `DOCUMENTED` 14；`NEEDS_REVALIDATION` 2；`DEFERRED_NOT_AUTHORIZED` 1 |
-| 项目状态登记 | [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §38 |
+| 产品范围建议 | [`docs/decisions/product-scope-rebaseline-proposal-20261107.md`](../decisions/product-scope-rebaseline-proposal-20261107.md)（`PENDING`，**待业务所有者批准**） |
+| 项目状态登记 | [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §38（审计基线登记）与 §39（产品范围重定基线建议） |
 | 能力矩阵登记 | [`docs/status/CAPABILITY_MATRIX.md`](../status/CAPABILITY_MATRIX.md)「B3101 / B3121 审计基线登记」 |
 | 本轮性质 | **仅登记审计基线**：未实施任何代码整改，未签发任何 Acceptance / Freeze |
 
@@ -43,13 +44,16 @@
 - 涉及运行时、数据库约束、并发、真实权限与端到端结果的结论，在对应 Issue 中保持 `NEEDS_REVALIDATION`，
   **不得**写成已通过或已失败的运行时结论；
 - 台账 §7 的 Package A～D 只是**建议**，**不是**实施授权；
+- **B3101 / B3121 手册仅是业务参考，不是逐项必须复刻的产品范围。** 台账 §0.5～§0.7 已确立
+  「参考金蝶、按需建设、非 1:1 复刻」原则：台账列出的新增业务功能与 UI 缺口，其
+  `Product Scope` 默认是 `SCOPE_REVIEW_PENDING`，**不得**直接升格为开发任务；
 - M1-Core 首期包级 Acceptance（`M1_CORE_ACCEPTANCE_PASS`，2026-11-07）覆盖范围**仅**其七 Gate，
   **不**覆盖本台账的 Capability 粒度，**也不**授予 Capability Freeze / Domain Acceptance。
 
 ## 持续状态更新机制
 
 后续所有 B3101 / B3121 开发任务，都必须以
-[`b3101-b3121-code-audit-baseline-20261107.md`](./b3101-b3121-code-audit-baseline-20261107.md)
+[`b3101-b3121-code-audit-20261107.md`](./b3101-b3121-code-audit-20261107.md)
 作为**详细 Issue 台账**。本索引与
 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) 只维护摘要与链接，**不复制** Issue 清单。
 
@@ -75,6 +79,20 @@ IDENTIFIED → DOCUMENTED → AUTHORIZED → IMPLEMENTING → CODE_COMPLETE → 
    [`docs/status/CAPABILITY_MATRIX.md`](../status/CAPABILITY_MATRIX.md)。
 
 这些文件**不会自动同步**；每次开发任务结束时必须显式执行状态同步。
+
+### 四条轴不得互相替代
+
+除 Issue 的证据状态链外，台账 v0.2 另设三条独立轴（台账 §0.6）：
+
+| 轴 | 用途 | 本目录的处理 |
+|---|---|---|
+| `Evidence Status` | 代码问题证据状态（静态 / 实测必须区分） | 本索引的 `DOCUMENTED` / `NEEDS_REVALIDATION` 等即属此轴 |
+| `Product Scope` | 该能力是不是本 ERP 未来要做的 | `SCOPE_REVIEW_PENDING`（默认）/ `CORE_REQUIRED` / `SIMPLIFIED` / `OPTIONAL` / `DEFERRED` / `OUT_OF_SCOPE`；后五项**须有可追溯 Owner / Scope Decision**，**不能**由开发者或 AI 宣告 |
+| `Authorization` | 本次是否授权动手开发 | `NOT_AUTHORIZED`（默认）/ `AUTHORIZED` / `DEFERRED_NOT_AUTHORIZED`；**不因** `Product Scope = CORE_REQUIRED` 自动授权 |
+
+范围裁剪建议与待批准的 Scope Change Proposal 见
+[`docs/decisions/product-scope-rebaseline-proposal-20261107.md`](../decisions/product-scope-rebaseline-proposal-20261107.md)；
+其状态为 `PENDING`，**未**获业务所有者批准前，已批准合同全部维持原状。
 
 ### 不可混用的状态
 

@@ -11,6 +11,7 @@
 |---|---|---|
 | [`OPEN-BUSINESS-DECISIONS.md`](./OPEN-BUSINESS-DECISIONS.md) | 尚未裁定的业务政策与设计决策登记 | `ACTIVE` |
 | [`m1-core-scope-rebaseline-20261102.md`](./m1-core-scope-rebaseline-20261102.md) | `M1-SRD-01` —— M1 首期范围重定基线决定（SRD-01 / SRD-02 / SRD-03） | `APPROVED`（仅三项范围决定；不含任何 Implementation 授权） |
+| [`product-scope-rebaseline-proposal-20261107.md`](./product-scope-rebaseline-proposal-20261107.md) | B3101 / B3121 **产品范围重定基线建议**与 `SCP-01`～`SCP-15` Scope Change Proposal：54 项能力逐项 `Product Scope` 建议、危险写入路径处置建议、复用约束与交付标准改写建议 | `PENDING` —— **全部是建议**，待业务所有者逐项批准；未批准前已批准 Requirement / Design / Acceptance / 延期政策**全部原样有效** |
 
 ## 登记规则
 

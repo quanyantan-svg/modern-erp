@@ -27,7 +27,7 @@
 
 | Manual | 模块 | Domain | 当前 Requirement | 当前 Design | 实现 / 验收证据 | 状态 |
 |---|---|---|---|---|---|---|
-| B3101 | 采购管理 | Procurement & Outsourcing | [`procurement-outsourcing.md` §31.3.1](../requirements/procurement-outsourcing.md) · PRC-01..26 | [`procurement-outsourcing.md` §26](../design/procurement-outsourcing.md) + [`procurement-outsourcing-m1-core.md`](../design/procurement-outsourcing-m1-core.md)（M1-Core 首期） | Acceptance `NOT READY`（§31.11）；M1 13 个 Gate 全部 `NOT_RUN`；M1-Core 首期七 Gate 7/7 `PASS` 且包级 Acceptance 已签发（§37.55）；**审计基线** [`v0.1` / `PRELIMINARY_STATIC_REVIEW`](../audits/b3101-b3121-code-audit-baseline-20261107.md) | `BLOCKED` |
+| B3101 | 采购管理 | Procurement & Outsourcing | [`procurement-outsourcing.md` §31.3.1](../requirements/procurement-outsourcing.md) · PRC-01..26 | [`procurement-outsourcing.md` §26](../design/procurement-outsourcing.md) + [`procurement-outsourcing-m1-core.md`](../design/procurement-outsourcing-m1-core.md)（M1-Core 首期） | Acceptance `NOT READY`（§31.11）；M1 13 个 Gate 全部 `NOT_RUN`；M1-Core 首期七 Gate 7/7 `PASS` 且包级 Acceptance 已签发（§37.55）；**审计基线** [`v0.2` / `PRELIMINARY_STATIC_REVIEW`](../audits/b3101-b3121-code-audit-20261107.md) | `BLOCKED` |
 | B3102 | 销售管理 | Sales & Customer | [`sales-customer/01-domain-closure.md` §34.8](../requirements/sales-customer/01-domain-closure.md) · CAP-1..27 | [`sales-customer/01-domain-technical-design.md` §29](../design/sales-customer/01-domain-technical-design.md) | Wave 6/7/8/9 + Gate A 已冻结；**整域未冻结**，Waves 1–2 无验收记录 | `HISTORICAL_EVIDENCE` |
 | B3103 | 信用管理 | Sales & Customer | [`sales-customer/01-domain-closure.md` §34.8](../requirements/sales-customer/01-domain-closure.md) + [`03-wave-9-amendments.md`](../requirements/sales-customer/03-wave-9-amendments.md)（SC82–SC107）· CAP-28..36 | [`sales-customer/04-wave-9-credit-baseline.md` §36](../design/sales-customer/04-wave-9-credit-baseline.md) + [`05-wave-11-stage-c.md` §37.54](../design/sales-customer/05-wave-11-stage-c.md) | Wave 9 / Gate A / Wave 10 已冻结；W11-SEC-01 与 W11-A U1/U2/U3 单元级已冻结；**W11-A 整包未签发** | `HISTORICAL_EVIDENCE` |
 | B3104 | 库存管理 | Inventory & Warehouse | [`inventory-warehouse.md` §32.3](../requirements/inventory-warehouse.md) · INV-01..38 | [`inventory-warehouse.md` §27](../design/inventory-warehouse.md) | 实现 Partial；**未见独立 Domain-Level Acceptance** | `HISTORICAL_EVIDENCE` |
@@ -47,20 +47,21 @@
 | B3118 | 工程数据 | Master & Engineering | [`master-engineering.md` §28.3](../requirements/master-engineering.md) · ME-01..31 | [`master-engineering.md` §23](../design/master-engineering.md) | 实现完成；**未见独立 Domain-Level Acceptance** | `HISTORICAL_EVIDENCE` |
 | B3119 | 生产管理 | Manufacturing & Quality | [`manufacturing-quality.md` §29.3](../requirements/manufacturing-quality.md) · MQ-01..43 | [`manufacturing-quality.md` §24](../design/manufacturing-quality.md) | 实现完成；**未见独立 Domain-Level Acceptance** | `HISTORICAL_EVIDENCE` |
 | B3120 | 计划管理 | Planning | [`planning.md` §30.2](../requirements/planning.md) · PL-01..45 | [`planning.md` §25](../design/planning.md) | `Final Acceptance: PASS`；**有明确用户 Freeze** | `VERIFIED` |
-| B3121 | 委外管理 | Procurement & Outsourcing | [`procurement-outsourcing.md` §31.3.3 + VMI-01..05](../requirements/procurement-outsourcing.md) · OUT-01..23 | [`procurement-outsourcing.md` §26](../design/procurement-outsourcing.md) + [`procurement-outsourcing-m1-core.md`](../design/procurement-outsourcing-m1-core.md)（M1-Core 首期） | Acceptance `NOT READY`；M1 全范围候选设计仍在待审区 `PENDING_REVIEW`；M1-Core 首期七 Gate 7/7 `PASS` 且包级 Acceptance 已签发（§37.55）；**审计基线** [`v0.1` / `PRELIMINARY_STATIC_REVIEW`](../audits/b3101-b3121-code-audit-baseline-20261107.md) | `BLOCKED` |
+| B3121 | 委外管理 | Procurement & Outsourcing | [`procurement-outsourcing.md` §31.3.3 + VMI-01..05](../requirements/procurement-outsourcing.md) · OUT-01..23 | [`procurement-outsourcing.md` §26](../design/procurement-outsourcing.md) + [`procurement-outsourcing-m1-core.md`](../design/procurement-outsourcing-m1-core.md)（M1-Core 首期） | Acceptance `NOT READY`；M1 全范围候选设计仍在待审区 `PENDING_REVIEW`；M1-Core 首期七 Gate 7/7 `PASS` 且包级 Acceptance 已签发（§37.55）；**审计基线** [`v0.2` / `PRELIMINARY_STATIC_REVIEW`](../audits/b3101-b3121-code-audit-20261107.md) | `BLOCKED` |
 | B3122 | 工作流设计与配置 | Platform | [`document.md` §22.22](../../document.md)（仅手册基线） | **无 Platform Design** | 仍然开放（正确） | `NOT_STARTED` |
 
 ## B3101 / B3121 审计基线登记（2026-11-07）
 
 | 项 | 值 |
 |---|---|
-| 审计基线正文 | [`docs/audits/b3101-b3121-code-audit-baseline-20261107.md`](../audits/b3101-b3121-code-audit-baseline-20261107.md) |
+| 审计基线正文 | [`docs/audits/b3101-b3121-code-audit-20261107.md`](../audits/b3101-b3121-code-audit-20261107.md) |
 | 审计索引 | [`docs/audits/README.md`](../audits/README.md) |
-| 审计版本 / 审计状态 | `v0.1` / `PRELIMINARY_STATIC_REVIEW`（初步静态代码审查） |
+| 审计版本 / 审计状态 | `v0.2` / `PRELIMINARY_STATIC_REVIEW`（初步静态代码审查；v0.2 增加产品范围裁剪原则，保留 v0.1 审计事实） |
 | 审计基准 SHA | `9b9cb09799aa05ccac43d02ac1718083921c6d04`（`master`） |
 | 覆盖 Capability | PRC-01..PRC-26、VMI-01..VMI-05、OUT-01..OUT-23 |
 | 对应 Domain | Procurement & Outsourcing |
-| 项目状态登记 | [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) §38 |
+| 产品范围建议 | [`docs/decisions/product-scope-rebaseline-proposal-20261107.md`](../decisions/product-scope-rebaseline-proposal-20261107.md) —— `PENDING`，**待业务所有者批准**；54 项当前 `Product Scope` 一律 `SCOPE_REVIEW_PENDING` |
+| 项目状态登记 | [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) §38（审计基线）与 §39（产品范围重定基线建议） |
 
 ### 六个验收轴的当前取值（**互不替代**）
 
@@ -88,6 +89,26 @@
    **不得**因代码存在或审计记录存在而视为可实施。
 7. 审计台账登记的问题**不得**被描述为已修复或已验收；整改必须先经 Requirement / Design / 授权门禁
    （`AGENTS.md §4`），并按台账 §0.3 / §11 的状态迁移链推进。
+
+### 产品范围建议（**待业务所有者裁定；本表状态不受影响**）
+
+| 项 | 内容 |
+|---|---|
+| 建议文档 | [`docs/decisions/product-scope-rebaseline-proposal-20261107.md`](../decisions/product-scope-rebaseline-proposal-20261107.md) —— `PENDING` |
+| 建议覆盖 | PRC-01..PRC-26、VMI-01..VMI-05、OUT-01..OUT-23 共 54 项，逐项给出 `Product Scope` 建议值 |
+| 建议分布 | `CORE_REQUIRED` 26；`SIMPLIFIED` 14；`OPTIONAL` 3；`DEFERRED` 9；`OUT_OF_SCOPE` 2 |
+| **当前生效值** | 全部 54 项 `Product Scope` = **`SCOPE_REVIEW_PENDING`**（默认） |
+| Scope Change Proposal | `SCP-01`～`SCP-15`，**全部待业务所有者批准** |
+| 范围审查结论 | 现行 Requirement §31.3 / §31.4 / §31.8 / §31.10 与 Design §26.27 / §26.31 **确实把金蝶手册的几乎全部功能无条件列为必须实现**（54 项全部 `COVERED` 目标、49 项必须闭环、明文禁止 defer VMI-03 / VMI-05） |
+
+**纪律**：
+
+1. 产品范围建议**不改变**本表 `状态` 列的任何取值；B3101 / B3121 仍为 `BLOCKED`；
+2. `Product Scope` 与本表 `状态` 是**两条不同的轴**，**不得**互相替代，也**不得**由范围建议反推覆盖状态；
+3. 未经业务所有者批准，`SCP-01`～`SCP-15` **一律不生效**；已批准 Requirement / Design / Acceptance /
+   延期政策全部维持原状；
+4. **不得**把金蝶原版的菜单数量、表单数量或操作步骤数量作为开发完成标准；
+5. 范围裁剪**不得**放宽库存、金额、权限、来源、事务、幂等与审计等核心正确性约束。
 
 ## 覆盖缺口说明
 
