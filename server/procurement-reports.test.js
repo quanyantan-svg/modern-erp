@@ -48,6 +48,40 @@ describe('Procurement Wave I period/WIP/opening/analytics reports', () => {
     assert.equal(myRow.processingFeeCents, 0);
   });
 
+  test('Outsourcing execution counts only effected receipts as finished', async () => {
+    await qualifyOutsourceSupplier();
+    const order = await fixture.request('POST', '/api/procurement/outsourcing/orders', fixture.tokens.admin, {
+      supplierId: 'supplier-001', productId: 'product-001', orderQuantity: 100, businessDate: isoDate(),
+    });
+    assert.equal(order.status, 201, order.data.error);
+    const insert = fixture.db.prepare(`INSERT INTO outsourcing_receipts
+      (id,receipt_no,order_id,quantity,received_date,supplier_id,business_status,processing_fee_cents,creator_id,created_at,updated_at)
+      VALUES(?,?,?,?,?,'supplier-001',?,?,'user-admin',?,?)`);
+    const now = new Date().toISOString();
+    for (const [id, quantity, status, fee] of [
+      ['pending', 20, 'PENDING_INSPECTION', 2000],
+      ['effected', 30, 'EFFECTED', 3000],
+      ['cancelled', 10, 'CANCELLED', 1000],
+    ]) {
+      insert.run(`${order.data.id}-${id}`, `R-${order.data.id}-${id}`, order.data.id, quantity, isoDate(), status, fee, now, now);
+    }
+    const report = await fixture.request('GET', '/api/reports/outsourcing/execution', fixture.tokens.admin);
+    assert.equal(report.status, 200, report.data.error);
+    const row = report.data.report.find((item) => item.orderId === order.data.id);
+    assert.equal(row.pendingInspection, 20);
+    assert.equal(row.cumulativeFinished, 30);
+    assert.equal(row.processingFeeCents, 3000);
+    assert.equal(row.progress, 0.3);
+    assert.equal(row.costEvidenceStatus, 'PROVISIONAL');
+    fixture.db.prepare("UPDATE outsourcing_receipts SET business_status='CANCELLED' WHERE id=?")
+      .run(`${order.data.id}-effected`);
+    const pendingOnly = await fixture.request('GET', '/api/reports/outsourcing/execution', fixture.tokens.admin);
+    const pendingOnlyRow = pendingOnly.data.report.find((item) => item.orderId === order.data.id);
+    assert.equal(pendingOnlyRow.cumulativeFinished, 0);
+    assert.equal(pendingOnlyRow.pendingInspection, 20);
+    assert.equal(pendingOnlyRow.costEvidenceStatus, 'PROVISIONAL', '没有已生效收货不能宣称成本证据最终确定');
+  });
+
   test('Material position read model exposes per-line cumulative math', async () => {
     await qualifyOutsourceSupplier();
     // M1C-WP-3：委外用料快照必须来自已批准的 OUTSOURCE BOM（每单位用量 × 订单总量 = 5）。
