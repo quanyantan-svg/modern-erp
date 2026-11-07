@@ -2332,6 +2332,20 @@ B3101_B3121_PRODUCT_SCOPE_REVIEW_PROPOSED
 | 远端状态 | **未** Push / Merge / Tag / Release / Deploy；`github/master` 仍为 `9b9cb09799aa05ccac43d02ac1718083921c6d04`，`origin/master` 仍为 `1de469217ce0ebf83b8c5a2df69c2d6df63a1718`；本地 `master` 领先 |
 | `package.json` / release tag | **未**变化 |
 
+## 40. Package A 采购与委外正确性整改增量（2026-11-07）
+
+本节是本次任务的**当前状态增量**；详细逐项证据与授权边界只在 [`B3101/B3121 审计台账 §11`](../audits/b3101-b3121-code-audit-20261107.md) 维护。§38 的 17 项统计是其日期化审计基线，不再代表本轮工作树状态。
+
+| 项 | 当前状态 |
+|---|---|
+| 已实施且 focused 测试通过 | `AUD-PRC-003`（采购/委外资格及业务日期）；`AUD-OUT-002`（委外报表仅计生效收货，待检单列）。二项均为 `TESTED`，**未**签发 Acceptance |
+| 待裁定或复验 | Package A 其余 Issue 的完整矩阵与 `AUD-PRC-006` Dependency Change Request 见审计台账 §11；`AUD-OUT-001` 保持 `DEFERRED_NOT_AUTHORIZED` |
+| 高风险入口 | `AUD-FE-001` 与 `AUD-PRC-001` 的演示/伪来源正式写入口仍待 `SCP-16` 处置；本轮未将其宣称安全或关闭 |
+| 验收边界 | M1-Core 七 Gate 原有 7/7 PASS 与 R-01～R-20 风险记录保持其既有范围；本轮未重新签发受影响 Gate，Procurement & Outsourcing Domain Acceptance 仍 `NOT READY` |
+| 产品范围 | `SCP-01`～`SCP-16` 全部 `PENDING`；B3101/B3121 未获 Capability Freeze 或 Manual Closure |
+
+本轮不涉及 schema/migration、真实数据库写入、MySQL Gate、发布或远端 Git 写操作。测试与本地提交锚点见台账 §11 交付记录和 `log/2026-11-07.md`；未运行的 Gate 不记为 PASS。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
