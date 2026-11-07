@@ -48,6 +48,10 @@
 >   （审查 SHA `70edc23aefdca9ee95c45be1b5933fd9cdb7f9e1`）精确融合至本文件 §6、§9.3、
 >   §13–§17，跨 Domain ACK-4 规范提升至 `solution.md §15.1`。候选原文保留作来源快照。
 >   本次只激活 Design，**不授权 Implementation / MySQL / M-15 / Migration**，7 个 Gate 状态不变。
+> - 本轮（`M1C-G04-D2-DESIGN-AMENDMENT`，2026-11-07）：Procurement & Outsourcing Domain
+>   Owner 批准 G04 可达性与证据层级的 Design-only 修订。§13.1 的 `M1C-G04` 拒绝断言现区分
+>   合法 L1 净供应不足、L3 历史异常负增量防御与不受支持基数；原 409 守卫、严格支持范围、事务、
+>   零副作用及审计要求全部保留。本修订不签发 `M1C-G04 PASS`，不授权 Implementation 或数据库操作。
 
 ## 1. 位置、与旧候选设计的关系
 
@@ -756,10 +760,19 @@ L1 不冒充能触发内部碰撞，L2 不替代真实 HTTP 正向通路。Write
 | `M1C-G01` | L1：`createReceiptNotice()` 经兼容单 PO 与多 PO `sourceAllocations` 创建标准采购通知 → 转换 → 采购入库；另建 OUTSOURCE 通知与无通知直接 PO → 采购入库路径 | HTTP + SQLite/MySQL | `createReceiptNotice()`（或其同事务私有 helper）原子创建表头、明细、已验证来源行与显式初始 0；转换模块不创建来源行；新建后部分转换成立且累计量正确增长；重放不重置、不重复扣减；行级多 PO 来源成立；OUTSOURCE 不写标准采购来源行；容量上界**按通知 `business_type` 分域**；交期消费进入不可变台账；直接路径仍合法 | 历史 NULL 行拒绝且历史数据零改写；来源分配和不等于通知行、PO/产品/供应商不匹配、交期不可判定、容量越界、委外订单剩余不可证明、转换后重转均精确拒绝 | 拒绝时收货 / 库存 / 估值 / 通知 / 来源累计量 / 交期台账**逐字段零变化** + 拒绝审计恰好 1 条 | `NOT_RUN` |
 | `M1C-G02` | L1：委外订单 → 显式创建/提交/独立审批加工费 PO → OUTSOURCE 完工通知 → 待检收货（带明细）→ IQC → 生效；正向主体必须为已配置的委外收货员，管理员不得替代 | HTTP + Quality + Inventory | 加工费 PO 为唯一单行来源且 `APPROVED`；通知、收货创建与生效逐段重读 PO/Item 来源；表头与 **≥1 条明细**原子落库；IQC 从正式明细可达；建待检与确认效力分离；生效后成品与成本证据一致 | 缺/未审批/错来源 PO、错 PO Item、缺明细、来源不匹配、质量门禁未过均精确拒绝；`OUTSOURCING_MANAGE` 单独持有时执行收货录入或生效 → 403 | 拒绝时 PO / Item / 收货 / IQC / 库存 / 估值 / 成本证据**逐字段零变化** + 拒绝审计恰好 1 条 | `NOT_RUN` |
 | `M1C-G03` | L1：物料行 → 发料 / 补料 / 退料；L2：仅验证 HTTP 不可达的 strict Mutation Key 碰撞 | HTTP + Inventory / Valuation snapshots；L2 primitive | 沿 canonical 仓位写**真实**物理库存、跟踪与估值；企业所有权不变；内部仓与 WIP 仓数量与流水可对账；多物料行与 SERIAL 拆分各自成键，实际腿数 == 预期腿数 | L1：缺 WIP 仓、库存不足、UOM/身份异常及同外部键异内容精确拒绝；L2：异指纹同 Mutation Key 409 `INVENTORY_MUTATION_UNEXPECTED_REPLAY`；重放幂等 | 拒绝时业务单据 / 库存 / 跟踪 / 估值 / 身份层**逐字段零变化** + 拒绝审计恰好 1 条；L2 不冒充 L1 | `NOT_RUN` |
-| `M1C-G04` | L1：发料 → 分批完工 → 生效 | HTTP + Valuation snapshots | 增量倒冲公式正确；材料成本来自 canonical 位置口径分摊（**非**全局平均价）；成品经唯一 Writer 入企业仓；OUT-21 成本证据 = 实际倒冲材料账面价值 + 加工费 | 增量 < 0 或 > 可用净供应 409；基数不受支持 409 `OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED`；重复确认不双扣 / 双收 | 重复 / 并发时零重复扣减、零重复入库 | `NOT_RUN` |
+| `M1C-G04` | L1：发料 → 分批完工 → 生效 | HTTP + Valuation snapshots | 增量倒冲公式正确；材料成本来自 canonical 位置口径分摊（**非**全局平均价）；成品经唯一 Writer 入企业仓；OUT-21 成本证据 = 实际倒冲材料账面价值 + 加工费 | **可达的 L1 业务拒绝**：本次增量 `> remaining + 1e-9` → 409 `OUTSOURCING_WIP_INSUFFICIENT`，业务事实逐字段零变化、拒绝审计恰一；BOM 快照／基数不受支持 → 409 `OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED`。**异常数据防御拒绝**：`incremental < 0` → 409 `OUTSOURCING_WIP_INSUFFICIENT`；该状态在已批准的状态迁移、BOM 快照与事务不变量成立时未发现合法 L1 HTTP 构造路径；由受控 L3 历史异常种子 + 生产 HTTP 的 D-1（backflush）与 D-1-C（confirm）证明 fail closed，**不得**列为合法 L1 正向造数。重复确认仍不得双扣／双收入库 | 拒绝时业务事实逐字段零变化 + 拒绝审计恰好 1 条；重复 / 并发时零重复扣减、零重复入库 | `NOT_RUN` |
 | `M1C-G05` | 无（浏览器） | Browser | 两个工作面无 `api.get/post` TypeError；320 / 390 / 430 / 680 四宽度交互成功；服务端 RBAC 生效；**不含**视觉体系重做 | 无权用户访问 → 页面级处理 + 服务端 403 | — | `NOT_RUN` |
 | `M1C-G06` | L1：委外加工费草稿创建、专用/共享 POST、共享 MATCH、普通采购自动开票内部调用链及普通采购共享入口回归；并覆盖其余延期危险写入 | HTTP + Finance + Inventory snapshots | HTTP 危险写入精确拒绝；管理员与持财务权限主体通过 RBAC 后由来源级 Guard 返回 409；未授权主体在读来源前 403；内部服务调用同一 Guard 并按既有异常合同传播；委外草稿仍为 `DRAFT`；普通采购创建/匹配/过账仍合法 | 管理员和财务主体命中委外来源 → 409；未授权主体 → 403 且不泄露来源；专用 POST、共享 POST/MATCH 与内部服务均不可绕过；普通采购同链路成功 | **零** AP open item / 凭证 / 分录 / 库存位 / 结算行 / 账单 `status` / `grni_cents` / `variance_cents` / 成本证据写入（逐字段零变化）+ 拒绝审计恰好 1 条 | `NOT_RUN` |
 | `M1C-G07` | L1：全部 Core 业务对象经生产 API 造数，含加工费 PO 正式创建/提交/审批 | HTTP + Real MySQL 8 concurrency | 生产 API 端到端**无手写 SQL 造数**；加工费 PO Item ID 经商业更新保持稳定；运行时 PO/Item Writer/Mutator 有 zero-bypass proof；SQLite / MySQL 行为对等；同源不同 Key 并发只一方成功 | 同 Key 异内容、同源第二张、PO Change ADD/MODIFY/CANCEL、通用 PO 类型注入及来源篡改均精确拒绝 | 拒绝方 PO / Item / 幂等 / 审计及下游快照逐字段相同（不得只断言数量） | `NOT_RUN` |
+
+**`M1C-G04-D2` 证据层级／可达性限定（2026-11-07）**：
+`incremental = perUnitQuantity × cumulativeEffectiveFinished − backflushedQuantity`。合法 L1 HTTP 的净供应不足
+由 WP-G 证明；历史 MySQL CR-07/08 仅补充其已真实执行的竞争子集，不据此推导 G07 败方全字段证据已经闭合。
+负增量守卫不得删除；D-1／D-1-C 的 SQL 仅作为有标记的 L3 历史异常种子，随后调用生产 Handler，其结论仅为
+防御性 409 + 业务事实逐字段零变化 + 拒绝审计恰一。合法路径不可达判断以 §9.1 的状态单向迁移、BOM 快照冻结、
+`backflushed_quantity` 仅由合法正增量写入及事务内权威重读等不变量成立为前提，并受浮点残差有限枚举、历史存量
+未核查的限制；不同 Mutation Key 的并发正确性也不能仅由 `inventory_mutation_log.idempotency_key UNIQUE` 推导。
+本修订不改变 G04 成功语义、零副作用、账面成本、成品唯一 Writer、RBAC/SOD 或首期严格支持范围。
 
 #### 13.1.2 `TC-01 / M-15` 条件前置
 

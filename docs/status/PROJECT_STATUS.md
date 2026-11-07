@@ -1900,6 +1900,22 @@ M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
   未改变数据库权限、未修改目标身份、未签发第二份 ACK-4、未复用历史 Run ID、未自动重跑、
   未执行额外 Migration。
 
+### 37.49 M1C-G03 Owner Acceptance 与 G04 D-2 Design 裁定（2026-11-07）
+
+- **G03 Owner 决定**：Procurement & Outsourcing Domain Owner 明确接受真实 MySQL 四事件 Mutation
+  Log/Key/身份完整重演尚未证明、G07 16 表 Schema Parity 不含 `inventory_mutation_log` 等有界残余风险，
+  正式签发 `M1C-G03 PASS`。正式记录：
+  [`docs/acceptance/m1-core-g03-owner-acceptance-20261107.md`](../acceptance/m1-core-g03-owner-acceptance-20261107.md)。
+- **G04 D-2 Design 裁定**：批准 `M1C-G04-D2 DESIGN_AMENDMENT_APPROVED`，仅修订 Active Design
+  §13.1 的可达性与证据层级表述：合法 L1 净供应不足与 L3 历史异常负增量防御分层，保留原 409 守卫、
+  严格支持范围、事务、业务事实零变化及拒绝审计恰一。修订记录：
+  [`docs/acceptance/m1-core-g04-d2-design-amendment-20261107.md`](../acceptance/m1-core-g04-d2-design-amendment-20261107.md)。
+- **七 Gate 当前状态**：G02/G03/G05/G06/G07=`PASS`；G01/G04=`INCONCLUSIVE`。
+- **包级状态**：`M1_CORE_ACCEPTANCE_BLOCKED` 保持；不签发 Capability Freeze、Domain Acceptance、
+  Manual Closure、Release Readiness 或 Release。
+- **未发生**：未修改生产代码、Requirement、DDL、Fixture、G07 Oracle 或已签发 Owner Acceptance；
+  未执行真实 MySQL、ACK-4、Migration、Push、Merge、Tag、Release 或 Deploy。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
