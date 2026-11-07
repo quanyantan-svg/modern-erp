@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import { createProcurementFixture } from './test-support/procurement-http-fixture.js';
+import { assertSupplierQualification } from './modules/procurement-sourcing.js';
 
 describe('Procurement Wave B sourcing and pricing', () => {
   let fixture;
@@ -26,7 +27,7 @@ describe('Procurement Wave B sourcing and pricing', () => {
   }
 
   test('source effectivity / disabled supplier / qualification expiry are enforced', async () => {
-    await qualifySupplier('supplier-002', isoDate(-30), isoDate(30));
+    await qualifySupplier('supplier-002', isoDate(-365), isoDate(365));
     const future = isoDate(60);
     const expired = isoDate(-180);
     const active = await fixture.request('POST', '/api/procurement/source-entries', fixture.tokens.admin, {
@@ -63,6 +64,46 @@ describe('Procurement Wave B sourcing and pricing', () => {
       productId: 'product-001', businessDate: isoDate(0), quantity: 100,
     });
     assert.equal(expiredDecision.status, 409, JSON.stringify(expiredDecision.data));
+  });
+
+  test('supplier qualification follows source type and business date', async () => {
+    const supplierId = 'supplier-003';
+    const today = isoDate();
+    const validFrom = isoDate(-60);
+    const validTo = isoDate(60);
+    const profile = async (procurementEnabled, outsourcingEnabled, from = validFrom, to = validTo) => {
+      const result = await fixture.request('PATCH', `/api/suppliers/${supplierId}/profile`, fixture.tokens.admin, {
+        procurementEnabled, outsourcingEnabled, category: 'GENERAL',
+        qualificationStatus: 'QUALIFIED', qualificationValidFrom: from, qualificationValidTo: to,
+      });
+      assert.equal(result.status, 200, result.data.error);
+    };
+    const denied = (type, date) => assert.throws(
+      () => assertSupplierQualification(fixture.db, supplierId, type, date),
+      (error) => error.status === 409,
+    );
+
+    await profile(false, true);
+    denied('PURCHASE', today);
+    assert.ok(assertSupplierQualification(fixture.db, supplierId, 'OUTSOURCE', today));
+    const blockedSource = await fixture.request('POST', '/api/procurement/source-entries', fixture.tokens.admin, {
+      supplierId, productId: 'product-003', sourceType: 'PURCHASE', effectiveFrom: today,
+    });
+    assert.equal(blockedSource.status, 409);
+    assert.equal(fixture.db.prepare('SELECT COUNT(*) n FROM source_list_entries WHERE supplier_id=? AND product_id=?').get(supplierId, 'product-003').n, 0);
+
+    await profile(true, false);
+    assert.ok(assertSupplierQualification(fixture.db, supplierId, 'PURCHASE', today));
+    denied('OUTSOURCE', today);
+
+    await profile(true, true, isoDate(10), isoDate(30));
+    denied('PURCHASE', today);
+    assert.ok(assertSupplierQualification(fixture.db, supplierId, 'PURCHASE', isoDate(15)));
+    denied('PURCHASE', isoDate(31));
+
+    await profile(true, true, isoDate(-60), isoDate(-10));
+    assert.ok(assertSupplierQualification(fixture.db, supplierId, 'PURCHASE', isoDate(-20)), '历史业务日期按当日有效期判断');
+    denied('PURCHASE', today);
   });
 
   test('quota conservation, deterministic rounding and split across suppliers', async () => {

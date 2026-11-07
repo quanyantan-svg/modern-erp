@@ -92,11 +92,16 @@ function listQuotaRows(db, { productId, sourceType, date }) {
   return db.prepare(sql).all(...params).map(rowToQuota);
 }
 
-function assertSupplierQualification(db, supplierId, productId) {
+function assertSupplierQualification(db, supplierId, sourceType, businessDate) {
   const row = db.prepare(`SELECT procurement_enabled,outsourcing_enabled,qualification_status,qualification_valid_from,qualification_valid_to FROM suppliers WHERE id=?`).get(supplierId);
   if (!row) throw new HttpError(409, '供应商不存在');
-  const date = new Date().toISOString().slice(0, 10);
-  if (row.qualification_status !== 'QUALIFIED' || (row.qualification_valid_to && row.qualification_valid_to < date)) {
+  if ((sourceType === 'PURCHASE' && !row.procurement_enabled)
+    || (sourceType === 'OUTSOURCE' && !row.outsourcing_enabled)) {
+    throw new HttpError(409, '供应商未启用该业务类型');
+  }
+  if (row.qualification_status !== 'QUALIFIED'
+    || (row.qualification_valid_from && row.qualification_valid_from > businessDate)
+    || (row.qualification_valid_to && row.qualification_valid_to < businessDate)) {
     throw new HttpError(409, '供应商资质无效或已过期');
   }
   return row;
@@ -206,7 +211,7 @@ export async function createSourceEntry(db, req, res, actor) {
   const sourceType = normalizeSourceType(body.sourceType);
   const date = body.effectiveFrom || new Date().toISOString().slice(0, 10);
   const enabled = body.enabled === undefined ? 1 : (body.enabled ? 1 : 0);
-  assertSupplierQualification(db, supplierId, productId);
+  assertSupplierQualification(db, supplierId, sourceType, date);
   const version = Number((db.prepare('SELECT COALESCE(MAX(version),0)+1 n FROM source_list_entries WHERE supplier_id=? AND product_id=? AND source_type=?').get(supplierId, productId, sourceType).n) || 1);
   const entryId = randomUUID(); const now = new Date().toISOString();
   transaction(db, () => {
@@ -280,7 +285,7 @@ export async function resolveSourcingDecision(db, req, res, actor) {
   for (const allocation of allocations) {
     const supplierId = allocation.quota?.supplierId || allocation.sourceEntry?.supplierId;
     if (!supplierId) continue;
-    assertSupplierQualification(db, supplierId, productId);
+    assertSupplierQualification(db, supplierId, procurementSourceType, businessDate);
   }
   // Manual override must include reason + permission.
   let overrideReason = null;
