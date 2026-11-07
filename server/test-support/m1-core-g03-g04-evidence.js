@@ -12,8 +12,9 @@
 // 身份层逐字段零变化」。下表是这五个域在真实 schema 中的**全部**表，
 // 外加 L1 发料路径自身写入的 canonical mutation log。
 export const G03_BUSINESS_FACT_TABLES = Object.freeze([
-  // 业务单据
-  'outsourcing_issues', 'outsourcing_supplements', 'outsourcing_returns', 'outsourcing_material_list',
+  // 业务单据（委外订单是发料/补料/退料所作用的单据本体）
+  'outsourcing_orders', 'outsourcing_issues', 'outsourcing_supplements', 'outsourcing_returns',
+  'outsourcing_material_list',
   // 库存（含 canonical mutation log：L1 发料路径自身写入的幂等账本）
   'inventory', 'inventory_transactions', 'inventory_mutation_log',
   // 跟踪（跟踪腿、身份分配、批次维度当前投影）
@@ -29,6 +30,25 @@ export const G03_BUSINESS_FACT_TABLES = Object.freeze([
   // 属估值域的附带事实；拒绝路径不得写入）
   'products',
 ]);
+
+// G03 业务事实表集的**真实**规模与存在性：由 schema 实际统计。
+//
+// 用途：让「G03 零副作用覆盖多少张表」这一数字始终可核对 —— 证据文档里的表数
+// 必须等于本报告的 `declared`，不得硬编码未经核对的数字。表集本身一旦增删，
+// 本报告随之变化，文档与断言都必须同步更新。
+export function g03BusinessFactTableReport(db) {
+  const missing = [];
+  for (const table of G03_BUSINESS_FACT_TABLES) {
+    const row = db.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type='table' AND name=?").get(table);
+    if (Number(row?.n || 0) !== 1) missing.push(table);
+  }
+  return Object.freeze({
+    declared: G03_BUSINESS_FACT_TABLES.length,
+    present: G03_BUSINESS_FACT_TABLES.length - missing.length,
+    missing: Object.freeze(missing),
+    tables: G03_BUSINESS_FACT_TABLES,
+  });
+}
 
 // L2 canonical inventory primitive 的「无部分写入」范围：物理腿、跟踪腿、
 // 估值流水、估值余额与 canonical mutation log。

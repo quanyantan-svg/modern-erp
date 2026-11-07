@@ -41,7 +41,7 @@ import {
   createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource,
 } from './test-support/procurement-http-fixture.js';
 import {
-  G03_BUSINESS_FACT_TABLES, snapshotTables,
+  G03_BUSINESS_FACT_TABLES, changedTables, g03BusinessFactTableReport, snapshotTables,
 } from './test-support/m1-core-g03-g04-evidence.js';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -229,6 +229,13 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
       materials = await snapshotMaterials(orderId, [lotProductId, serialProductId]);
     });
 
+    test('G03-0 G03 业务事实表集与真实 schema 一致（表数不得虚报）', () => {
+      const report = g03BusinessFactTableReport(fixture.db);
+      assert.deepEqual(report.missing, [], `G03 业务事实表集里的表必须真实存在：${report.missing.join(', ')}`);
+      assert.equal(report.present, report.declared, '表集声明数必须等于 schema 中真实存在的表数');
+      assert.equal(report.declared, 18, 'G03 业务事实表集为 18 张表；表集增删必须同步更新本断言与候审证据中的表数');
+    });
+
     test('G03-1 LOT / SERIAL 身份各自成键，跟踪腿数等于实际物理腿数，企业所有权不变', async () => {
       const lotIssue = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/issues`, fixture.tokens.outsourcing, {
         materialListId: materials[lotProductId], quantity: 3, issuedDate: isoDate(), idempotencyKey: 'wp7a-lot-1', lotId,
@@ -294,9 +301,9 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
     });
 
     test('G03-2 身份异常一律 409 且拒绝审计恰好一条、事实零变化', async () => {
-      const before = g03BusinessFacts();
-      const rejectsBefore = countRejects('OUTSOURCING_ORDER', orderId);
-
+      // 四个案例**逐个**采集拒绝前后的完整快照：每一次拒绝都独立成立，
+      // 不能靠「四次合起来没变」蒙混过关 —— 后一次的失败无法掩盖前一次的
+      // 副作用，反之亦然。
       const cases = [
         { name: 'LOT 物料缺少批次身份', body: { materialListId: materials[lotProductId], quantity: 1, issuedDate: isoDate(), idempotencyKey: 'wp7a-bad-lot' }, code: 'WIP_IDENTITY_EVIDENCE_MISSING' },
         { name: 'SERIAL 物料数量不为 1', body: { materialListId: materials[serialProductId], quantity: 2, issuedDate: isoDate(), idempotencyKey: 'wp7a-bad-serial-qty', serialId }, code: 'WIP_IDENTITY_POLICY_MISMATCH' },
@@ -304,13 +311,33 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
         { name: 'SERIAL 物料携带批次身份', body: { materialListId: materials[serialProductId], quantity: 1, issuedDate: isoDate(), idempotencyKey: 'wp7a-bad-serial-lot', serialId, lotId }, code: 'WIP_IDENTITY_EVIDENCE_MISSING' },
       ];
       for (const item of cases) {
+        const before = g03BusinessFacts();
+        const rejectsBefore = countRejects('OUTSOURCING_ORDER', orderId);
+
         const response = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/issues`, fixture.tokens.outsourcing, item.body);
+
         assert.equal(response.status, 409, `${item.name} 必须 409，实际 ${response.status}`);
-        assert.equal(response.data.code, item.code, item.name);
+        assert.equal(response.data.code, item.code, `${item.name} 必须返回精确错误码`);
+        assert.deepEqual(g03BusinessFacts(), before, `${item.name} 拒绝后 G03 完整业务事实必须逐字段零变化`);
+        assert.equal(countRejects('OUTSOURCING_ORDER', orderId), rejectsBefore + 1,
+          `${item.name} 拒绝必须恰好新增 1 条拒绝审计`);
       }
-      assert.equal(countRejects('OUTSOURCING_ORDER', orderId), rejectsBefore + cases.length,
-        '每个业务门禁拒绝恰好新增 1 条拒绝审计');
-      assert.deepEqual(g03BusinessFacts(), before, '身份异常拒绝后 G03 完整业务事实必须逐字段零变化');
+    });
+
+    test('G03-2N 负控：同一完整快照比较在允许写入的路径上必须报告差异', async () => {
+      // 非空洞负控：G03-2 的「逐字段零变化」断言必须**有能力**发现差异。
+      // 这里在一条**被允许写入**的路径（合法发料）上运行同一比较，要求它报告
+      // 变化；若比较本身是恒假的，G03-2 的零变化断言就毫无意义。
+      const before = g03BusinessFacts();
+      const response = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/issues`, fixture.tokens.outsourcing, {
+        materialListId: materials[lotProductId], quantity: 1, issuedDate: isoDate(), idempotencyKey: 'wp7a-g03-2n-control', lotId,
+      });
+      assert.equal(response.status, 201, '合法发料必须成功');
+      const after = g03BusinessFacts();
+      const changed = changedTables(before, after);
+      assert.ok(changed.length > 0, '同一完整快照比较在允许写入的路径上必须报告差异');
+      assert.ok(changed.includes('inventory') || changed.includes('inventory_transactions'),
+        `合法发料必须改变库存或物理流水事实，实际变化表：${changed.join(', ') || '无'}`);
     });
 
     test('G03-3 缺仓与库存不足一律 409 且拒绝审计恰好一条、事实零变化', async () => {
@@ -565,6 +592,24 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
     let r1OpeningBalance = null;
     const r1BalanceKey = () => `NONE:warehouse-001:${r1ParentId}`;
 
+    // 本批的**独立**成本期望值：由本套件自己建立的输入推导，**不**取自任何
+    // 生产函数的输出。
+    //
+    //   BOM 每单位用量 0.005 × 每批收货 30 = 每批倒冲 0.15 单位
+    //   × canonical 位置口径单位成本 100 分 = 每批材料账面价值 **15 分**
+    //   + 本套件设置的 provisional 加工费 **30000 分**
+    //   = 每批成品估值 **30015 分**
+    //
+    // 对照仓把同产品单位成本抬到 99999 分：若实现退化为**全局平均价**，每批材料
+    // 账面价值会变成约 8249.92 分，本套件的绝对期望因此能**独立**检出该错误 ——
+    // 不依赖「用生产函数的另一个输出当预期值」。
+    const R1_BOM_PER_UNIT_QUANTITY = 0.005;
+    const R1_RECEIPT_QUANTITY = 30;
+    const R1_CANONICAL_UNIT_COST_CENTS = 100;
+    const R1_PROCESSING_FEE_CENTS = 30000;
+    const R1_EXPECTED_MATERIAL_COST_CENTS = 15;
+    const R1_EXPECTED_FINISHED_VALUE_CENTS = R1_EXPECTED_MATERIAL_COST_CENTS + R1_PROCESSING_FEE_CENTS;
+
     const readR1Balance = () => fixture.db.prepare(
       'SELECT * FROM inventory_valuation_balances WHERE balance_key=?',
     ).get(r1BalanceKey()) || null;
@@ -750,7 +795,23 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
         assert.equal(evidence.processing_fee_actual_cents, null, '首期不得提前写入加工费实际值');
         assert.equal(evidence.variance_cents, null, '首期不得提前写入差异');
 
-        // 该批成品估值 = 该批实际倒冲材料账面价值 + provisional 加工费。
+        // 独立期望（绝对值，由本套件自己的输入推导）：
+        //   每批材料账面价值 = BOM 每单位用量 × 每批收货量 × canonical 位置单位成本
+        //                    = 0.005 × 30 × 100 = 15 分
+        //   每批 provisional 加工费 = 30000 分
+        //   每批成品估值 = 15 + 30000 = 30015 分
+        //
+        // 这三个绝对值**不**取自任何生产函数的输出，因此能独立检出「材料成本
+        // 退化为全局平均价」这类错误（对照仓 99999 分/单位会把材料成本推到
+        // 约 8249.92 分，与 15 分严重偏离）。
+        assert.equal(Number(evidence.material_consumed_value_cents), R1_EXPECTED_MATERIAL_COST_CENTS,
+          `第 ${index + 1} 批材料账面价值必须为 ${R1_EXPECTED_MATERIAL_COST_CENTS} 分（BOM ${R1_BOM_PER_UNIT_QUANTITY} × ${R1_RECEIPT_QUANTITY} × ${R1_CANONICAL_UNIT_COST_CENTS} 分/单位）`);
+        assert.equal(Number(evidence.processing_fee_provisional_cents), R1_PROCESSING_FEE_CENTS,
+          `第 ${index + 1} 批 provisional 加工费必须为 ${R1_PROCESSING_FEE_CENTS} 分`);
+        assert.equal(Number(movements[0].value_delta_cents), R1_EXPECTED_FINISHED_VALUE_CENTS,
+          `第 ${index + 1} 批成品估值必须为 ${R1_EXPECTED_FINISHED_VALUE_CENTS} 分（${R1_EXPECTED_MATERIAL_COST_CENTS} 材料 + ${R1_PROCESSING_FEE_CENTS} 加工费）`);
+
+        // 构成关系同样成立：成品估值 = 该批实际倒冲材料账面价值 + provisional 加工费。
         const expectedValue = Number(evidence.material_consumed_value_cents) + Number(evidence.processing_fee_provisional_cents);
         assert.equal(Number(movements[0].value_delta_cents), expectedValue,
           `第 ${index + 1} 批成品估值必须等于该批实际倒冲材料成本 + provisional 加工费`);

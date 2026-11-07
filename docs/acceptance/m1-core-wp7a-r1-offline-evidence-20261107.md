@@ -57,7 +57,9 @@ movementGroupId / movementKind / businessDate / quantity / 位置身份 JSON）�
 `server/modules/outsourcing.js` 的 `saveIdempotency()` 位于事务内，拒绝时事务整体回滚，
 因此拒绝后 `idempotency_records` **零新增**。这使 `idempotency_records` 可以进入
 G03 的零变化快照（连同 `products` 的估值激活标记），快照覆盖面因此从旧实现的
-**3 张表（且限定在本订单内）**提升为 **18 张表的完整行**。
+**3 张表（且限定在本订单内）**提升为 **18 张表的完整行**（表数由
+`g03BusinessFactTableReport()` 按 schema 实际统计，断言见 §5 的 `G03-0`；本文档里的
+数字**不得**硬编码未经核对的取值）。
 
 ## 3. WP-H —— G01 历史测试的逐项归属与执行记录
 
@@ -136,7 +138,7 @@ G03 的零变化快照（连同 `products` 的估值激活标记），快照覆�
 
 | 域 | 表 |
 |---|---|
-| 业务单据 | `outsourcing_issues`、`outsourcing_supplements`、`outsourcing_returns`、`outsourcing_material_list` |
+| 业务单据 | `outsourcing_orders`、`outsourcing_issues`、`outsourcing_supplements`、`outsourcing_returns`、`outsourcing_material_list` |
 | 库存（含幂等账本） | `inventory`、`inventory_transactions`、`inventory_mutation_log`、`idempotency_records` |
 | 跟踪 | `tracked_inventory_movements`、`tracked_source_allocations`、`inventory_lot_balances` |
 | 估值 | `inventory_valuation_movements`、`inventory_valuation_balances` |
@@ -150,9 +152,16 @@ G03-2 / G03-3 / G03-4 各自断言（口径为实体作用域：`action='REJECT'
 
 | 例 | 拒绝分支 | 零副作用断言 |
 |---|---|---|
-| G03-2 | 身份异常 4 分支（LOT 缺批次 / SERIAL 数量≠1 / SERIAL 缺序列号 / SERIAL 携带批次） | 完整快照逐字段零变化 + 拒绝审计恰好 4 条 |
+| G03-2 | 身份异常 4 分支（LOT 缺批次 / SERIAL 数量≠1 / SERIAL 缺序列号 / SERIAL 携带批次） | **每个案例独立**采集拒绝前后的完整快照，并各自独立断言：409、精确错误码、完整快照逐字段零变化、拒绝审计**恰好新增 1 条**。四个案例不得靠「合起来没变」蒙混过关 |
 | G03-3 | 缺 WIP 仓、库存不足（退料超量） | 两处完整快照逐字段零变化 + 拒绝审计恰好 1 条/条 |
 | G03-4 | UOM 不符 | **由「仅 `issued_quantity == 0`」升级为完整快照逐字段零变化** + 拒绝审计恰好 1 条 |
+
+**新增两项自检**：
+
+- `G03-0`：G03 业务事实表集与真实 schema 一致 —— 每一张表都必须真实存在，
+  声明数必须等于实际存在数；表集增删必须同步更新该断言与本文档的表数。
+- `G03-2N`：**比较敏感性负控** —— 在一条**被允许写入**的路径（合法发料）上运行同一套完整
+  快照比较，要求它**报告差异**。若该比较是恒假的，G03-2 的「逐字段零变化」断言就毫无意义。
 
 **非空洞证明**：在 G03-4 的拒绝窗口内注入一处**跟踪层既有行的原地字段改写**
 （`UPDATE tracked_inventory_movements SET quantity=quantity+1`），G03-4 **实测 FAIL**；旧断言
@@ -182,7 +191,7 @@ G03-2 / G03-3 / G03-4 各自断言（口径为实体作用域：`action='REJECT'
 唯一 Writer 已被证明。
 
 **非空洞证明**：在第二个模块临时植入一处 `sourceType: 'OUTSOURCING_RECEIPT'` 字面量，
-`G04-R1-1` **实测 FAIL**；恢复后 10/10 PASS，生产文件 `git diff` 为空。
+`G04-R1-1` **实测 FAIL**；恢复后 12/12 PASS，生产文件 `git diff` 为空。
 
 ## 7. WP-F —— G04 逐批成本构成与 Movement/Balance 逐笔对账
 
@@ -208,8 +217,22 @@ G03-2 / G03-3 / G03-4 各自断言（口径为实体作用域：`action='REJECT'
 **口径说明**：成品 Movement 的金额**包含** provisional 加工费，因此**不得**断言它等于单独的
 材料成本；断言的是「材料成本 + 加工费」这一合同构成。
 
+**独立（绝对）成本期望**：本用例**不**把「同一生产函数产出的另一个结果」当作唯一预期值。
+三个绝对值由本套件自己建立的输入推导：
+
+| 量 | 推导 | 期望值 |
+|---|---|---|
+| 每批倒冲量 | BOM 每单位用量 0.005 × 每批收货 30 | 0.15 单位 |
+| 每批材料账面价值 | 0.15 单位 × canonical 位置单位成本 100 分/单位 | **15 分** |
+| 每批 provisional 加工费 | 本套件设置的 `processingFeeCents` | **30000 分** |
+| 每批成品估值 | 15 + 30000 | **30015 分** |
+
+对照仓把同产品单位成本抬到 99999 分/单位：若材料成本退化为**全局平均价**，每批材料账面
+价值会变成约 8249.92 分，与 15 分严重偏离 ⇒ 本用例**自身**即可检出该错误，不依赖任何生产
+函数的输出作为预期值。构成关系（Movement == 材料成本 + 加工费）作为**附加**断言保留。
+
 **非空洞证明**：临时把生产侧 `totalFinishedValue` 改为只含材料成本（去掉 provisional 加工费），
-`G04-R1-2` 与既有 `G04-1` **同时实测 FAIL**；恢复后 10/10 PASS，生产文件 `git diff` 为空。
+`G04-R1-2` 与既有 `G04-1` **同时实测 FAIL**；恢复后 12/12 PASS，生产文件 `git diff` 为空。
 
 **位置口径的非空洞性**：本 describe 同样种入同产品对照仓（99999 分/单位），若材料成本退化为
 全局平均价，材料账面价值将由 15 分偏离，逐批成本构成断言必然失败。
@@ -219,12 +242,12 @@ G03-2 / G03-3 / G03-4 各自断言（口径为实体作用域：`action='REJECT'
 | 项 | 结果 |
 |---|---|
 | Focused `server/m1c-wp7a-g03-l2-mutation-key.test.js`（WP-A） | **4/4 PASS** |
-| Focused `server/m1c-wp7a-gate-acceptance.test.js`（WP-B / WP-E / WP-F） | **10/10 PASS** |
+| Focused `server/m1c-wp7a-gate-acceptance.test.js`（WP-B / WP-E / WP-F） | **12/12 PASS** |
 | Focused `server/m1c-wp1-procurement-notice-conversion.test.js`（G01） | **26/26 PASS** |
 | Focused `server/m1c-wp2-wp5-outsourcing.test.js` | **13/13 PASS** |
-| 变异实验（4 项） | 全部按预期 FAIL → 恢复后 PASS；生产文件 `git diff` 为空 |
+| 变异实验（6 项） | 全部按预期 FAIL → 恢复后 PASS；生产文件 `git diff` 为空 |
 | FAST | **576/576 PASS**，0 fail / 0 skipped / 0 todo |
-| FULL（新增文件登记于 FULL，故一并复跑） | **3329/3329 PASS**，0 fail / 0 skipped / 0 todo |
+| FULL（新增文件登记于 FULL，故一并复跑） | **3331/3331 PASS**，0 fail / 0 skipped / 0 todo |
 | Build | PASS |
 | Node `--check`（4 个改动文件） | PASS |
 | `git diff --check` | PASS |
@@ -242,10 +265,58 @@ G03-2 / G03-3 / G03-4 各自断言（口径为实体作用域：`action='REJECT'
 | G07 PASS 的证据边界更正 | **未登记**（WP-K，待独立 Owner 决定） |
 | G01/G03/G04 的 Owner Acceptance | **未签发** |
 
-## 10. 候审结论
+## 10. 独立源码审查结论与三项修复
+
+独立审查基线 `b525422aa8ad63bfc91b36addd5f606f4f508e8b`，结论：
 
 ```text
-M1C_WP7A_R1_OFFLINE_EVIDENCE_READY_FOR_INDEPENDENT_REVIEW
+M1C_WP7A_R1_REVIEW_CHANGES_REQUESTED
+```
+
+### 10.1 修复 A —— G03 表集准确性
+
+- **问题**：本文档与测试注释把 G03 业务事实表集写成「18 张表」，而源码里当时只有 **17 张**；
+  且未核查委外订单（发料所作用的单据本体）是否应纳入零副作用快照。
+- **核查**：`outsourcing_orders` 在发料 / 补料 / 退料三条路径上**不被写入**（该文件里对
+  `outsourcing_orders` 的写只有订单创建、状态流转与物料清单快照路径的
+  `SET updated_at=updated_at` 同值写），因此它属于「业务单据」域且**应纳入**。
+- **修复**：表集加入 `outsourcing_orders`；新增 `g03BusinessFactTableReport()`（按 schema
+  实际统计声明数、实际存在数与缺失表）；新增 `G03-0` 用例断言「每一张表真实存在 +
+  声明数 == 实际存在数 + 表集为 18 张」。**表数此后不再由文档单方面声明**，而是由源码与
+  schema 实际统计得出；表集增删会同时使 `G03-0` 失败，强制文档与断言同步更新。
+- **同步修正**：§2.2、§5 的表数表述与表清单已按真实统计更新。
+
+### 10.2 修复 B —— G03-2 逐请求断言
+
+- **问题**：原实现只采集一次「四次拒绝前」的快照，四次拒绝后再比较一次；后一次失败无法掩盖
+  前一次的副作用，且审计计数是「四次合计 +4」而非逐次「恰好 +1」。
+- **修复**：四个身份异常案例改为**逐个**采集拒绝前后的完整快照，每次独立断言 409、精确错误
+  码、完整快照逐字段零变化、拒绝审计**恰好新增 1 条**。G03-3 / G03-4 的既有完整快照逻辑
+  保持不变。
+- **非空洞负控**（新增 `G03-2N`）：在**被允许写入**的路径（合法发料）上运行同一套完整快照
+  比较，要求它报告差异 —— 证明「逐字段零变化」这一断言**有能力**发现差异。
+- **变异实验**：临时禁用委外身份门禁（`resolveOutsourcingIdentity` 的 SERIAL 缺序列号分支）
+  ⇒ `G03-2` **实测 FAIL**；恢复后 12/12 PASS，生产文件 `git diff` 为空。
+
+### 10.3 修复 C —— G04-R1-2 独立成本期望
+
+- **问题**：原实现把「`material_consumed_value_cents` + `processing_fee_provisional_cents`」
+  当作唯一预期值 —— 两个值都来自生产函数的输出，无法独立检出材料成本口径的错误。
+- **修复**：增加由本套件输入推导的**绝对**期望：每批材料账面价值 **15 分**、provisional
+  加工费 **30000 分**、每批成品估值 **30015 分**；构成关系断言作为附加项保留。
+- **变异实验**：临时把估值分摊改为**跨仓全局平均价** ⇒ `G04-R1-2` **实测 FAIL**，失败信息
+  正是「第 1 批材料账面价值必须为 15 分」；既有 `G04-1` 同时失败；恢复后 12/12 PASS，生产
+  文件 `git diff` 为空。
+
+### 10.4 本轮修复的变更范围
+
+仅修改：`server/m1c-wp7a-gate-acceptance.test.js`、`server/test-support/m1-core-g03-g04-evidence.js`
+与本文档。**未修改**生产 Handler、DDL、Fixture、Oracle、Gate 合同、CR 集与治理状态。
+
+## 11. 候审结论
+
+```text
+M1C_WP7A_R1_CHANGES_REQUESTED_FIXES_IMPLEMENTED_READY_FOR_REVIEW
 ```
 
 本批只产出**离线补证证据**。G01/G03/G04 仍为 `INCONCLUSIVE`，`M1_CORE_ACCEPTANCE_BLOCKED`
