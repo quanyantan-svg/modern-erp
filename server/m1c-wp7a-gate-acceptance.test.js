@@ -31,8 +31,9 @@
 //      postCanonicalTrackedLeg，原生库存单据确认路径不写它。
 // 其余（LOT / SERIAL 身份、库存入仓、委外 BOM、委外订单、完工通知、收货、
 // 发料 / 补料 / 退料、加工费账单）全部经生产 API 造数。
-// G04-D1 另有一处明确隔离的 L3 历史异常种子：把已倒冲累计量改为大于
-// 当前合法目标累计量；种子只用于证明生产 HTTP Handler 的防御性拒绝。
+// G04-D1 的 backflush / confirm 两例各有一处明确隔离的 L3 历史异常种子：
+// 把已倒冲累计量改为大于当前合法目标累计量；种子只用于证明对应生产
+// HTTP Handler 的防御性拒绝，不得被表述为合法 L1 状态。
 //
 // 本套件拥有一次性临时 SQLite 文件，不触碰任何项目 / 开发 / 生产数据库，
 // 也不连接 MySQL。
@@ -627,6 +628,82 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
       assert.deepEqual(changedTables(before, g04BusinessFacts()), [], 'D-1 防御性拒绝后 G04 完整业务事实必须逐字段零变化');
       assert.equal(countRejects('OUTSOURCING_RECEIPT', receipt.data.id), rejectsBefore + 1,
         'D-1 防御性拒绝必须恰好新增一条 REJECT 审计');
+    });
+
+    test('G04-D1-C confirm 路径：L3 历史倒冲超目标时 409、18 表零变化且拒绝审计精确关联', async () => {
+      const productId = await createProduct('WP7A-D1-CONFIRM-MAT', 'NONE');
+      await receiveStock(productId, 20);
+      seedValuationBalance({
+        key: `NONE:warehouse-001:${productId}`, method: 'MOVING_AVERAGE',
+        productId, warehouseId: 'warehouse-001', quantity: 20, valueCents: 2000,
+      });
+      const bomId = await createOutsourceBom('WP7A-D1-CONFIRM', [{ productId, quantity: 1 }]);
+      const orderId = await releaseOrder(bomId, 10);
+      const materialListId = (await snapshotMaterials(orderId, [productId]))[productId];
+
+      const issue = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/issues`, fixture.tokens.outsourcing, {
+        materialListId, quantity: 5, issuedDate: isoDate(), idempotencyKey: 'wp7a-d1-confirm-issue',
+      });
+      assert.equal(issue.status, 201, issue.data.error);
+
+      // L1：加工费 PO、完工通知、待检收货全部经生产 HTTP 建立。
+      const source = await prepareOutsourcingReceiptSource(fixture, orderId, 2, 'wp7a-d1-confirm');
+      const receipt = await fixture.request('POST', '/api/procurement/outsourcing/receipts', fixture.tokens.outsourcingReceiving, {
+        orderId, quantity: 2, receivedDate: isoDate(), businessDate: isoDate(), processingPoId: source.processingPoId,
+        sourceNoticeId: source.sourceNoticeId, warehouseId: source.warehouseId, processingFeeCents: 200,
+        ...outsourcingReceiptBody(source, 2, 200),
+      }, { 'idempotency-key': 'wp7a-d1-confirm-receipt' });
+      assert.equal(receipt.status, 201, receipt.data.error);
+      assert.equal(fixture.db.prepare('SELECT business_status FROM outsourcing_receipts WHERE id=?').get(receipt.data.id).business_status,
+        'PENDING_INSPECTION');
+
+      // L1 质量条件：通过生产 HTTP 创建并完成 OUTSOURCING_RECEIPT IQC PASS。
+      const iqc = await fixture.request('POST', '/api/iqc', fixture.tokens.warehouse, {
+        outsourcing_receipt_id: receipt.data.id,
+      });
+      assert.equal(iqc.status, 201, iqc.data.error);
+      const iqcPass = await fixture.request('POST', `/api/iqc/${iqc.data.id}/complete`, fixture.tokens.warehouse, {
+        result: 'PASS', inspection_quantity: 2, passed_quantity: 2, failed_quantity: 0,
+      });
+      assert.equal(iqcPass.status, 200, iqcPass.data.error);
+      const iqcRow = fixture.db.prepare('SELECT status,result,source_type,outsourcing_receipt_id FROM iqc_inspections WHERE id=?').get(iqc.data.id);
+      assert.equal(iqcRow.status, 'COMPLETED');
+      assert.equal(iqcRow.result, 'PASS');
+      assert.equal(iqcRow.source_type, 'OUTSOURCING_RECEIPT');
+      assert.equal(iqcRow.outsourcing_receipt_id, receipt.data.id,
+        '质量条件必须由生产 HTTP 形成与本收货关联的已完成 IQC PASS');
+
+      // L3：唯一的受控历史异常种子。合法 confirm 目标累计量为 2，历史已倒冲累计量被置为 3。
+      // 该状态不是合法 L1 造数，只用于验证 confirm Handler 的防御性 fail-closed 分支。
+      fixture.db.prepare('UPDATE outsourcing_material_list SET backflushed_quantity=3 WHERE id=?').run(materialListId);
+      const seeded = fixture.db.prepare(`SELECT backflushed_quantity,
+        json_extract(bom_snapshot_json,'$.per_unit_quantity') per_unit_quantity
+        FROM outsourcing_material_list WHERE id=?`).get(materialListId);
+      assert.equal(Number(seeded.per_unit_quantity) * 2, 2, '本次合法 confirm 的目标累计量必须为 2');
+      assert.equal(Number(seeded.backflushed_quantity), 3, 'L3 种子必须明确制造 target(2) - historical(3) < 0');
+
+      const before = g04BusinessFacts();
+      const auditsBefore = fixture.db.prepare(
+        "SELECT id FROM audit_logs WHERE action='REJECT' AND entity_type='OUTSOURCING_RECEIPT' AND entity_id=? ORDER BY id",
+      ).all(receipt.data.id).map((row) => row.id);
+      const rejected = await fixture.request('POST', `/api/procurement/outsourcing/receipts/${receipt.data.id}/confirm`,
+        fixture.tokens.outsourcingReceiving, {}, { 'idempotency-key': 'wp7a-d1-confirm-effect' });
+      assert.equal(rejected.status, 409, 'confirm 负增量防御必须返回 409');
+      assert.equal(rejected.data.code, 'OUTSOURCING_WIP_INSUFFICIENT');
+      assert.deepEqual(changedTables(before, g04BusinessFacts()), [],
+        'confirm 防御性拒绝后 G04 18 表业务事实必须逐字段零变化');
+
+      const auditsAfter = fixture.db.prepare(
+        "SELECT * FROM audit_logs WHERE action='REJECT' AND entity_type='OUTSOURCING_RECEIPT' AND entity_id=? ORDER BY id",
+      ).all(receipt.data.id);
+      const added = auditsAfter.filter((row) => !auditsBefore.includes(row.id));
+      assert.equal(added.length, 1, 'confirm 防御性拒绝必须恰好新增一条 REJECT 审计');
+      assert.equal(added[0].action, 'REJECT');
+      assert.equal(added[0].entity_type, 'OUTSOURCING_RECEIPT');
+      assert.equal(added[0].entity_id, receipt.data.id, '拒绝审计必须关联本收货实体');
+      assert.match(added[0].detail, /确认委外收货 拒绝/);
+      assert.match(added[0].detail, /OUTSOURCING_WIP_INSUFFICIENT/,
+        '拒绝审计必须记录与 HTTP 响应相同的精确错误码');
     });
 
     test('G04-WP-G 合法 HTTP 构造净 WIP 供应不足：确认拒绝、完整快照零变化且拒绝审计恰好一条', async () => {
