@@ -2348,6 +2348,21 @@ B3101_B3121_PRODUCT_SCOPE_REVIEW_PROPOSED
 
 本轮不涉及 schema/migration、真实数据库写入、MySQL Gate、发布或远端 Git 写操作。测试与本地提交锚点见台账 §11 交付记录和 `log/2026-11-07.md`；未运行的 Gate 不记为 PASS。
 
+## 41. Package A1 决策、Requirement 与 Design 状态（2026-11-07）
+
+本节是当前项目级状态增量；§40 的 Package A 表述是先前时点记录，逐项证据与原始审计问题见 [`审计台账 §12`](../audits/b3101-b3121-code-audit-20261107.md)。Owner 已批准 `AUD-FE-001/AUD-PRC-001` `SAFE_CLOSE`，`AUD-OUT-001` 为需协调 M1-Core 的有界 `SAFE_CLOSE` 意图；VMI-01～03 最小闭环与 VMI-04 只读数量汇总保留，VMI-05 物权转移/账单交接暂缓。`SCP-11` 全量延期原提案被部分取代；其余 `SCP` 提案不因本轮自动生效。`D-P01/D-P02` 及 VMI 供应商资格规则仍待 Owner 决策。
+
+| 项 | 当前状态 / 唯一详证 |
+|---|---|
+| Requirement | `document.md` §0 导航与 `docs/requirements/procurement-outsourcing.md` §31.14 已起草，`PENDING_APPROVAL`；旧 §31.12/§31.13 历史批准不改 |
+| Design | `solution.md` §0 导航与 `docs/design/procurement-outsourcing.md` §26.34 已起草，`PENDING_REVIEW`；M1-Core Active Design 与七 Gate Acceptance 不改 |
+| FE-001 / PRC-001 | Owner 决定已记录，危险入口仍在；`BLOCKED`、未实施、未测试，详见审计台账 §12 |
+| OUT-001 | 原「无物理 movement」单独判据不成立；具体身份/历史/并发/数量守卫风险待复验，`DEFERRED_NOT_AUTHORIZED` 标签保留；M1C-G03/G06 原 PASS 不扩张，Gate 影响待 Owner 判断 |
+| VMI | Agreement Binding、业务幂等、Consumption 容量和汇总口径待实施/验证；Supplier Eligibility `OWNER_DECISION_PENDING`；VMI-05 继续 409 `VMI_SETTLEMENT_POLICY_PENDING` |
+| 交付边界 | B3101/B3121 `BLOCKED`；无 Capability `COVERED`、Freeze、Domain Acceptance；Implementation、Migration、数据库/远端 Git 操作均未授权 |
+
+本轮在 Design 完成后 **HARD STOP**，等待业务所有者审阅 Requirement/Design 并明确批准下一轮 Implementation。`R-01..R-20`、M1-GD01/02、B-P01/02、C-P01..04、M-15 均维持先前记录。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。

@@ -17,6 +17,8 @@
 > [`docs/decisions/m1-core-scope-rebaseline-20261102.md`](../decisions/m1-core-scope-rebaseline-20261102.md)；
 > 当前项目状态见 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §37。
 
+> **2026-11-07 范围增补**：§26.34 是 §31.14 的有界 Design；仅在 A1 SAFE_CLOSE 与 VMI-01..05 最小范围上取代 §26.4/§26.16/§26.20 对应旧目标。§26.33 仍保留给 M1 全范围候选设计，不在此复用；M1-Core Active Design 与既有 Gate Acceptance 均不改写。
+
 ## 26. Procurement & Outsourcing Domain Technical Design
 
 > 本节固化 Procurement & Outsourcing Domain Closure 的 Design 阶段成果。Requirement 见 `document.md §31`；Audit 见本次会话的 `PROCUREMENT & OUTSOURCING DOMAIN FINAL AUDIT REPORT` + Correction Pass。Manual Evidence Baseline 来自上游已批准的 B3101 / B3121 + B3104 / B3105 / B3106 / B3108 / B3109 / B3119 / B3120。
@@ -1393,3 +1395,33 @@ Functional Browser UAT 尚有 3 个 Design-to-Implementation gap，故当前 Des
 Final verdict：`NOT READY`。后续修复必须继续遵守本节既有 source/transaction/RBAC/audit/SQLite+MySQL 设计，不得以 ordinary Purchase Receipt/IQC 的假成功替代。
 
 ---
+
+### 26.34 Package A1 SAFE_CLOSE 与 VMI 最小闭环 Design（2026-11-07；待审阅）
+
+**依据与边界**：Owner 决定见 `OPEN-BUSINESS-DECISIONS.md` §4.1；Requirement 见 §31.14。此处仅形成下一轮 Implementation 的设计依据，**未授权修改代码、Schema 或数据库**。本节在列明的 A1/VMI 范围内 supersede §26.4、§26.16 旧的全量目标和旧 owner-dimension 不可用假设；未列出的采购/委外设计保持原状。M1-Core 首期 §7、§13 与七 Gate 已签发验收保留其原范围。
+
+#### 26.34.1 A1 寻源关闭
+
+- `src/pages/sourcing-pricing.jsx` 删除 `runAllocation()` 及「模拟寻源分配」按钮和演示常量；保留现有合法 GET 查询、Source List、Quota、Price/Discount 展示及独立操作。无需新 Preview API、路由或状态机。
+- `POST /api/procurement/sourcing-decisions` 在 `server/modules/procurement-sourcing.js::resolveSourcingDecision()` 的**服务端入口**完成既有认证/适用权限后，统一抛 `HttpError(409, ..., {code:'SOURCING_DECISION_WRITE_CLOSED'})`；管理员同样受该业务策略约束。拒绝须发生在任何 source/decision/allocation 业务写入前，不依赖伪来源是否存在，也不以隐藏 UI 代替。未授权者依既有 403；业务 409 由一个边界调用 `auditBusinessRejection`，不得 handler 与全局异常层双记。保留 Source List/Quota 查询及配置接口，不改 `AUD-PRC-002` Hash 实现。
+- 测试矩阵：普通有权用户、管理员、伪 PR 来源、同请求重复调用皆稳定 409；逐字段快照比较 `sourcing_decisions`、allocations、PR/PO、库存/采购/财务表；按拒绝审计合同核对单次记录及重复调用不造成重复业务效果；GET/配置回归。
+
+#### 26.34.2 WIP 转移核验与 Gate 影响
+
+`createWipTransfer()` 现状更新源/目标 `outsourcing_material_list.issued_quantity`，未调用物理 Inventory Writer；如果只改变 Supplier WIP 的订单归属，这是**逻辑数量归属**而非仓位移动。它既不生成成本携带，也不能被记为真实库存 movement。代码注释「reusing canonical inventory movements」与实现不符，应在获批实施时纠正。源减目标增须在同一事务中以权威余额、身份、订单状态与业务日期重读后执行；数量必须有限、正数、精度合法且不超源剩余，目标行唯一可判定。零身份余额记录不足以证明历史 WIP 可转移：需核对产品跟踪策略、历史 movement 与身份台账覆盖，任一不可证明则 fail closed。两请求竞争同一源时采用数据库可证明的锁/条件更新，败方零业务副作用并按拒绝合同审计；成本字段保持 `UNVERIFIED_COST`/NULL，不以 `issued_quantity` 假装价值转移。若业务要求真实物理位置变化，须另按 canonical `applyInventoryMutation()`、跟踪与估值设计，不复用本逻辑接口冒充物理转移。
+
+**M1C-G03/G06 Impact Assessment**：§7.5/§13 的数量归属保留与成本携带拒绝仍是已批准合同；既有 7/7 PASS 不作撤销或扩张。原 `AUD-OUT-001` 以「无 canonical Inventory movement」作为唯一缺陷的判定不成立；当前代码仍有事务外余额/身份读取、数量未充分校验、历史覆盖与并发守卫未证明等具体风险，见审计台账 §12。下一轮针对这些缺陷做最小修复与 focused/并发/SQLite-MySQL 复核，再由 Owner 判断是否影响 G03/G06；**不批准关闭整个接口**，也不自动重签 Gate。`B-P01` 成本携带及 `B-P02` 差异生效持续拒绝。
+
+#### 26.34.3 VMI 调用链与 Schema
+
+调用链：`Agreement → Receipt(PENDING) → Confirm(CONFIRMED) → SUPPLIER-owned Inventory → Consumption(CONFIRMED) → read-only Summary`。`procurement-vmi.js` 保持业务 owner；物理库存仅由 `applyInventoryMutation()` 持有。复用现有 `vmi_agreements` 的 `supplier_id/warehouse_id/product_id/effective_from/effective_to/active` 与现有 Receipt/Consumption 事实表，不采用 §26.16 旧草案中不存在的 `agreement_no/replenishment_mode/ownership_transfer_rule/settlement` 字段。现有 `min_stock/max_stock/reorder_level` 仅作为兼容字段，不驱动新补货或结算规则。
+
+- **VMI-01**：现有 `createVmiAgreement()` 以 `outsourcing_enabled=1` 判资格，Requirement/Design 中未找到「委外资格等于 VMI 资格」的批准依据。`VMI_SUPPLIER_ELIGIBILITY_OWNER_DECISION_PENDING`；在 Owner 裁定正式资格来源前，不改成采购资格、全体供应商或虚构 `vmi_enabled`。若裁定需新增资格字段，先回到 Requirement/Design 并另获 Schema/Migration 授权；当前 VMI-01 实施放行受阻。
+- **VMI-02**：创建时必须通过 `agreementId` 明确绑定有效 Agreement（或仅在唯一有效候选时由服务端确定性绑定），检查 supplier/warehouse/product/receivedDate、有效期与 active；确认时在同一事务内重读 Receipt、Agreement 与 owner 位置并重验，状态仅 `PENDING → CONFIRMED`。多协议候选或历史 Receipt 无可证明绑定一律 409，不能 `LIMIT 1` 选取。确认仅调用 `applyInventoryMutation({sourceType:'VMI_RECEIPT', movementKind:'IN', toPosition:{ownerType:'SUPPLIER',ownerId:supplierId,...}})`；库存、状态与审计原子完成。重试由业务命令幂等和内部固定 Receipt mutation key 双层保护。
+- **VMI-03**：只接受已确认 Receipt；事务内重读 Receipt/Agreement、supplier/warehouse/product、该 Receipt 已确认消费累计及 canonical Supplier 位置余额；若有退回或调整，先按可追溯事实计算可用量，无法归属到 Receipt 的历史变动不能靠总池余额猜分。`quantity > receipt可用量` 或 owner 位置不足时 409 且零业务副作用。`applyInventoryMutation({sourceType:'VMI_CONSUMPTION', movementKind:'OUT', fromPosition:{ownerType:'SUPPLIER',ownerId:supplierId,...}})`、Consumption 行与审计同一原子事务；Receipt 保持 `CONFIRMED`，不启用 `CONSUMED`。同一 Receipt 的并发消费通过数据库锁/条件累计守卫串行化或等效可证明方案，SQLite/MySQL 均不得超额。
+- **VMI-04**：GET 汇总按已确认 Receipt、Consumption 和 canonical owner 位置事实计算 Received、Consumed、Remaining，按 supplier/product/warehouse 口径保持可追溯；对合法退回/调整显示可解释的差额并使 `Received − Consumed` 与当前 Supplier 位置余额对账。历史 `CONSUMED/TRANSFERRED` 状态、ownership-transfer 表行及无法归属的旧数据不能默认为新结算事实；口径冲突时显式标记不可核对，不伪造非负余额。移除 `pendingSettlement/transferred` 对外字段及任何金额/已结算展示，不写结算表。
+- **VMI-05**：现有 ownership-transfer POST 继续在权限后返回 409 `VMI_SETTLEMENT_POLICY_PENDING`，拒绝审计仅一次，物权、库存、Supplier Bill、AP、GL 零变化。`D-P01/D-P02`、`M1-GD01/GD02` 不改变，避免 `M1-F-07` 双扣；不新增结算周期、物权变更、税价或账单 API。
+
+**最小 additive migration 设计边界**：现有 `vmi_receipts` 无 `agreement_id`，`vmi_consumptions` 无业务幂等键；下一轮须先验证现有通用 `idempotencyReplay/requestFingerprint/saveIdempotency` 与 `vmi_receipts.idempotency_key UNIQUE` 的复用能力，再设计 Receipt 的 `agreement_id` 可空 FK/索引、Consumption 的命令键唯一约束（或复用通用幂等表），及业务日期/来源索引。历史行保持原值、不自动回填、不删除表；历史绑定不能证明时只读兼容、确认/消耗 fail closed。任何新增字段、唯一索引、锁策略均需独立 Schema/Migration 授权与 SQLite/MySQL 8 parity 验证，不在本轮执行。
+
+**幂等、权限、错误与验证**：沿现有 `VMI_VIEW/VMI_MANAGE` 后端门禁；管理者亦不得越过协议/库存/延期策略。Receipt 创建、确认与 Consumption 的外部 `Idempotency-Key` 按 operation + 业务对象作用域及规范化 payload 指纹记录：同键同负载精确重放原响应，同键异负载 409；内部库存 mutation key 固定于权威业务 ID。复用现有命名锁/事务释放合同，拒绝审计放在回滚后的单一边界；400 输入错误与 403 权限错误沿既有合同，协议不唯一/失效、余额不足、幂等冲突、历史不可证明为稳定 409 code。测试覆盖协议 0/1/多匹配、日期边界、历史 NULL 绑定、同键重放/异负载、重复确认、双并发超额、事务故障注入、owner 维度与库存/事实/审计快照、合法调整/退回汇总、VMI-05 零副作用；SQLite focused/full/heavy 与受保护 disposable MySQL 并发门禁按 §9/§10 执行。回滚仅撤销新代码与 additive 入口，保留已产生的业务事实；不得删除历史表或以回滚改写库存。
