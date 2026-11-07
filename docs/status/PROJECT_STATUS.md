@@ -2030,6 +2030,34 @@ M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
   未连接真实 MySQL、未运行 G07、未签发或消费 ACK-4、未执行 Migration、Reset / Bootstrap / Cleanup、
   未运行 HEAVY、未 Push / Merge / Tag / Release / Deploy；未虚构 WP-I、WP-J 或 M-15 的完成状态。
 
+### 37.54 M1-Core 首期包级 Acceptance 候签记录与独立只读复核结论（2026-11-07）
+
+- **候签记录**：新增
+  [`docs/acceptance/m1-core-package-acceptance-candidate-20261107.md`](../acceptance/m1-core-package-acceptance-candidate-20261107.md)。
+  建议决定 **`ACCEPT_WITH_BOUNDED_RESIDUAL_RISK`**，范围**仅** M1-Core 首期七 Gate
+  （`M1C-G01`～`M1C-G07`）所界定的 Procurement & Outsourcing 首期能力。
+- **候签记录内容**：P1–P12 已证明项（含 G07 11/11 与 16/16 Parity 等真实有效断言、G01/G03/G04 的 SQLite L1
+  业务事实断言、G05 浏览器非空洞性、当前 HEAD 回归）；R-01～R-17 已由各 Gate Owner Acceptance 逐项接受的
+  残余风险；R-18 已由 WP-K 接受；R-19/R-20 本轮由 WP-K-R1 接受；D-01～D-04 明确**延期未授权**
+  （WP-I、WP-J、M-15、旧 13 Gate 的 6 项 `DEFERRED` 与 9 项 RACE）。
+- **独立只读复核结论**：`READY_FOR_OWNER_PACKAGE_ACCEPTANCE`。复核在提交 `dadca3d` 之后**实际执行**，
+  逐项核查：B-1/B-2 **已实际落地**（Active Design 的过时现在时陈述已消除、三处指针修订已在位，
+  两份正式裁定与修订记录已入库）；七 Gate PASS 记录**未被改动**；G07 Oracle 新增风险**已完整且准确地接受
+  与披露**（槽位口径 54＝36＋18、未重算 29＝25＋4、35 个 (CR, 表) 组合，已在提交后源码上**重新复跑复现**）；
+  FULL / Build / Docs 证据可追溯至实测 SHA `83e13e00`；**未发现**新的业务缺陷或安全阻断；
+  WP-I / WP-J / M-15 **未**被虚构为已完成；旧 M1 13 Gate **未**恢复为当前验收条件；
+  **未**出现未授权的发布、部署、冻结或历史数据库修改。
+- **状态保持**：七 Gate **7 / 7 `PASS`** **不变**；`M1_CORE_ACCEPTANCE_BLOCKED` **保持**。
+  本节**不**签发包级 Acceptance、Capability Freeze、Domain Acceptance、Manual Closure、
+  Release Readiness、Tag、Release 或 Deploy —— **包级 PASS 须由业务所有者按 AGENTS.md §4.5 亲自确认**，
+  不得由实施代理自评替代。
+- **剩余动作**：① 业务所有者对候签记录作最终确认；② 确认后由平台按治理流程把包级结论登记为本表新的
+  日期化条目（**不得**改写 §37.48–§37.53）；③ 本地提交同步到 `github/master`（Push）**本轮未授权**；
+  ④ Capability Freeze / Domain Acceptance / Manual Closure / Release Readiness 需另行裁定，不在本包内。
+- **未发生**：未修改生产代码、DDL、Fixture、G07 Oracle、G07 合同、测试或任何已签发 Owner Acceptance；
+  未连接真实 MySQL、未运行 G07、未签发或消费 ACK-4、未执行 Migration、Reset / Bootstrap / Cleanup、
+  未运行 HEAVY、未 Push / Merge / Tag / Release / Deploy；未虚构 WP-I、WP-J 或 M-15 的完成状态。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
