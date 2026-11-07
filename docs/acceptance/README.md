@@ -30,6 +30,9 @@
 | [`m1-core-g07-parity-r4-review-20261106.md`](./m1-core-g07-parity-r4-review-20261106.md) | Run `a78b0d3e` 唯一失败（Schema Parity，5 张表目录表达式括号）的真实根因与保义括号规范化候审证据；范围受限表达式 AST、S 表达式树形比较、真实导出夹具与 16 表离线回放；第一轮独立源码复核 `M1C_G07_PARITY_R4_REVIEW_BLOCKED` 的两项 AST 缺陷（字面量类别、CAST 长度）已由 R4-R1 定向修复，第二轮发现的 CAST 字符集无条件丢弃已由 R4-R2 定向修复；未重跑真实 G07，历史 G07 FAIL 保持 |
 | [`m1-core-g07-owner-acceptance-20261107.md`](./m1-core-g07-owner-acceptance-20261107.md) | M1C-G07 正式 Owner Acceptance（`M1C-G07 PASS`，2026-11-07）；Run `b29c3f1f` / SHA `054ebb67` 单次真实 MySQL 执行：11/11 PASS、16 表 Schema Parity 全 MATCHED、CR-01～CR-09、Root FINISHED、五类对象归零、ACK-4 一次性消费；仅批准 G07，不签发包级 Acceptance / Freeze / Release |
 | [`m1-core-wp7a-r1-offline-evidence-20261107.md`](./m1-core-wp7a-r1-offline-evidence-20261107.md) | M1-Core 第一批最小离线补证候审证据（WP-A / WP-B / WP-E / WP-F / WP-H）：G03 的 L2 canonical inventory primitive 碰撞负控、G03 拒绝路径 18 表完整业务事实快照、G04 成品唯一 Writer 与逐批成本估值对账、G01 历史 25 项 + 后补 D0 的逐项归属与执行记录对照；四项变异实验证明非空洞；未签发任何 Owner Acceptance |
+| [`m1-core-wp7a-r2-offline-evidence-20261107.md`](./m1-core-wp7a-r2-offline-evidence-20261107.md) | M1-Core 第二批离线补证与候审（WP-C / WP-D / WP-K）：G03 多物料行与 SERIAL 身份的八条物理腿与身份分域补证（三项精准变异实验）；G04 负增量可达性的只读审查与 D-1/D-2 方案推荐；G07 证据边界更正的**未签发草案**与待 Owner 裁定事项；未签发任何 Owner Acceptance，未修改已签发结论 |
+| [`m1-core-g04-negative-increment-reachability-20261107.md`](./m1-core-g04-negative-increment-reachability-20261107.md) | G04「增量倒冲数量小于 0」的合法生产 HTTP 可达性审查（只读）：business_status 单向迁移、backflushed_quantity 单调写入、BOM 快照冻结、累计合格收货不减、并发受 UNIQUE 约束保护；结论为「仅 L3/历史异常可构造」；推荐 D-1 → D-2 组合，待 Owner 裁定 |
+| [`m1-core-g07-evidence-boundary-draft-20261107.md`](./m1-core-g07-evidence-boundary-draft-20261107.md) | G07 证据边界更正的**候审草案（未签发）**：已证明 / 未充分证明 / 恒真或恒等式 / 未启用四类逐项列明，追加式边界说明表述，以及是否采纳、是否接受该偏差用于包级验收、是否启动 Oracle 强度补强等四项待 Owner 裁定事项；不修改已签发的 `M1C-G07 PASS` |
 | [`sales-customer/`](./sales-customer/) | Sales & Customer 各 Wave 的 Acceptance / Freeze 记录与实施证据 |
 
 ## 规则
