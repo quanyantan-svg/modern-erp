@@ -117,17 +117,19 @@ async function main() {
       return `source ${source.id} resolved eligible`;
     });
 
-    await run('UAT-04', 'Quota allocation', 'Create quota; resolve sourcing allocation', async () => {
+    await run('UAT-04', 'Quota query and safe decision closure', 'Create quota; query it; reject formal decision write', async () => {
       expect(await browserApi(page, 'POST', '/api/procurement/quotas', {
         supplierId: 'supplier-001', productId: 'product-002', sourceType: 'PURCHASE',
         proportion: { num: 1, den: 1 }, effectiveFrom: today,
       }), 201, 'create quota');
+      const quotaList = expect(await browserApi(page, 'GET', `/api/procurement/quotas?productId=product-002&sourceType=PURCHASE&date=${today}`), 200, 'query quota');
+      if (!quotaList.quotas.some((row) => row.supplierId === 'supplier-001')) throw new Error('configured quota not returned');
       const decision = expect(await browserApi(page, 'POST', '/api/procurement/sourcing-decisions', {
         sourceType: 'PR', sourceId: 'UAT-QUOTA', procurementSourceType: 'PURCHASE',
         productId: 'product-002', businessDate: today, quantity: 17,
-      }), 200, 'allocate quota');
-      if (decision.allocations.reduce((sum, row) => sum + row.allocatedQuantity, 0) !== 17) throw new Error('quota allocation not conserved');
-      return 'allocation total=17';
+      }), 409, 'formal decision safely closed');
+      if (decision.code !== 'SOURCING_DECISION_WRITE_CLOSED') throw new Error(`unexpected closure code ${decision.code}`);
+      return 'quota GET 200; decision POST 409';
     });
 
     await run('UAT-05', 'Price resolution with pricing UOM/discount', 'Create UOM price and discount; query effective price', async () => {

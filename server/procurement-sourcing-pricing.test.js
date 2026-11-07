@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import { createProcurementFixture } from './test-support/procurement-http-fixture.js';
-import { assertSupplierQualification } from './modules/procurement-sourcing.js';
+import { allocateProportional, assertSupplierQualification } from './modules/procurement-sourcing.js';
 
 describe('Procurement Wave B sourcing and pricing', () => {
   let fixture;
@@ -26,7 +26,7 @@ describe('Procurement Wave B sourcing and pricing', () => {
     assert.equal(result.status, 200, result.data.error);
   }
 
-  test('source effectivity / disabled supplier / qualification expiry are enforced', async () => {
+  test('source effectivity and legal source query remain available', async () => {
     await qualifySupplier('supplier-002', isoDate(-365), isoDate(365));
     const future = isoDate(60);
     const expired = isoDate(-180);
@@ -50,20 +50,12 @@ describe('Procurement Wave B sourcing and pricing', () => {
     assert.equal(list.status, 200, list.data.error);
     assert.ok(list.data.sourceEntries.length >= 1);
 
-    const decision = await fixture.request('POST', '/api/procurement/sourcing-decisions', fixture.tokens.admin, {
-      sourceType: 'PR', sourceId: 'PR-WAVE-B-001', procurementSourceType: 'PURCHASE',
-      productId: 'product-001', businessDate: isoDate(0), quantity: 100,
-    });
-    assert.equal(decision.status, 200, decision.data.error);
-    assert.equal(decision.data.allocations.length, 1);
-    assert.equal(decision.data.allocations[0].supplierId, 'supplier-002');
-
     await qualifySupplier('supplier-002', isoDate(-180), isoDate(-30));
-    const expiredDecision = await fixture.request('POST', '/api/procurement/sourcing-decisions', fixture.tokens.admin, {
-      sourceType: 'PR', sourceId: 'PR-WAVE-B-002', procurementSourceType: 'PURCHASE',
-      productId: 'product-001', businessDate: isoDate(0), quantity: 100,
-    });
-    assert.equal(expiredDecision.status, 409, JSON.stringify(expiredDecision.data));
+    assert.throws(() => assertSupplierQualification(fixture.db, 'supplier-002', 'PURCHASE', isoDate(0)),
+      (error) => error.status === 409);
+    const stillReadable = await fixture.request('GET', `/api/procurement/source-entries?productId=product-001&date=${isoDate(0)}`, fixture.tokens.admin);
+    assert.equal(stillReadable.status, 200);
+    assert.ok(stillReadable.data.sourceEntries.length >= 1);
   });
 
   test('supplier qualification follows source type and business date', async () => {
@@ -130,42 +122,49 @@ describe('Procurement Wave B sourcing and pricing', () => {
       });
       assert.equal(result.status, 201, result.data.error);
     }
-    const decision = await fixture.request('POST', '/api/procurement/sourcing-decisions', fixture.tokens.admin, {
-      sourceType: 'PR', sourceId: 'PR-WAVE-B-QUOTA', procurementSourceType: 'PURCHASE',
-      productId: 'product-002', businessDate: isoDate(0), quantity: 100,
-    });
-    assert.equal(decision.status, 200, decision.data.error);
-    const total = decision.data.allocations.reduce((acc, item) => acc + item.allocatedQuantity, 0);
-    assert.equal(total, 100);
-    const supplier001 = decision.data.allocations.find((a) => a.supplierId === 'supplier-001');
-    const supplier002 = decision.data.allocations.find((a) => a.supplierId === 'supplier-002');
-    const supplier003 = decision.data.allocations.find((a) => a.supplierId === 'supplier-003');
-    assert.equal(supplier001.allocatedQuantity + supplier002.allocatedQuantity + supplier003.allocatedQuantity, 100);
-    assert.ok(supplier001.allocatedQuantity >= supplier002.allocatedQuantity);
+    const listed = await fixture.request('GET', `/api/procurement/quotas?productId=product-002&sourceType=PURCHASE&date=${isoDate(0)}`, fixture.tokens.admin);
+    assert.equal(listed.status, 200);
+    assert.equal(listed.data.quotas.length, 3);
+    const allocations = allocateProportional({ num: 100, den: 1 }, listed.data.quotas.map((quota) => ({ quota, proportion: quota.proportion })));
+    assert.equal(allocations.reduce((acc, item) => acc + item.allocated.num / item.allocated.den, 0), 100);
   });
 
-  test('manual override requires permission, reason and audit', async () => {
-    const blocked = await fixture.request('POST', '/api/procurement/sourcing-decisions', fixture.tokens.sales, {
-      sourceType: 'PR', sourceId: 'PR-WAVE-B-OVERRIDE', procurementSourceType: 'PURCHASE',
+  test('closed decision write rejects ordinary user, admin, forged source and repeat without business effects', async () => {
+    const body = {
+      sourceType: 'PR', sourceId: 'PR-WAVE-B-001', procurementSourceType: 'PURCHASE',
       productId: 'product-001', businessDate: isoDate(0), quantity: 50,
-      manualOverride: { reason: '紧急采购' },
-    });
-    assert.equal(blocked.status, 403);
-    const noReason = await fixture.request('POST', '/api/procurement/sourcing-decisions', fixture.tokens.admin, {
-      sourceType: 'PR', sourceId: 'PR-WAVE-B-OVERRIDE-2', procurementSourceType: 'PURCHASE',
-      productId: 'product-001', businessDate: isoDate(0), quantity: 50,
-      manualOverride: { reason: '' },
-    });
-    assert.equal(noReason.status, 400);
-    const overridden = await fixture.request('POST', '/api/procurement/sourcing-decisions', fixture.tokens.admin, {
-      sourceType: 'PR', sourceId: 'PR-WAVE-B-OVERRIDE-3', procurementSourceType: 'PURCHASE',
-      productId: 'product-001', businessDate: isoDate(0), quantity: 50,
-      manualOverride: { reason: '战略互供' },
-    });
-    assert.equal(overridden.status, 200, overridden.data.error);
-    assert.match(overridden.data.allocations[0].rule, /OVERRIDE/);
-    const audit = fixture.db.prepare("SELECT detail FROM audit_logs WHERE entity_type='SOURCING_DECISION' AND action='OVERRIDE' ORDER BY created_at DESC LIMIT 1").get();
-    assert.match(audit.detail, /PR-WAVE-B-OVERRIDE-3/);
+    };
+    const unauthorized = await fixture.request('POST', '/api/procurement/sourcing-decisions', fixture.tokens.sales, body);
+    assert.equal(unauthorized.status, 403);
+    fixture.db.prepare("INSERT OR IGNORE INTO role_permissions(role_id,permission_code) VALUES('role-sales','PROCUREMENT_CONFIG_VIEW')").run();
+
+    const tables = [
+      'source_list_entries', 'source_list_versions', 'quota_assignments',
+      'sourcing_decisions', 'sourcing_decision_allocations', 'purchase_requisitions',
+      'purchase_orders', 'purchase_order_items', 'inventory', 'inventory_transactions',
+      'inventory_valuation_movements', 'inventory_valuation_balances',
+      'supplier_bills', 'account_payables', 'accounting_vouchers',
+    ];
+    const snapshot = () => Object.fromEntries(tables.map((name) => [name, fixture.db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all()]));
+    const before = snapshot();
+    const auditCount = () => fixture.db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SOURCING_DECISION' AND action='REJECT' AND detail LIKE '%SOURCING_DECISION_WRITE_CLOSED%'").get().n;
+    let rejected = auditCount();
+    for (const [token, payload] of [
+      [fixture.tokens.sales, body],
+      [fixture.tokens.admin, body],
+      [fixture.tokens.admin, { ...body, sourceId: 'FORGED-PR-NOT-FOUND' }],
+      [fixture.tokens.admin, body],
+    ]) {
+      const response = await fixture.request('POST', '/api/procurement/sourcing-decisions', token, payload);
+      assert.equal(response.status, 409, JSON.stringify(response.data));
+      assert.equal(response.data.code, 'SOURCING_DECISION_WRITE_CLOSED');
+      assert.deepEqual(snapshot(), before, '拒绝不得修改任何相关业务表字段');
+      assert.equal(auditCount(), ++rejected, '每次业务拒绝恰好一条审计');
+    }
+    const sourceList = await fixture.request('GET', '/api/procurement/source-entries?productId=product-001', fixture.tokens.sales);
+    assert.equal(sourceList.status, 200);
+    const quotaList = await fixture.request('GET', '/api/procurement/quotas?productId=product-002', fixture.tokens.admin);
+    assert.equal(quotaList.status, 200);
   });
 
   test('price effectivity, UOM conversion, discount resolution and historical PO unaffected', async () => {

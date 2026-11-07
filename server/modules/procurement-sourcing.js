@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { transaction } from '../db.js';
-import { audit } from '../lib/audit.js';
+import { audit, auditBusinessRejection } from '../lib/audit.js';
 import {
   HttpError, allow, allowAny, assertAllowedFields, readJson, requiredText, send,
 } from '../lib/http.js';
-import { rational, roundRational } from './commercial-golive.js';
+import { rational } from './commercial-golive.js';
 
 const VIEW_PERMISSIONS = ['PROCUREMENT_CONFIG_VIEW', 'PROCUREMENT_CONFIG_MANAGE'];
 const SOURCE_TYPES = new Set(['PURCHASE', 'OUTSOURCE']);
@@ -17,11 +17,6 @@ function assertViewPermission(actor) {
 function assertManagePermission(actor) {
   allow(actor, 'PROCUREMENT_CONFIG_MANAGE');
 }
-
-function assertSourcingOverridePermission(actor) {
-  allowAny(actor, ['PROCUREMENT_CONFIG_MANAGE']);
-}
-
 
 function normalizeSourceType(value, label = '货源类型') {
   const text = String(value ?? '').trim().toUpperCase();
@@ -260,61 +255,9 @@ export async function upsertQuota(db, req, res, actor) {
 
 export async function resolveSourcingDecision(db, req, res, actor) {
   assertViewPermission(actor);
-  const body = await readJson(req);
-  assertAllowedFields(body, ['sourceType', 'sourceId', 'procurementSourceType', 'productId', 'businessDate', 'quantity', 'manualOverride']);
-  const sourceType = body.sourceType === 'PR' ? 'PR' : 'PO';
-  const procurementSourceType = normalizeSourceType(body.procurementSourceType ?? 'PURCHASE');
-  const productId = requiredText(body.productId, '产品', 100);
-  const businessDate = String(body.businessDate || new Date().toISOString().slice(0, 10));
-  const required = rational(Number(body.quantity), 1);
-  const sourceEntries = listSourceEntries(db, { productId, sourceType: procurementSourceType, date: businessDate });
-  if (!sourceEntries.length && !body.manualOverride) {
-    throw new HttpError(409, '未找到有效货源，无法分配');
-  }
-  const quotas = listQuotaRows(db, { productId, sourceType: procurementSourceType, date: businessDate });
-  const supplierMap = new Map(sourceEntries.map((entry) => [entry.supplierId, entry]));
-  let allocations;
-  if (quotas.length && supplierMap.size) {
-    allocations = allocateProportional(required, quotas.filter((q) => supplierMap.has(q.supplierId)));
-  } else if (sourceEntries.length === 1) {
-    allocations = [{ quota: null, allocated: required, sourceEntry: sourceEntries[0] }];
-  } else {
-    throw new HttpError(409, '没有匹配的货源或配额');
-  }
-  // For each allocation, ensure supplier is qualified at business date.
-  for (const allocation of allocations) {
-    const supplierId = allocation.quota?.supplierId || allocation.sourceEntry?.supplierId;
-    if (!supplierId) continue;
-    assertSupplierQualification(db, supplierId, procurementSourceType, businessDate);
-  }
-  // Manual override must include reason + permission.
-  let overrideReason = null;
-  if (body.manualOverride) {
-    assertSourcingOverridePermission(actor);
-    overrideReason = requiredText(body.manualOverride?.reason, '人工覆盖原因', 500);
-  }
-  const decisionId = randomUUID();
-  const hashInput = JSON.stringify({ sourceType, sourceId: body.sourceId, productId, allocations });
-  const hash = `sha256:${hashInput.length}`;
-  transaction(db, () => {
-    db.prepare(`INSERT INTO sourcing_decisions(id,source_type,source_id,procurement_source_type,product_id,status,business_date,hash,override_reason,created_by,created_at,applied_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(decisionId, sourceType, body.sourceId, procurementSourceType, productId, body.manualOverride ? 'OVERRIDDEN' : 'APPLIED', businessDate, hash, overrideReason, actor.id, new Date().toISOString(), new Date().toISOString());
-    const insertAllocation = db.prepare(`INSERT INTO sourcing_decision_allocations(id,decision_id,source_list_entry_id,supplier_id,product_id,source_quantity_num,source_quantity_den,allocated_quantity_num,allocated_quantity_den,rule_reason)
-      VALUES(?,?,?,?,?,?,?,?,?,?)`);
-    allocations.forEach((allocation, index) => {
-      const supplierId = allocation.quota?.supplierId || allocation.sourceEntry?.supplierId;
-      insertAllocation.run(randomUUID(), decisionId, allocation.sourceEntry?.id || null, supplierId, productId, required.num, required.den, allocation.allocated.num, allocation.allocated.den, body.manualOverride ? `OVERRIDE:${overrideReason}` : `QUOTA:${allocation.quota?.id || 'single-source'}`);
-    });
-    audit(db, actor.id, body.manualOverride ? 'OVERRIDE' : 'APPLY', 'SOURCING_DECISION', decisionId, `${sourceType}:${body.sourceId}`);
-  });
-  return send(res, 200, {
-    decisionId,
-    allocations: allocations.map((allocation) => ({
-      supplierId: allocation.quota?.supplierId || allocation.sourceEntry?.supplierId,
-      allocatedQuantity: roundRational(allocation.allocated.num, allocation.allocated.den),
-      rule: body.manualOverride ? 'OVERRIDE' : `QUOTA:${allocation.quota?.id || 'single-source'}`,
-    })),
-  });
+  const error = new HttpError(409, '正式寻源决策写入已关闭', { code: 'SOURCING_DECISION_WRITE_CLOSED' });
+  auditBusinessRejection(db, actor, { entityType: 'SOURCING_DECISION', entityId: null, action: '正式寻源决策写入' }, error);
+  throw error;
 }
 
 export function listSourcingDecisions(db, res, actor, url) {
