@@ -120,16 +120,22 @@ async function probeMutationStatus(page, surface) {
 
 async function exerciseAuthorizedSurface(page, surface, performMutation) {
   if (surface.route === 'sourcing-pricing') {
-    const action = page.getByRole('button', { name: '模拟寻源分配' });
-    await action.waitFor({ state: 'visible' });
-    if (await action.isDisabled()) throw new Error('寻源分配动作不可用');
-    if (!performMutation) return { legalAction: 'button visible and enabled', businessError: 'covered at 320px' };
-    const responsePromise = page.waitForResponse((response) => response.url().endsWith('/api/procurement/sourcing-decisions') && response.request().method() === 'POST');
-    await action.click();
-    const response = await responsePromise;
-    if (response.status() !== 200) throw new Error(`寻源分配动作返回 ${response.status()}，期望 200`);
-    await page.locator('.help-disclosure').filter({ hasText: 'Sourcing OK:' }).waitFor({ state: 'visible' });
-    return { legalAction: `sourcing POST ${response.status()}`, businessError: 'not-applicable' };
+    if (await page.getByRole('button', { name: '模拟寻源分配' }).count()) throw new Error('危险演示写入按钮仍可见');
+    const posts = [];
+    const onRequest = (request) => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/procurement/sourcing-decisions') posts.push(request.url());
+    };
+    page.on('request', onRequest);
+    try {
+      for (const tab of ['Quota', 'Price List', 'Pricing Discount', 'Source List']) {
+        await page.locator('select').selectOption({ label: tab });
+        await page.locator('.compact-record-list').waitFor({ state: 'attached' });
+      }
+    } finally {
+      page.off('request', onRequest);
+    }
+    if (posts.length) throw new Error('只读查询触发了正式寻源写入');
+    return { legalAction: '四个只读页签可切换', businessError: '危险演示入口不存在' };
   }
 
   const create = page.getByRole('button', { name: '新建委外订单' });

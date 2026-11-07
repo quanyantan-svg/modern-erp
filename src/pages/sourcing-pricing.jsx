@@ -3,7 +3,7 @@
 // Mobile-first workspace for:
 //   - Source List (PRC-04)
 //   - Quota (PRC-05, PROPORTIONAL)
-//   - Sourcing Decision (PRC-06, with manual override)
+//   - Sourcing Decision (PRC-06, write entry safely closed)
 //   - Price List (PRC-07)
 //   - Pricing UOM (PRC-08)
 //   - Pricing Discount (PRC-09)
@@ -14,7 +14,6 @@
 //   - POST   /api/procurement/source-entries
 //   - GET    /api/procurement/quotas
 //   - POST   /api/procurement/quotas
-//   - POST   /api/procurement/sourcing-decisions
 //   - GET    /api/procurement/price-list
 //   - POST   /api/procurement/price-list
 //   - POST   /api/procurement/price-list/:id/adjust
@@ -24,13 +23,12 @@
 // Implementation discipline (per erp-mobile-taste):
 //   - LIST → DETAIL contextual workflow; dense ERP workspace.
 //   - No marketing cards; no glassmorphism.
-//   - Sourcing allocation: PROPORTIONAL with quantity conservation + residual tie-break.
 
 import { useEffect, useState, useCallback } from 'react';
 import { api } from '../api.js';
 import { Empty } from '../components/ui.jsx';
 import {
-  BusinessAction, BusinessPageHeader, BusinessPageShell,
+  BusinessPageHeader, BusinessPageShell,
   CompactRecord, CompactRecordList, HelpDisclosure,
 } from '../components/design-system.jsx';
 
@@ -43,7 +41,6 @@ export default function SourcingPricingPage() {
   const [prices, setPrices] = useState([]);
   const [discounts, setDiscounts] = useState([]);
   const [error, setError] = useState('');
-  const [allocating, setAllocating] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -63,33 +60,11 @@ export default function SourcingPricingPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  async function runAllocation() {
-    setAllocating(true);
-    try {
-      // Demo: allocate 100 PCS of product-001 against all sources.
-      const res = await api('/api/procurement/sourcing-decisions', {
-        method: 'POST',
-        body: {
-          sourceType: 'PR', sourceId: 'PR-DEMO-001', procurementSourceType: 'PURCHASE',
-          productId: 'product-001', businessDate: new Date().toISOString().slice(0, 10),
-          quantity: 100,
-        },
-      });
-      setError(`Sourcing OK: ${res.allocations?.length || 0} allocations, total ${res.allocations?.reduce((a, x) => a + x.allocatedQuantity, 0) || 0}`);
-    } catch (err) { setError(err.message); }
-    finally { setAllocating(false); }
-  }
-
   return (
     <BusinessPageShell>
       <BusinessPageHeader
         title="寻源与定价"
         context="Source List · Quota · Sourcing · Price List · Pricing UOM · Pricing Discount · Price Adjustment"
-        primaryAction={
-          <BusinessAction hierarchy="primary" onClick={runAllocation} disabled={allocating}>
-            模拟寻源分配
-          </BusinessAction>
-        }
         secondaryActions={
           <select value={tab} onChange={(e) => setTab(e.target.value)}>
             <option value="source">Source List</option>
