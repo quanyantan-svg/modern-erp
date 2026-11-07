@@ -145,3 +145,28 @@ M1C_WP7A_R2_WP_C_IMPLEMENTED_WP_D_ANALYZED_WP_K_DRAFTED_READY_FOR_REVIEW
 
 本批只产出**离线补证证据**与**两份候审草案**。G01/G03/G04 仍为 `INCONCLUSIVE`，
 `M1_CORE_ACCEPTANCE_BLOCKED` 保持；G02/G05/G06/G07 的已签发 Owner Acceptance 不受本批影响。
+
+## 8. D-G03-001 最小审计边界修复（2026-11-07）
+
+- **基线与授权**：基线 `e4e139a60b17e4520a963d74e45da0a19df5402e`。Modern ERP 项目 Owner
+  单独授权仅修复 `issueMaterial`、`supplementMaterial`、`returnMaterial` 中外部幂等冲突的拒绝审计边界，
+  并授权本地提交；未授权远端操作。
+- **缺陷确认**：修复前隔离 SQLite HTTP 测试中 ISSUE / SUPPLEMENT / RETURN 均首次合法请求成功、同内容重放
+  返回 200、异内容返回 409、业务事实逐字段零变化，但对应 `OUTSOURCING_ORDER` 的 REJECT 审计增量均为 0，
+  违反 §31.13.5 与 Active Design §13.1 的「拒绝审计恰好 1 条」。原因是 `idempotencyReplay()` 的冲突异常
+  在三条 Handler 现有业务 `try/catch` 之前抛出。
+- **最小修复**：三条 Handler 分别捕获 replay 检查抛出的异常，调用现有 `auditRejectedBusinessRule()` 后原样重抛。
+  同内容 replay 的 200 返回路径、异内容 409、业务事务及业务合同均未改变；未修改共享
+  `financial-controls.js`、DDL、Migration、Fixture、G07 Oracle、Active Requirement/Design 或 Owner Acceptance。
+- **验证**：最终 focused D-G03-001 `3/3 PASS`；每例覆盖首次成功、同内容 replay `200 + replayed=true` 且事实/审计不变、
+  同键异内容 `409` 且事实零变化、REJECT 恰好新增 1 条。负控临时移除 ISSUE 审计调用时，ISSUE 单例按预期失败
+  （审计 `0 !== 1`），SUPPLEMENT / RETURN 仍通过；随后恢复生产文件并复跑通过。相关 G03/G04/G06、WP-C 与套件治理
+  Focused `41/41 PASS`；FAST `576/576 PASS`；Build PASS。
+- **FULL 结果**：`pnpm.cmd test` 执行 222 个文件，最终 `3339/3340 PASS`、0 skipped、0 todo。唯一失败为
+  `scripts/gates/m1-core-g07-diagnostics.test.js` 在 Windows 当前受限执行环境调用 `SetAccessControl` 时抛
+  `UnauthorizedAccessException`；D-G03-001 测试在同次 FULL 中 `3/3 PASS`。未改 G07 相关代码。
+- **文档检查**：current / migration 结果在本记录提交前复跑。此修复不签发 G03 Owner Acceptance；G03 与 M1-Core
+  包级状态维持既有 `INCONCLUSIVE` / `M1_CORE_ACCEPTANCE_BLOCKED`，等待独立源码复核。
+- **变更文件**：`server/modules/outsourcing.js`、`server/m1c-wp7a-g03-idempotency-conflict.test.js`、
+  `scripts/testing/test-suites.js`、本文及 `log/2026-11-07.md`。
+- **未发生**：真实 MySQL、G07、ACK-4、Reset / Bootstrap / Cleanup、Migration、Push、Merge、Tag、Release、Deploy。

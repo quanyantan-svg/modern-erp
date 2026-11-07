@@ -471,7 +471,13 @@ export async function issueMaterial(db, req, res, actor, orderId) {
   if (!body.idempotencyKey) throw new HttpError(400, 'idempotencyKey 必填');
   const operation = 'OUTSOURCING_ISSUE';
   const fingerprint = requestFingerprint(normalizeMaterialFingerprint(body));
-  const replay = idempotencyReplay(db, operation, orderId, body.idempotencyKey, fingerprint);
+  let replay;
+  try {
+    replay = idempotencyReplay(db, operation, orderId, body.idempotencyKey, fingerprint);
+  } catch (error) {
+    auditRejectedBusinessRule(db, actor, 'OUTSOURCING_ORDER', orderId, '委外发料', error);
+    throw error;
+  }
   if (replay) return send(res, 200, { ...replay, replayed: true });
   const id = randomUUID(); const now = new Date().toISOString(); const businessDate = body.issuedDate || now.slice(0, 10);
   try {
@@ -504,7 +510,13 @@ export async function supplementMaterial(db, req, res, actor, orderId) {
   if (!body.idempotencyKey) throw new HttpError(400, 'idempotencyKey 必填');
   const operation = 'OUTSOURCING_SUPPLEMENT';
   const fingerprint = requestFingerprint(normalizeMaterialFingerprint(body));
-  const replay = idempotencyReplay(db, operation, orderId, body.idempotencyKey, fingerprint);
+  let replay;
+  try {
+    replay = idempotencyReplay(db, operation, orderId, body.idempotencyKey, fingerprint);
+  } catch (error) {
+    auditRejectedBusinessRule(db, actor, 'OUTSOURCING_ORDER', orderId, '委外补料', error);
+    throw error;
+  }
   if (replay) return send(res, 200, { ...replay, replayed: true });
   const id = randomUUID(); const now = new Date().toISOString(); const businessDate = body.supplementDate || now.slice(0, 10);
   try { transaction(db, () => {
@@ -532,7 +544,13 @@ export async function returnMaterial(db, req, res, actor, orderId) {
   if (!body.idempotencyKey) throw new HttpError(400, 'idempotencyKey 必填');
   const operation = 'OUTSOURCING_RETURN';
   const fingerprint = requestFingerprint(normalizeMaterialFingerprint(body));
-  const replay = idempotencyReplay(db, operation, orderId, body.idempotencyKey, fingerprint);
+  let replay;
+  try {
+    replay = idempotencyReplay(db, operation, orderId, body.idempotencyKey, fingerprint);
+  } catch (error) {
+    auditRejectedBusinessRule(db, actor, 'OUTSOURCING_ORDER', orderId, '委外退料', error);
+    throw error;
+  }
   if (replay) return send(res, 200, { ...replay, replayed: true });
   const id = randomUUID(); const now = new Date().toISOString(); const businessDate = body.returnDate || now.slice(0, 10);
   try { transaction(db, () => {

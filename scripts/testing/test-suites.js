@@ -270,6 +270,11 @@ const FULL = [
   // enterprise ownership and the L1 idempotency replay / conflict contract.
   // Deliberately NOT registered in FAST: it owns a disposable temp SQLite.
   'server/m1c-wp7a-g03-multi-material.test.js',
+  // M1C-WP7A-R2: ISSUE / SUPPLEMENT / RETURN must preserve the external
+  // idempotency contract when the same key is reused with different content:
+  // 409, no G03 business-fact changes, and exactly one REJECT audit.
+  // Deliberately NOT registered in FAST: it owns a disposable temp SQLite.
+  'server/m1c-wp7a-g03-idempotency-conflict.test.js',
   // M1C-G07 Phase-5 low-cost real-HTTP smoke: drives CR-01..CR-09 setup chains
   // through the real createApp HTTP handler against an isolated disposable
   // SQLite and asserts the pre-race business state. Proves business
