@@ -253,6 +253,14 @@ const FULL = [
   // Deliberately NOT registered in FAST: each case owns a disposable temp
   // SQLite and drives the real HTTP API.
   'server/m1c-wp7a-gate-acceptance.test.js',
+  // M1C-WP7-A-R1: the G03 **L2 canonical inventory primitive** evidence layer
+  // required by Active Design §13.1.1 — the same five-field Mutation Key with
+  // the same fingerprint replays, with a different fingerprint it is rejected
+  // with the exact 409 INVENTORY_MUTATION_UNEXPECTED_REPLAY, and neither the
+  // physical legs, the tracking legs, the valuation rows nor the canonical
+  // mutation log are partially written. Deliberately NOT registered in FAST:
+  // it owns a disposable temp SQLite.
+  'server/m1c-wp7a-g03-l2-mutation-key.test.js',
   // M1C-G07 Phase-5 low-cost real-HTTP smoke: drives CR-01..CR-09 setup chains
   // through the real createApp HTTP handler against an isolated disposable
   // SQLite and asserts the pre-race business state. Proves business

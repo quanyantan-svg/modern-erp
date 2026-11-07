@@ -15,6 +15,13 @@
 //          材料成本按 canonical 位置口径（非全局平均价）；加工费 provisional 证据。
 //   G06 —— 来源级拒绝后 AP / 凭证 / 库存 / 估值 / 成本证据 / 单据逐字段零变化。
 //
+// M1C-WP7-A-R1 补证（本批，独立 describe，不改动 G01/G03/G04/G06 既有断言）：
+//   G03 —— L2 canonical inventory primitive 证据（另见
+//          `server/m1c-wp7a-g03-l2-mutation-key.test.js`）；
+//          G03-2/3/4 的拒绝路径统一到**完整业务事实**逐字段快照。
+//   G04 —— 成品唯一 Writer、企业所有权与物理/跟踪/估值流水关联（G04-R1-1）；
+//          逐批成品估值与成本构成、Movement 与 Balance 逐笔核对（G04-R1-2）。
+//
 // 证据分级：正向来源一律经生产 HTTP API（L1）。只有三处使用直接 SQL（L3），
 // 且都是没有生产写入入口的字段：
 //   1) `products.valuation_method` —— 无任何 HTTP 路由写入它；
@@ -33,6 +40,12 @@ import { after, before, describe, test } from 'node:test';
 import {
   createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource,
 } from './test-support/procurement-http-fixture.js';
+import {
+  G03_BUSINESS_FACT_TABLES, snapshotTables,
+} from './test-support/m1-core-g03-g04-evidence.js';
+import { readdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { join, relative } from 'node:path';
 
 const PARENT_CODE = 'WP7A-FG';
 const MATERIAL_LOT = 'WP7A-LOT';
@@ -102,9 +115,9 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
   }
 
   // 生产 API 创建已批准、已生效、用途为 OUTSOURCE 的 BOM。
-  async function createOutsourceBom(version, items) {
+  async function createOutsourceBom(version, items, bomProductId = parentId) {
     const bom = await fixture.request('POST', '/api/engineering/boms', fixture.tokens.admin, {
-      productId: parentId, version, purpose: 'OUTSOURCE', approvalStatus: 'APPROVED',
+      productId: bomProductId, version, purpose: 'OUTSOURCE', approvalStatus: 'APPROVED',
       effectiveFrom: isoDate(), items,
     });
     assert.equal(bom.status, 201, bom.data.error);
@@ -115,9 +128,9 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
     return bom.data.id;
   }
 
-  async function releaseOrder(bomId, orderQuantity) {
+  async function releaseOrder(bomId, orderQuantity, orderProductId = parentId) {
     const order = await fixture.request('POST', '/api/procurement/outsourcing/orders', fixture.tokens.admin, {
-      supplierId: 'supplier-001', productId: parentId, orderQuantity, unit: 'EA',
+      supplierId: 'supplier-001', productId: orderProductId, orderQuantity, unit: 'EA',
       businessDate: isoDate(), bomId,
     });
     assert.equal(order.status, 201, order.data.error);
@@ -138,17 +151,18 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
     ]));
   }
 
-  // 一个委外订单的全部物料事实快照：用于「拒绝后逐字段零变化」断言。
-  function materialFacts(orderId) {
-    return JSON.stringify({
-      materials: fixture.db.prepare('SELECT * FROM outsourcing_material_list WHERE order_id=? ORDER BY id').all(orderId),
-      balances: fixture.db.prepare(
-        'SELECT * FROM outsourcing_wip_identity_balances WHERE material_list_id IN (SELECT id FROM outsourcing_material_list WHERE order_id=?) ORDER BY material_list_id,identity_key',
-      ).all(orderId),
-      transactions: fixture.db.prepare(
-        "SELECT * FROM inventory_transactions WHERE source_id IN (SELECT id FROM outsourcing_issues WHERE order_id=?) ORDER BY id",
-      ).all(orderId),
-    });
+  // G03 合同的**完整业务事实**快照：用于「拒绝后逐字段零变化」断言。
+  //
+  // Active Design §13.1 的 G03 零副作用列要求「业务单据 / 库存 / 跟踪 / 估值 /
+  // 身份层逐字段零变化」。旧实现只采集了三张表且**限定在本订单内**，因此
+  // 跟踪层与估值层完全没有被断言到，订单之外的既有行被原地改写也发现不了。
+  //
+  // 现在改为对 G03 合同涉及的全部业务事实表做**完整行**采集与逐字段比较
+  // （表集见 `G03_BUSINESS_FACT_TABLES`）。`audit_logs` **不在**快照内：拒绝
+  // 路径必须**恰好新增 1 条**拒绝审计，这是与「零变化」并列的独立要求，
+  // 由各用例单独断言。
+  function g03BusinessFacts() {
+    return snapshotTables(fixture.db, G03_BUSINESS_FACT_TABLES);
   }
 
   async function qualifySupplier() {
@@ -280,7 +294,7 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
     });
 
     test('G03-2 身份异常一律 409 且拒绝审计恰好一条、事实零变化', async () => {
-      const before = materialFacts(orderId);
+      const before = g03BusinessFacts();
       const rejectsBefore = countRejects('OUTSOURCING_ORDER', orderId);
 
       const cases = [
@@ -296,12 +310,12 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
       }
       assert.equal(countRejects('OUTSOURCING_ORDER', orderId), rejectsBefore + cases.length,
         '每个业务门禁拒绝恰好新增 1 条拒绝审计');
-      assert.equal(materialFacts(orderId), before, '身份异常拒绝后库存、身份余额与物料行必须逐字段零变化');
+      assert.deepEqual(g03BusinessFacts(), before, '身份异常拒绝后 G03 完整业务事实必须逐字段零变化');
     });
 
     test('G03-3 缺仓与库存不足一律 409 且拒绝审计恰好一条、事实零变化', async () => {
       // 缺仓：供应商未配置委外 WIP 仓（异常样本构造，构造后立即复原）。
-      const before = materialFacts(orderId);
+      const before = g03BusinessFacts();
       const rejectsBefore = countRejects('OUTSOURCING_ORDER', orderId);
       fixture.db.prepare("UPDATE suppliers SET supplier_wip_warehouse_id=NULL WHERE id='supplier-001'").run();
       const noWarehouse = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/issues`, fixture.tokens.outsourcing, {
@@ -311,7 +325,7 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
       assert.equal(noWarehouse.status, 409, '缺 WIP 仓必须 409');
       assert.equal(noWarehouse.data.code, 'OUTSOURCING_WIP_WAREHOUSE_MISSING');
       assert.equal(countRejects('OUTSOURCING_ORDER', orderId), rejectsBefore + 1);
-      assert.equal(materialFacts(orderId), before, '缺仓拒绝后事实必须逐字段零变化');
+      assert.deepEqual(g03BusinessFacts(), before, '缺仓拒绝后 G03 完整业务事实必须逐字段零变化');
 
       // 库存不足：退料数量超过供应商 WIP 剩余。
       const issued = Number(fixture.db.prepare('SELECT issued_quantity q FROM outsourcing_material_list WHERE id=?').get(materials[lotProductId]).q);
@@ -321,7 +335,7 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
       assert.equal(overReturn.status, 409, '库存不足必须 409');
       assert.equal(overReturn.data.code, 'OUTSOURCING_WIP_INSUFFICIENT');
       assert.equal(countRejects('OUTSOURCING_ORDER', orderId), rejectsBefore + 2);
-      assert.equal(materialFacts(orderId), before, '库存不足拒绝后事实必须逐字段零变化');
+      assert.deepEqual(g03BusinessFacts(), before, '库存不足拒绝后 G03 完整业务事实必须逐字段零变化');
     });
 
     test('G03-4 UOM 不符一律 409 且拒绝审计恰好一条', async () => {
@@ -337,13 +351,14 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
       assert.equal(patched.status, 200, patched.data.error);
 
       const rejectsBefore = countRejects('OUTSOURCING_ORDER', uomOrderId);
+      const before = g03BusinessFacts();
       const response = await fixture.request('POST', `/api/procurement/outsourcing/orders/${uomOrderId}/issues`, fixture.tokens.outsourcing, {
         materialListId: uomMaterials[uomProductId], quantity: 1, issuedDate: isoDate(), idempotencyKey: 'wp7a-uom-mismatch',
       });
       assert.equal(response.status, 409, 'UOM 不符必须 409');
       assert.equal(response.data.code, 'OUTSOURCING_WIP_UOM_MISMATCH');
       assert.equal(countRejects('OUTSOURCING_ORDER', uomOrderId), rejectsBefore + 1);
-      assert.equal(Number(fixture.db.prepare('SELECT issued_quantity q FROM outsourcing_material_list WHERE id=?').get(uomMaterials[uomProductId]).q), 0);
+      assert.deepEqual(g03BusinessFacts(), before, 'UOM 不符拒绝后 G03 完整业务事实必须逐字段零变化');
     });
 
     test('G03-5 同键同内容幂等重放不产生第二次物理动作，同键异内容一律拒绝', async () => {
@@ -533,6 +548,249 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
       assert.equal(fixture.db.prepare(
         "SELECT COUNT(*) n FROM inventory_transactions WHERE source_type='OUTSOURCING_BACKFLUSH'",
       ).get().n, backflushAfterFirst, '重复确认不得双扣');
+    });
+  });
+
+  // ------------------------------------------------------------- G04-R1 ---
+  // M1C-WP7-A-R1 —— G04 的成品 Writer 与逐批成本估值补证。
+  //
+  // 本 describe 使用**自己的成品货品与自己的委外订单**，与 G04 组的夹具完全
+  // 隔离，因此断言不依赖任何用例执行顺序。
+  describe('G04-R1 — 成品唯一 Writer、企业所有权与逐批成本估值', () => {
+    let r1ParentId;
+    let r1CostProductId;
+    let r1OrderId;
+    let r1MaterialListId;
+    let r1Batches = [];
+    let r1OpeningBalance = null;
+    const r1BalanceKey = () => `NONE:warehouse-001:${r1ParentId}`;
+
+    const readR1Balance = () => fixture.db.prepare(
+      'SELECT * FROM inventory_valuation_balances WHERE balance_key=?',
+    ).get(r1BalanceKey()) || null;
+
+    // 该批成品的估值 Movement：按**收货单 + 明细**关联，并要求恰好一条。
+    function r1BatchMovements(batch) {
+      const item = fixture.db.prepare(
+        'SELECT * FROM outsourcing_receipt_items WHERE receipt_id=? ORDER BY line_no',
+      ).get(batch.receiptId);
+      const movements = fixture.db.prepare(
+        "SELECT * FROM inventory_valuation_movements WHERE source_type='OUTSOURCING_RECEIPT' AND source_id=? AND source_item_id=? AND status='POSTED' ORDER BY id",
+      ).all(batch.receiptId, item.id);
+      return { item, movements };
+    }
+
+    // 成品入库的**静态 Writer 调用链**检查。
+    //
+    // 目的：证明成品物理腿在生产代码里只有**一条**写入路径，而不是只断言
+    // 「库存腿数正确」。做法是扫描 server 下的全部生产源文件（排除 *.test.js）：
+    //   ① canonical primitive 的成品 sourceType 字面量只出现在**一个**文件；
+    //   ② 该文件里的全部字面量都位于 `receiveOutsourcingFinishedGoods` 函数体内；
+    //   ③ 成品入库 Writer 在整个 server 树里**只有一个调用点**。
+    //
+    // 口径边界：这是**源码级**证明「今天不存在第二条写入路径」，不是运行时
+    // 证明；将来新增写入点会让本断言失败，从而强制重新审查。
+    function scanFinishedGoodsWriterChain() {
+      const serverDir = fileURLToPath(new URL('.', import.meta.url));
+      const files = [];
+      const walk = (dir) => {
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          const full = join(dir, entry.name);
+          if (entry.isDirectory()) walk(full);
+          else if (entry.isFile() && entry.name.endsWith('.js') && !entry.name.endsWith('.test.js')) files.push(full);
+        }
+      };
+      walk(serverDir);
+
+      const literalPattern = /sourceType:\s*'OUTSOURCING_RECEIPT'/g;
+      const literalFiles = [];
+      let literalCount = 0;
+      for (const file of files) {
+        const text = readFileSync(file, 'utf8');
+        const hits = text.match(literalPattern) || [];
+        if (hits.length) {
+          literalFiles.push(relative(serverDir, file).replaceAll('\\', '/'));
+          literalCount += hits.length;
+        }
+      }
+
+      const ownerFile = files.find((file) => /export function receiveOutsourcingFinishedGoods\(/.test(readFileSync(file, 'utf8')));
+      const ownerText = readFileSync(ownerFile, 'utf8');
+      const bodyStart = ownerText.indexOf('export function receiveOutsourcingFinishedGoods(');
+      const bodyEnd = ownerText.indexOf('\nexport function ', bodyStart + 1);
+      const body = ownerText.slice(bodyStart, bodyEnd === -1 ? ownerText.length : bodyEnd);
+      const bodyLiterals = (body.match(literalPattern) || []).length;
+
+      let callSites = 0;
+      const callSiteFiles = [];
+      for (const file of files) {
+        const text = readFileSync(file, 'utf8');
+        const hits = (text.match(/receiveOutsourcingFinishedGoods\(/g) || []).length;
+        const definitions = (text.match(/export function receiveOutsourcingFinishedGoods\(/g) || []).length;
+        const calls = hits - definitions;
+        if (calls > 0) {
+          callSites += calls;
+          callSiteFiles.push(relative(serverDir, file).replaceAll('\\', '/'));
+        }
+      }
+      return {
+        literalFiles, literalCount, bodyLiterals, callSites, callSiteFiles,
+        owner: relative(serverDir, ownerFile).replaceAll('\\', '/'),
+      };
+    }
+
+    before(async () => {
+      r1ParentId = await createProduct('WP7A-R1-FG', 'NONE', 'FINISHED_GOOD');
+      r1CostProductId = await createProduct('WP7A-R1-COST', 'NONE');
+      await receiveStock(r1CostProductId, 100);
+      seedValuationBalance({
+        key: `NONE:warehouse-001:${r1CostProductId}`, method: 'MOVING_AVERAGE',
+        productId: r1CostProductId, warehouseId: 'warehouse-001', quantity: 100, valueCents: 10000,
+      });
+      // 对照仓的同产品成本：若材料成本退化为全局平均价，逐批成品估值断言必须失败。
+      const contrast = await fixture.request('POST', '/api/warehouses', fixture.tokens.admin, {
+        code: 'WH-WP7A-R1-003', name: 'WP7A R1 成本对照仓',
+      });
+      assert.equal(contrast.status, 201, contrast.data.error);
+      seedValuationBalance({
+        key: `NONE:${contrast.data.id}:${r1CostProductId}`, method: 'MOVING_AVERAGE',
+        productId: r1CostProductId, warehouseId: contrast.data.id, quantity: 100, valueCents: 99999,
+      });
+
+      const bomId = await createOutsourceBom('WP7A-R1', [{ productId: r1CostProductId, quantity: 0.005 }], r1ParentId);
+      r1OrderId = await releaseOrder(bomId, 100, r1ParentId);
+      const materials = await snapshotMaterials(r1OrderId, [r1CostProductId]);
+      r1MaterialListId = materials[r1CostProductId];
+
+      const issue = await fixture.request('POST', `/api/procurement/outsourcing/orders/${r1OrderId}/issues`, fixture.tokens.outsourcing, {
+        materialListId: r1MaterialListId, quantity: 10, issuedDate: isoDate(), idempotencyKey: 'wp7a-r1-issue',
+      });
+      assert.equal(issue.status, 201, issue.data.error);
+
+      // 成品估值余额的**期初**与**逐批余额**快照：用于「各批增量加总 vs 期初期末
+      // Balance 差额」核对。期初必须为空 —— 成品在首批完工前没有估值余额。
+      r1OpeningBalance = readR1Balance();
+      assert.equal(r1OpeningBalance, null, '成品在首批完工前不得存在估值余额（期初为空）');
+
+      for (const batch of [1, 2]) {
+        const source = await prepareOutsourcingReceiptSource(fixture, r1OrderId, 30, `wp7a-r1-b${batch}`);
+        const receipt = await fixture.request('POST', '/api/procurement/outsourcing/receipts', fixture.tokens.outsourcingReceiving, {
+          orderId: r1OrderId, quantity: 30, receivedDate: isoDate(), businessDate: isoDate(), processingPoId: source.processingPoId,
+          sourceNoticeId: source.sourceNoticeId, warehouseId: source.warehouseId, processingFeeCents: 30000,
+          ...outsourcingReceiptBody(source, 30, 30000),
+        }, { 'idempotency-key': `wp7a-r1-receipt-${batch}` });
+        assert.equal(receipt.status, 201, receipt.data.error);
+        const effected = await fixture.request('POST', `/api/procurement/outsourcing/receipts/${receipt.data.id}/confirm`,
+          fixture.tokens.outsourcingReceiving, {}, { 'idempotency-key': `wp7a-r1-effect-${batch}` });
+        assert.equal(effected.status, 200, effected.data.error);
+        r1Batches.push({ receiptId: receipt.data.id, ...effected.data, balanceAfter: readR1Balance() });
+      }
+    });
+
+    test('G04-R1-1 成品只经唯一 Writer 进入合法企业仓，物理/跟踪/估值流水逐笔关联', () => {
+      // 1) 成品仓位：唯一、合法企业仓、企业所有权。
+      const positions = fixture.db.prepare('SELECT * FROM inventory WHERE product_id=? AND active=1').all(r1ParentId);
+      assert.equal(positions.length, 1, '成品只能有一个 canonical 仓位');
+      assert.equal(positions[0].warehouse_id, 'warehouse-001', '成品只能进入合法企业仓');
+      assert.equal(positions[0].owner_type, 'ENTERPRISE', '成品所有权必须是企业');
+      assert.equal(positions[0].owner_id, null, '成品所有权不得挂到供应商或第三方');
+      assert.equal(Number(positions[0].quantity), 60, '成品数量必须等于两批合计 60');
+      assert.equal(
+        fixture.db.prepare('SELECT COUNT(*) n FROM inventory WHERE product_id=? AND warehouse_id=?').get(r1ParentId, 'warehouse-002').n,
+        0, '成品不得进入供应商 WIP 仓',
+      );
+
+      // 2) 物理流水 ↔ 跟踪流水 ↔ 估值流水：逐笔关联。
+      const legs = fixture.db.prepare(
+        "SELECT * FROM inventory_transactions WHERE source_type='OUTSOURCING_RECEIPT' AND product_id=? ORDER BY created_at,id",
+      ).all(r1ParentId);
+      assert.equal(legs.length, 2, '两批完工必须恰好两条成品入库物理腿');
+      for (const leg of legs) {
+        assert.equal(leg.direction, 'IN', '成品入库腿方向必须是 IN');
+        assert.equal(leg.valuation_status, 'VALUED', '每条成品物理腿必须完成权威估值');
+        const tracked = fixture.db.prepare('SELECT * FROM tracked_inventory_movements WHERE transaction_id=?').all(leg.id);
+        assert.equal(tracked.length, 1, '每条成品物理腿必须恰好一条跟踪腿');
+        assert.equal(tracked[0].source_type, 'OUTSOURCING_RECEIPT');
+        assert.equal(tracked[0].source_id, leg.source_id, '跟踪腿必须关联同一收货');
+        assert.equal(tracked[0].product_id, r1ParentId);
+        assert.equal(tracked[0].warehouse_id, leg.warehouse_id, '跟踪腿必须在同一仓位');
+        assert.equal(Number(tracked[0].quantity), Math.abs(Number(leg.quantity_change)), '跟踪腿数量必须等于物理腿数量');
+        const valuation = fixture.db.prepare(
+          "SELECT * FROM inventory_valuation_movements WHERE inventory_transaction_id=? AND status='POSTED'",
+        ).all(leg.id);
+        assert.equal(valuation.length, 1, '每条成品物理腿必须恰好一条 POSTED 估值流水');
+        assert.equal(valuation[0].source_id, leg.source_id, '估值流水必须关联同一收货');
+        assert.equal(valuation[0].source_item_id, tracked[0].source_item_id, '估值流水必须关联同一收货明细');
+      }
+
+      // 3) 静态 Writer 调用链：成品物理腿只有一条生产写入路径。
+      const chain = scanFinishedGoodsWriterChain();
+      assert.deepEqual(chain.literalFiles, [chain.owner],
+        `成品 sourceType 字面量只允许出现在成品 Writer 模块内，实际：${chain.literalFiles.join(', ')}`);
+      assert.equal(chain.bodyLiterals, chain.literalCount,
+        '成品 sourceType 字面量必须全部位于成品入库 Writer 函数体内');
+      assert.equal(chain.callSites, 1, '成品入库 Writer 只能有一个调用点');
+      assert.deepEqual(chain.callSiteFiles, ['modules/outsourcing-finance.js'],
+        '成品入库 Writer 的调用点必须唯一');
+    });
+
+    test('G04-R1-2 每批成品估值 = 该批实际倒冲材料成本 + provisional 加工费，且与 Balance 逐笔对账', () => {
+      assert.equal(r1Batches.length, 2, '必须恰好两批完工');
+      let totalMovementQuantity = 0;
+      let totalMovementValue = 0;
+      for (const [index, batch] of r1Batches.entries()) {
+        const { item, movements } = r1BatchMovements(batch);
+        assert.equal(movements.length, 1, `第 ${index + 1} 批成品估值必须恰好一条 Movement（按收货单与明细关联）`);
+        const evidence = fixture.db.prepare(
+          'SELECT * FROM outsourcing_cost_evidences WHERE outsourcing_receipt_id=?',
+        ).get(batch.receiptId);
+        assert.ok(evidence, `第 ${index + 1} 批必须存在加工费成本证据`);
+        assert.equal(evidence.basis_status, 'PROVISIONAL', '加工费证据必须为 provisional 口径');
+        assert.ok(Number(evidence.processing_fee_provisional_cents) > 0, '加工费必须以 provisional 形式存在');
+        assert.equal(evidence.processing_fee_actual_cents, null, '首期不得提前写入加工费实际值');
+        assert.equal(evidence.variance_cents, null, '首期不得提前写入差异');
+
+        // 该批成品估值 = 该批实际倒冲材料账面价值 + provisional 加工费。
+        const expectedValue = Number(evidence.material_consumed_value_cents) + Number(evidence.processing_fee_provisional_cents);
+        assert.equal(Number(movements[0].value_delta_cents), expectedValue,
+          `第 ${index + 1} 批成品估值必须等于该批实际倒冲材料成本 + provisional 加工费`);
+        // 明确不得把成品 Movement 读成「只有材料成本」或「累计余额」。
+        assert.notEqual(Number(movements[0].value_delta_cents), Number(evidence.material_consumed_value_cents),
+          '成品 Movement 必须包含 provisional 加工费，不得等于单独的材料成本');
+        assert.equal(Number(movements[0].quantity_delta), Number(item.quantity),
+          `第 ${index + 1} 批成品估值的数量必须等于该批明细数量`);
+
+        // Movement 必须按 inventory_transaction_id 关联到该批的成品物理腿。
+        const leg = fixture.db.prepare('SELECT * FROM inventory_transactions WHERE id=?').get(movements[0].inventory_transaction_id);
+        assert.ok(leg, '成品估值 Movement 必须按 inventory_transaction_id 关联到成品物理腿');
+        assert.equal(leg.source_id, batch.receiptId, '关联的物理腿必须属于同一收货');
+        assert.equal(leg.direction, 'IN');
+        assert.equal(leg.product_id, r1ParentId);
+        assert.equal(leg.valuation_status, 'VALUED');
+
+        const batchValue = Number(movements[0].value_delta_cents);
+        const batchQuantity = Number(movements[0].quantity_delta);
+        totalMovementValue += batchValue;
+        totalMovementQuantity += batchQuantity;
+
+        // 逐批 Balance 增量 = 该批 Movement 合计（不得把累计 Balance 当作单笔 Movement）。
+        const previous = index === 0 ? r1OpeningBalance : r1Batches[index - 1].balanceAfter;
+        const current = batch.balanceAfter;
+        assert.ok(current, `第 ${index + 1} 批完工后必须存在成品估值余额`);
+        assert.equal(Number(current.value_cents) - Number(previous?.value_cents || 0), batchValue,
+          `第 ${index + 1} 批的 Balance 金额增量必须等于该批 Movement 合计`);
+        assert.equal(Number(current.quantity) - Number(previous?.quantity || 0), batchQuantity,
+          `第 ${index + 1} 批的 Balance 数量增量必须等于该批 Movement 合计`);
+      }
+
+      // 各批增量加总，与期初期末 Balance 差额核对。
+      const closing = readR1Balance();
+      assert.ok(closing, '两批完工后必须存在成品估值余额');
+      assert.equal(Number(closing.value_cents) - Number(r1OpeningBalance?.value_cents || 0), totalMovementValue,
+        '各批成品 Movement 金额加总必须等于期初期末 Balance 金额差额');
+      assert.equal(Number(closing.quantity) - Number(r1OpeningBalance?.quantity || 0), totalMovementQuantity,
+        '各批成品 Movement 数量加总必须等于期初期末 Balance 数量差额');
+      assert.equal(Number(closing.value_cents), totalMovementValue, '期末 Balance 金额必须等于各批 Movement 加总');
     });
   });
 
