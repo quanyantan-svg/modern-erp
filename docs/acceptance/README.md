@@ -36,6 +36,7 @@
 | [`m1-core-g03-g04-offline-closure-20261107.md`](./m1-core-g03-g04-offline-closure-20261107.md) | G03/G04 R3 候审矩阵：保留 SQLite L1/L2 四事件 Mutation Key / 身份腿证据，明确 G07 16 表 Parity 不含 `inventory_mutation_log`、真实 MySQL 四事件行为未证明；补齐 G04 D-1 backflush + confirm 防御路径并限定 ACL 结论只适用于两个已测令牌；未签 Gate PASS，G04 D-2 仍待 Owner 裁定 |
 | [`m1-core-g03-owner-acceptance-20261107.md`](./m1-core-g03-owner-acceptance-20261107.md) | M1C-G03 正式 Owner Acceptance（`M1C-G03 PASS`，2026-11-07）；明确接受真实 MySQL 四事件完整重演未证明、16 表 Parity 不含 `inventory_mutation_log` 等有界残余风险；不签发包级 Acceptance / Freeze / Release |
 | [`m1-core-g04-d2-design-amendment-20261107.md`](./m1-core-g04-d2-design-amendment-20261107.md) | G04 D-2 正式 Design 修订记录：Active Design §13.1 区分合法 L1 净供应不足与 L3 历史异常负增量防御证据，保留 409、严格支持范围、零副作用与审计合同；不构成 `M1C-G04 PASS` |
+| [`m1-core-g04-owner-acceptance-20261107.md`](./m1-core-g04-owner-acceptance-20261107.md) | M1C-G04 正式 Owner Acceptance（`M1C-G04 PASS`，2026-11-07）；接受 MySQL 败方全字段零副作用未充分证明、并发覆盖有限、L3 负增量防御及历史/浮点边界等六项有界残余风险；不签发包级 Acceptance / Freeze / Release |
 | [`sales-customer/`](./sales-customer/) | Sales & Customer 各 Wave 的 Acceptance / Freeze 记录与实施证据 |
 
 ## 规则

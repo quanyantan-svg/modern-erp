@@ -1916,6 +1916,22 @@ M1C_WP7_G07_R2_READY_FOR_INDEPENDENT_REVIEW
 - **未发生**：未修改生产代码、Requirement、DDL、Fixture、G07 Oracle 或已签发 Owner Acceptance；
   未执行真实 MySQL、ACK-4、Migration、Push、Merge、Tag、Release 或 Deploy。
 
+### 37.50 M1C-G04 正式 Owner Acceptance（2026-11-07）
+
+- **Owner 决定**：Procurement & Outsourcing Domain Owner 选择 `ACCEPT_BOUNDED_RESIDUAL_RISK`，
+  明确接受正式记录 §4 的六项有界残余风险并签发 `M1C-G04 PASS`。正式记录：
+  [`docs/acceptance/m1-core-g04-owner-acceptance-20261107.md`](../acceptance/m1-core-g04-owner-acceptance-20261107.md)。
+- **证据范围**：SQLite 生产 HTTP 覆盖受支持基数的增量倒冲、位置成本、成品唯一 Writer、重放、
+  合法净供应不足及有标记的 L3 历史异常负增量防御；历史 G07 Run `b29c3f1f` 的 CR-03/07/08
+  仅作为真实 MySQL 竞争子集，不外推为败方既有业务行全字段零变化或全部 G04 腿的完整 MySQL 重演。
+- **残余风险保持显式**：MySQL 败方完整零副作用未充分证明、并发覆盖有限、负增量仅防御性证明、
+  历史库与浮点边界未穷尽、暂估成本不等于 AP/GL 完结、G07 WP-K 证明偏差未由本决定追认。
+- **七 Gate 当前状态**：G01=`INCONCLUSIVE`；G02/G03/G04/G05/G06/G07=`PASS`。
+- **包级状态**：`M1_CORE_ACCEPTANCE_BLOCKED` 保持；本决定不签发 Capability Freeze、Domain Acceptance、
+  Manual Closure、Release Readiness 或 Release。
+- **未发生**：未修改 Active Requirement/Design、生产 Handler、测试、Fixture、DDL 或 G07 Oracle；
+  未执行真实 MySQL、G07、ACK-4、Migration、Push、Merge、Tag、Release 或 Deploy。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
