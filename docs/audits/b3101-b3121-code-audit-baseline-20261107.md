@@ -1,13 +1,13 @@
 # B3101 / B3121 采购与委外代码审计基线
 
-> **文档类型**：静态代码审计基线（Audit Baseline）  
-> **版本**：v0.1  
-> **审计日期**：2026-11-07  
-> **审计状态**：`PRELIMINARY_STATIC_REVIEW`  
-> **适用仓库**：`quanyantan-svg/modern-erp`  
-> **审计分支**：`master`  
-> **审计基准 SHA**：`9b9cb09799aa05ccac43d02ac1718083921c6d04`  
-> **业务手册**：B3101《采购管理操作手册 V1.0》；B3121《委外管理操作手册 V1.0》  
+> **文档类型**：静态代码审计基线（Audit Baseline）
+> **版本**：v0.1
+> **审计日期**：2026-11-07
+> **审计状态**：`PRELIMINARY_STATIC_REVIEW`
+> **适用仓库**：`quanyantan-svg/modern-erp`
+> **审计分支**：`master`
+> **审计基准 SHA**：`9b9cb09799aa05ccac43d02ac1718083921c6d04`
+> **业务手册**：B3101《采购管理操作手册 V1.0》；B3121《委外管理操作手册 V1.0》
 > **重要声明**：本文件记录的是基于上述 SHA 的远端静态代码初审结果，不是 Domain Acceptance、Capability Freeze、Release Readiness 或完整验收报告。未在本轮执行测试套件，也未连接真实 MySQL。
 
 ---

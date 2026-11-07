@@ -2195,10 +2195,11 @@ B3101_B3121_AUDIT_BASELINE_REGISTERED
 | 项 | 值 |
 |---|---|
 | 审计基准（父提交） | `9b9cb09799aa05ccac43d02ac1718083921c6d04` |
+| 主体交付提交 | `a4389711f474790af50f0bc3d46b6acaec6e30fd`（`登记 B3101 / B3121 静态代码审计基线到项目治理`；8 个文件，+1035 / −7） |
 | 变更范围 | 仅治理与文档（`docs/audits/**`、`docs/status/**`、`docs/requirements/README.md`、`docs/design/README.md`、`docs/README.md`、`log/2026-11-07.md`）；**未**修改任何 `src/` / `server/` 生产代码、schema、migration、API、权限、状态机或业务测试 |
-| 交付提交锚点 | 按本表既有惯例，由**后续单独提交**登记（见当天 `log/2026-11-07.md`「B3101 / B3121 审计基线登记」节） |
-| 校验 | `node scripts/docs/check-doc-consistency.mjs`（current 模式）、`node scripts/docs/check-doc-consistency.mjs --mode migration`、`git diff --check` |
-| 远端状态 | **未** Push / Merge / Tag / Release / Deploy |
+| 审计基线正文处理 | 主体交付提交**原样登记**审计基线正文；随后仅对其抬头 8 行做**行尾空白规范化**（删除 Markdown 硬换行的两个尾随空格），使其与仓库既有 `docs/**` 无行尾空白的约定一致并通过 `git diff --check`——**正文内容与全部结论未改写** |
+| 校验 | `node scripts/docs/check-doc-consistency.mjs`（current 模式）：N1 / N3–N9 `PASS`，N2 `RETIRED`；`node scripts/docs/check-doc-consistency.mjs --mode migration`：C1–C6 `ALL CHECKS PASSED`；`git diff --check`：exit 0 |
+| 远端状态 | **未** Push / Merge / Tag / Release / Deploy；`github/master` 仍为 `9b9cb09799aa05ccac43d02ac1718083921c6d04`（本地 `master` 领先 1），`origin/master` 仍为 `1de469217ce0ebf83b8c5a2df69c2d6df63a1718`（本地领先 11） |
 
 **边界**：本节登记的是**审计基线**。它**不**使任何 Capability 变为 `VERIFIED` 或 `PASS`，
 **不**授予 Capability Freeze / Domain Acceptance，**不**授权任何 Implementation，
