@@ -2675,6 +2675,23 @@ I3a-S 先实施并独立提交；I3a-S 的验收断言**只能是**固定拒绝�
 
 **本节明确不改变的**：`AUD-OUT-001` 仍为 `TESTED` / `PENDING_OWNER_APPROVAL`；**未**签发 OUT-001 Acceptance、Domain Acceptance、Capability Freeze 或 Release；§31.14 / §26.34 的整体状态不变；`A1-D-RV-01`～`A1-D-RV-04` 不变；M1-Core 七 Gate、`B-P01`/`B-P02`、`D-P01`/`D-P02`、VMI、`PRC-06`、B3101 / B3121 原状态不变。本轮**未**执行真实 MySQL Gate、**未**手动设置破坏性环境变量、**未**执行 Migration / DDL、**未**连接生产数据库、**未**创建 ACK-4 Capability、**未**触碰 VMI / PRC-005 / PRC-006 或任何其它审计 Issue、**未** Merge / Tag / Release / Deploy。
 
+### 45.13 OUT-001 MySQL Gate Owner 复核后最小安全修补（2026-11-08）
+
+本节登记 Owner 对 §45.12 Gate 的技术复核修补；它只修改 Gate 基础设施、真实 MySQL 测试代码与离线证据，**不执行**真实 MySQL Gate，不改变 OUT-001 业务实现、Schema、Migration、`M1_CORE_MANIFEST` 或数据库权限。
+
+| 复核项 | 修补与当前证据 |
+|---|---|
+| Global Mutex | 删除普通 Session Mutex 降级；`Global\...` 创建或获取失败直接 `BLOCKED`，ACK-4 消费与破坏性操作不可达；异常路径显式释放句柄。包含空格的 repo / capability / proof / child 路径按 Windows PowerShell 5.1 native argument 规则显式引用 |
+| EMPTY_ONLY / RESET | `RESET_SCHEMA_PRE_RUN` Child 重新验证目标与 `SELECT DATABASE()`，统计 BASE TABLE / VIEW / TRIGGER / ROUTINE / EVENT；任一非零即拒绝。空库 RESET 为零 DROP 的已证明 no-op，避免检查后再删除并发出现的未知对象。Root 只在 Child 退出成功且 JSON、`dropped=0`、五类计数全零后设置 `resetCompleted=true`；RESET 失败或结果不确定时 Cleanup 次数固定为 0，现场进入 quarantine |
+| Child / Postflight | 操作超时：RESET 2 分钟、Bootstrap 10 分钟、HTTP Fixtures 30 分钟、Cleanup 5 分钟、Postflight 2 分钟；Windows 使用 `taskkill /T /F` 终止进程树并等待退出确认。无法确认退出时禁止 Cleanup。Postflight 等待进程、stdout、stderr 全部结束后解析完整 JSON，缺失、截断、异常退出或超时一律未验证 |
+| M2 | 测试代码改为两个独立 Node.js 应用进程；每个进程独占 HTTP Server 与 MySQL Adapter，继续使用确定性事务门禁屏障；本轮只完成代码与非 MySQL 加载验证，真实 MySQL `NOT_RUN` |
+| M3 | 测试代码改为通过真实 `releaseMySqlIdempotencyLocks()` 构造 `RELEASE_LOCK=0`，验证 quarantine、`TERMINATION_CONFIRMED`、observer 重获同名锁、victim 从 PROCESSLIST 消失且无新业务会话。真实不确定 COMMIT 仍明确为 `NOT_PROVEN_ON_REAL_MYSQL` |
+| M4 | 增加 identity effect 业务键、effect allocation 业务键与幂等业务键的独立真实 MySQL 重复键行为断言；要求 `ER_DUP_ENTRY` / errno 1062，并由生产分类器识别。未修改 Schema |
+
+本地实测：Gate/guard/专属非 MySQL 合并运行 **54 项**（48 PASS + 6 个真实 MySQL 合同 SKIP，退出码 0）；OUT-001 focused SQLite **28/28 PASS**；FAST **590/590 PASS**；Build PASS；Docs current N1/N3～N9 PASS、N2 `RETIRED`；Docs migration C1～C6 PASS；PowerShell AST parse PASS；FULL **3380/3381**，唯一失败仍是既有 Windows ACL `SetAccessControl` 沙箱拒绝，因此 FULL 保持 **FAIL**；`git diff --check` PASS。首次直接调用 `pnpm` 被本机 execution policy 拒绝（退出码 1），改用仓库既有 Windows 入口 `pnpm.cmd` 后得到上述真实结果。
+
+Gate 状态保持：`GATE_IMPLEMENTED` **达成**；`GATE_READY` **未达成（待 Owner 技术复核）**；`GATE_AUTHORIZED` **未达成**；`GATE_EXECUTED = NOT_RUN`；`GATE_ACCEPTED` **未达成**。`AUD-OUT-001` 仍为 `TESTED` / `PENDING_OWNER_APPROVAL`，`NOT_PROVEN_ON_REAL_MYSQL` 保留。
+
 ### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
 
 以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：

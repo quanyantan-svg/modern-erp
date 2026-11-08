@@ -54,6 +54,8 @@ export async function runOut001MySqlLifecycle({
   let childrenExited = false;
   let cleanupAttempts = 0;
   let inventory = [];
+  let resetStarted = false;
+  let resetCompleted = false;
   const registeredChildren = [];
 
   try {
@@ -63,7 +65,9 @@ export async function runOut001MySqlLifecycle({
     assertActiveRootLease(rootLease, expected);
 
     beginAck4RootOperation(rootLease, 'RESET_SCHEMA_PRE_RUN', expected);
+    resetStarted = true;
     await reset(out001OperationContext(rootLease, 'RESET_SCHEMA_PRE_RUN', registeredChildren));
+    resetCompleted = true;
 
     beginAck4RootOperation(rootLease, 'BOOTSTRAP_CURRENT_SCHEMA', expected);
     await bootstrap(out001OperationContext(rootLease, 'BOOTSTRAP_CURRENT_SCHEMA', registeredChildren));
@@ -85,6 +89,11 @@ export async function runOut001MySqlLifecycle({
       }
       if (!childrenExited) {
         inventory = ['CHILD_EXIT_UNVERIFIED'];
+        cleanupProven = false;
+      } else if (resetStarted && !resetCompleted) {
+        // RESET 的结果未知时必须保留现场。此时禁止 Cleanup，避免把并发创建或
+        // 未知对象当成本 Gate 的产物删除。
+        inventory = ['RESET_UNVERIFIED'];
         cleanupProven = false;
       } else {
         try {
@@ -111,6 +120,7 @@ export async function runOut001MySqlLifecycle({
     manifest: rootLease.manifest,
     state, testsPassed, cleanupProven, childrenExited,
     cleanupAttempts, childCount: registeredChildren.length,
+    resetStarted, resetCompleted,
   });
   if (primaryError) {
     primaryError.out001Lifecycle = report;

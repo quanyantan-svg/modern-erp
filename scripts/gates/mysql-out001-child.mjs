@@ -82,8 +82,12 @@ async function databaseOperation(operation) {
   }
   const db = verified.db;
   try {
-    const result = disposable.resetAuthorizedDisposableMySqlSchema(db, config);
-    const inventory = db.prepare('SHOW FULL TABLES').all();
+    const result = disposable.resetAuthorizedDisposableMySqlSchema(
+      db, config, process.env, { requireEmpty: operation === 'RESET_SCHEMA_PRE_RUN' },
+    );
+    const inventory = operation === 'RESET_SCHEMA_PRE_RUN'
+      ? result.inventory
+      : db.prepare('SHOW FULL TABLES').all();
     process.stdout.write(`${JSON.stringify({ operation, dropped: result.dropped, inventory })}\n`);
   } finally {
     db.close();

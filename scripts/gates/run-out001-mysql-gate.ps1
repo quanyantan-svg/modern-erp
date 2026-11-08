@@ -76,6 +76,16 @@ function Clear-GateEnvironment {
   }
 }
 
+# Windows PowerShell 5.1 flattens Start-Process -ArgumentList to one command
+# line. Quote each path/value explicitly so repository and capability paths
+# containing spaces remain one native argument.
+function ConvertTo-NativeArgument([string]$Argument) {
+  if ($Argument -notmatch '[\s"]') { return $Argument }
+  $escaped = [regex]::Replace($Argument, '(\\*)"', '$1$1\"')
+  $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
+  return '"' + $escaped + '"'
+}
+
 # Runs a native helper and keeps its stdout and its stderr apart. A native
 # command that writes to stderr must not be turned into a terminating
 # PowerShell error, and the real error text must survive.
@@ -87,7 +97,7 @@ function Invoke-NodeHelper {
   try {
     $previousPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    $process = Start-Process -FilePath 'node' -ArgumentList $HelperPath -NoNewWindow -Wait -PassThru `
+    $process = Start-Process -FilePath 'node' -ArgumentList (ConvertTo-NativeArgument $HelperPath) -NoNewWindow -Wait -PassThru `
       -WorkingDirectory $repoRoot -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile
     $ErrorActionPreference = $previousPreference
     $stdoutText = (Get-Content -Raw -Encoding UTF8 $stdoutFile) -replace "`0", ''
@@ -106,20 +116,41 @@ function Enter-GateLock([string]$name) {
   try {
     $createdNew = $false
     $mutex = [System.Threading.Mutex]::new($false, "Global\$name", [ref]$createdNew)
-  } catch [System.UnauthorizedAccessException] {
-    $mutex = [System.Threading.Mutex]::new($false, $name)
+  } catch {
+    if ($null -ne $mutex) { $mutex.Dispose() }
+    throw [System.InvalidOperationException]::new("GLOBAL_MUTEX_CREATE_FAILED:$name", $_.Exception)
   }
   $acquired = $false
   try {
     $acquired = $mutex.WaitOne(0)
   } catch [System.Threading.AbandonedMutexException] {
     $acquired = $true
+  } catch {
+    $mutex.Dispose()
+    throw [System.InvalidOperationException]::new("GLOBAL_MUTEX_ACQUIRE_FAILED:$name", $_.Exception)
   }
   if (-not $acquired) {
     $mutex.Dispose()
     return $null
   }
   return $mutex
+}
+
+function Exit-GateLock($mutex) {
+  if ($null -eq $mutex) { return }
+  try { $mutex.ReleaseMutex() } catch { }
+  $mutex.Dispose()
+}
+
+$targetProofPath = $null
+$gateLock = $null
+trap {
+  Write-Block "unexpected launcher failure; ACK-4/destructive work is blocked ($($_.Exception.Message))."
+  Clear-GateEnvironment
+  $password = $null
+  if ($targetProofPath) { Remove-Item -LiteralPath $targetProofPath -Force -ErrorAction SilentlyContinue }
+  Exit-GateLock $gateLock
+  exit 8
 }
 
 if (-not (Test-Path $baselinePath)) {
@@ -181,7 +212,15 @@ $targetProof = [ordered]@{
 
 # --- Serialization ------------------------------------------------------------
 $lockName = "ModernERP.MySqlGate.$($baseline.database)"
-$gateLock = Enter-GateLock $lockName
+try {
+  $gateLock = Enter-GateLock $lockName
+} catch {
+  Write-Block "the machine-wide Global Mutex could not be created or acquired for this target ($lockName)."
+  Clear-GateEnvironment
+  $password = $null
+  Remove-Item -LiteralPath $targetProofPath -Force -ErrorAction SilentlyContinue
+  exit 6
+}
 if ($null -eq $gateLock) {
   Write-Block "another schema-clearing MySQL gate already holds the lock for this target ($lockName)."
   Clear-GateEnvironment
@@ -211,7 +250,12 @@ Push-Location $repoRoot
 try {
   $previousPreference = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  $gate = Start-Process -FilePath 'node' -ArgumentList @($gateScript, '--run-id', $RunId, '--ack4-capability', $Ack4Capability, '--target-proof', $targetProofPath) `
+  $gateArguments = @(
+    (ConvertTo-NativeArgument $gateScript), '--run-id', (ConvertTo-NativeArgument $RunId),
+    '--ack4-capability', (ConvertTo-NativeArgument ([System.IO.Path]::GetFullPath($Ack4Capability))),
+    '--target-proof', (ConvertTo-NativeArgument $targetProofPath)
+  )
+  $gate = Start-Process -FilePath 'node' -ArgumentList $gateArguments `
     -NoNewWindow -Wait -PassThru -WorkingDirectory $repoRoot -RedirectStandardOutput $gateOutFile -RedirectStandardError $gateErrFile
   $gateExit = $gate.ExitCode
   $ErrorActionPreference = $previousPreference
@@ -240,7 +284,8 @@ if ($lastJson) {
 Clear-GateEnvironment
 $password = $null
 Remove-Item -LiteralPath $targetProofPath -Force -ErrorAction SilentlyContinue
-if ($null -ne $gateLock) { $gateLock.Dispose() }
+Exit-GateLock $gateLock
+$gateLock = $null
 
 Write-Step ''
 if ($gateExit -eq 0 -and $rootState -eq 'FINISHED' -and $null -ne $rootReport -and

@@ -63,7 +63,41 @@ export function assertAuthorizedDisposableMySqlTarget(config, env = process.env)
   return Object.freeze({ identity, operations: MYSQL_DESTRUCTIVE_OPERATIONS_ACK });
 }
 
-export function resetAuthorizedDisposableMySqlSchema(db, config, env = process.env) {
+export function disposableMySqlObjectInventory(db, database) {
+  const tableRows = db.prepare('SHOW FULL TABLES').all();
+  const inventory = { tables: 0, views: 0, triggers: 0, routines: 0, events: 0 };
+  for (const row of tableRows) {
+    const [, type] = Object.values(row);
+    if (String(type).toUpperCase() === 'BASE TABLE') inventory.tables += 1;
+    else if (String(type).toUpperCase() === 'VIEW') inventory.views += 1;
+    else throw new Error(`MYSQL DISPOSABLE TARGET REFUSED: unsupported object type ${type}`);
+  }
+  inventory.triggers = Number(db.prepare(
+    'SELECT COUNT(*) count FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=?',
+  ).get(database)?.count || 0);
+  inventory.routines = Number(db.prepare(
+    'SELECT COUNT(*) count FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA=?',
+  ).get(database)?.count || 0);
+  inventory.events = Number(db.prepare(
+    'SELECT COUNT(*) count FROM information_schema.EVENTS WHERE EVENT_SCHEMA=?',
+  ).get(database)?.count || 0);
+  return Object.freeze(inventory);
+}
+
+export function assertDisposableMySqlSchemaEmpty(db, config) {
+  const actualDatabase = db.prepare('SELECT DATABASE() database_name').get()?.database_name;
+  if (actualDatabase !== config.database) {
+    throw new Error(`MYSQL DISPOSABLE TARGET REFUSED: SELECT DATABASE()=${actualDatabase} expected ${config.database}`);
+  }
+  const inventory = disposableMySqlObjectInventory(db, config.database);
+  const occupied = Object.entries(inventory).filter(([, count]) => count !== 0);
+  if (occupied.length) {
+    throw new Error(`MYSQL DISPOSABLE TARGET REFUSED: EMPTY_ONLY recheck failed (${occupied.map(([kind, count]) => `${kind}=${count}`).join(',')})`);
+  }
+  return inventory;
+}
+
+export function resetAuthorizedDisposableMySqlSchema(db, config, env = process.env, { requireEmpty = false } = {}) {
   // A protected gate assigns the schema cleanup to exactly one process: the
   // Root's CLEANUP_SCHEMA_POST_RUN child. A test process that runs inside the
   // gate may only close its own connection. `deferMySqlCleanup()` makes that
@@ -84,6 +118,14 @@ export function resetAuthorizedDisposableMySqlSchema(db, config, env = process.e
   const actualDatabase = db.prepare('SELECT DATABASE() database_name').get()?.database_name;
   if (actualDatabase !== config.database) {
     throw new Error(`MYSQL DISPOSABLE TARGET REFUSED: SELECT DATABASE()=${actualDatabase} expected ${config.database}`);
+  }
+  if (requireEmpty) {
+    const inventory = assertDisposableMySqlSchemaEmpty(db, config);
+    // EMPTY_ONLY means there is nothing for RESET to drop. Returning here is
+    // stronger than listing a second time: an object concurrently created
+    // after the proof can make bootstrap fail, but this RESET child can never
+    // delete that unknown object.
+    return Object.freeze({ ...authorization, dropped: 0, inventory });
   }
   const objects = db.prepare('SHOW FULL TABLES').all().map((row) => {
     const [name, type] = Object.values(row);

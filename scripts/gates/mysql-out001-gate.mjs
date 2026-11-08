@@ -15,12 +15,14 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { finished } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import {
   assertNoAck4Quarantine, consumeAck4Record, OUT_001_MYSQL_MANIFEST, OUT_001_MYSQL_MANIFEST_NAME,
 } from './ack4/ack4-runtime.mjs';
-import { hasExited, waitForExit } from './m1-core-g07-child-lifecycle.mjs';
+import {
+  collectOut001Child, ensureOut001ChildExited, OUT_001_CHILD_TIMEOUT_MS,
+  parseOut001OperationOutput, parseOut001PostflightOutput,
+} from './mysql-out001-process-lifecycle.mjs';
 import { runOut001MySqlLifecycle } from './mysql-out001-root-lifecycle.mjs';
 import { assertOut001MySqlStaticPreflight, OUT_001_MYSQL_SUITE_FILE } from './mysql-out001-static-preflight.mjs';
 
@@ -103,11 +105,9 @@ async function main() {
   };
 
   const finishChild = async (entry) => {
-    const code = await waitForExit(entry.child);
-    // `exit` 可能早于 stdout/stderr 的 `end`；两路流都结束之后才解析 TAP，
-    // 否则 node:test 的失败尾部可能在解析前丢失。
-    await Promise.all([entry.child.stdout, entry.child.stderr]
-      .filter(Boolean).map((stream) => finished(stream, { cleanup: true }).catch(() => {})));
+    const code = await collectOut001Child(entry, {
+      timeoutMs: OUT_001_CHILD_TIMEOUT_MS[entry.operation],
+    });
     entry.context.markChildExited(entry.child.pid, entry.childStartedAt);
     if (code !== 0) {
       const error = new Error(`OUT_001_MYSQL_CHILD_FAILED:${entry.mode}:${entry.operation}:exit ${code}`);
@@ -117,6 +117,11 @@ async function main() {
       throw error;
     }
     return entry.stdout;
+  };
+
+  const finishOperation = async (context, operation) => {
+    const stdout = await finishChild(await spawnRegistered(context, { mode: 'operation', operation }));
+    return parseOut001OperationOutput(stdout, operation);
   };
 
   const report = await runOut001MySqlLifecycle({
@@ -140,22 +145,22 @@ async function main() {
     },
     expected,
     quarantineDir,
-    reset: async (context) => finishChild(await spawnRegistered(context, { mode: 'operation', operation: 'RESET_SCHEMA_PRE_RUN' })),
-    bootstrap: async (context) => finishChild(await spawnRegistered(context, { mode: 'operation', operation: 'BOOTSTRAP_CURRENT_SCHEMA' })),
+    reset: async (context) => finishOperation(context, 'RESET_SCHEMA_PRE_RUN'),
+    bootstrap: async (context) => finishOperation(context, 'BOOTSTRAP_CURRENT_SCHEMA'),
     runHttpFixtures: async (context) => {
       const suite = await spawnRegistered(context, { mode: 'suite', operation: 'RUN_OUT001_HTTP_FIXTURES' });
       await finishChild(suite);
       return { passed: true };
     },
     stopChildren: async () => {
-      for (const entry of children) if (!hasExited(entry.child)) entry.child.kill('SIGTERM');
       for (const entry of children) {
-        if (!hasExited(entry.child)) await waitForExit(entry.child);
+        const exited = await ensureOut001ChildExited(entry);
+        if (!exited) return false;
         try { entry.context.markChildExited(entry.child.pid, entry.childStartedAt); } catch {}
       }
-      return children.every((entry) => hasExited(entry.child));
+      return true;
     },
-    cleanup: async (context) => finishChild(await spawnRegistered(context, { mode: 'operation', operation: 'CLEANUP_SCHEMA_POST_RUN' })),
+    cleanup: async (context) => finishOperation(context, 'CLEANUP_SCHEMA_POST_RUN'),
     verifyCleanup: async () => {
       // 独立核验：它不消费任何 destructive 操作，只开启新会话重新证明身份
       // 并统计五类对象。
@@ -174,11 +179,18 @@ async function main() {
       let stderr = '';
       postflight.stdout.on('data', (chunk) => { stdout += chunk; });
       postflight.stderr.on('data', (chunk) => { stderr += chunk; });
-      const code = await waitForExit(postflight);
+      let code;
+      try {
+        code = await collectOut001Child({
+          child: postflight, mode: 'postflight', operation: 'POSTFLIGHT',
+          get stdout() { return stdout; }, get stderr() { return stderr; },
+        }, { timeoutMs: OUT_001_CHILD_TIMEOUT_MS.POSTFLIGHT });
+      } catch (error) {
+        return { clean: false, inventory: [error.code || 'POSTFLIGHT_UNVERIFIED'] };
+      }
       if (code !== 0) return { clean: false, inventory: [`POSTFLIGHT_EXIT_${code}`] };
-      const line = stdout.trim().split(/\r?\n/).findLast((item) => item.startsWith('{'));
-      const result = line ? JSON.parse(line) : null;
-      if (result?.operation !== 'POSTFLIGHT' || !result?.inventory) {
+      const result = parseOut001PostflightOutput(stdout);
+      if (!result) {
         return { clean: false, inventory: ['POSTFLIGHT_UNVERIFIED'] };
       }
       const inventory = Object.entries(result.inventory)

@@ -11,11 +11,12 @@
 //               §26.34.14.2、§26.34.14.3
 
 import assert from 'node:assert/strict';
+import { fork } from 'node:child_process';
 import { after, before, describe, test } from 'node:test';
 import { createProcurementFixture, seedApprovedOutsourceBom } from './test-support/procurement-http-fixture.js';
 import { MySqlSyncAdapter } from './database/mysql-adapter.js';
 import { resolveDatabaseConfig } from './database/config.js';
-import { transaction, mysqlSessionState } from './db.js';
+import { releaseMySqlIdempotencyLocks, transaction, mysqlSessionState } from './db.js';
 import { runG07GateRace, waitForNewTransaction } from './test-utils/m1-core-g07-lock-wait.js';
 import {
   compareTableParity, readMySqlInformationSchemaContract,
@@ -51,6 +52,53 @@ function openIndependentSession() {
     host: config.host, port: config.port, database: config.database,
     user: config.user, password: config.password, ssl: config.ssl,
   });
+}
+
+function processListIds(db) {
+  const config = resolveDatabaseConfig({ backend: 'mysql' });
+  return db.prepare(
+    'SELECT ID id FROM information_schema.PROCESSLIST WHERE DB=DATABASE() AND USER=? ORDER BY ID',
+  ).all(config.user).map((row) => Number(row.id));
+}
+
+async function startIndependentOut001App() {
+  const child = fork(new URL('../scripts/gates/mysql-out001-http-app-child.mjs', import.meta.url), [], {
+    env: { ...process.env }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+  });
+  let stderr = '';
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  let ready;
+  try {
+    ready = await new Promise((resolveReady, reject) => {
+      const timer = setTimeout(() => reject(new Error('OUT001_M2_APP_START_TIMEOUT')), 30_000);
+      child.on('message', (message) => {
+        if (message?.type === 'READY') { clearTimeout(timer); resolveReady(message); }
+        if (message?.type === 'ERROR') { clearTimeout(timer); reject(new Error(message.message)); }
+      });
+      child.once('exit', (code) => {
+        clearTimeout(timer);
+        reject(new Error(`OUT001_M2_APP_EXIT_${code}:${stderr}`));
+      });
+    });
+  } catch (error) {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    throw error;
+  }
+  return {
+    ...ready,
+    child,
+    async close() {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      child.send({ type: 'STOP' });
+      await new Promise((resolveClose, reject) => {
+        const timer = setTimeout(() => {
+          child.kill('SIGKILL');
+          reject(new Error('OUT001_M2_APP_STOP_TIMEOUT'));
+        }, 15_000);
+        child.once('exit', () => { clearTimeout(timer); resolveClose(); });
+      });
+    },
+  };
 }
 
 function isoDate(offsetDays = 0) {
@@ -207,12 +255,15 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
     }
   });
 
-  test('M2 不同 Key、两个独立 MySQL 会话、同源并发竞争不得超额或双写', { skip: isMySql ? false : MYSQL_ONLY }, async () => {
-    // 两个夹具各自打开一个独立 MySQL Adapter，因此是两个独立数据库会话。
-    const fixtureA = await createProcurementFixture('modern-erp-out001-race-a-');
-    const fixtureB = await createProcurementFixture('modern-erp-out001-race-b-');
-    const barrier = openIndependentSession();
+  test('M2 不同 Key、两个独立应用进程、同源并发竞争不得超额或双写', { skip: isMySql ? false : MYSQL_ONLY }, async () => {
+    // 两个 child 各自拥有独立 Node.js 进程、HTTP Server 与 MySQL Adapter。
+    let fixtureA;
+    let fixtureB;
+    let barrier;
     try {
+      fixtureA = await startIndependentOut001App();
+      fixtureB = await startIndependentOut001App();
+      barrier = openIndependentSession();
       const source = await createOrderWithMaterial();
       const target = await createOrderWithMaterial();
       await issueWip(source.orderId, source.materialRow, 5);
@@ -228,6 +279,7 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
           transferBody(source, target, 3, `out001-m2-b-${Date.now()}`), signal),
       });
 
+      assert.notEqual(fixtureA.pid, fixtureB.pid, '两个应用实例必须位于两个独立 Node.js 进程');
       // 两个等待者必须是两个**不同的** MySQL 会话。
       assert.notEqual(race.waiterA, race.waiterB, '两个并发请求必须来自两个独立的 MySQL 会话');
       const created = race.responses.filter((response) => response.status === 201);
@@ -254,9 +306,8 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
       assert.notEqual(before, out001BusinessSnapshot(fixture.db), '并发必须只产生一组业务事实');
       assert.equal(physicalBefore, out001PhysicalFinanceSnapshot(fixture.db), '并发不得产生物理库存/估值/财务副作用');
     } finally {
-      barrier.close();
-      await fixtureA.close();
-      await fixtureB.close();
+      try { barrier?.close(); } catch {}
+      await Promise.all([fixtureA, fixtureB].filter(Boolean).map((app) => app.close()));
     }
   });
 
@@ -270,22 +321,41 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
       });
       assert.equal(mysqlSessionState(session), 'IDLE_TRUSTED');
 
-      // 一次未确认的命名锁释放会把适配器隔离，并最终到达 TERMINATION_CONFIRMED。
+      // 一次未确认的命名锁释放会经生产函数把适配器隔离，并最终到达
+      // TERMINATION_CONFIRMED。先由 victim 自己释放服务器端锁，但保留本地
+      // 登记，再调用生产 release 函数，稳定得到 RELEASE_LOCK=0。
       const lockName = `out001-m3-unverified-${Date.now()}`;
       assert.equal(Number(session.prepare('SELECT GET_LOCK(?,10) acquired').get(lockName).acquired), 1);
-      // 先在服务器侧释放，使适配器随后释放时拿不到锁（RELEASE_LOCK 返回 0）。
       const other = openIndependentSession();
       try {
-        // 命名锁属于持有它的会话，其它会话无法释放它；因此这里改为直接让
-        // 适配器释放一个它**不再**持有的锁：由服务器先 DROP 掉同一会话的锁。
-        // MySQL 没有跨会话释放，因此用适配器的隔离入口制造未确认释放。
-        session.quarantine('out001_m3_unverified_release_probe');
+        const victimId = Number(session.prepare('SELECT CONNECTION_ID() id').get()?.id);
+        const beforeIds = processListIds(other);
+        session._idempotencyLocks = new Set([lockName]);
+        session._idempotencyLockEpoch = session.sessionEpoch;
+        assert.equal(Number(session.prepare('SELECT RELEASE_LOCK(?) released').get(lockName)?.released), 1);
+        const release = releaseMySqlIdempotencyLocks(session);
+        assert.equal(release.attempted, 1);
+        assert.equal(release.verified.length, 0);
+        assert.deepEqual(release.unverified.map((item) => item.outcome), ['NOT_OWNER']);
+        assert.equal(release.quarantined, true, '未确认释放必须由生产函数触发 quarantine');
         const state = session.quarantineState;
         assert.equal(state.state, 'TERMINATION_PENDING');
         await state.termination;
         assert.equal(state.state, 'TERMINATION_CONFIRMED', 'R1 要求终止已确认');
         assert.equal(session.sessionState, 'TERMINATED');
         assert.equal(mysqlSessionState(session), 'TERMINATED');
+        assert.equal(Number(other.prepare('SELECT IS_FREE_LOCK(?) free').get(lockName)?.free), 1,
+          'observer 必须证明原命名锁已在服务器端释放');
+        assert.equal(Number(other.prepare('SELECT GET_LOCK(?,5) acquired').get(lockName)?.acquired), 1,
+          'observer 必须能够重新取得同一命名锁');
+        assert.equal(Number(other.prepare('SELECT RELEASE_LOCK(?) released').get(lockName)?.released), 1);
+        assert.equal(Number(other.prepare(
+          'SELECT COUNT(*) n FROM information_schema.PROCESSLIST WHERE ID=?',
+        ).get(victimId)?.n || 0), 0, 'victim session 必须从 PROCESSLIST 消失');
+        assert.deepEqual(
+          processListIds(other), beforeIds.filter((id) => id !== victimId),
+          '隔离不得意外创建新的业务会话',
+        );
       } finally {
         other.close();
       }
@@ -373,19 +443,74 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
     assert.ok(fkError, 'MySQL 必须拒绝指向不存在 effect 的 source_effect_id');
     assert.match(String(fkError.message), /foreign key/i, '必须是外键被违反');
 
-    // 4.4 UNIQUE：idempotency_records 的 (operation_type, document_id, idempotency_key)。
+    function assertDuplicate(error, label) {
+      assert.ok(error, `${label} 必须拒绝重复键`);
+      assert.ok(error.code === 'ER_DUP_ENTRY' || error.errno === 1062,
+        `${label} 必须返回真实 MySQL ER_DUP_ENTRY/1062: ${error.code}/${error.errno}`);
+      assert.equal(isWipTransferUniqueConstraintError(error), true, `${label} 必须被生产分类器识别`);
+    }
+
+    // 4.4 UNIQUE：identity effect 的业务身份键。
+    const supplyEffectId = `out001-m4-supply-${Date.now()}`;
+    db.prepare(`INSERT INTO outsourcing_wip_identity_effects(
+      id,material_list_id,identity_key,identity_type,lot_id,serial_id,effect_direction,signed_quantity,
+      event_type,business_event_id,business_event_item_id,source_effect_id,business_date,idempotency_key,request_fingerprint,created_at)
+      VALUES(?,?,'NONE','NONE',NULL,NULL,'SUPPLY',1,'ISSUE','m4-event','m4-item',NULL,'2026-01-01',?,'fp',?)`)
+      .run(supplyEffectId, probeMaterialId, `out001-m4-supply-key-${Date.now()}`, now);
+    const effectUniqueError = (() => {
+      try {
+        db.prepare(`INSERT INTO outsourcing_wip_identity_effects(
+          id,material_list_id,identity_key,identity_type,lot_id,serial_id,effect_direction,signed_quantity,
+          event_type,business_event_id,business_event_item_id,source_effect_id,business_date,idempotency_key,request_fingerprint,created_at)
+          VALUES(?,?,'NONE','NONE',NULL,NULL,'SUPPLY',1,'ISSUE','m4-event','m4-item',NULL,'2026-01-01',?,'fp',?)`)
+          .run(`out001-m4-supply-dup-${Date.now()}`, probeMaterialId, `out001-m4-supply-dup-key-${Date.now()}`, now);
+        return null;
+      } catch (error) { return error; }
+    })();
+    assertDuplicate(effectUniqueError, 'identity effect business key');
+
+    // 4.5 UNIQUE：effect allocation 的 (effect, source supply, kind)。
+    const consumeEffectId = `out001-m4-consume-${Date.now()}`;
+    db.prepare(`INSERT INTO outsourcing_wip_identity_effects(
+      id,material_list_id,identity_key,identity_type,lot_id,serial_id,effect_direction,signed_quantity,
+      event_type,business_event_id,business_event_item_id,source_effect_id,business_date,idempotency_key,request_fingerprint,created_at)
+      VALUES(?,?,'NONE','NONE',NULL,NULL,'CONSUME',-1,'TRANSFER_OUT','m4-transfer','m4-transfer-item',NULL,'2026-01-01',?,'fp',?)`)
+      .run(consumeEffectId, probeMaterialId, `out001-m4-consume-key-${Date.now()}`, now);
+    db.prepare(`INSERT INTO outsourcing_wip_identity_effect_allocations(
+      id,effect_id,source_supply_effect_id,allocation_kind,allocated_quantity,created_at)
+      VALUES(?,?,?,'TRANSFER_ORIGIN',1,?)`).run(`out001-m4-allocation-${Date.now()}`, consumeEffectId, supplyEffectId, now);
+    const allocationUniqueError = (() => {
+      try {
+        db.prepare(`INSERT INTO outsourcing_wip_identity_effect_allocations(
+          id,effect_id,source_supply_effect_id,allocation_kind,allocated_quantity,created_at)
+          VALUES(?,?,?,'TRANSFER_ORIGIN',1,?)`).run(
+          `out001-m4-allocation-dup-${Date.now()}`, consumeEffectId, supplyEffectId, now,
+        );
+        return null;
+      } catch (error) { return error; }
+    })();
+    assertDuplicate(allocationUniqueError, 'identity effect allocation key');
+
+    // 4.6 UNIQUE：idempotency_records 的 (operation_type, document_id, idempotency_key)。
+    const idempotencyValues = ['OUTSOURCING_WIP_TRANSFER', 'out001-doc', `out001-m4-key-${Date.now()}`];
+    db.prepare(`INSERT INTO idempotency_records(
+      id,operation_type,document_id,idempotency_key,request_fingerprint,result_json,status,created_at)
+      VALUES(?,?,?,?,?,'{}','SUCCEEDED',?)`).run(
+      `out001-m4-idem-first-${Date.now()}`, ...idempotencyValues, 'fp', now,
+    );
     const uniqueError = (() => {
       try {
         db.prepare(`INSERT INTO idempotency_records(
           id,operation_type,document_id,idempotency_key,request_fingerprint,result_json,status,created_at)
-          VALUES(?,'OUTSOURCING_WIP_TRANSFER','out001-doc','out001-m4-key','fp','{}','SUCCEEDED',?)`).run(`out001-m4-idem-${Date.now()}`, now);
+          VALUES(?,?,?,?,?,'{}','SUCCEEDED',?)`).run(
+          `out001-m4-idem-dup-${Date.now()}`, ...idempotencyValues, 'fp', now,
+        );
         return null;
       } catch (error) { return error; }
     })();
-    assert.ok(uniqueError, 'MySQL 必须拒绝重复的幂等记录');
-    assert.match(String(uniqueError.message), /duplicate entry/i, '必须是唯一键被违反');
+    assertDuplicate(uniqueError, 'idempotency business key');
 
-    // 4.5 双端 Schema Parity：同一份 SQLite bootstrap 与真实 MySQL 目录的列 /
+    // 4.7 双端 Schema Parity：同一份 SQLite bootstrap 与真实 MySQL 目录的列 /
     // 索引 / 外键 / CHECK 必须一致（复用仓库既有的比较器）。
     const { createTempDb } = await import('./test-utils/temp-db.js');
     const previousBackend = process.env.ERP_TEST_DB_BACKEND;

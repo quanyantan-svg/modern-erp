@@ -8,6 +8,7 @@ import { consumePortableChildLease, issuePortableChildLease } from '../scripts/g
 import {
   MYSQL_DESTRUCTIVE_OPERATIONS_ACK,
   assertAuthorizedDisposableMySqlTarget,
+  assertDisposableMySqlSchemaEmpty,
   deferMySqlCleanup,
   mysqlCleanupDeferralState,
   mysqlDisposableTargetIdentity,
@@ -124,6 +125,57 @@ test('Gate A schema reset refuses a connected database mismatch before destructi
   };
   assert.throws(() => resetAuthorizedDisposableMySqlSchema(db, config, authorized), /SELECT DATABASE/);
   assert.equal(executed, false);
+});
+
+function emptyOnlyDb({ tables = [], triggers = 0, routines = 0, events = 0, database = config.database } = {}) {
+  const executed = [];
+  return {
+    executed,
+    prepare(sql) {
+      if (sql === 'SELECT DATABASE() database_name') return { get: () => ({ database_name: database }) };
+      if (sql === 'SHOW FULL TABLES') return { all: () => tables };
+      if (sql.includes('information_schema.TRIGGERS')) return { get: () => ({ count: triggers }) };
+      if (sql.includes('information_schema.ROUTINES')) return { get: () => ({ count: routines }) };
+      if (sql.includes('information_schema.EVENTS')) return { get: () => ({ count: events }) };
+      throw new Error(`unexpected SQL: ${sql}`);
+    },
+    exec(sql) { executed.push(sql); },
+  };
+}
+
+test('OUT-001 EMPTY_ONLY recheck accepts only a fully empty five-class inventory', () => {
+  const db = emptyOnlyDb();
+  assert.deepEqual(assertDisposableMySqlSchemaEmpty(db, config), {
+    tables: 0, views: 0, triggers: 0, routines: 0, events: 0,
+  });
+  const result = resetAuthorizedDisposableMySqlSchema(db, config, authorized, { requireEmpty: true });
+  assert.equal(result.dropped, 0);
+  assert.deepEqual(db.executed, []);
+});
+
+test('OUT-001 EMPTY_ONLY recheck rejects every object class before destructive SQL', () => {
+  const cases = [
+    { tables: [{ Tables_in_test: 't', Table_type: 'BASE TABLE' }] },
+    { tables: [{ Tables_in_test: 'v', Table_type: 'VIEW' }] },
+    { triggers: 1 }, { routines: 1 }, { events: 1 },
+  ];
+  for (const inventory of cases) {
+    const db = emptyOnlyDb(inventory);
+    assert.throws(
+      () => resetAuthorizedDisposableMySqlSchema(db, config, authorized, { requireEmpty: true }),
+      /EMPTY_ONLY recheck failed/,
+    );
+    assert.deepEqual(db.executed, []);
+  }
+});
+
+test('OUT-001 EMPTY_ONLY identity mismatch refuses before inventory or destructive SQL', () => {
+  const db = emptyOnlyDb({ database: 'wrong_database' });
+  assert.throws(
+    () => resetAuthorizedDisposableMySqlSchema(db, config, authorized, { requireEmpty: true }),
+    /SELECT DATABASE/,
+  );
+  assert.deepEqual(db.executed, []);
 });
 
 test('protected fixture can defer schema cleanup to the Root without touching the database', () => {
