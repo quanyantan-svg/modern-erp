@@ -2661,7 +2661,7 @@ I3a-S 先实施并独立提交；I3a-S 的验收断言**只能是**固定拒绝�
 | 清理权责 | Schema 清理只属于 Root 的 `CLEANUP_SCHEMA_POST_RUN` 子进程。测试进程只关闭自己的连接：`deferMySqlCleanup()`（`server/test-utils/mysql-disposable-target.js`）把来自测试进程的清理请求变成「已延期」；`server/test-support/procurement-http-fixture.js` 新增 MySQL 分支，只打开**已 bootstrap** 的会话（不调用 `createDatabase()`，不执行 DDL） |
 | M1–M5 | 见 §26.34.16.3。M2 的败方 code 已按 §45.11 更正为 `OUTSOURCING_WIP_TRANSFER_OVERDRAW`；M3 的**真实**不确定 COMMIT 在一次性 least-privilege 账户下不可达（缺 `CONNECTION_ADMIN`），该子项在 Gate 中显式标注 `NOT_PROVEN_ON_REAL_MYSQL` |
 | 28 项 focused 的 MySQL 版本 | `server/mysql-out001.integration.js` 直接复用 `server/outsourcing-wip-transfer.test.js`（21 项）与 `server/outsourcing-finance.test.js`（7 项）；两个文件按后端选择夹具，因此 MySQL 跑的是**同一批断言** |
-| 本地离线验证 | `server/mysql-out001-gate-infrastructure.test.js` + `mysql-disposable-target-guard.test.js` 新增用例：11/11 PASS；OUT-001 focused SQLite：28/28 PASS；专属集成入口在非 MySQL 环境：28 PASS + M1～M5 六项显式 SKIP；FAST：581/581 PASS；FULL：3371/3372，唯一失败为既有 Windows ACL `SetAccessControl` 沙箱拒绝，故 FULL **FAIL**、不得记为 PASS；Build PASS；Docs migration C1～C6 PASS；`git diff --check` PASS。真实 MySQL Gate 仍为 `NOT_RUN` |
+| 本地离线验证 | `server/mysql-out001-gate-infrastructure.test.js` + `mysql-disposable-target-guard.test.js` 新增用例：11/11 PASS；OUT-001 focused SQLite：28/28 PASS；专属集成入口在非 MySQL 环境：28 PASS + M1～M5 六项显式 SKIP；FAST：581/581 PASS；FULL：3371/3372，唯一失败为既有 Windows ACL `SetAccessControl` 沙箱拒绝，故 FULL **FAIL**、不得记为 PASS；Build PASS；Docs migration C1～C6 PASS；提交 `fbf3ceb` 后 Docs current N1/N3～N9 PASS、N2 RETIRED；`git diff --check` PASS。真实 MySQL Gate 仍为 `NOT_RUN` |
 
 **Gate 状态词汇（严格区分，不得混用）**：
 
