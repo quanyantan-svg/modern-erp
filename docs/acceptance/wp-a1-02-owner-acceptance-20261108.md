@@ -1,26 +1,31 @@
-# WP-A1-02 Owner Acceptance 候签记录（2026-11-08）
+# WP-A1-02 正式 Owner Acceptance 记录（2026-11-08）
 
 > 用途：登记业务所有者对 `WP-A1-02`（`AUD-PRC-001`，正式寻源决策写入口服务端安全关闭）的**有界验收决定**。
 >
 > Owner：Procurement & Outsourcing Domain Owner（验收决定与残余风险接受）；Platform / QA（技术证据维护）。
 >
-> 状态：`PENDING_OWNER_APPROVAL` —— **业务所有者尚未作出决定**。本文件只是候签记录，
-> **不签发任何 Acceptance 标识**，不构成 `ACCEPTED`，也不构成 Design PASS。
+> 状态：`ACCEPTED` —— 业务所有者于 **2026-11-08** 作出决定 **`ACCEPT_WITH_BOUNDED_RESIDUALS`**，
+> 签发标识 **`WP_A1_02_ACCEPTED_WITH_BOUNDED_RESIDUALS`**。该决定**附有公开、未关闭的证据限制**（见 §4、§5）。
+> 本决定**不**构成 Requirement 验收、Design PASS、Capability Closure、Domain Acceptance、Manual Closure
+> 或 Release Readiness。
 >
-> 权威来源：Active Requirement [`docs/requirements/procurement-outsourcing.md`](../requirements/procurement-outsourcing.md) §31.14.1；
-> Active Design [`docs/design/procurement-outsourcing.md`](../design/procurement-outsourcing.md) §26.34.1；
-> 审计台账 [`docs/audits/b3101-b3121-code-audit-20261107.md`](../audits/b3101-b3121-code-audit-20261107.md) §13；
-> 唯一项目状态 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §42。
+> 权威来源：Requirement [`docs/requirements/procurement-outsourcing.md`](../requirements/procurement-outsourcing.md) §31.14.1
+> —— **待验收增量，状态 `PENDING_APPROVAL`**；Design [`docs/design/procurement-outsourcing.md`](../design/procurement-outsourcing.md) §26.34.1
+> —— **待审增量，状态 `PENDING_REVIEW`**（M1-Core 首期的 Active Design 是
+> [`docs/design/procurement-outsourcing-m1-core.md`](../design/procurement-outsourcing-m1-core.md)）；
+> 审计台账 [`docs/audits/b3101-b3121-code-audit-20261107.md`](../audits/b3101-b3121-code-audit-20261107.md) §13 与 §13.2；
+> 唯一项目状态 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §42 与 §44。
 >
-> 来源 SHA：实施提交 `8fa20a4374418ea24150fc5234ccd577389802dd`；本候签记录撰写基线 `master` @ `a39beac7a334ab4cf32fd5bc6b33ef978d6a6d65`。
+> 来源 SHA：实施提交 `8fa20a4374418ea24150fc5234ccd577389802dd`；候签记录撰写基线 `master` @ `a39beac7a334ab4cf32fd5bc6b33ef978d6a6d65`；
+> Owner 复核基线 `github/master` @ `6ee0ad3c98612f03107aa39ead0eae6c5e2c8f64`。
 >
-> 本文件是验收证据，不取代 Requirement、Active Design 或唯一项目状态登记表。**本文件的生成本身不构成 Git 提交或远端同步。**
+> 本文件是验收证据，不取代 Requirement、Design 或唯一项目状态登记表。**本文件的生成本身不构成 Git 提交或远端同步。**
 
 ```text
-WP_A1_02_OWNER_ACCEPTANCE_PENDING_APPROVAL
+WP_A1_02_ACCEPTED_WITH_BOUNDED_RESIDUALS
 ```
 
-## 1. 验收对象与范围
+## 1. 验收对象、范围与 Owner 决定
 
 | 项 | 值 |
 |---|---|
@@ -32,6 +37,36 @@ WP_A1_02_OWNER_ACCEPTANCE_PENDING_APPROVAL
 | 明确不在范围 | `PRC-06` Capability Closure；`AUD-PRC-002`（Hash，`AUD-PRC-001` 的 Hash 部分**单独保留**）；VMI；`AUD-OUT-001`；M1-Core 七 Gate；Domain Acceptance；Manual Closure；Release Readiness；Release / Deploy |
 
 本记录与 [`wp-a1-01-owner-acceptance-20261108.md`](./wp-a1-01-owner-acceptance-20261108.md) 是**两个独立**的验收对象，**不互相代表、不合并决定**。
+
+### 1.1 Owner 决定（2026-11-08）
+
+业务所有者于 **2026-11-08** 在本轮对话中作出**明确的有界接受决定**：
+
+```text
+WP_A1_02_ACCEPTED_WITH_BOUNDED_RESIDUALS
+```
+
+| 项 | 值 |
+|---|---|
+| 决定 | `ACCEPT_WITH_BOUNDED_RESIDUALS` |
+| 签发标识 | `WP_A1_02_ACCEPTED_WITH_BOUNDED_RESIDUALS` |
+| 验收对象 | `WP-A1-02` / `AUD-PRC-001`，范围**仅限**本节范围栏所列 |
+| 验收日期 | 2026-11-08 |
+| 决定来源 | 本轮对话中业务所有者明确的条件授权，及业务所有者对远端代码与本候签材料的独立技术复核 |
+| 被接受的证据限制 | §4 全部九项（**含**旧功能 UAT 15/28、FULL 未完成、无本轮真实 MySQL Gate 证据） |
+| 被接受的残余风险 | §5 全部 R-A1-02-01 ～ R-A1-02-08 |
+| 决定**不**覆盖 | §6 全表 |
+
+**决定来源的边界（不得虚构）**：本决定的来源是**业务所有者在当前对话中的明确授权**。仓库侧可核验的复核对象为 `github/master` @ `6ee0ad3c98612f03107aa39ead0eae6c5e2c8f64` 的代码与本文件正文。**不存在虚构的手写签名、电子签章或外部审批单**；本轮 Review 的执行人、评审编号与逐项发现未在本仓库记录，本文**不代为杜撰**。
+
+**本次接受的含义**：仅接受本节范围栏所列的 `WP-A1-02` 实施事实与其证据，**并**把 §4 的九项证据限制与 §5 的八项残余风险接受为**已知且未关闭**的残余风险。接受**不**等于：
+
+- §4 的任何一项限制被消除 —— 旧功能 UAT 15/28、FULL 未完成、无本轮真实 MySQL Gate 证据、并发未证明**仍然开放**；
+- §5 的任何一项残余风险被证明不存在；
+- `AUD-PRC-002`（Hash）被关闭，或 `MC-REQ-11` 的全应用 403 拒绝审计缺口被关闭；
+- `PRC-06` 变为 `COVERED`，或 B3101 / B3121 变为 `COVERED`。
+
+**实施授权的来源（须与 Requirement / Design 状态区分）**：`WP-A1-02` 的实施授权来自**先前独立的有界 Implementation 授权**（审计台账 §13 与 `log/2026-11-07.md`），**不是**来自 §31.14 或 §26.34 的获批 —— §31.14 至今仍为 `PENDING_APPROVAL`，§26.34 至今仍为 `PENDING_REVIEW`。本次验收**不**改变这两项状态，也**不**追溯性地把该实施授权解释为 Requirement 或 Design 的批准。
 
 ## 2. 实施证据（提交 `8fa20a4`）
 
@@ -112,6 +147,8 @@ WP_A1_02_OWNER_ACCEPTANCE_PENDING_APPROVAL
 
 ## 4. 已披露的限制与未证明事项（不得隐藏、不得改写为 PASS）
 
+以下九项限制随 §1.1 的接受决定**一并被接受为已知限制**，但**没有任何一项被消除**。本节原文**不得**被改写为 PASS，也**不得**因接受决定而删除或弱化。
+
 1. **旧功能 UAT 为 15 / 28，不是 PASS。** `scripts/acceptance/procurement-outsourcing-functional-uat.mjs` 全套 **28** 项中仅 **15** 项通过；其中**只有 UAT-04 按新合同通过**（配额 GET 200 + 正式决策 POST 409 `SOURCING_DECISION_WRITE_CLOSED`）。其余失败集中在收货与委外既有链路，属**既有**缺陷面，**不**由本工作包引入，也**不**由本工作包关闭。**全套不记为 PASS。**
 2. **FULL 回归未完成，不记为 PASS。** FULL 曾启动但因耗时停止；**停止前**仍出现既有的 `m1-core-g07-diagnostics.test.js` 临时证据文件 `SetAccessControl` 权限拒绝。FULL 在本轮**没有**跑完，因此**不得**声称 FULL PASS，也不得以 FAST 576/576 替代 FULL 结论。
 3. **没有本轮真实 MySQL Gate 证据。** 本轮**未连接**任何真实 MySQL，**未**执行 `test:mysql` / `test:mysql:concurrency` / 任何 disposable MySQL Gate，**未**执行 Migration、Reset、Bootstrap 或 Cleanup。全部证据来自临时 SQLite fixture。因此「MySQL 与 SQLite 双端等价」「MySQL 下的拒绝审计恰好一次」**未被证明**。
@@ -122,7 +159,7 @@ WP_A1_02_OWNER_ACCEPTANCE_PENDING_APPROVAL
 8. **`AUD-PRC-002`（Hash）仍开放。** Requirement §31.14.1 明确「`AUD-PRC-002` Hash 单独保留」。本工作包**不**覆盖 Hash 语义，**不**构成该 Issue 的关闭依据。
 9. **旧功能 UAT 的 15/28 与 FULL 未完成两项限制，对本工作包的正面结论构成上限。** 即使 Owner 接受 WP-A1-02，也**不得**据此声称 B3101 / B3121 的旧功能面已通过验收。
 
-## 5. 残余风险（若接受，由业务所有者一并承担）
+## 5. 残余风险（**已于 2026-11-08 由业务所有者一并接受**；仍未消除、仍未关闭）
 
 | # | 残余风险 | 说明 |
 |---|---|---|
@@ -141,23 +178,23 @@ WP_A1_02_OWNER_ACCEPTANCE_PENDING_APPROVAL
 - `PRC-06` **不**因本记录变为 `COVERED`；`docs/status/CAPABILITY_MATRIX.md` **不**更新；**不扩大** `PRC-06` 范围。
 - B3101 / B3121 **仍为 `BLOCKED`**；Procurement & Outsourcing Domain Acceptance **仍为 `NOT READY`**（`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY`）。
 - M1-Core 七 Gate 的 7 / 7 `PASS` 及其既有范围**不变**；`R-01`～`R-20`、`D-01`～`D-04`、`WP-I` / `WP-J`、`M-15` 原状态**不变**。
-- §26.34 的 Design 状态**不**因本记录改变：`PENDING_REVIEW` 保持，`DESIGN_PASS` **未签发**。**WP-A1-01 / WP-A1-02 的 Acceptance 不是 Design PASS**，`A1-D-RV-01`～`A1-D-RV-04` 四个 Owner Review Gate 状态**不变**。
+- §26.34 的 Design 状态**不**因本记录改变：`PENDING_REVIEW` 保持，`DESIGN_PASS` **未签发**；§31.14 的 Requirement 状态同样**不**因本记录改变：`PENDING_APPROVAL` 保持，Requirement 验收**未签发**。**WP-A1-01 / WP-A1-02 的 Acceptance 不是 Design PASS，也不是 Requirement 验收**，`A1-D-RV-01`～`A1-D-RV-04` 四个 Owner Review Gate 状态**不变**。
 - 本记录**不**授权真实 MySQL、Migration、数据库写入、DDL、Push、Merge、Tag、Release、Deploy。
 
-## 7. Owner 决定栏（**待业务所有者填写；本文件不代填**）
-
-请在下列两项中**择一**，并显式签署。决定前本工作包保持 `TESTED` / `PENDING_OWNER_APPROVAL`。
-
-- [ ] **`ACCEPT_WITH_BOUNDED_RESIDUALS`** —— 接受 §4 全部限制与 §5 全部残余风险，`AUD-PRC-001` 记为 `ACCEPTED`
-- [ ] **`RETURN_FOR_REWORK`** —— 退回返工，并指明必须补齐的证据（缺项：真实 MySQL 证据 / 并发证据 / 旧功能 UAT 15/28 / FULL 完整回归 / 403 拒绝审计 / 其他）
+## 7. Owner 决定记录（**已作出**，2026-11-08）
 
 ```text
-决定标识：____________________（ACCEPT_WITH_BOUNDED_RESIDUALS 或 RETURN_FOR_REWORK）
-决定人：____________________
-日期：____________________
+决定标识：WP_A1_02_ACCEPTED_WITH_BOUNDED_RESIDUALS
+决定：ACCEPT_WITH_BOUNDED_RESIDUALS
+验收日期：2026-11-08
+决定来源：业务所有者在本轮对话中的明确授权及独立技术复核
 ```
 
-**在业务所有者作出上述决定之前**，`AUD-PRC-001` 与 `WP-A1-02` 的状态**保持** `TESTED` / `PENDING_OWNER_APPROVAL`，**不得**改写为 `ACCEPTED`、`VERIFIED` 或任何形式的 PASS。
+- 本栏由**业务所有者的决定**填入，**不代填**签名人、审批编号或电子签章（来源边界见 §1.1）。
+- 候签阶段的原始候选态 `PENDING_OWNER_APPROVAL`、§3 的全部测试证据（含 `not ok` 项）与 §4 / §5 的限制与残余风险**原样保留**，**不**因本次接受决定而被改写、删除或弱化。
+- `AUD-PRC-001` 与 `WP-A1-02` 的状态由 `TESTED` / `PENDING_OWNER_APPROVAL` 迁移为 `ACCEPTED`（附有界残余风险）。该迁移**仅限**本文件 §1 范围栏所列，**不**外溢到 §6 的任何一项。
+
+**该决定与 `WP-A1-01` 的决定相互独立**：本文件不因 `wp-a1-01-owner-acceptance-20261108.md` 的接受而成立，反之亦然；两者各自的范围、限制、残余风险与 Owner 决定逐项独立。
 
 ## 8. 未解决矛盾
 

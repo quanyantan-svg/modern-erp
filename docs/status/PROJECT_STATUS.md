@@ -2457,6 +2457,84 @@ A1_DESIGN_AMENDMENT_AND_ACCEPTANCE_CANDIDATES_READY_FOR_OWNER_REVIEW
 
 在业务所有者**分别**作出决定之前，两项保持 `TESTED` / `PENDING_OWNER_APPROVAL`。
 
+## 44. A1 两项 Owner Acceptance 正式登记与 OUT-001 实施前置（2026-11-08）
+
+```text
+A1_I1_I2_ACCEPTED_WITH_BOUNDED_RESIDUALS
+```
+
+### 44.1 本节定位与边界
+
+本节是 Package A1 两项验收**正式登记**与 OUT-001 实施前置收口的**唯一增量登记**。
+
+- 本节**不修改、不删除、不重排** §35～§43 的任何历史结论；凡与其冲突，按**日期化 supersession** 处理（§43.8 的「未作出」在 2026-11-08 当日续记时为真，其当前含义被本节取代）。
+- 本节**不**签发 Requirement 验收、Design PASS、Capability Freeze、Domain Acceptance、Manual Closure 或 Release Readiness。
+- 本节**不**授权任何 Implementation、Schema / Migration、数据库操作或真实 MySQL Gate；本轮**零生产代码变更**。
+- 本节编号为 **§44**，按既有「H2 = 日期化顶层章节」规则**追加**在 §43 之后；历史编号未重排。
+
+### 44.2 两项独立 Owner Acceptance 决定
+
+业务所有者于 **2026-11-08** 在本轮对话中作出**两个相互独立**的有界验收决定：
+
+| 工作包 | Issue | 决定 | 签发标识 | 验收日期 | 正式记录 |
+|---|---|---|---|---|---|
+| `WP-A1-01` | `AUD-FE-001` | `ACCEPT_WITH_BOUNDED_RESIDUALS` | `WP_A1_01_ACCEPTED_WITH_BOUNDED_RESIDUALS` | 2026-11-08 | [`docs/acceptance/wp-a1-01-owner-acceptance-20261108.md`](../acceptance/wp-a1-01-owner-acceptance-20261108.md) |
+| `WP-A1-02` | `AUD-PRC-001` | `ACCEPT_WITH_BOUNDED_RESIDUALS` | `WP_A1_02_ACCEPTED_WITH_BOUNDED_RESIDUALS` | 2026-11-08 | [`docs/acceptance/wp-a1-02-owner-acceptance-20261108.md`](../acceptance/wp-a1-02-owner-acceptance-20261108.md) |
+
+**决定来源的边界（不得虚构）**：来源是**业务所有者在当前对话中的明确授权**，及业务所有者对远端代码与候签材料的独立技术复核。仓库侧可核验的复核对象为 `github/master` @ `6ee0ad3c98612f03107aa39ead0eae6c5e2c8f64` 的代码与两份正式记录正文。**不存在虚构的手写签名、电子签章或外部审批单**；本轮 Review 的执行人、评审编号与逐项发现未在本仓库记录，本节**不代为杜撰**。
+
+**实施授权与合同状态的区别**：`WP-A1-01` / `WP-A1-02` 的实施授权来自**先前独立的有界 Implementation 授权**（审计台账 §13 与 `log/2026-11-07.md`），**不是**来自 §31.14 或 §26.34 的获批。§31.14 仍为 `PENDING_APPROVAL`，§26.34 仍为 `PENDING_REVIEW`，`DESIGN_PASS` **未签发**；**两项 Acceptance 不是 Requirement 验收，也不是 Design PASS**。
+
+### 44.3 状态迁移
+
+```text
+Before : AUD-FE-001 / WP-A1-01 = TESTED / PENDING_OWNER_APPROVAL
+         AUD-PRC-001 / WP-A1-02 = TESTED / PENDING_OWNER_APPROVAL
+After  : AUD-FE-001 / WP-A1-01 = ACCEPTED（附有界残余风险）
+         AUD-PRC-001 / WP-A1-02 = ACCEPTED（附有界残余风险）
+```
+
+### 44.4 保留的原始证据（不得改写）
+
+| 类别 | 证据 | 状态 |
+|---|---|---|
+| 已通过 | FAST **576/576** | PASS |
+| 已通过 | focused `server/procurement-sourcing-pricing.test.js` **5/5** | PASS |
+| 已通过 | 浏览器响应式回归 **24/24**（整体套件 = 2 工作面 × 4 视口 × 3 主体；寻源子集 12/12） | PASS |
+| 已通过 | `pnpm.cmd build` | PASS |
+| **FAILED** | 旧功能 UAT `procurement-outsourcing-functional-uat.mjs` **15 / 28**（**只有 UAT-04** 按新合同通过） | **仍为 FAIL** |
+| **NOT_RUN** | FULL 回归 | **未完成**（停止前遇既有 `m1-core-g07-diagnostics.test.js` `SetAccessControl` 权限拒绝） |
+| **NOT_RUN** | 真实 MySQL Gate（`test:mysql` / `test:mysql:concurrency` / 任何 disposable MySQL Gate） | **未运行** |
+| **FAILED** | `pnpm.cmd test:fast --filter procurement-sourcing-pricing` | **退出码 1，4 项失败**（`server/production-safety.test.js`：陈旧断言 7≠5 及其 Windows `EBUSY` 级联；定向文件登记在 FULL，过滤为 0 个文件后 `node --test` 回退默认全仓发现） |
+
+上表随 §44.2 的决定**一并被接受为已知限制与已知残余风险**，但**没有任何一项被消除**。原始 FAILED / NOT_RUN 记录**原样保留**，**不得**改写为 PASS。
+
+### 44.5 远端同步前后差异
+
+| 项 | 同步前 | 同步后 |
+|---|---|---|
+| `github/master` | `a39beac7a334ab4cf32fd5bc6b33ef978d6a6d65` | `6ee0ad3c98612f03107aa39ead0eae6c5e2c8f64`（Owner 本轮独立核验） |
+| 已推送提交 | —— | `4e3fe11f7803fe99a36b9971cd57586cc8fab427`（A1 Design 小修）、`6ee0ad3c98612f03107aa39ead0eae6c5e2c8f64`（两项 Acceptance 候签与状态索引） |
+| 本地 `master` | 与远端一致（`a39beac`） | 与远端一致（`6ee0ad3`），工作树干净 |
+| Gitee `origin/master` | 未在本轮核验 | 本轮**未**推送、**未**核验（远端 TLS 握手不可达，且本轮不授权任何远端写操作） |
+
+### 44.6 明确不因本节改变的事项
+
+- `PRC-06` **不**变为 `COVERED`；`docs/status/CAPABILITY_MATRIX.md` 不更新；B3101 / B3121 继续 `BLOCKED`；Procurement & Outsourcing Domain Acceptance 继续 `NOT READY`（`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY`）。
+- `AUD-PRC-002`（Hash）、`AUD-OUT-001`（仍 `DEFERRED_NOT_AUTHORIZED`）、`AUD-FE-002` / `AUD-FE-003`、`AUD-PRC-003`～`AUD-PRC-009`、`AUD-VMI-001`～`AUD-VMI-003`、`AUD-OUT-002` 的状态**全部不变**。
+- M1-Core 七 Gate 7/7 `PASS` 及其既有范围、`R-01`～`R-20`、`D-01`～`D-04`、`WP-I` / `WP-J`、`M-15`、`SCP-01`～`SCP-16` 原状态不变。
+- §31.14 仍 `PENDING_APPROVAL`；§26.34 仍 `PENDING_REVIEW`；`A1-D-RV-01`～`A1-D-RV-04` 四个 Owner Review Gate 状态不变。
+- 本轮**未**修改 `server/`、`src/`、`scripts/`、`docs/requirements/`、`document.md`、`solution.md`；**未**修改数据库 Schema / Migration；**未**执行数据库写入、Migration、Reset / Bootstrap / Cleanup；**未**连接真实 MySQL；**未** Push / Merge / Tag / Release / Deploy。
+
+### 44.7 下一阶段：OUT-001 实施前置
+
+OUT-001（`AUD-OUT-001`）的实现前置以 [`docs/design/procurement-outsourcing.md`](../design/procurement-outsourcing.md) §26.34.13 的 **I3a / I3b 两批划分**为候审修订基础：
+
+- **I3a**：不修改 Schema 的安全加固（请求合同与格式校验、事务内权威重读、幂等合同落地、数量守恒与并发守卫、拒绝审计单一边界、不安全路径继续 fail closed、`transferNo` 稳定生成、零副作用回归）；
+- **I3b**：来源追溯与身份效力，**需单独申请** `source_material_list_id` 的 additive Migration 授权。
+
+该修订**只是 Design 候审修订**，**不**签发 Requirement 验收或 `DESIGN_PASS`，**不**授权任何 Implementation、Schema / Migration、数据库操作或真实 MySQL Gate。**Design 完成后 HARD STOP。**
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
