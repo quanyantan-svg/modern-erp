@@ -1437,7 +1437,7 @@ Final verdict：`NOT READY`。后续修复必须继续遵守本节既有 source/
 - 请求保持既有 `POST /api/procurement/outsourcing/wip-transfers`，在另行批准 Implementation 后要求幂等键（非空、长度有界）；复用 `requestFingerprint()`、`idempotencyReplay()`、`saveIdempotency()`，**先验证**既有 MySQL 命名锁释放与事务所有权合同。无合法键返回 400，绝不生成 WIP 转移事实；改变请求合同需要本 Design 获业务所有者审批。**键来源与响应约定以 §26.34.8 为准**：键取请求体 `body.idempotencyKey`，**不**取 HTTP `Idempotency-Key` 头；本节此前的「外部 `Idempotency-Key`」表述已由 §26.34.8 取代。
 - 规范化指纹必须包含 `sourceOrderId`、`targetOrderId`、`materialListId`（源行）、`quantity`（经 UOM/精度规范化）、`transferDate` 和任何最终获批的身份选择字段。作用域至少为 `(operationType='OUTSOURCING_WIP_TRANSFER', authoritative sourceOrderId, body.idempotencyKey)`，还必须服从现有组织/租户与授权边界；不得跨主体查询或重放他人的响应。**字段集合与归一规则的权威正文是 §26.34.8.2**；本节只保留原则性要求。
 - 首次成功：201，返回稳定的 `id`、`transferNo`；相同作用域、相同 Key 和相同规范化载荷：返回原业务结果并附 `replayed:true`，不新增转移记录、身份证据、库存、审计成功事实；同 Key 不同载荷：409 `OUTSOURCING_WIP_TRANSFER_IDEMPOTENCY_CONFLICT`，不写业务事实。**最终响应形式以 §26.34.8.1 为准**（首次 201 `{id, transferNo}`；精确重放 201 `{id, transferNo, replayed:true}`；缺键 400 `IDEMPOTENCY_KEY_REQUIRED`）；本节此前的「200 + `replayed:true`」假设与「replay 形式待核对」开放项已由 §26.34.8 取代。不得由 Agent 自行更改全局幂等合同。
-- 幂等记录写入与 WIP 数量/身份效力、业务转移事实、成功审计必须在**同一业务事务**中完成。重试或中途失败不得产生半个转移；`transferNo` 使用稳定、冲突安全的生成方式，不能依赖毫秒时间戳作为唯一性证明。对于已进入 COMMIT 结果不确定状态的 MySQL 请求，不允许自动重新执行写入，**也不得以新的幂等键自动重建业务事实**；处置方式以 §26.34.9.2 第 7 条为准（可信连接只读核验原业务对象与幂等记录，按已证明状态恢复或继续隔离）。
+- 幂等记录写入与 WIP 数量/身份效力、业务转移事实、成功审计必须在**同一业务事务**中完成。重试或中途失败不得产生半个转移；`transferNo` 使用稳定、冲突安全的生成方式，不能依赖毫秒时间戳作为唯一性证明，**具体编号方案以 §26.34.14.2 为准**。对于已进入 COMMIT 结果不确定状态的 MySQL 请求，不允许自动重新执行写入，**也不得以新的幂等键自动重建业务事实**；处置方式以 §26.34.9.2 第 7 条与 **§26.34.14.3 的严格恢复条件**为准。
 
 ##### 26.34.4.2 源/目标物料行与不可变来源证据
 
@@ -1585,7 +1585,7 @@ Final verdict：`NOT READY`。后续修复必须继续遵守本节既有 source/
 - 精确重放**不得**新增转移行、不得新增身份 effect/分配、不得改动任何数量、不得新增成功审计。精确重放的响应内容必须与首次成功的响应**逐字段一致**（仅多 `replayed: true`）。
 - 幂等记录读取（`idempotencyReplay()`）在业务事务**之外**执行；幂等记录写入（`saveIdempotency()`）在业务事务**之内**执行。这与仓库既有调用方（如 `server/modules/consignment.js`）的既有约定一致。
 - 幂等记录的唯一约束为 `UNIQUE(operation_type, document_id, idempotency_key)`（`idempotency_records`），因此「同 Key 异载荷」在并发下由该唯一约束与 MySQL 命名锁共同收敛，不得依赖应用层「先查后写」的时序假设。
-- `transferNo` 的稳定、冲突安全生成方式属 §26.34.4.1 已登记的待修项；本小修**不改变**该结论，也不在本小修中指定新的编号算法。
+- `transferNo` 的稳定、冲突安全生成方式属 §26.34.4.1 已登记的待修项；其**最小稳定编号方案已由 §26.34.14.2 固定**，本小修不再保留该开放项，也**不**引入第二套编号算法。
 
 #### 26.34.9 A1 小修：MySQL 命名锁释放与事务边界合同（2026-11-08；PENDING_REVIEW）
 
@@ -1617,10 +1617,7 @@ Final verdict：`NOT READY`。后续修复必须继续遵守本节既有 source/
    - `finally` 中的释放在 SQLite 路径是**空操作**（`releaseMySqlIdempotencyLocks()` 在 `db.dialect !== 'mysql'` 时直接返回空结果），因此同一段调用代码可同时服务 SQLite 与 MySQL 两条路径，不需要分支。
 5. **禁止绕过公共合同**：调用侧**不得**直接执行 `RELEASE_LOCK()` 或任何等价的私有释放语句；不得自建第二套锁释放实现；不得吞掉 `releaseMySqlIdempotencyLocks()` 的返回值。
 6. **未确认释放的处置**：`releaseMySqlIdempotencyLocks()` 的 `unverified` 非空时，该连接已被既有机制隔离（`quarantineMySqlAdapter(db, 'idempotency_lock_release_unverified')`）。调用侧**不得**在隔离连接上继续发起任何语句，**不得**把未确认释放当作已释放，**不得**自行恢复该连接。SQLite 路径没有命名锁，其既有连接隔离机制保持不变。
-7. **不确定 COMMIT**：`transaction()` 对不确定 COMMIT 不会自动重试写操作。调用侧**不得**在捕获该错误后自动重发写请求，**尤其不得以新的幂等键自动重建业务事实** —— 新键会绕开既有幂等记录，可能在原提交其实已生效时产生第二笔业务事实。正确处置是：**在可信连接上只读核验**原业务对象（该幂等作用域下的转移事实行、源/目标数量）与该幂等记录本身，然后按**已证明状态**处置：
-   - **已提交**（可证明业务事实与幂等记录均存在）→ 返回原结果并附 `replayed:true`（响应形式按 §26.34.8.1 / §26.34.10.3），**不得**再发起写入；
-   - **未提交**（可证明两者均不存在）→ 以**同一**幂等键重试，使重试落在同一幂等作用域内；
-   - **无法证明**（连接不可信、会话状态不确定、只读核验本身失败或核验结果矛盾）→ **保持该连接的既有隔离机制**，不得在隔离连接上继续发起任何语句，**不得**自动重发，交由 Owner / 人工按第 6 条的处置路径收敛。
+7. **不确定 COMMIT**：`transaction()` 对不确定 COMMIT 不会自动重试写操作。调用侧**不得**在捕获该错误后自动重发写请求，**尤其不得以新的幂等键自动重建业务事实** —— 新键会绕开既有幂等记录，可能在原提交其实已生效时产生第二笔业务事实。处置的**原则**是：**只有在原会话与未决事务已被安全收束、原业务事实确实未提交、且无并发未决写入三项同时成立时**，才允许以**同一**幂等键重试；否则一律保持隔离并交由 Owner / 人工处置。**三项条件的逐条判定与禁止项以 §26.34.14.3 为准**，其中「仅查询不到记录」**不构成**未提交证明。
 
    只读核验**必须**在可信连接上执行；在被隔离或会话状态不确定的连接上所得的核验结果**不构成**「已提交」或「未提交」的证明，也**不得**被当作可重试的依据。
 8. **业务拒绝的单一边界**：任何业务门禁拒绝（409）必须在**事务回滚之后**由**单一**边界调用 `auditBusinessRejection()` 记录恰好一条拒绝审计；不得在事务内先写成功审计再回滚，也不得由 handler 与统一错误层各记一条。`auditBusinessRejection()` 只对 `status === 409` 的 `HttpError` 生效，400 / 403 沿既有合同处理。
@@ -1741,38 +1738,166 @@ Final verdict：`NOT READY`。后续修复必须继续遵守本节既有 source/
 - 继续 fail closed 的路径（**必须**保持 409，且**必须**留单次拒绝审计）：历史身份不可证明（`OUTSOURCING_WIP_TRANSFER_SOURCE_UNVERIFIED`）、LOT / SERIAL 或跟踪产品（`OUTSOURCING_WIP_TRANSFER_IDENTITY_UNSUPPORTED`）、成本 / 价值携带（`OUTSOURCING_WIP_TRANSFER_COST_POLICY_PENDING`，`B-P01` 延期期间）、身份余额冲突、目标行不唯一、订单状态不允许、业务期间关闭、数量越界（`OUTSOURCING_WIP_TRANSFER_OVERDRAW`）或并发败方（`OUTSOURCING_WIP_TRANSFER_CONCURRENT_CONFLICT`）。
 - 「保留合法数量转移」与「不安全路径 fail closed」**同时成立**是本设计的核心。任何一方被无条件取消，都超出本小节授权。
 
-##### 26.34.13.2 I3a —— 不修改 Schema 的安全加固（可独立实施）
+##### 26.34.13.2 I3a-S —— 不修改 Schema 的安全加固（**可独立实施**）
+
+> **可实施性结论（依据 §26.34.14.1 的代码级证据）**：本清单的每一项都**不需要**身份 effect 链即可正确实施；其可观测结果是**稳定 409 + 零业务副作用 + 单次拒绝审计**，**不包含**任何正向 201。
 
 | # | 事项 | 合同要点 | 依据 |
 |---|---|---|---|
-| I3a-1 | 请求合同与输入校验 | 只接受既有五项入参 + `body.idempotencyKey`；数量必须有限正数、精度合法；业务日期 `YYYY-MM-DD`；源 / 目标订单不同；缺键 400 `IDEMPOTENCY_KEY_REQUIRED`；非法输入 400 且零业务写入 | §26.34.8.1、§26.34.5.2 |
-| I3a-2 | 事务内权威重读 | 源 / 目标订单状态、源 / 目标物料行余额、产品跟踪策略、身份余额、期间状态一律在**事务内**重读；**不得**沿用事务外读取的余额作为写入依据 | §26.34.5.1 第 2 条 |
-| I3a-3 | 幂等合同落地 | 键来源、作用域、指纹、固定响应与同事务提交按 §26.34.8 执行；不得自行更改全局幂等合同 | §26.34.8 |
-| I3a-4 | 数量守恒与并发守卫 | 源减目标增必须成对；以受影响行数 / 余额条件更新（CAS）保证不超额；竞争败方 409 且零业务副作用 | §26.34.4.3、§26.34.5.3 |
-| I3a-5 | 拒绝审计单一边界 | 业务 409 在事务回滚后由**单一**边界调用 `auditBusinessRejection()` 记录**恰好一条**；handler 与统一错误层不得双记；400 / 403 沿既有合同 | §26.34.5.2、§26.34.9.2 第 8 条 |
-| I3a-6 | 不安全路径继续 fail closed | 既有 `OUTSOURCING_WIP_TRANSFER_IDENTITY_UNSUPPORTED` 行为**保持**；LOT / SERIAL、历史残差、成本携带补齐或沿用对应 409 | §26.34.13.1 |
-| I3a-7 | `transferNo` 稳定生成 | 替换 `Date.now()` 截断生成，改用稳定、冲突安全的编号来源；不得以毫秒时间戳作为唯一性证明 | §26.34.4.1 |
-| I3a-8 | 零副作用回归 | 逐字段业务快照（源 / 目标 `issued_quantity`、转移表、幂等记录、审计、库存 / 估值 / AP / GL）+ 拒绝审计恰好一次 + 幂等同键重放 / 异载荷冲突 / 缺键三态 | §26.34.5.3 |
-| I3a-9 | 锁与事务边界 | 按 §26.34.9.2 以 `try/finally` 包裹并复用 `releaseMySqlIdempotencyLocks(db)`；不确定 COMMIT 按第 7 条只读核验处置，**不得**以新键自动重建业务事实 | §26.34.9.2 |
+| I3a-S-1 | 请求合同与输入校验 | 允许字段集合新增 `body.idempotencyKey`（当前该字段被 400 `VALIDATION` 拒绝）；数量必须有限正数、精度合法；业务日期 `YYYY-MM-DD`；源 / 目标订单不同；缺键 400 `IDEMPOTENCY_KEY_REQUIRED`；非法输入 400 且零业务写入 | §26.34.8.1、§26.34.5.2 |
+| I3a-S-2 | 事务内权威重读 | 源 / 目标订单状态、源 / 目标物料行余额、产品跟踪策略、身份余额、期间状态一律在**事务内**重读；**不得**沿用事务外读取的余额作为写入依据 | §26.34.5.1 第 2 条 |
+| I3a-S-3 | 幂等合同落地 | 键来源、作用域、指纹、固定响应与同事务提交按 §26.34.8 执行；不得自行更改全局幂等合同 | §26.34.8 |
+| I3a-S-4 | 数量守恒与并发守卫 | 源减目标增必须成对；以受影响行数 / 余额条件更新（CAS）保证不超额；竞争败方 409 且零业务副作用 | §26.34.4.3、§26.34.5.3 |
+| I3a-S-5 | 拒绝审计单一边界 | 业务 409 在事务回滚后由**单一**边界调用 `auditBusinessRejection()` 记录**恰好一条**；handler 与统一错误层不得双记；400 / 403 沿既有合同 | §26.34.5.2、§26.34.9.2 第 8 条 |
+| I3a-S-6 | 身份路径继续 fail closed | **保持**既有 `OUTSOURCING_WIP_TRANSFER_IDENTITY_UNSUPPORTED` 行为：源行存在任何身份余额时拒绝。I3a-S **不**放宽该门禁 | §26.34.13.1、§26.34.14.1 |
+| I3a-S-7 | 历史可证明性守卫 | 源行 `legacy_unverified_wip_quantity IS NULL` → 409 `OUTSOURCING_WIP_TRANSFER_SOURCE_UNVERIFIED`（当前该守卫**缺失**）；`identity_evidence_state` 必须为 `VERIFIED` | §26.34.4.2、§26.34.13.1 |
+| I3a-S-8 | `transferNo` 稳定生成 | 按 §26.34.14.2 的最小稳定编号方案生成；唯一性证明是随机后缀而非毫秒时间戳；`id` 与 `transferNo` 在业务事务**内**铸造并与幂等记录同事务持久化 | §26.34.14.2 |
+| I3a-S-9 | 目标行唯一性与 UOM 核验 | 目标行候选数必须**严格为 1**（`get()` / `LIMIT 1` 不构成唯一性证明）；源行 `unit` 与产品基础 UOM 不一致 → 409 | §26.34.4.2、§26.34.8.2 |
+| I3a-S-10 | 锁与事务边界 | 按 §26.34.9.2 以 `try/finally` 包裹并复用 `releaseMySqlIdempotencyLocks(db)`；不确定 COMMIT 按 §26.34.14.3 的严格恢复条件处置，**不得**以新键自动重建业务事实 | §26.34.9.2、§26.34.14.3 |
+| I3a-S-11 | 回归断言 | 逐字段业务快照（源 / 目标 `issued_quantity`、转移表、幂等记录、审计、库存 / 估值 / AP / GL）+ 拒绝审计恰好一次 + 幂等同键重放 / 异载荷冲突 / 缺键三态；**断言必须是固定结果**，见 §26.34.14.1 | §26.34.5.3、§26.34.14.1 |
 
-**I3a 的边界**：**不修改任何 Schema / Migration**，**不**新增表、列、索引或约束；**不**实现来源追溯的新持久化列（属 I3b）；**不**实现身份 effect / 分配链（属 I3b）；**不**放宽 `B-P01` / `B-P02` 延期边界；**不**触碰 M1-Core 已批准 Gate 的原合同。
+**I3a-S 的边界**：**不修改任何 Schema / Migration**，**不**新增表、列、索引或约束；**不**实现身份 effect / 分配链（属 I3b）；**不**实现来源追溯的新持久化列（§26.34.14.3 证明其非必需）；**不**放宽 `B-P01` / `B-P02` 延期边界；**不**触碰 M1-Core 已批准 Gate 的原合同。
 
-##### 26.34.13.3 I3b —— 来源追溯与身份效力（需单独授权 additive Migration）
+##### 26.34.13.2b I3a-P —— 正向 201 行为（**必须依赖 I3b**，不得单独实施）
+
+> **依赖结论**：正向 `201 {id, transferNo}` **无法**在 I3a-S 之内获得。理由见 §26.34.14.1：当前唯一能承载「已证明 WIP 数量」的物料行，恰好就是**必然带身份余额**的行；I3a-S 不实现身份链，若在这些行上放行 201，就会产生 §26.34.4.3 所禁止的「只改两条 `issued_quantity`」状态，使身份账与数量账脱节。因此 **I3a-P 与 I3b 必须同批实施**。
+
+| # | 事项 | 合同要点 | 依赖 |
+|---|---|---|---|
+| I3a-P-1 | 成对身份效力 | 同一事务内形成源行 `TRANSFER_OUT`（`effect_direction='CONSUME'`，`signed_quantity<0`）与目标行 `TRANSFER_IN`（`effect_direction='SUPPLY'`，`signed_quantity>0`），`business_event_id` 恒等于转移事实 ID | **I3b** |
+| I3a-P-2 | `TRANSFER_ORIGIN` 分配 | 源行 `TRANSFER_OUT` 按供给占用比例分配到源行既有 SUPPLY effect；目标行 `TRANSFER_IN` 分配指向该 `TRANSFER_OUT` effect；每笔供给的累计分配不得超过原供给 | **I3b** |
+| I3a-P-3 | 数量与身份守恒 | `Σ transfer_out = Σ transfer_in = requested quantity`；源行 `available_quantity` 相应减少、目标行 `available_quantity` 相应增加；`available_quantity = supplied - consumed` 恒成立 | **I3b** |
+| I3a-P-4 | 物理与成本不变量 | 物理库存 `inventory_positions` / `inventory_transactions` / `tracked_inventory_movements` **无新增数量移动**；企业所有权不变；成本字段保持未证实，**零携带** | **I3b** |
+| I3a-P-5 | 正向验收断言 | 合法 NONE 路径必须断言**固定 201** `{id, transferNo}`，并断言身份 effect / 分配链 / 数量守恒 / 物理零移动。**禁止**以 `201 || 409` 作为正向验收 | **I3b** |
+
+##### 26.34.13.3 I3b —— 来源追溯与身份效力（**经 §26.34.14.1 核验：不需要新增 Schema**）
+
+> **Schema 结论（2026-11-08 只读代码核验）**：既有 `outsourcing_wip_identity_effects` / `..._effect_allocations` / `..._identity_balances` 的表、列、CHECK、UNIQUE 与 FK **已经能够完整表达**跨订单 WIP 数量归属转移的来源追溯与身份效力链；`TRANSFER_IN` / `TRANSFER_OUT` / `TRANSFER_ORIGIN` 早已在 CHECK 约束中声明（`server/migrations/procurement-outsourcing-schema.js:743`、`:767`），缺的**只是 Writer**。因此 **I3b 不以任何 additive Migration 为前置条件**；此前候选的 `source_material_list_id` 已被**降级为可选便利项**（见 I3b-2）。
 
 | # | 事项 | 合同要点 | 门禁 |
 |---|---|---|---|
-| I3b-1 | 来源行可追溯 | `outsourcing_wip_transfers` 新增 `source_material_list_id TEXT NULL`（可选 FK → `outsourcing_material_list.id`）与必要查询索引；新转移显式写源行 ID，既有 `material_list_id` 继续表示**目标行**；二者在确认后不可普通修改 | **需单独 Schema / Migration 授权** |
-| I3b-2 | 历史行处理 | 历史行新增列保持 NULL，**不**按订单 + 产品猜回填；历史来源不可证明者只读标 `SOURCE_UNVERIFIED` | 同上 |
-| I3b-3 | 双向追溯 | `transferId → sourceOrderId + sourceMaterialListId → targetOrderId + targetMaterialListId` 正反双向可追溯；仅凭旧表 `source_order_id` + 目标产品事后 JOIN **不算**确定性证据 | 同上 |
-| I3b-4 | 身份效力链 | 同一事务形成配对 `TRANSFER_OUT`（源行 CONSUME）/ `TRANSFER_IN`（目标行 SUPPLY），以 `TRANSFER_ORIGIN` 分配与 `source_effect_id` 串起供给链；`Σ transfer_out = Σ transfer_in = requested quantity`；每笔供给的累计分配不得超过原供给 | 同上 + §26.34.4.3 |
+| I3b-1 | 身份效力 Writer | 复用 `server/modules/outsourcing-inventory.js` 的唯一规范 Writer 路径扩展 `TRANSFER_OUT` / `TRANSFER_IN` / `TRANSFER_ORIGIN`；**不得**新建第二套账本、不得绕过既有分配算术 | **无需 Schema 授权**；需 Owner 批准 Implementation 范围 |
+| I3b-2 | 来源行可追溯 | 源行由**转移事实 ID → `TRANSFER_OUT` effect 的 `material_list_id`** 唯一确定（`business_event_id` = 转移事实 ID）；既有 `outsourcing_wip_transfers.material_list_id` 继续表示**目标行**，语义不变。**可选便利项**（非必需）：新增 `source_material_list_id TEXT NULL` 以便免 JOIN 直读 | 可便利项**如实施，须单独申请 additive Migration 授权**（含双端 parity、备份与回滚）；**未获授权时不影响 I3b 交付** |
+| I3b-3 | 历史行处理 | 历史转移行**不**补写、不回填；历史来源不可证明者只读标 `SOURCE_UNVERIFIED`，不得据 `source_order_id` + 目标产品事后 JOIN 伪造确定性证据 | 同上 |
+| I3b-4 | 双向追溯 | `transferId → sourceOrderId + sourceMaterialListId → targetOrderId + targetMaterialListId` 正反双向可追溯 | 同上 |
 | I3b-5 | 物理与成本不变量 | 物理库存 `inventory_positions` / `inventory_transactions` / `tracked_inventory_movements` **无新增数量移动**；企业所有权不变；成本字段保持未证实，**零携带** | §26.34.4.3、`B-P01` |
-| I3b-6 | 双端迁移验证 | SQLite 与 MySQL 8 分别验证新建库、升级既有库、重复运行、部分失败与重试（注意 MySQL DDL 可自动提交），验证 FK / 索引 / NULL 语义 parity；先做只读 preflight | **需单独授权**，含备份与回滚方案 |
+| I3b-6 | 证据要求 | SQLite 与 MySQL 8 分别验证身份链在并发下的守恒、失败零副作用与重放稳定；**真实 MySQL Gate 仍需独立授权** | **需单独授权**（真实 MySQL Gate） |
 
-**I3b 的边界**：I3b 的 additive Migration **必须单独申请授权**，不得与 I3a 打包执行。未获授权时 I3a 仍可独立实施；此时转移事实的可追溯性只依赖既有 `source_order_id` + 目标行，来源不可证明的行按 `SOURCE_UNVERIFIED` 只读处理，**不得**伪造来源。
+**I3b 的边界**：I3b 与 **I3a-P 必须同批实施**（§26.34.13.2b）。I3b **不**要求任何 additive Migration；可选便利项 `source_material_list_id` 若被提出，**必须单独申请授权**，不得与 I3b 打包执行，也**不得**成为 I3b 的前置条件。I3a-S 仍可独立实施，与 I3b 无耦合。
 
 ##### 26.34.13.4 实施前置条件与 HARD STOP
 
-- I3a 与 I3b **均未获授权**：本小节只是**候审修订**。I3a 须由业务 Owner 明确批准 Implementation 范围；I3b 另需**独立**的 Schema / Migration 授权。
-- I3a 的实施须先具备：Requirement 侧可引用的「数量归属守恒 + 不可证明路径 fail closed」合同（§31.14.2 当前为 `PENDING_APPROVAL`）与本 Design 的批准（§26.34 当前为 `PENDING_REVIEW`）。
+- **I3a-S、I3a-P、I3b 三者均未获授权**：本小节只是**候审修订**。
+  - **I3a-S** 须由业务 Owner 明确批准 Implementation 范围；其验收断言是**固定 409 + 固定 code + 零副作用**，**不含**任何正向 201。
+  - **I3a-P** 与 **I3b** 必须**同批**批准（依据 §26.34.14.1），并与 §26.34.14.2 的编号方案、§26.34.14.3 的恢复条件一并获批。
+  - **I3b 不以任何 additive Migration 为前置条件**（依据 §26.34.14.1 与 §26.34.13.3）；可选便利项 `source_material_list_id` 若被提出，须单独申请 additive Migration 授权。
+- I3a-S 的实施须先具备：Requirement 侧可引用的「数量归属守恒 + 不可证明路径 fail closed」合同（§31.14.2 当前为 `PENDING_APPROVAL`）与本 Design 的批准（§26.34 当前为 `PENDING_REVIEW`）。
 - 本小节**不**改变 `AUD-OUT-001` 的 `DEFERRED_NOT_AUTHORIZED` 标签，**不**改变 M1C-G03 / G06 既有 7/7 `PASS` 的范围，**不**改变 `B-P01` / `B-P02`、`D-P01` / `D-P02`、`M-15`、`SCP-01`～`SCP-16` 的原状态，也**不**开放 VMI-05。
 - **HARD STOP**：本小节完成后不进入生产代码 Implementation。
+
+#### 26.34.14 OUT-001 Design Dependency Review（2026-11-08；PENDING_REVIEW）
+
+> **定位 / Owner / 状态**：本小节是 2026-11-08 对 OUT-001 实施前置的**只读依赖审查**结论，Owner 为 Procurement & Outsourcing Domain Owner。依据为只读代码审查与一次性临时 SQLite 探针（**探针脚本位于仓库之外**，不在仓库内创建或修改任何文件，不连接生产数据库，不执行 DDL）。它**细化** §26.34.13 的批次划分，**不签发** Requirement 验收或 `DESIGN_PASS`，**不授权**任何 Implementation、Schema / Migration、数据库操作或真实 MySQL Gate。
+
+##### 26.34.14.1 结论一：I3a 不实现身份链却要求保留合法转移 —— 结构性冲突与证据
+
+**代码级事实（只读核验，`master` @ `ba5dbb4a105abe5b2ab36ffe48a851317be300c2`）**：
+
+| # | 事实 | 位置 |
+|---|---|---|
+| F1 | 正常发料 `issueMaterial()` 在同一事务内调用 `executeOutsourcingMove(..., direction:'SUPPLY')`，后者调用 `recordSupply()` | `server/modules/outsourcing.js:490`；`server/modules/outsourcing-inventory.js:218-219` |
+| F2 | `recordSupply()` 为 NONE 产品写入 `outsourcing_wip_identity_effects`（`effect_direction='SUPPLY'`、`event_type='ISSUE'`）**并** upsert `outsourcing_wip_identity_balances`（`identity_key='NONE'`、`evidence_state='QUANTITY_ONLY'`） | `server/modules/outsourcing-inventory.js:74-93` |
+| F3 | 同一发料事务把 `outsourcing_material_list.issued_quantity` 加上数量并置 `identity_evidence_state='VERIFIED'` | `server/modules/outsourcing.js:493` |
+| F4 | `createWipTransfer()` 只要源行存在**任意**身份余额行就抛 409 `OUTSOURCING_WIP_TRANSFER_IDENTITY_UNSUPPORTED` | `server/modules/outsourcing-finance.js:409-414` |
+| F5 | `createWipTransfer()` 的容量检查用 `issued + supplemented - returned - backflushed`；从未发料的行该值为 0 | `server/modules/outsourcing-finance.js:415-416` |
+| F6 | `outsourcing_material_list.issued_quantity` 的**唯一**生产写入方是 F3 的发料路径 | `server/modules/outsourcing.js:493` |
+| F7 | `TRANSFER_IN` / `TRANSFER_OUT` / `TRANSFER_ORIGIN` 只出现在 schema 的 CHECK 约束与测试断言中，**无任何生产 Writer** | `server/migrations/procurement-outsourcing-schema.js:743`、`:767`；`server/modules/**` 无写入点 |
+| F8 | 身份 effect 表为**只追加**：无 `DELETE FROM outsourcing_wip_*`，无对 `outsourcing_wip_identity_effects` 的 `UPDATE` | 全仓检索无命中 |
+
+**推论（冲突的根因）**：
+
+- 由 F1 + F2 + F3 + F6：**任何**拥有可证明 WIP 数量的物料行，必然同时拥有身份余额行。
+- 由 F4：这些行今天**全部**被 409 拒绝 —— 包括身份证据恰好就是 §26.34.4.3 第一实施候选（非跟踪产品、`identity_key='NONE'`、`evidence_state='QUANTITY_ONLY'`）的行。
+- 由 F4 + F5 反向推论：没有身份余额的行必然从未发料，容量为 0，任何正数量转移必然 409。
+- ⇒ **当前实现下 `POST /api/procurement/outsourcing/wip-transfers` 不存在任何可返回 201 的路径**：接口事实上已对全部可证明行关闭，而**不是**被安全地限制在"不支持的子集"内。
+
+**因此**：
+
+1. **I3a-S（安全加固）可独立实施**，其正确可观测结果是**稳定 409 + 零业务副作用 + 单次拒绝审计**；I3a-S **不产生**任何正向 201。
+2. **I3a-P（正向 201）必须依赖 I3b**：若在没有身份链的行上放行 201，就会产生 §26.34.4.3 明确禁止的「只更新两条 `issued_quantity`」状态，使身份账与数量账脱节。
+3. §26.34.13.1「保留合法数量归属转移的产品目标」**仍然成立**，但其**可实现路径**是 **I3a-P 与 I3b 同批实施**，而不是 I3a 单独放行。
+
+**一次性探针观测**（临时 SQLite，脚本在仓库之外；不连接生产库、不执行 DDL）：
+
+| 场景 | 观测结果 |
+|---|---|
+| 正常发料 5 PCS（非跟踪产品）后源行身份余额 | `identity_key='NONE'`、`identity_type='NONE'`、`evidence_state='QUANTITY_ONLY'`、`supplied=5`、`consumed=0`、`available=5` |
+| 同一源行的身份 effect | `effect_direction='SUPPLY'`、`signed_quantity=5`、`event_type='ISSUE'` |
+| 源行物料行 | `issued_quantity=5`、`identity_evidence_state='VERIFIED'` |
+| 对该行发起 3 PCS 转移 | **409 `OUTSOURCING_WIP_TRANSFER_IDENTITY_UNSUPPORTED`** |
+| 请求携带 `idempotencyKey` | **400 `VALIDATION`**（该字段当前不在允许字段集合内） |
+| 以**目标**行充当源行发起转移 | 404（`materialListId` 必须是**源**行） |
+
+**验收断言的硬性要求**：既有 `server/outsourcing-finance.test.js:232` 使用 `assert.equal(transfer.status === 201 || transfer.status === 409, true)` —— 这**不是**正向验收，也不构成任何正向证据。I3a-S 的验收断言必须是**固定 409 + 固定 code + 逐字段零副作用快照**；I3a-P 的验收断言必须是**固定 201** + 身份链与守恒断言。**任何一档都不得使用 `201 || 409`。**
+
+##### 26.34.14.2 结论二：`transferNo` 最小稳定编号方案
+
+**现状与问题**：`server/modules/outsourcing-finance.js:418` 生成 `'WIP-XFER-' + Date.now().toString().slice(-10)`；`outsourcing_wip_transfers.transfer_no` 为 `TEXT NOT NULL UNIQUE`（`server/migrations/procurement-outsourcing-schema.js:650`）。问题有二：
+
+1. **唯一性证明错误**：毫秒时间戳截断**不能**保证唯一 —— 同毫秒内的两次转移必然相同。仓库的规范做法是**时间戳只作可读前缀、随机后缀承担唯一性**（`server/modules/financial-controls.js:23`、`server/modules/procurement-orders.js:29`、`server/modules/consignment.js:375`）。
+2. **稳定性缺失**：编号在事务**外**铸造，且不与幂等记录绑定；同一业务事实在不确定 COMMIT 之后重试会铸出**新**编号，使幂等记录与转移事实脱钩。
+
+**最小稳定编号方案**：
+
+```text
+transferNo = `WIP-XFER-${businessDateYYYYMMDD}-${randomUUID 去连字符后取前 12 位大写十六进制}`
+```
+
+| 性质 | 规定 |
+|---|---|
+| 唯一性证明 | **随机后缀**（UUIDv4 的随机源截取 12 位十六进制 = 48 位）；`transfer_no UNIQUE` 约束作为最终兜底 |
+| 可读前缀 | **业务日期** `YYYYMMDD`，**不取墙上时钟**，因此不受时钟回拨与并发重试影响 |
+| 禁止 | **不得**以 `Date.now()` 截断或任何纯时钟值作为唯一性来源 |
+| 铸造时机 | 在业务事务**内**铸造，并与转移事实行、幂等记录 `result_json` **同一事务**持久化 |
+| 精确重放 | **原样返回**已持久化的 `transferNo`，**不得**重新铸造 |
+| 不确定 COMMIT 后 | 仅在 §26.34.14.3 的恢复条件成立且已证明原事实**未提交**时，才由重试铸造新编号（此时不存在"原编号"） |
+| 冲突处置 | `transfer_no` UNIQUE 冲突必须映射为稳定错误码（409），**不得**暴露为 500 |
+
+**与仓库既有风格的关系**：`financial-controls.js:23` 的 4 位十六进制后缀只有 16 位熵，弱于本方案。本方案在**位数**上取 12 位（48 位），在**前缀**上改用业务日期而非墙上时钟，在**语义**上把编号绑定到事务与幂等记录。允许实现时按既有 `number(prefix)` helper 风格封装，但**熵来源与持久化语义不得削弱**。
+
+##### 26.34.14.3 结论三：不确定 COMMIT 的安全恢复条件（收紧）
+
+**为什么"查询不到记录"不构成未提交证明**：MySQL 的 READ COMMITTED 下，未提交事务的行对其它会话不可见；因此在原事务**仍可能提交**的时刻读到"无记录"，与"原事务已回滚"**不可区分**。请求超时时 Worker 仍可能在执行该语句，原会话的开放事务可能在稍后才提交。
+
+**允许按原 Key 重试的必要条件（必须全部成立，缺一即禁止重试）**：
+
+| # | 条件 | 判定依据 |
+|---|---|---|
+| R1 | **原会话已终止且终止已确认** | 原适配器已被隔离，且 `quarantineState.state === 'TERMINATION_CONFIRMED'`（`sessionState === 'TERMINATED'`）。`TERMINATION_PENDING` 与 `TERMINATION_FAILED` **均不满足**本条件 | `server/database/mysql-adapter.js:131-157` |
+| R2 | **未决事务已随会话收束** | R1 成立后，服务端回收该会话，其开放事务被回滚、其命名锁被释放。原会话**仍存活**（含仅 `TERMINATION_PENDING`）时本条件**不成立** | `server/db.js:2287-2288`（`sessionDestroyed` 释放路径） |
+| R3 | **核验连接可信且与原会话不同** | 核验必须在**另一条**可信连接上执行：`mysqlSessionState()` ∈ `{IDLE_TRUSTED, FRESH}`，且会话 epoch 与原会话不同。**禁止**在被隔离的适配器上核验 | `server/db.js:2152-2159` |
+| R4 | **核验在 R1 之后执行且为只读** | 顺序不可颠倒：先确认会话终止，再只读核验 `(operationType, documentId, key)` 作用域下的幂等记录与转移事实行；核验必须是只读事务，**不得**写任何行 | `server/db.js:2409`（`readTransaction`） |
+| R5 | **无并发未决写入** | 作用域的 MySQL 命名锁在核验与重试之间**不得**被他人持有；重试必须经由正常路径的 `idempotencyReplay()` 重新获取该锁，使并发写入被串行化 | `server/modules/financial-controls.js:35-41` |
+
+**明确禁止**：
+
+| # | 禁止项 |
+|---|---|
+| P1 | 以**新的**幂等键重试（会绕开既有幂等记录，可能产生第二笔业务事实） |
+| P2 | 仅以"查询不到记录"作为未提交证明（必须先满足 R1 + R4） |
+| P3 | 在被隔离 / 终止未确认 / 终止失败的连接上执行核验或重试 |
+| P4 | 在未记录恢复决定与审计的情况下自动重试 |
+| P5 | 在 R1～R5 任一不成立时把操作标记为"可重试" |
+
+**允许的重试路径**：R1～R5 全部成立后，以**同一**幂等键、**同一**规范化载荷重新进入正常路径（先做重放查找；若记录此时存在，即为重放而非新写）。重试产生的 `id` / `transferNo` 是**新的**业务事实编号，与 §26.34.14.2 一致（原事实已证明未提交）。
+
+**审计义务**：恢复决定（成立 / 不成立、依据哪几条条件、终止状态、epoch 变化）必须写入审计；不成立时必须保持隔离并升级处置，**不得**静默降级为普通失败。
+
+##### 26.34.14.4 本轮审查的边界
+
+- 本轮**只**做只读代码审查、一次性临时 SQLite 探针与 Design 文档修订；**未**修改任何 `server/` / `src/` / `scripts/` 文件，**未**执行 DDL / Migration，**未**连接真实数据库，**未**运行任何 Gate。
+- 本轮**不**签发 Requirement 验收或 `DESIGN_PASS`，**不**授权任何 Implementation。§26.34 仍为 `PENDING_REVIEW`，§31.14 仍为 `PENDING_APPROVAL`。
+- 本轮**不**改变 `AUD-OUT-001` 的 `DEFERRED_NOT_AUTHORIZED` 标签，**不**改变 M1C-G03 / G06 既有 7/7 `PASS`、`B-P01` / `B-P02`、`D-P01` / `D-P02`、`M-15`、`SCP-01`～`SCP-16` 的原状态，**不**开放 VMI-05。
+- 探针脚本位于仓库之外的一次性临时目录，**未**在仓库内创建或修改任何文件；其观测结论以本节 F1～F8 的源码事实为准。
+
+**HARD STOP**：本小节完成后不进入生产代码 Implementation。
