@@ -24,6 +24,7 @@ import {
   parseOut001OperationOutput, parseOut001PostflightOutput,
 } from './mysql-out001-process-lifecycle.mjs';
 import { runOut001MySqlLifecycle } from './mysql-out001-root-lifecycle.mjs';
+import { initializeOut001DescendantRegistry } from './mysql-out001-descendant-registry.mjs';
 import { assertOut001MySqlStaticPreflight, OUT_001_MYSQL_SUITE_FILE } from './mysql-out001-static-preflight.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -97,7 +98,9 @@ async function main() {
     });
     const lease = context.issuePortableChild({ childPid: child.pid, childStartedAt });
     writeFileSync(leasePath, JSON.stringify(lease), { flag: 'wx', mode: 0o600 });
-    const entry = { child, context, childStartedAt, mode, operation, stdout: '', stderr: '' };
+    const entry = {
+      child, context, childStartedAt, leasePath, mode, operation, stdout: '', stderr: '',
+    };
     child.stdout.on('data', (chunk) => { entry.stdout += chunk; });
     child.stderr.on('data', (chunk) => { entry.stderr += chunk; });
     children.push(entry);
@@ -108,7 +111,6 @@ async function main() {
     const code = await collectOut001Child(entry, {
       timeoutMs: OUT_001_CHILD_TIMEOUT_MS[entry.operation],
     });
-    entry.context.markChildExited(entry.child.pid, entry.childStartedAt);
     if (code !== 0) {
       const error = new Error(`OUT_001_MYSQL_CHILD_FAILED:${entry.mode}:${entry.operation}:exit ${code}`);
       error.code = 'OUT_001_MYSQL_CHILD_FAILED';
@@ -116,6 +118,12 @@ async function main() {
       error.stderr = entry.stderr;
       throw error;
     }
+    if (!await ensureOut001ChildExited(entry)) {
+      const error = new Error(`OUT_001_MYSQL_CHILD_EXIT_UNVERIFIED:${entry.mode}:${entry.operation}`);
+      error.code = 'OUT_001_MYSQL_CHILD_EXIT_UNVERIFIED';
+      throw error;
+    }
+    entry.context.markChildExited(entry.child.pid, entry.childStartedAt);
     return entry.stdout;
   };
 
@@ -148,7 +156,20 @@ async function main() {
     reset: async (context) => finishOperation(context, 'RESET_SCHEMA_PRE_RUN'),
     bootstrap: async (context) => finishOperation(context, 'BOOTSTRAP_CURRENT_SCHEMA'),
     runHttpFixtures: async (context) => {
-      const suite = await spawnRegistered(context, { mode: 'suite', operation: 'RUN_OUT001_HTTP_FIXTURES' });
+      const descendantRegistryPath = initializeOut001DescendantRegistry(childDir, runId);
+      const suite = await spawnRegistered(context, {
+        mode: 'suite',
+        operation: 'RUN_OUT001_HTTP_FIXTURES',
+        extraEnv: {
+          ERP_OUT_001_DESCENDANT_REGISTRY: descendantRegistryPath,
+          ERP_OUT_001_DESCENDANT_RUN_ID: runId,
+        },
+      });
+      suite.descendantRegistry = Object.freeze({
+        registryPath: descendantRegistryPath,
+        childLeasePath: suite.leasePath,
+        runId,
+      });
       await finishChild(suite);
       return { passed: true };
     },

@@ -26,6 +26,9 @@ import {
   out001PhysicalFinanceSnapshot,
 } from './test-utils/mysql-out001-target.js';
 import { isWipTransferUniqueConstraintError } from './modules/outsourcing-finance.js';
+import {
+  appendOut001DescendantRegistration, OUT_001_DESCENDANT_PURPOSE,
+} from '../scripts/gates/mysql-out001-descendant-registry.mjs';
 
 // 现有 28 项 OUT-001 focused 测试的 MySQL 版本：
 //   · server/outsourcing-wip-transfer.test.js —— 21 项 WIP 转移专项；
@@ -67,21 +70,32 @@ async function startIndependentOut001App() {
   });
   let stderr = '';
   child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const readyPromise = new Promise((resolveReady, reject) => {
+    const timer = setTimeout(() => reject(new Error('OUT001_M2_APP_START_TIMEOUT')), 30_000);
+    child.on('message', (message) => {
+      if (message?.type === 'READY') { clearTimeout(timer); resolveReady(message); }
+      if (message?.type === 'ERROR') { clearTimeout(timer); reject(new Error(message.message)); }
+    });
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      reject(new Error(`OUT001_M2_APP_EXIT_${code}:${stderr}`));
+    });
+  });
   let ready;
   try {
-    ready = await new Promise((resolveReady, reject) => {
-      const timer = setTimeout(() => reject(new Error('OUT001_M2_APP_START_TIMEOUT')), 30_000);
-      child.on('message', (message) => {
-        if (message?.type === 'READY') { clearTimeout(timer); resolveReady(message); }
-        if (message?.type === 'ERROR') { clearTimeout(timer); reject(new Error(message.message)); }
+    if (process.env.ERP_OUT_001_DESCENDANT_REGISTRY) {
+      await appendOut001DescendantRegistration({
+        registryPath: process.env.ERP_OUT_001_DESCENDANT_REGISTRY,
+        childLeasePath: process.env.ERP_OUT_001_ACK4_CHILD_LEASE,
+        runId: process.env.ERP_OUT_001_DESCENDANT_RUN_ID,
+        pid: child.pid,
+        purpose: OUT_001_DESCENDANT_PURPOSE,
       });
-      child.once('exit', (code) => {
-        clearTimeout(timer);
-        reject(new Error(`OUT001_M2_APP_EXIT_${code}:${stderr}`));
-      });
-    });
+    }
+    ready = await readyPromise;
   } catch (error) {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await readyPromise.catch(() => {});
     throw error;
   }
   return {
@@ -335,6 +349,13 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
           'sentinelLock 必须由 victim 真实持有');
         assert.equal(Number(other.prepare('SELECT GET_LOCK(?,0) acquired').get(sentinelLock)?.acquired), 0,
           'victim 终止前 observer 不得取得 sentinelLock');
+        // observer 持有 unownedLock，victim 不持有。victim 对它执行
+        // RELEASE_LOCK 时，MySQL 必须返回 0（NOT_OWNER）。
+        const observerId = Number(other.prepare('SELECT CONNECTION_ID() id').get().id);
+        assert.equal(Number(other.prepare('SELECT GET_LOCK(?,0) acquired').get(unownedLock)?.acquired), 1,
+          'observer 必须成功持有 unownedLock');
+        assert.equal(Number(other.prepare('SELECT IS_USED_LOCK(?) owner').get(unownedLock)?.owner), observerId,
+          'unownedLock 的真实所有者必须是 observer');
         session._idempotencyLocks = new Set([unownedLock]);
         session._idempotencyLockEpoch = session.sessionEpoch;
         const release = releaseMySqlIdempotencyLocks(session);
@@ -361,7 +382,16 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
           '隔离不得意外创建新的业务会话',
         );
       } finally {
+        try {
+          const owner = Number(other.prepare('SELECT IS_USED_LOCK(?) owner').get(unownedLock)?.owner);
+          const observerId = Number(other.prepare('SELECT CONNECTION_ID() id').get()?.id);
+          if (owner === observerId) {
+            assert.equal(Number(other.prepare('SELECT RELEASE_LOCK(?) released').get(unownedLock)?.released), 1,
+              'observer 必须释放其持有的 unownedLock');
+          }
+        } finally {
         other.close();
+        }
       }
     } finally {
       try { session.close(); } catch { /* the adapter may already be terminated */ }

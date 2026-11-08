@@ -2707,6 +2707,19 @@ Gate 状态保持：`GATE_IMPLEMENTED` **达成**；`GATE_READY` **未达成（�
 
 Gate 状态不推进：`GATE_IMPLEMENTED` 已达成；`GATE_READY` 仍待 Owner 最终技术复核；`GATE_AUTHORIZED` / `GATE_ACCEPTED` 未达成；`GATE_EXECUTED = NOT_RUN`。`AUD-OUT-001` 仍为 `TESTED` / `PENDING_OWNER_APPROVAL`，未生成 ACK-4 Capability，未签发 Acceptance，真实 MySQL 与 RESET / BOOTSTRAP / CLEANUP 始终 `NOT_RUN`。
 
+### 45.15 OUT-001 MySQL Gate 最终两项精确修复（2026-11-09）
+
+本节只登记 Owner 最终复核指定的两项精确修复与离线证据；不改变 OUT-001 业务实现、PowerShell Launcher、Schema、Migration、`M1_CORE_MANIFEST` 或数据库权限。
+
+| 复核项 | 修复与证据 |
+|---|---|
+| Suite 后代退出证明 | `RUN_OUT001_HTTP_FIXTURES` 的两个 M2 App 在 ACK-4 children 目录下的受控 JSONL registry 持久登记 `runId + purpose + PID + process creation time`；Suite 的正常完成与 Root `stopChildren()` 统一调用同一退出核验。缺失、损坏、RunId 不符、进程查询失败或任一相同创建时间的 PID 仍存活都 fail closed。离线 A/B/C 用例分别证明「Suite 与两个登记后代均退出才允许 Cleanup」「Suite 父进程已退出但后代仍存活时 Cleanup 0 次并 quarantine」「缺失/损坏/错误 RunId 证据时 Cleanup 0 次并 quarantine」 |
+| M3 NOT_OWNER 因果 | observer 先真实取得 `unownedLock` 并以 `IS_USED_LOCK()` 确认 owner 为 observer connection id；victim 的本地集合只登记该锁，真实 `releaseMySqlIdempotencyLocks()` 因此得到 `NOT_OWNER` 并进入 quarantine。observer 在 `finally` 中只释放自己仍持有的 `unownedLock`；`sentinelLock` 继续由 victim 持有直至会话终止，未增加提前释放路径。真实 COMMIT 不确定性继续为 `NOT_PROVEN_ON_REAL_MYSQL` |
+
+本地验证（均未连接真实 MySQL）：Gate infrastructure **17/17 PASS**（退出码 0）；disposable target guard **10/10 PASS**（退出码 0）；OUT-001 SQLite focused **28/28 PASS**（退出码 0）；`server/mysql-out001.integration.js` 语法检查 PASS（退出码 0）；FAST **597/597 PASS**（退出码 0）；Build PASS（退出码 0）；Docs current N1/N3～N9 PASS、N2 `RETIRED`（退出码 0）；Docs migration C1～C6 PASS（退出码 0）；`git diff --check` PASS（退出码 0）。开发中的前两次 infrastructure 运行各退出 1：第一次暴露登记时序竞争，第二次暴露测试后代未 detached；修正离线夹具后最终 17/17。FULL 本轮不重跑；上一轮 **3380/3381**、唯一既有 Windows ACL `SetAccessControl` 失败的事实保持不变。
+
+Gate 状态不推进：`GATE_READY`、`GATE_AUTHORIZED`、`GATE_ACCEPTED` 均未签发；`GATE_EXECUTED = NOT_RUN`。`AUD-OUT-001` 仍为 `TESTED` / `PENDING_OWNER_APPROVAL`，未生成 ACK-4 Capability，未签发 Acceptance，真实 MySQL、MySQL integration 与 RESET / BOOTSTRAP / CLEANUP 始终 `NOT_RUN`。
+
 ### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
 
 以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：

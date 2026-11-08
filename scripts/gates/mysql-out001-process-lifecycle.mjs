@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { finished } from 'node:stream/promises';
 import { hasExited, waitForExit } from './m1-core-g07-child-lifecycle.mjs';
+import { verifyOut001DescendantsExited } from './mysql-out001-descendant-registry.mjs';
 
 export const OUT_001_CHILD_TIMEOUT_MS = Object.freeze({
   RESET_SCHEMA_PRE_RUN: 2 * 60_000,
@@ -130,9 +131,17 @@ export async function collectOut001Child(entry, {
   return outcome.code;
 }
 
-export async function ensureOut001ChildExited(entry, { terminate = terminateProcessTree } = {}) {
-  if (!hasExited(entry.child)) return terminate(entry.child);
-  return true;
+export async function ensureOut001ChildExited(entry, {
+  terminate = terminateProcessTree,
+  verifyDescendants = verifyOut001DescendantsExited,
+} = {}) {
+  if (!hasExited(entry.child)) {
+    const terminated = await terminate(entry.child);
+    if (!terminated || !hasExited(entry.child)) return false;
+  }
+  if (entry.operation !== 'RUN_OUT001_HTTP_FIXTURES') return true;
+  if (!entry.descendantRegistry) return false;
+  return verifyDescendants(entry.descendantRegistry);
 }
 
 export function parseOut001PostflightOutput(stdout) {

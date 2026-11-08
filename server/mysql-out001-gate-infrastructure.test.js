@@ -19,6 +19,10 @@ import {
 import {
   MYSQL_LOCAL_DISPOSABLE_TARGET, MYSQL_LOCAL_TARGET,
 } from '../scripts/gates/mysql-local-target-contract.mjs';
+import {
+  appendOut001DescendantRegistration, initializeOut001DescendantRegistry,
+  out001DescendantRegistryPath,
+} from '../scripts/gates/mysql-out001-descendant-registry.mjs';
 
 const commitSha = 'b'.repeat(40);
 const target = Object.freeze({
@@ -136,6 +140,42 @@ function quotePowerShellLiteral(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
 }
 
+function descendantEvidence(dir, runId, { initialize = true } = {}) {
+  const childLeasePath = join(dir, 'suite-0.lease.json');
+  writeFileSync(childLeasePath, '{}');
+  const registryPath = initialize
+    ? initializeOut001DescendantRegistry(dir, runId)
+    : out001DescendantRegistryPath(dir, runId);
+  return Object.freeze({ registryPath, childLeasePath, runId });
+}
+
+function spawnSuiteParent({ exitAfterChildren }) {
+  const childCode = "setInterval(()=>{},1000)";
+  const parentCode = [
+    "const { spawn } = require('node:child_process');",
+    `const a=spawn(process.execPath,['-e',${JSON.stringify(childCode)}],{stdio:'ignore',windowsHide:true,detached:true});`,
+    `const b=spawn(process.execPath,['-e',${JSON.stringify(childCode)}],{stdio:'ignore',windowsHide:true,detached:true});`,
+    'process.stdout.write(JSON.stringify({pids:[a.pid,b.pid]})+"\\n");',
+    exitAfterChildren
+      ? "let left=2;const done=()=>{left-=1;if(left===0)process.exit(0)};a.once('exit',done);b.once('exit',done);"
+      : "process.stdin.resume();process.stdin.once('data',()=>process.exit(0));",
+  ].join('');
+  return spawn(process.execPath, ['-e', parentCode], {
+    stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+  });
+}
+
+async function registerDescendants(evidence, pids) {
+  for (const pid of pids) {
+    await appendOut001DescendantRegistration({ ...evidence, pid });
+  }
+}
+
+function killTestProcessTree(pid) {
+  if (!processExists(pid)) return;
+  spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true });
+}
+
 describe('OUT-001 protected MySQL Gate infrastructure (offline)', () => {
   test('static preflight binds the fixed target, exact Manifest and fixed suite without opening MySQL', () => {
     const proof = assertOut001MySqlStaticPreflight({ target, environment: environment() });
@@ -177,6 +217,147 @@ describe('OUT-001 protected MySQL Gate infrastructure (offline)', () => {
     assert.doesNotMatch(runner, /markChildExited[^\n]+catch \{\}/);
     assert.match(launcher, /ProtectedData\]::Unprotect/);
     assert.match(launcher, /\$rootState -eq 'CLEANUP_UNVERIFIED'/);
+    assert.match(runner, /ERP_OUT_001_DESCENDANT_REGISTRY/);
+    assert.match(runner, /await ensureOut001ChildExited\(entry\)/);
+  });
+
+  test('A: exited Suite plus two registered exited M2 apps permits Root cleanup', {
+    skip: process.platform === 'win32' ? false : 'Windows-only descendant registry evidence',
+  }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'modern-erp-out001-descendants-ok-'));
+    const runId = '123e4567-e89b-42d3-a456-426614174030';
+    const evidence = descendantEvidence(dir, runId);
+    const suite = spawnSuiteParent({ exitAfterChildren: true });
+    let pids = [];
+    try {
+      pids = JSON.parse(await waitForLine(suite.stdout)).pids;
+      await registerDescendants(evidence, pids);
+      for (const pid of pids) killTestProcessTree(pid);
+      assert.equal(await collectOut001Child({
+        child: suite, mode: 'suite', operation: 'RUN_OUT001_HTTP_FIXTURES',
+      }, { timeoutMs: 5_000 }), 0);
+      const entry = { child: suite, operation: 'RUN_OUT001_HTTP_FIXTURES', descendantRegistry: evidence };
+      assert.equal(await ensureOut001ChildExited(entry), true,
+        'two registered apps with matching identities have exited');
+
+      const root = consumeSimulatedRoot(dir, runId);
+      const { calls, input } = lifecycleDependencies(root);
+      input.quarantineDir = join(dir, 'quarantine');
+      let registered;
+      input.runHttpFixtures = async (context) => {
+        calls.push('RUN_OUT001_HTTP_FIXTURES');
+        context.issueChild({ childPid: suite.pid, childStartedAt: 'suite-normal' });
+        registered = context;
+        return { passed: true };
+      };
+      input.stopChildren = async () => {
+        const exited = await ensureOut001ChildExited(entry);
+        if (exited) registered.markChildExited(suite.pid, 'suite-normal');
+        return exited;
+      };
+      const report = await runOut001MySqlLifecycle(input);
+      assert.equal(report.state, 'FINISHED');
+      assert.equal(report.childrenExited, true);
+      assert.equal(report.cleanupAttempts, 1);
+      assert.equal(report.cleanupProven, true);
+    } finally {
+      for (const pid of pids) killTestProcessTree(pid);
+      killTestProcessTree(suite.pid);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('B: exited Suite with registered live M2 descendant blocks cleanup and quarantines', {
+    skip: process.platform === 'win32' ? false : 'Windows-only descendant registry evidence',
+  }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'modern-erp-out001-descendants-live-'));
+    const runId = '123e4567-e89b-42d3-a456-426614174031';
+    const evidence = descendantEvidence(dir, runId);
+    const suite = spawnSuiteParent({ exitAfterChildren: false });
+    let pids = [];
+    try {
+      pids = JSON.parse(await waitForLine(suite.stdout)).pids;
+      await registerDescendants(evidence, pids);
+      suite.stdin.end('EXIT\n');
+      assert.equal(await collectOut001Child({
+        child: suite, mode: 'suite', operation: 'RUN_OUT001_HTTP_FIXTURES',
+      }, { timeoutMs: 5_000 }), 0);
+      assert.ok(pids.every(processExists), 'registered descendants must still be running after Suite exit');
+      const entry = { child: suite, operation: 'RUN_OUT001_HTTP_FIXTURES', descendantRegistry: evidence };
+      assert.equal(await ensureOut001ChildExited(entry), false,
+        'parent exit cannot bypass a matching live descendant identity');
+
+      const root = consumeSimulatedRoot(dir, runId);
+      const { calls, input } = lifecycleDependencies(root);
+      input.quarantineDir = join(dir, 'quarantine');
+      input.runHttpFixtures = async (context) => {
+        calls.push('RUN_OUT001_HTTP_FIXTURES');
+        context.issueChild({ childPid: suite.pid, childStartedAt: 'suite-live-descendant' });
+        return { passed: true };
+      };
+      input.stopChildren = async () => ensureOut001ChildExited(entry);
+      const report = await runOut001MySqlLifecycle(input);
+      assert.equal(report.state, 'CLEANUP_UNVERIFIED');
+      assert.equal(report.childrenExited, false);
+      assert.equal(report.cleanupAttempts, 0);
+      assert.equal(report.cleanupProven, false);
+      assert.ok(pids.every(processExists), 'read-only verification must not kill a live descendant');
+    } finally {
+      for (const pid of pids) killTestProcessTree(pid);
+      killTestProcessTree(suite.pid);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('C: missing, malformed or wrong-RunId descendant evidence fails closed', {
+    skip: process.platform === 'win32' ? false : 'Windows-only descendant registry evidence',
+  }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'modern-erp-out001-descendants-invalid-'));
+    const runId = '123e4567-e89b-42d3-a456-426614174032';
+    const suite = spawn(process.execPath, ['-e', ''], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    try {
+      await collectOut001Child({ child: suite, mode: 'suite', operation: 'RUN_OUT001_HTTP_FIXTURES' }, { timeoutMs: 5_000 });
+      const missing = descendantEvidence(dir, runId, { initialize: false });
+      assert.equal(await ensureOut001ChildExited({
+        child: suite, operation: 'RUN_OUT001_HTTP_FIXTURES', descendantRegistry: missing,
+      }), false);
+
+      const malformed = descendantEvidence(dir, runId);
+      writeFileSync(malformed.registryPath, '{not-json}\n');
+      assert.equal(await ensureOut001ChildExited({
+        child: suite, operation: 'RUN_OUT001_HTTP_FIXTURES', descendantRegistry: malformed,
+      }), false);
+
+      const wrongRunId = '123e4567-e89b-42d3-a456-426614174033';
+      const now = new Date().toISOString();
+      const wrongRecords = [41001, 41002].map((pid) => JSON.stringify({
+        version: 1, runId: wrongRunId, purpose: 'OUT001_M2_APP', pid,
+        processCreatedAt: now, registeredAt: now,
+      })).join('\n');
+      writeFileSync(malformed.registryPath, `${wrongRecords}\n`);
+      assert.equal(await ensureOut001ChildExited({
+        child: suite, operation: 'RUN_OUT001_HTTP_FIXTURES', descendantRegistry: malformed,
+      }), false);
+
+      const root = consumeSimulatedRoot(dir, runId);
+      const { calls, input } = lifecycleDependencies(root);
+      input.quarantineDir = join(dir, 'quarantine');
+      const invalidEntry = {
+        child: suite, operation: 'RUN_OUT001_HTTP_FIXTURES', descendantRegistry: malformed,
+      };
+      input.runHttpFixtures = async (context) => {
+        calls.push('RUN_OUT001_HTTP_FIXTURES');
+        context.issueChild({ childPid: suite.pid, childStartedAt: 'suite-invalid-registry' });
+        return { passed: true };
+      };
+      input.stopChildren = async () => ensureOut001ChildExited(invalidEntry);
+      const report = await runOut001MySqlLifecycle(input);
+      assert.equal(report.state, 'CLEANUP_UNVERIFIED');
+      assert.equal(report.childrenExited, false);
+      assert.equal(report.cleanupAttempts, 0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test('Windows taskkill confirms both parent and grandchild exit before reporting process-tree termination', {
