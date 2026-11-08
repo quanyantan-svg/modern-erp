@@ -1425,3 +1425,108 @@ Final verdict：`NOT READY`。后续修复必须继续遵守本节既有 source/
 **最小 additive migration 设计边界**：现有 `vmi_receipts` 无 `agreement_id`，`vmi_consumptions` 无业务幂等键；下一轮须先验证现有通用 `idempotencyReplay/requestFingerprint/saveIdempotency` 与 `vmi_receipts.idempotency_key UNIQUE` 的复用能力，再设计 Receipt 的 `agreement_id` 可空 FK/索引、Consumption 的命令键唯一约束（或复用通用幂等表），及业务日期/来源索引。历史行保持原值、不自动回填、不删除表；历史绑定不能证明时只读兼容、确认/消耗 fail closed。任何新增字段、唯一索引、锁策略均需独立 Schema/Migration 授权与 SQLite/MySQL 8 parity 验证，不在本轮执行。
 
 **幂等、权限、错误与验证**：沿现有 `VMI_VIEW/VMI_MANAGE` 后端门禁；管理者亦不得越过协议/库存/延期策略。Receipt 创建、确认与 Consumption 的外部 `Idempotency-Key` 按 operation + 业务对象作用域及规范化 payload 指纹记录：同键同负载精确重放原响应，同键异负载 409；内部库存 mutation key 固定于权威业务 ID。复用现有命名锁/事务释放合同，拒绝审计放在回滚后的单一边界；400 输入错误与 403 权限错误沿既有合同，协议不唯一/失效、余额不足、幂等冲突、历史不可证明为稳定 409 code。测试覆盖协议 0/1/多匹配、日期边界、历史 NULL 绑定、同键重放/异负载、重复确认、双并发超额、事务故障注入、owner 维度与库存/事实/审计快照、合法调整/退回汇总、VMI-05 零副作用；SQLite focused/full/heavy 与受保护 disposable MySQL 并发门禁按 §9/§10 执行。回滚仅撤销新代码与 additive 入口，保留已产生的业务事实；不得删除历史表或以回滚改写库存。
+
+#### 26.34.4 A1 Design Review Addendum — WIP 业务幂等与来源追溯（2026-11-08；PENDING_REVIEW）
+
+> **定位 / Owner / 状态**：本增补仅属于 `docs/design/procurement-outsourcing.md` §26.34 的待审 Design，Owner 为 Procurement & Outsourcing Domain Owner。依据 §31.14、Owner Decision §4.1 和 M1-Core Active Design §7/§9/§10。它细化 §26.34.2–§26.34.3，不形成第二份权威 Design，不变更 Requirement、已批准 M1-Core 7/7 Gate、`B-P01/B-P02`、`D-P01/D-P02`。`PENDING_REVIEW` 不等于 Design PASS、Implementation 或 Migration 授权。
+>
+> **代码核验锚点**：`master` @ `ba276d63d437a42d61b47763ed8d35bd9b3236d8`。`createWipTransfer()` 位于 `server/modules/outsourcing-finance.js`；现有转移表只把 `material_list_id` 写成目标行，不能独立保存源行；`outsourcing_wip_identity_effects` 已有 `TRANSFER_OUT` / `TRANSFER_IN`，`outsourcing_wip_identity_effect_allocations` 已有 `TRANSFER_ORIGIN`，但现有转移函数尚未使用。以下是**目标设计**，不得当作现有实现事实。
+
+##### 26.34.4.1 WIP Transfer 命令、幂等作用域与结果
+
+- 请求保持既有 `POST /api/procurement/outsourcing/wip-transfers`，在另行批准 Implementation 后要求外部 `Idempotency-Key`（非空、长度有界）；复用 `requestFingerprint()`、`idempotencyReplay()`、`saveIdempotency()`，**先验证**既有 MySQL 命名锁释放与事务所有权合同。无合法键返回 400，绝不生成 WIP 转移事实；改变请求合同需要本 Design 获业务所有者审批。
+- 规范化指纹必须包含 `sourceOrderId`、`targetOrderId`、`materialListId`（源行）、`quantity`（经 UOM/精度规范化）、`transferDate` 和任何最终获批的身份选择字段。作用域至少为 `(operationType='OUTSOURCING_WIP_TRANSFER', authoritative sourceOrderId, Idempotency-Key)`，还必须服从现有组织/租户与授权边界；不得跨主体查询或重放他人的响应。
+- 首次成功：201，返回稳定的 `id`、`transferNo`；相同作用域、相同 Key 和相同规范化载荷：采用项目现有**已批准**的重放约定返回原业务结果（如该调用约定为 200 + `replayed:true`，必须由合同测试固定），不新增转移记录、身份证据、库存、审计成功事实；同 Key 不同载荷：409 `OUTSOURCING_WIP_TRANSFER_IDEMPOTENCY_CONFLICT`，不写业务事实。**最终 HTTP replay 形式在 Implementation 前须与现有受批准接口风格核对，不得由 Agent 自行更改全局幂等合同。**
+- 幂等记录写入与 WIP 数量/身份效力、业务转移事实、成功审计必须在**同一业务事务**中完成。重试或中途失败不得产生半个转移；`transferNo` 使用稳定、冲突安全的生成方式，不能依赖毫秒时间戳作为唯一性证明。对于已进入 COMMIT 结果不确定状态的 MySQL 请求，不允许自动重新执行写入。
+
+##### 26.34.4.2 源/目标物料行与不可变来源证据
+
+- API 的 `materialListId` **表示源行**；数据库旧表 `outsourcing_wip_transfers.material_list_id` 在既有实现中**表示目标行**。这两个语义必须显式映射，不得直接将 API 字段覆盖为同一个数据库事实。
+- 源行按 `(id=materialListId, order_id=sourceOrderId)` 唯一核定；目标行按 `(order_id=targetOrderId, product_id=source.product_id)` 查询并检查候选数严格为 1；`get()`/`LIMIT 1` 不能证明唯一。还要验证产品、基础 UOM、同一供应商 WIP 物理位置、两订单状态、业务日期和权限，任何不一致均拒绝，不允许跨仓物理移动借用逻辑转移接口。
+- **最小 Schema 候选（单独授权）**：保留旧 `material_list_id` 对应目标行的历史语义，仅为 `outsourcing_wip_transfers` 新增 `source_material_list_id TEXT NULL`（可选 FK→`outsourcing_material_list.id`）与必要查询索引。所有新转移写入显式源行 ID，目标行仍写现有 `material_list_id`；二者在确认后不可普通修改。历史行的新增列保持 NULL，不根据订单+产品猜回填；历史来源不可证明时只读标 `SOURCE_UNVERIFIED`。新增列是否必需以及是否另建不可变来源关联，须完成 migration 评审再批准；不得在 Design Review 当下执行 DDL。
+- 转移事实能从 `transferId → sourceOrderId + sourceMaterialListId → targetOrderId + targetMaterialListId` 正向、反向追溯；源/目标 ID、数量、UOM、业务日期、身份效力来源、操作人和审计具有稳定关联。仅凭旧表里的 `source_order_id` + 目标产品作事后 JOIN 不算确定性证据。
+- 源行与目标行的 `legacy_unverified_wip_quantity` 只有在证明为已核验数据时才参与。`NULL` 表示未知，绝不 `COALESCE(...,0)` 后获得转移容量。不得仅因 `outsourcing_wip_identity_balances` 行数为 0 就认定历史 WIP 为合法可转移数量。
+
+##### 26.34.4.3 身份效力与允许路径
+
+- 第一实施候选仅评估**可证明的非跟踪产品**（`products.tracking_policy='NONE'`）、`identity_key='NONE'`、来源证明齐全、同一 Supplier WIP 物理位置不变且不存在成本携带的订单间**逻辑数量归属**。LOT/SERIAL、历史残差、身份政策冲突及成本/价值不可证明的路径继续 fail closed，不能因有迁移能力而放宽 `B-P01` 延期边界。
+- 对候选合法路径，不得只更新两条 `outsourcing_material_list.issued_quantity`。必须在同一事务内形成配对的 `TRANSFER_OUT`（源行 `CONSUME`）与 `TRANSFER_IN`（目标行 `SUPPLY`）身份效力，并以已有 `TRANSFER_ORIGIN` 分配和 `source_effect_id`（经过代码级契约核验后）串起可用源供给、源转出、目标转入。每笔供给被消费/转移的累计分配不得超过原供给；`Σ transfer_out = Σ transfer_in = requested quantity`。如现有 schema/消费者无法准确表达该链，不得伪造成功，应返回待裁定的 409 并回到 Design/Schema 审批。
+- 必须同时验证 `supplier_wip_remaining` 与 canonical WIP 身份账的数量。初始和最终两订单各自的身份可用量、`issued_quantity + supplemented_quantity - returned_quantity - backflushed_quantity` 的定义一致；组合总量守恒。物理库存 `inventory_positions/inventory_transactions/tracked_inventory_movements` **无新增数量移动**，企业所有权不变。目标行尚未拥有可核对的估值来源时，不得使下游成本携带/会计路径意外可执行。
+- `outsourcing_wip_identity_effects` 中的 `TRANSFER_IN/OUT` 已在 schema 声明，**不代表**实现或 Gate 已完成。当前 `recordSupply/recordConsumption` 是私有实现且主要服务物理发退倒冲；Implementation 应通过唯一规范 Owner 进行有界扩展，禁止复制第二套 ledger、绕过现有分配或更改已批准的物理腿写者。
+
+#### 26.34.5 A1 Design Review Addendum — WIP 事务、拒绝审计、并发与 Gate（PENDING_REVIEW）
+
+##### 26.34.5.1 事务算法和并发守恒
+
+1. 先完成认证和 `OUTSOURCING_MATERIAL_EXECUTE` 权限、有限长度输入格式校验；对业务源的任何查询/重放均不得绕过权限与组织范围。
+2. 使用当前 `transaction(db, work)` 原语：SQLite `BEGIN IMMEDIATE`；MySQL 按现有 L0 transaction gate 与命名锁/事务生命周期合同运行。在事务内确定性重读源/目标订单、物料行、产品跟踪策略、身份/供给分配、历史残差与日期/期间状态；不能沿用事务外余额作为写入依据。
+3. 对两订单同物料行执行**确定性锁顺序**或由既有 L0 gate 证明所有相关 Writer 串行化，并在更新中使用受影响行数/旧版本或余额条件校验（CAS）。减源、增目标、配对 effect / allocation、转移事实、幂等成功记录和审计同一原子提交。即使另一个请求已占用同一源余额，也不得发生超额或双花；若无法证明锁/条件写的双数据库语义，停止实施该路径。
+4. 失败必须回滚：两行 `issued_quantity`、身份余额、effect/allocations、转移表、幂等成功结果、库存/估值/AP/GL 等业务事实前后**逐字段不变**。拒绝审计采用已有 `auditBusinessRejection()`，仅在业务回滚后由**单一边界**记录一次；不可在事务内先写成功审计再试图保留它，也不能在 handler 和统一错误层重复记录。
+5. MySQL deadlock/timeout/ROLLBACK 不确定/COMMIT 结果不确定，必须按 `AGENTS.md` 与 `server/db.js` 已批准事务清理、隔离和重试合同处理；无证明不得将未知提交解释为失败可安全重试。任何新 Lock/DDL/跨域 Writer 影响须另审。
+
+##### 26.34.5.2 错误与审计约束（候选业务 code 须经 Design 批准）
+
+| 条件 | 目标行为 | 数据影响及审计 |
+|---|---|---|
+| 缺键、NaN/Infinity、0/负数、精度/UOM/日期格式非法 | 400 | 零业务写入；沿现有 400 审计约定 |
+| 未授权 / 跨授权范围 | 403 | 零业务写入；不得泄露别人的订单与余额 |
+| 源订单或源行确不存在 | 404 | 零业务写入；不扩大既有 404 审计义务 |
+| 多个目标候选、无效订单状态、同源同目标、不一致供应商 WIP 仓、关闭业务期间 | 409 + 具有稳定 code 的具体原因 | 零业务副作用；单次拒绝审计 |
+| 历史余额未证实 / 身份无法追溯 / LOT/SERIAL 或成本延期路径 | 409 + `OUTSOURCING_WIP_TRANSFER_SOURCE_UNVERIFIED` / `..._IDENTITY_UNSUPPORTED` / `..._COST_POLICY_PENDING`（按实际原因选择） | 零业务副作用；单次拒绝审计 |
+| 超额 / 并发败方 | 409 + `OUTSOURCING_WIP_TRANSFER_OVERDRAW` / `..._CONCURRENT_CONFLICT` | 零业务副作用；单次拒绝审计 |
+| 同 Key 异载荷 | 409 `OUTSOURCING_WIP_TRANSFER_IDEMPOTENCY_CONFLICT` | 不生成第二个转移/身份证据；单次拒绝审计 |
+| 首次合法转移 | 201 | 数量与身份成对守恒；恰好一条成功审计 |
+| 同 Key 同载荷重放 | 按已批准 replay 合同 | 精确重放结果，**不新增**成功或拒绝审计 |
+
+`HttpError` 的错误 code 只在 HTTP/API 层映射；内部事务失败不能伪装成业务成功或一律误转 409。原实现仅部分 409 走审计；正式修订必须覆盖全部**已明确属于业务门禁**的拒绝，而不得把 DB 连接异常也写成业务拒绝。
+
+##### 26.34.5.3 必须新增的 focused / race / parity 证据
+
+- **WIP 正向**：从有效、新建、可证明的 `NONE` WIP 供应中转出部分数量；源减少目标增加，物理库存 0 变化、成本 0 携带、身份 effect `TRANSFER_OUT/IN` 与分配链恰好对应；后续合法退料/倒冲不能消费已转走的源容量。
+- **WIP 幂等**：同 Key 同载荷首次创建与精确重放；同 Key 异载荷稳定冲突；不同 Key 同源竞争，合法总完成量不超过源初始余额；失败方单次拒绝审计。
+- **WIP 负向**：负数/0/非有限量、UOM 不符、SERIAL 非整数、跨仓、源目标相同、目标重复产品行、closed period、未 RELEASED/不允许的状态、历史 NULL 残差、LOT/SERIAL 未批准、缺失 identity supply、目标身份余额冲突；逐字段快照证明零业务副作用。
+- **WIP 并发**：真实 API 两连接同时各转相同源的相同/不同 Key；在 SQLite 和受保护 disposable MySQL 8 中验证最后可用量无负数、没有重复 effect、没有双扣/双加；通过人工同步屏障与故障注入验证失败回滚和 MySQL 不确定连接隔离，不得仅凭单线程 mock 宣称通过。
+- **兼容 Gate**：核验 M1C-G03/G06 已批准原行为未受破坏；新增测试仅扩大 A1 专项证据，不改写历史 7/7 PASS；Gate 是否需重审由 Owner 根据差异证据决定。旧 `201 || 409` 宽松断言必须改成按已批准允许/拒绝情形分别**固定结果**。
+
+#### 26.34.6 A1 Design Review Addendum — VMI 最小 Schema / Migration 边界（PENDING_REVIEW）
+
+##### 26.34.6.1 当前实体核验和最小增量候选
+
+| 对象 | master 现状 | 最小候选与门禁 |
+|---|---|---|
+| `vmi_agreements` | 已有 `supplier_id/warehouse_id/product_id/effective_from/effective_to/active` | **优先无新增业务字段**。有效协议必须按 supplier+warehouse+product+业务日期+active 严格唯一；时间区间重叠不能靠普通组合 UNIQUE 判定，须在事务中检测并发重叠。供应商资格仍 `OWNER_DECISION_PENDING`。 |
+| `vmi_receipts` | 已有 `idempotency_key UNIQUE`，**无** `agreement_id` | **候选唯一必要持久化变更**：加 `agreement_id TEXT NULL`（FK 指向 `vmi_agreements.id`，若两端 FK 迁移可证明安全）和关联查询索引；业务创建时为新行写入可验证的 Agreement ID，历史 NULL 保留。 |
+| `vmi_consumptions` | 已有 `vmi_receipt_id`，**无**外部业务幂等键字段 | 优先复用通用 `idempotency_records`，操作+Receipt+Key 作用域、payload fingerprint；仅当无法证明精确重放/跨进程并发时，才另提新增唯一键字段或索引的 Design/Migration 候选。 |
+| `outsourcing_wip_transfers` | 旧 `material_list_id` 存目标行，未存源行 | §26.34.4 的 `source_material_list_id TEXT NULL` 是**独立的 WIP migration 候选**，不能与 VMI `agreement_id` 混成一项自动授权。 |
+| `vmi_ownership_transfers` | 存在旧业务表 | **不新增、不激活、不回填**；VMI-05 继续 409，禁止物权、Bill、AP/GL 生效。 |
+
+**必须先做只读 preflight**：检查 SQLite 与 MySQL 8 当前表、列、FK、索引、旧业务状态/数量、历史 VMI Receipt 未绑定数量、Agreement 日期区间交叠数量、已存在重复/冲突幂等键、来源流水和 owner 位置完整性；输出可追溯计数和样本（不得含敏感凭证），不得自动修复。不能把开发环境空库的结论泛化为真实库。任何 Schema DDL 都必须在**单独明确授权**及备份/回滚方案后执行；本次只形成候选。
+
+##### 26.34.6.2 Agreement 绑定、幂等与历史策略
+
+- 新 Receipt 创建时：必须在事务内按 supplier/warehouse/product/receivedDate 找到**恰好一个**有效 Agreement；若请求显式 `agreementId`，仍要核对该 ID 与唯一有效候选一致。0 个、多个、已失效、不匹配均 409；不可 `LIMIT 1` 或根据列表排序隐式选主。确认时重读 `receipt.agreement_id` 与 Agreement，并在同一事务中重验绑定、状态 `PENDING`、owner 位置与日期，再调用 canonical `applyInventoryMutation()`。
+- 对有效期采用仓库规范的 `YYYY-MM-DD` 业务日期，不可默认 `created_at`；`effective_from`/`effective_to` 边界以及 active/inactive 的行为在用例中固定。Agreement 的资格基准如何定义、Agreement 到期后能否对已确认收货执行消费，均**不得**由 Agent 隐式裁定：如现有已批准合同不足，保持严格 fail closed，提交 Owner 决策；无需为未批准政策开发接口。
+- 外部 `Idempotency-Key` 覆盖 Receipt 创建、Receipt Confirm、Consumption；规范化指纹包括协议/Receipt ID、supplier/warehouse/product、quantity、业务日期及 operation-specific 字段。成功记录与业务事实同事务，内部库存 `VMI_RECEIPT:<stableReceiptId>` / `VMI_CONSUMPTION:<stableConsumptionId>` 保证固定来源键，不得每次重试新 UUID 造成双入/双扣。同 Key 同载荷精确 replay；异载荷 409；跨操作与跨权限边界不共享重放结果。
+- `vmi_receipts.idempotency_key UNIQUE` 不是 fingerprint/response replay 的替代品；`vmi_consumptions` 没键也不能以每次新 UUID 当作业务幂等。应先证明通用幂等表能覆盖 SQLite/MySQL 两路径，且同一个调用中命名锁与事务相容；无法证明就回到 Design，不用临时内存锁替代数据库证据。
+- 对历史 `agreement_id=NULL` 的 Receipt：只读兼容、带 `AGREEMENT_UNVERIFIED` 或等效明确标识；**不推定绑定、不自动更新状态、不补写库存**。对于历史 `CONSUMED/TRANSFERRED` 等状态，不将其当作 A1 正式结算或已批准 owner change。若历史 Receipt 无法明确归属，其后续 Confirm / Consumption 一律 fail closed。
+
+##### 26.34.6.3 Consumption 容量、汇总与迁移执行合同
+
+- Consumption 事务内同时核对：Receipt 为已确认、真实 Agreement 绑定可证、`receipt.quantity - confirmedConsumptions - sourceAttributedReturns/Adjustments >= requestedQty`，以及 canonical SUPPLIER 位置实际足额；**两个不变量必须同时成立**，不能用同供应商/产品/仓库的其他 Receipt 库存替代本 Receipt 的剩余容量。缺少可归属的退回/调整事实时 fail closed，不自动按 FIFO/比例回填。
+- 一次业务 Consumption 内先通过身份与源头检查，再原子写 canonical OUT 库存腿、VMI Consumption 事实、幂等成功记录和成功审计；失败回滚上述全部，拒绝审计在事务外单次持久化。同 Receipt 并发双请求必须经当前 SQLite/MySQL 事务门禁及累计守卫证明总消费不超额；不得要求另建第二套库存 Writer。
+- VMI-04 的 `Received - Consumed` 是**未调整毛余额**；若存在经证明的合法退回/调整，需显示可解释的调节差额以对账 canonical Supplier-owned 当前余额，不能谎称 `Received - Consumed` 无条件等于调整后位置余额。无法证明时返回显式不可核对状态，不伪造可用量；不得展示 `pendingSettlement/transferred` 或任何物权转移金额、自动应付。
+- Migration 候选须**新增而非重建**历史来源事实，`agreement_id` 历史默认 NULL；不得执行自动回填、硬删除旧状态或强行重写旧 VMI 移动记录。SQLite 与 MySQL 8 分别验证创建新库、升级现有库、重复运行、部分失败与重试（注意 MySQL DDL 可自动提交），验证 FK/索引/NULL/有效日期/unique 语义 parity。撤回应用代码时须保留所有已生效库存/业务事实；DDL 回滚需独立备份与受控计划，不能通过删除历史账来“恢复”。
+- 范围明确排除：新增 `vmi_enabled`、复杂补货算法、自动 ownership transfer、价格/税/结算/供应商账单、AP/GL、历史事实推断和其他产品范围 SCP。新资格字段如确有必要必须先回 Requirement/Owner Decision，不能在 Schema 设计中偷偷确定业务政策。
+
+#### 26.34.7 Review Gate、未决项与 HARD STOP（2026-11-08；PENDING_REVIEW）
+
+| Gate | 通过条件 | 当前结果 |
+|---|---|---|
+| `A1-D-RV-01` WIP 幂等与来源 | 确认 replay 响应、源/目标不可变证据和现有 WIP ledger effect 的一对一归属算法 | `PENDING_OWNER_REVIEW`（只形成设计候选） |
+| `A1-D-RV-02` WIP 安全并发 | 明确合法 `NONE` 路径、成本/LOT/SERIAL 延期与 400/403/404/409、拒绝审计、SQLite/MySQL race 断言 | `PENDING_OWNER_REVIEW` |
+| `A1-D-RV-03` VMI Schema | 优先复用通用幂等，仅最小 `agreement_id` 候选，历史 NULL fail closed、双端迁移 preflight/rollback | `PENDING_OWNER_REVIEW`；Schema/Migration 未授权 |
+| `A1-D-RV-04` 产品/外部政策 | VMI Supplier Eligibility 与 Agreement 到期后 Consumption 的业务政策须获 Owner 裁定；若需新字段先改 Requirement | `BLOCKED_ON_OWNER_DECISION` |
+
+**验收边界**：本增补仅为 **Design Review 修订候选**，不得自动把 §31.14 标为 `APPROVED`、把 §26.34 标为 `DESIGN_PASS`、把 `AUD-OUT-001` 标为已验证或将 B3101/B3121 变为 `COVERED`。M1-Core 七 Gate 的 7/7 PASS 继续仅对原范围有效；`D-P01/D-P02`、`B-P01/B-P02`、`SCP-01..10/12..15`、`M-15` 原状态不变。
+
+**未发生事项**：本轮没有修改 `docs/requirements/`、`document.md`、`server/`、`src/`、数据库 Schema/Migration、运行测试或 MySQL Gate，也没有提交、Push、Merge、Tag、Release、Deploy。Design Review 文本完成后 **HARD STOP**；接下来须由业务 Owner 明确批准 Requirement、此 Design Amendment、Implementation 范围，以及各个 Schema/Migration 的独立授权。A1-I1/I2 可在获得明确实施授权后优先单独推进；A1-I3/I4 不得绕开本表阻塞项。
