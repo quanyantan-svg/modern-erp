@@ -10,6 +10,16 @@ export const M1_CORE_MANIFEST = Object.freeze([
   'RUN_M1_HTTP_FIXTURES',
   'CLEANUP_SCHEMA_POST_RUN',
 ]);
+// OUT-001 (委外跨单 WIP 数量归属转移) 的独立 ACK-4 Manifest。M1_CORE_MANIFEST
+// 属于 M1-Core G07，不被本 Manifest 复用或修改；OUT-001 的操作范围只包含
+// 自身的一个 HTTP fixture 动作。
+export const OUT_001_MYSQL_MANIFEST_NAME = 'OUT_001_MYSQL_V1';
+export const OUT_001_MYSQL_MANIFEST = Object.freeze([
+  'RESET_SCHEMA_PRE_RUN',
+  'BOOTSTRAP_CURRENT_SCHEMA',
+  'RUN_OUT001_HTTP_FIXTURES',
+  'CLEANUP_SCHEMA_POST_RUN',
+]);
 export const ACK4_TERMINAL_STATES = Object.freeze(['FINISHED', 'FAILED', 'CLEANUP_UNVERIFIED']);
 export const ACK4_RECOVERY_MANIFEST = Object.freeze([
   'INSPECT_QUARANTINE',

@@ -88,6 +88,7 @@ const FULL = [
   'server/sales-customer-wave7-migration.test.js',
   'server/sales-gate-retry-admission.test.js',
   'server/mysql-disposable-target-guard.test.js',
+  'server/mysql-out001-gate-infrastructure.test.js',
   'scripts/mysql-sales-wave7-gate-a-runner.test.js',
   'scripts/mysql-sales-wave10-runners.test.js',
   // Transaction Lifecycle Safety — pure fault injection, no real MySQL.
@@ -762,6 +763,7 @@ const FAST = [
   // W7 F2 pure retry-admission parser and injected monotonic-clock contract.
   'server/sales-gate-retry-admission.test.js',
   'server/mysql-disposable-target-guard.test.js',
+  'server/mysql-out001-gate-infrastructure.test.js',
   'scripts/mysql-sales-wave7-gate-a-runner.test.js',
   // Wave 10 cross-dialect parity helpers — pure DDL parsing and comparison.
   'server/sales-customer-wave10-mysql-parity.test.js',

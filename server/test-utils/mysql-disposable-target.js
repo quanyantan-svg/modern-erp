@@ -5,6 +5,29 @@ const DISPOSABLE_NAME_HINT = /(?:test|phase7[abc]|disposable)/i;
 export const MYSQL_DESTRUCTIVE_OPERATIONS_ACK =
   'DROP_ALL_TABLES,RECREATE_SCHEMA,DROP_ALL_TABLES_ON_CLEANUP';
 
+/**
+ * The schema cleanup of a protected MySQL gate belongs to exactly one process:
+ * the Root's `CLEANUP_SCHEMA_POST_RUN` child. A test process that runs inside
+ * the gate may only close its own connection.
+ *
+ * `deferMySqlCleanup()` records that separation in the process that asks for a
+ * cleanup, so `resetAuthorizedDisposableMySqlSchema()` becomes a no-op there
+ * instead of dropping objects the Root still has to account for.
+ */
+let mysqlCleanupDeferral = null;
+
+export function deferMySqlCleanup(reason) {
+  mysqlCleanupDeferral = Object.freeze({
+    reason: String(reason || '').trim() || 'UNSPECIFIED',
+    deferredAt: new Date().toISOString(),
+  });
+  return mysqlCleanupDeferral;
+}
+
+export function mysqlCleanupDeferralState() {
+  return mysqlCleanupDeferral;
+}
+
 export function mysqlDisposableTargetIdentity(config) {
   const host = String(config?.host ?? '').trim();
   const port = Number(config?.port);
@@ -41,6 +64,21 @@ export function assertAuthorizedDisposableMySqlTarget(config, env = process.env)
 }
 
 export function resetAuthorizedDisposableMySqlSchema(db, config, env = process.env) {
+  // A protected gate assigns the schema cleanup to exactly one process: the
+  // Root's CLEANUP_SCHEMA_POST_RUN child. A test process that runs inside the
+  // gate may only close its own connection. `deferMySqlCleanup()` makes that
+  // separation enforceable instead of advisory: any schema cleanup requested
+  // from a deferred process is recorded and NOT executed.
+  const deferral = mysqlCleanupDeferralState();
+  if (deferral) {
+    return Object.freeze({
+      identity: mysqlDisposableTargetIdentity(config),
+      operations: MYSQL_DESTRUCTIVE_OPERATIONS_ACK,
+      dropped: 0,
+      deferred: true,
+      deferral,
+    });
+  }
   assertActivePortableChildOperation(['RESET_SCHEMA_PRE_RUN', 'CLEANUP_SCHEMA_POST_RUN']);
   const authorization = assertAuthorizedDisposableMySqlTarget(config, env);
   const actualDatabase = db.prepare('SELECT DATABASE() database_name').get()?.database_name;

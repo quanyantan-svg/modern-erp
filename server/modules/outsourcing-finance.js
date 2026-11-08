@@ -455,7 +455,9 @@ function buildWipTransferNo(businessDate) {
   return `WIP-XFER-${businessDate.replace(/-/g, '')}-${randomUUID().replace(/-/g, '').slice(0, 12).toUpperCase()}`;
 }
 
-function isWipTransferUniqueConstraintError(error) {
+// 唯一键冲突的识别器。导出是为了让受保护的 MySQL Gate 能用**真实**的
+// MySQL 重复键错误验证「冲突被映射为 409 而不是 500」这一契约。
+export function isWipTransferUniqueConstraintError(error) {
   if (!error) return false;
   if (error.code === 'SQLITE_CONSTRAINT_UNIQUE' || error.errno === 19) return true;
   if (error.code === 'ER_DUP_ENTRY' || error.errno === 1062) return true;

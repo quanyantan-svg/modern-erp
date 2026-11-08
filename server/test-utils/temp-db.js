@@ -20,7 +20,7 @@ import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDatabase } from '../db.js';
 import { resolveDatabaseConfig } from '../database/config.js';
-import { assertAuthorizedDisposableMySqlTarget, resetAuthorizedDisposableMySqlSchema } from './mysql-disposable-target.js';
+import { assertAuthorizedDisposableMySqlTarget, mysqlCleanupDeferralState, resetAuthorizedDisposableMySqlSchema } from './mysql-disposable-target.js';
 import { assertActivePortableChildOperation } from '../../scripts/gates/ack4/ack4-runtime.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -77,6 +77,13 @@ export function createTempDb({
   mysqlLifecycle = null,
 } = {}) {
   if (process.env.ERP_TEST_DB_BACKEND === 'mysql') {
+    // A protected gate assigns the bootstrap to exactly one child. A process
+    // that already runs inside such a gate must not bootstrap the schema a
+    // second time: that would execute DDL outside the approved operation
+    // scope. `deferMySqlCleanup()` marks that state.
+    if (mysqlCleanupDeferralState()) {
+      throw new Error('TEMP DB: createTempDb must not bootstrap inside an already-bootstrapped protected gate');
+    }
     assertActivePortableChildOperation(['BOOTSTRAP_CURRENT_SCHEMA', 'RUN_M1_HTTP_FIXTURES', 'CLEANUP_SCHEMA_POST_RUN']);
     const config = resolveDatabaseConfig({ backend: 'mysql' });
     if (mysqlLifecycle) mysqlLifecycle.beforeCreate(config);

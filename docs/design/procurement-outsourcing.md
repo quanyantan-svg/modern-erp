@@ -1968,3 +1968,50 @@ C2 与 C4 合起来表达「原始供给 → 源转出 → 目标转入」的完
 - `M1C-G03` / `M1C-G06` 既有 7/7 `PASS` 及其范围、`B-P01` / `B-P02`、`D-P01` / `D-P02`、`M-15`、`SCP-01` ～ `SCP-16`、`PRC-06` 与 B3101 / B3121 状态**全部不变**。
 - 本轮**未**授权真实 MySQL Gate：不得运行、不得声称 PASS；`FULL` 回归若未完成须记录 `NOT_RUN`；旧功能 UAT 的既有失败**不得**改写为 PASS。
 - **HARD STOP**：两批 Implementation 完成后停止，等待 Owner 技术复核与真实 MySQL Gate 授权；不得 Push / Merge / Tag / Release / Deploy。
+
+#### 26.34.16 OUT-001 受保护真实 MySQL 8 Gate 范围登记（2026-11-08；GATE_IMPLEMENTED）
+
+> **定位 / Owner / 状态**：本小节属于 `docs/design/procurement-outsourcing.md` §26.34，Owner 为 Procurement & Outsourcing Domain Owner。本小节只登记 **Gate 的范围与状态**，**不**执行 Gate，**不**签发任何 Acceptance。
+
+##### 26.34.16.1 ACK-4 Manifest 与操作范围
+
+OUT-001 使用**独立**的 ACK-4 Manifest `OUT_001_MYSQL_V1`，操作范围固定为四项：
+
+| # | 操作 | 归属进程 | 说明 |
+|---|---|---|---|
+| 1 | `RESET_SCHEMA_PRE_RUN` | Root 的 operation 子进程 | 清空一次性目标；执行前必须有已消费的 ACK-4 Lease |
+| 2 | `BOOTSTRAP_CURRENT_SCHEMA` | Root 的 operation 子进程 | 建立当前 Schema；**唯一**允许执行 DDL 的位置 |
+| 3 | `RUN_OUT001_HTTP_FIXTURES` | Root 的 suite 子进程 | 运行固定套件 `server/mysql-out001.integration.js`；不接受任意传入脚本 |
+| 4 | `CLEANUP_SCHEMA_POST_RUN` | Root 的 operation 子进程 | 清理 Schema；**唯一**有权 DROP 的位置 |
+
+`M1_CORE_MANIFEST` 属于 M1-Core G07，**未被修改**，也未被本 Manifest 复用。OUT-001 不复用任何被 `blockUnmigratedAck4Entry` 阻断的旧入口。
+
+##### 26.34.16.2 目标绑定与清理权责
+
+- 目标必须精确绑定到那一个已批准的本地一次性 MySQL 8 目标（host / port / database / user），并核对 `server UUID`、`CURRENT_USER()`、有效授权的 SHA-256 指纹与 MySQL 8 版本；初始对象必须为空。
+- 口令只经 DPAPI 在进程内解密，**不落盘、不入日志、不上命令行**。
+- **Schema 清理只有一个归属进程**：Root 的 `CLEANUP_SCHEMA_POST_RUN` 子进程。测试进程只关闭自己的连接；`deferMySqlCleanup()` 把来自测试进程的清理请求变成「已延期」而不是执行。
+- 全部 schema 清理失败 → ACK-4 终态 `CLEANUP_UNVERIFIED` → 写入 quarantine 标记；恢复需要**新的** ACK-4 批准。
+- 收尾由**独立**的只读 postflight 核验五类数据库对象（tables / views / triggers / routines / events）为零。
+
+##### 26.34.16.3 M1～M5 证据范围与已知不可达项
+
+| # | 待证项 | 本 Gate 的证明方式 | 当前状态 |
+|---|---|---|---|
+| M1 | 命名锁获取 / COMMIT-ROLLBACK 释放 / 第二会话重新获取 | 两个**独立** MySQL 会话上的 `GET_LOCK` / `RELEASE_LOCK`；并证明应用自身的幂等命名锁在请求进行中被持有、在请求结束后被释放 | GATE_IMPLEMENTED（**未执行**） |
+| M2 | 不同 Key、同源并发 | 两个**独立**应用进程（两个独立 MySQL 会话）+ `mysql_transaction_gates` 全局门禁作确定性屏障，逐个观察门禁等待者 | GATE_IMPLEMENTED（**未执行**） |
+| M3 | COMMIT 不确定 / 会话终止 / R1–R5 | 真实 MySQL 上可判定：会话状态机、锁释放未确认 → 隔离 → `TERMINATION_CONFIRMED`。**真实**的「COMMIT 结果未知」需要以更高权限在提交中途 `KILL CONNECTION`；一次性 least-privilege 账户刻意没有该权限，因此该子项以仓库自带 recovery worker 夹具证明**代码路径**，并在报告中显式标注**未在真实 MySQL 上证明** | GATE_IMPLEMENTED（**未执行**；真实不确定 COMMIT = `NOT_PROVEN_ON_REAL_MYSQL`） |
+| M4 | CHECK / UNIQUE / FK / SQLite-MySQL Schema Parity | 真实 MySQL 上逐条触发并断言**具体**约束错误；双端 Parity 复用仓库既有 `compareTableParity` 比较器 | GATE_IMPLEMENTED（**未执行**） |
+| M5 | `transfer_no` UNIQUE 冲突映射 | 真实 MySQL 重复键错误 + handler 分类器断言（映射为 409 `OUTSOURCING_WIP_TRANSFER_NO_CONFLICT`，不得暴露 500） | GATE_IMPLEMENTED（**未执行**） |
+
+##### 26.34.16.4 Gate 状态词汇（不得混用）
+
+| 状态 | 含义 | 当前 |
+|---|---|---|
+| `GATE_IMPLEMENTED` | Gate 的代码、Manifest、子进程与测试已存在并进入仓库 | **本轮达成** |
+| `GATE_READY` | Gate 的代码与合同已就绪，可被授权执行 | **未达成**（待 Owner 技术复核） |
+| `GATE_AUTHORIZED` | Owner 已就**这一次**目标签发 ACK-4 能力 | **未达成** |
+| `GATE_EXECUTED` | Gate 对真实 MySQL 实际跑过一次并留下终态 | **未达成**（本轮 `NOT_RUN`） |
+| `GATE_ACCEPTED` | Owner 依据执行证据接受该 Gate 的结论 | **未达成** |
+
+本轮**不**执行真实 MySQL Gate，**不**手动设置破坏性环境变量，**不**执行 Migration / DDL，**不**连接生产数据库，**不**创建 ACK-4 Capability，**不**签发 OUT-001 Acceptance。

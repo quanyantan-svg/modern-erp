@@ -2643,10 +2643,37 @@ I3a-S 先实施并独立提交；I3a-S 的验收断言**只能是**固定拒绝�
 | # | 待验项 | 说明 |
 |---|---|---|
 | M1 | **命名锁** | `idempotencyReplay()` 的 MySQL 命名锁在「未命中即持锁 → 事务提交 / 回滚 → `releaseMySqlIdempotencyLocks()` 确认释放」全链路上不产生 `LOCK_ABSENT` / 未确认释放 / 连接隔离 |
-| M2 | **不同 Key 并发** | 不同幂等键的同源并发转移在 MySQL 行锁下的败方 code（SQLite 本地因事务串行化表现为 `OUTSOURCING_WIP_TRANSFER_OVERDRAW`，MySQL 行锁下应表现为 `OUTSOURCING_WIP_TRANSFER_CONCURRENT_CONFLICT`），最终可用量不为负、无双写、无重复 effect |
+| M2 | **不同 Key 并发** | 不同幂等键的同源并发转移的败方 code。**2026-11-08 源码复核更正**：真实 MySQL 与 SQLite 的败方**同为** `OUTSOURCING_WIP_TRANSFER_OVERDRAW` —— `server/db.js` 的 `transaction()` 在 MySQL 下先取得 `mysql_transaction_gates` 全局行锁（`SELECT gate_id FROM mysql_transaction_gates WHERE gate_id=1 FOR UPDATE`）并持有到 COMMIT/ROLLBACK，因此两个不同 Key 的转移**根本不会交错**：败方在事务内重读到已被扣减的余额，按超额拒绝。`OUTSOURCING_WIP_TRANSFER_CONCURRENT_CONFLICT`（CAS 受影响行数守卫）在当前全局门禁下**不可达**，只作为纵深防御存在。待验项据此收敛为：败方固定 409 `OUTSOURCING_WIP_TRANSFER_OVERDRAW`、最终可用量不为负、无双写、无重复 effect |
 | M3 | **COMMIT 不确定** | `transaction()` 的不确定 COMMIT 路径（`mysqlRequestTimeout` / `sessionLost`）不自动重试写操作、不产生第二笔转移事实；§26.34.14.3 的 R1～R5 恢复条件在真实会话终止 / epoch 变化证据下可判定 |
 | M4 | **CHECK / UNIQUE / FK** | `outsourcing_wip_identity_effects` / `..._effect_allocations` / `..._identity_balances` 在 MySQL 8 下的 CHECK（`available_quantity = supplied − consumed`、`available_quantity >= 0`）、UNIQUE（`event_type, business_event_id, business_event_item_id, identity_key`；`effect_id, source_supply_effect_id, allocation_kind`；`transfer_no`）与 FK 语义与 SQLite 等价 |
 | M5 | **编号碰撞** | `transferNo`（`WIP-XFER-<业务日期>-<12 位十六进制>`，48 位熵）在 MySQL 并发下的 `UNIQUE` 冲突路径确实映射为 409 `OUTSOURCING_WIP_TRANSFER_NO_CONFLICT`，而不是 500 |
+
+### 45.12 OUT-001 受保护真实 MySQL 8 Gate 范围登记（2026-11-08）
+
+本节登记 Gate 的**范围与状态**。权威 Design 见 [`docs/design/procurement-outsourcing.md`](../design/procurement-outsourcing.md) §26.34.16。**本轮未执行真实 MySQL Gate。**
+
+| 项 | 内容 |
+|---|---|
+| ACK-4 Manifest | 独立 Manifest **`OUT_001_MYSQL_V1`**，操作范围 `RESET_SCHEMA_PRE_RUN` → `BOOTSTRAP_CURRENT_SCHEMA` → `RUN_OUT001_HTTP_FIXTURES` → `CLEANUP_SCHEMA_POST_RUN`。`M1_CORE_MANIFEST` **未被修改**、未被复用；不复用被 `blockUnmigratedAck4Entry` 阻断的旧入口 |
+| Gate 文件 | `scripts/gates/mysql-out001-gate.mjs`（Root）、`scripts/gates/mysql-out001-child.mjs`（Child）、`scripts/gates/mysql-out001-root-lifecycle.mjs`（Root 生命周期）、`scripts/gates/mysql-out001-static-preflight.mjs`（静态前置）、`scripts/gates/run-out001-mysql-gate.ps1`（launcher）、`package.json` 的 `test:mysql:out001` |
+| 复用 | `scripts/gates/ack4/ack4-runtime.mjs`（ACK-4 运行时）、`scripts/gates/mysql-local-target-contract.mjs`（固定目标合同）、`server/test-utils/mysql-wave10-campaign-target.js`（身份 / 授权 / 对象清单）、`server/test-utils/mysql-disposable-target.js`（一次性目标守卫）、`server/test-utils/m1-core-g07-lock-wait.js`（确定性门禁屏障）、`server/test-utils/m1-core-schema-parity.js`（双端 Parity 比较器） |
+| 目标绑定 | 固定一次性 MySQL 8 目标；核对 `server UUID`、`CURRENT_USER()`、有效授权 SHA-256 指纹、MySQL 8 版本；初始对象必须为空；DPAPI 口令不落盘；独占命名 Mutex；ACK-4 单次消费 + 精确 SHA / Manifest / Target；Child 只执行被签名 Lease 授权的操作；清理失败 → quarantine；收尾由独立只读 postflight 核验五类对象为零；launcher **不接受**任何脚本参数 |
+| 清理权责 | Schema 清理只属于 Root 的 `CLEANUP_SCHEMA_POST_RUN` 子进程。测试进程只关闭自己的连接：`deferMySqlCleanup()`（`server/test-utils/mysql-disposable-target.js`）把来自测试进程的清理请求变成「已延期」；`server/test-support/procurement-http-fixture.js` 新增 MySQL 分支，只打开**已 bootstrap** 的会话（不调用 `createDatabase()`，不执行 DDL） |
+| M1–M5 | 见 §26.34.16.3。M2 的败方 code 已按 §45.11 更正为 `OUTSOURCING_WIP_TRANSFER_OVERDRAW`；M3 的**真实**不确定 COMMIT 在一次性 least-privilege 账户下不可达（缺 `CONNECTION_ADMIN`），该子项在 Gate 中显式标注 `NOT_PROVEN_ON_REAL_MYSQL` |
+| 28 项 focused 的 MySQL 版本 | `server/mysql-out001.integration.js` 直接复用 `server/outsourcing-wip-transfer.test.js`（21 项）与 `server/outsourcing-finance.test.js`（7 项）；两个文件按后端选择夹具，因此 MySQL 跑的是**同一批断言** |
+| 本地离线验证 | `server/mysql-out001-gate-infrastructure.test.js` + `mysql-disposable-target-guard.test.js` 新增用例：11/11 PASS；OUT-001 focused SQLite：28/28 PASS；专属集成入口在非 MySQL 环境：28 PASS + M1～M5 六项显式 SKIP；FAST：581/581 PASS；FULL：3371/3372，唯一失败为既有 Windows ACL `SetAccessControl` 沙箱拒绝，故 FULL **FAIL**、不得记为 PASS；Build PASS；Docs migration C1～C6 PASS；`git diff --check` PASS。真实 MySQL Gate 仍为 `NOT_RUN` |
+
+**Gate 状态词汇（严格区分，不得混用）**：
+
+| 状态 | 含义 | 当前 |
+|---|---|---|
+| `GATE_IMPLEMENTED` | Gate 代码、Manifest、子进程与测试已入仓 | **达成** |
+| `GATE_READY` | 代码与合同就绪，可被授权执行 | **未达成**（待 Owner 技术复核） |
+| `GATE_AUTHORIZED` | Owner 已就这一次目标签发 ACK-4 能力 | **未达成** |
+| `GATE_EXECUTED` | 对真实 MySQL 实际跑过一次并留下终态 | **未达成**（本轮 `NOT_RUN`） |
+| `GATE_ACCEPTED` | Owner 依据执行证据接受该 Gate 结论 | **未达成** |
+
+**本节明确不改变的**：`AUD-OUT-001` 仍为 `TESTED` / `PENDING_OWNER_APPROVAL`；**未**签发 OUT-001 Acceptance、Domain Acceptance、Capability Freeze 或 Release；§31.14 / §26.34 的整体状态不变；`A1-D-RV-01`～`A1-D-RV-04` 不变；M1-Core 七 Gate、`B-P01`/`B-P02`、`D-P01`/`D-P02`、VMI、`PRC-06`、B3101 / B3121 原状态不变。本轮**未**执行真实 MySQL Gate、**未**手动设置破坏性环境变量、**未**执行 Migration / DDL、**未**连接生产数据库、**未**创建 ACK-4 Capability、**未**触碰 VMI / PRC-005 / PRC-006 或任何其它审计 Issue、**未** Merge / Tag / Release / Deploy。
 
 ### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
 
@@ -2654,7 +2681,7 @@ I3a-S 先实施并独立提交；I3a-S 的验收断言**只能是**固定拒绝�
 
 1. `idempotencyReplay()` 的 **MySQL 命名锁**在「未命中即持锁 → 事务提交/回滚 → `releaseMySqlIdempotencyLocks()` 确认释放」全链路上不产生 `LOCK_ABSENT` / 未确认释放 / 连接隔离。
 2. `transaction()` 的 **COMMIT 不确定**路径（`mysqlRequestTimeout` / `sessionLost`）下不自动重试写操作，且不产生第二笔转移事实；§26.34.14.3 的 R1～R5 恢复条件在真实会话终止 / epoch 变化证据下可判定。
-3. **CAS 并发**：不同幂等键的同源并发转移在 MySQL 行锁下，败方走 `OUTSOURCING_WIP_TRANSFER_CONCURRENT_CONFLICT`（SQLite 本地路径因事务串行化而表现为 `OUTSOURCING_WIP_TRANSFER_OVERDRAW`），最终可用量不为负、无双写、无重复 effect。
+3. **CAS 并发**：不同幂等键的同源并发转移在 MySQL 下同样被 `mysql_transaction_gates` 全局行锁串行化，败方与 SQLite 一致走 `OUTSOURCING_WIP_TRANSFER_OVERDRAW`（**2026-11-08 源码复核更正**，此前登记的 `..._CONCURRENT_CONFLICT` 预期不成立——该 CAS 守卫在全局门禁下不可达），最终可用量不为负、无双写、无重复 effect。
 4. `outsourcing_wip_identity_effects` / `..._effect_allocations` / `..._identity_balances` 在 **MySQL 8** 下的 CHECK / UNIQUE / FK 语义与 SQLite 等价（含 `available_quantity = supplied − consumed`、`available_quantity >= 0`、`UNIQUE(event_type, business_event_id, business_event_item_id, identity_key)`、`UNIQUE(effect_id, source_supply_effect_id, allocation_kind)`）。
 5. `transfer_no` 的 **UNIQUE 冲突**在 MySQL 下映射为 `OUTSOURCING_WIP_TRANSFER_NO_CONFLICT`（而非 500）。
 6. MySQL 与 SQLite 的 **Schema parity**（本次未新增 DDL，故只验证既有表的列 / 约束 / 索引一致性）。

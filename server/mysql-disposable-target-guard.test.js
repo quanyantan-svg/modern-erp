@@ -8,6 +8,8 @@ import { consumePortableChildLease, issuePortableChildLease } from '../scripts/g
 import {
   MYSQL_DESTRUCTIVE_OPERATIONS_ACK,
   assertAuthorizedDisposableMySqlTarget,
+  deferMySqlCleanup,
+  mysqlCleanupDeferralState,
   mysqlDisposableTargetIdentity,
   resetAuthorizedDisposableMySqlSchema,
 } from './test-utils/mysql-disposable-target.js';
@@ -122,4 +124,17 @@ test('Gate A schema reset refuses a connected database mismatch before destructi
   };
   assert.throws(() => resetAuthorizedDisposableMySqlSchema(db, config, authorized), /SELECT DATABASE/);
   assert.equal(executed, false);
+});
+
+test('protected fixture can defer schema cleanup to the Root without touching the database', () => {
+  const deferral = deferMySqlCleanup('unit test: root owns cleanup');
+  const db = {
+    prepare() { throw new Error('deferred cleanup must not query the database'); },
+    exec() { throw new Error('deferred cleanup must not execute SQL'); },
+  };
+  const result = resetAuthorizedDisposableMySqlSchema(db, config, authorized);
+  assert.equal(result.deferred, true);
+  assert.equal(result.dropped, 0);
+  assert.equal(result.deferral, deferral);
+  assert.equal(mysqlCleanupDeferralState(), deferral);
 });

@@ -7,6 +7,9 @@ import { createApp } from '../app.js';
 import { createDatabase } from '../db.js';
 
 export async function createProcurementFixture(prefix) {
+  if (process.env.ERP_TEST_DB_BACKEND === 'mysql') {
+    return createMySqlProcurementFixture(prefix);
+  }
   const tempDir = mkdtempSync(join(tmpdir(), prefix));
   const db = createDatabase(join(tempDir, 'erp.db'));
   const server = createServer(createApp(db, { distDir: resolve('dist') }));
@@ -47,6 +50,69 @@ export async function createProcurementFixture(prefix) {
     await new Promise((done, reject) => server.close((error) => error ? reject(error) : done()));
     db.close();
     rmSync(tempDir, { recursive: true, force: true });
+  }
+
+  return { db, baseUrl, request, tokens, close };
+}
+
+/**
+ * The MySQL path of the procurement HTTP fixture.
+ *
+ * Inside a protected MySQL gate the schema is **already bootstrapped** by the
+ * Root's BOOTSTRAP_CURRENT_SCHEMA child, so this process must never call
+ * `createDatabase()` (that would re-run the migration/DDL chain outside the
+ * approved operation scope) and must never drop the schema either — the
+ * Root's CLEANUP_SCHEMA_POST_RUN child owns that. The fixture therefore opens
+ * the identity-pinned existing session and, on close, only closes its own
+ * connection.
+ */
+async function createMySqlProcurementFixture(prefix) {
+  const { openOut001MySqlAdapter, deferMySqlCleanup } = await import('../test-utils/mysql-out001-target.js');
+  const targetProofPath = String(process.env.ERP_OUT_001_TARGET_PROOF || '').trim();
+  if (!targetProofPath) {
+    throw new Error('PROCUREMENT FIXTURE: ERP_OUT_001_TARGET_PROOF is required on the MySQL path');
+  }
+  deferMySqlCleanup(`OUT-001 MySQL gate (${prefix}): the schema cleanup belongs to the Root CLEANUP_SCHEMA_POST_RUN child`);
+  const { db } = openOut001MySqlAdapter({ targetProofPath });
+  const server = createServer(createApp(db, { distDir: resolve('dist') }));
+  await new Promise((done) => server.listen(0, '127.0.0.1', done));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  async function request(method, path, token = null, body, extraHeaders = {}) {
+    const response = await fetch(baseUrl + path, {
+      method,
+      headers: {
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...extraHeaders,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const data = await response.json().catch(() => ({}));
+    return { status: response.status, data };
+  }
+
+  async function login(username, password) {
+    const result = await request('POST', '/api/auth/login', null, { username, password });
+    assert.equal(result.status, 200, result.data.error);
+    return result.data.token;
+  }
+
+  const tokens = {
+    admin: await login('admin', 'admin123'),
+    sales: await login('sales', 'sales123'),
+    reviewer: await login('reviewer', 'review123'),
+    warehouse: await login('warehouse', 'warehouse123'),
+    accounting: await login('accounting', 'accounting123'),
+    outsourcing: await login('outsourcing', 'outsourcing123'),
+    outsourcingReceiving: await login('outsourcingreceiving', 'outsourcingreceiving123'),
+  };
+
+  async function close() {
+    await new Promise((done, reject) => server.close((error) => error ? reject(error) : done()));
+    // Only this process's own connection is closed. The schema stays exactly
+    // as the Root's cleanup child has to find it.
+    db.close();
   }
 
   return { db, baseUrl, request, tokens, close };
