@@ -2369,6 +2369,94 @@ B3101_B3121_PRODUCT_SCOPE_REVIEW_PROPOSED
 
 focused 5/5、FAST 576/576、构建与响应式浏览器回归 24/24 通过；`git diff --check` 通过。旧功能 UAT 仅 UAT-04 的新合同检查通过，全套 15/28，不能记为 PASS；FULL 回归未完成，停止前遇到既有 G07 诊断测试权限失败。`AUD-PRC-002`、`AUD-OUT-001`、VMI、M1-Core 七 Gate 与 R-01～R-20 均不因本轮变化；B3101/B3121 仍 `BLOCKED`，Capability Matrix 未更新。无 Migration、真实数据库或远端 Git 写入。
 
+## 43. Package A1 Design 小修与两项独立 Acceptance 候签（2026-11-08）
+
+```text
+A1_DESIGN_AMENDMENT_AND_ACCEPTANCE_CANDIDATES_READY_FOR_OWNER_REVIEW
+```
+
+### 43.1 本节定位与边界
+
+本节是 Package A1 本轮（2026-11-08）的**唯一增量登记**。
+
+- 本节**不修改、不删除、不重排** §35～§42 的任何历史结论；凡与其冲突，按**日期化 supersession** 处理。
+- 本节**不是** Acceptance，**不签发**任何 Acceptance / Freeze / `DESIGN_PASS` 标识，**不授权**任何 Implementation、Schema / Migration、数据库操作或真实 MySQL Gate。
+- 本轮**零生产代码变更**：`server/`、`src/`、`scripts/` 零改动；**未**修改数据库 Schema / Migration，**未**执行 Migration、Reset、Bootstrap、Cleanup 或数据库写入，**未**连接真实 MySQL。
+- 本节编号为 **§43**，按既有「H2 = 日期化顶层章节」规则**追加**在 §42 之后；历史编号未重排。
+
+### 43.2 Design 小修（`docs/design/procurement-outsourcing.md` §26.34.8～§26.34.12）
+
+| 小修 | 落点 | 合同要点 |
+|---|---|---|
+| WIP 幂等合同 | §26.34.8 | 幂等键唯一来源为 `body.idempotencyKey`；固定 `operationType='OUTSOURCING_WIP_TRANSFER'`、`documentId=sourceOrderId`；复用 `requestFingerprint()` / `idempotencyReplay()` / `saveIdempotency()`；固定响应：首次 201 `{id,transferNo}`、同 Key 同内容 201 `{id,transferNo,replayed:true}`、同 Key 异内容 409 `OUTSOURCING_WIP_TRANSFER_IDEMPOTENCY_CONFLICT`、缺键 400 `IDEMPOTENCY_KEY_REQUIRED`；指纹覆盖源/目标订单、源物料行、规范化数量、UOM、业务日期与身份选择字段；幂等记录、转移事实、数量效力、身份效力与成功审计**同一事务**提交；精确重放不新增业务事实或成功审计 |
+| MySQL 命名锁释放 | §26.34.9 | **只核对不修改** `server/db.js`：未命中即持锁、`transaction()` 正常 COMMIT/ROLLBACK 后释放、BEGIN 启动失败由 `settleFailedTransactionStart()` 默认释放、`assertMySqlTransactionAdmission()` 位于 `transaction()` 内部 `try` 之前故调用方必须提供外层 `try/finally` 释放保障、复用 `releaseMySqlIdempotencyLocks(db)`、禁止直接执行 `RELEASE_LOCK()` 绕过公共合同、未确认释放遵循既有连接隔离机制、不确定 COMMIT 不得自动重试写操作、业务拒绝必须在事务回滚后由单一边界审计 |
+| VMI 幂等合同 | §26.34.10 | 三个独立 `operationType`：`VMI_RECEIPT_CREATE`（作用域 `create-request:${idempotencyKey}`）、`VMI_RECEIPT_CONFIRM`（`receiptId`）、`VMI_CONSUMPTION_CREATE`（`receiptId`）；统一 `body.idempotencyKey`；三条规范化指纹字段集已固定；固定响应：Receipt Create 201 / 精确重放 201 + `replayed:true`、Receipt Confirm 200 `{ok:true}` / 精确重放 200 `{ok:true,replayed:true}`、Consumption Create 201 `{id,consumptionNo}` / 精确重放原结果 + `replayed:true`、同 Key 异载荷 409 `VMI_IDEMPOTENCY_KEY_PAYLOAD_CONFLICT`、缺键 400 `IDEMPOTENCY_KEY_REQUIRED`；成功事实、库存 mutation 与幂等记录同事务提交；精确重放不新增库存变化与成功审计 |
+| VMI 旧字段兼容 | §26.34.11 | 保留 `vmi_receipts.idempotency_key` 与既有 UNIQUE 约束，新 Receipt 继续写入该列；通用 `idempotency_records` 为新请求的**权威重放记录**；通用记录未命中时必须核对旧字段，重建可证明的规范化指纹：完全匹配返回原 Receipt、不重复创建；内容不一致 409；无法证明历史载荷 409 `VMI_RECEIPT_IDEMPOTENCY_LEGACY_UNVERIFIED`；不自动回填、不修改历史业务行、NULL 历史键保持 NULL；不删除旧表/字段/约束；**不**为幂等问题新增 Schema，`agreement_id` 仍是独立 Migration 候选；**不**开放 VMI-05 |
+
+§26.34.7 的四个 Owner Review Gate 状态**全部保持不变**（`A1-D-RV-01`～`A1-D-RV-03` = `PENDING_OWNER_REVIEW`，`A1-D-RV-04` = `BLOCKED_ON_OWNER_DECISION`）。§26.34 的 `PENDING_REVIEW` 与 `DESIGN_PASS` 未签发状态不变；**A1-I1 / I2 的 Acceptance 不等同于 Design PASS**。
+
+### 43.3 两项独立 Acceptance 候签
+
+| 工作包 | Issue | 候签记录 | 当前状态 | Owner 决定 |
+|---|---|---|---|---|
+| `WP-A1-01` | `AUD-FE-001` | [`docs/acceptance/wp-a1-01-owner-acceptance-20261108.md`](../acceptance/wp-a1-01-owner-acceptance-20261108.md) | `TESTED` / `PENDING_OWNER_APPROVAL` | **未作出**（`ACCEPT_WITH_BOUNDED_RESIDUALS` / `RETURN_FOR_REWORK`） |
+| `WP-A1-02` | `AUD-PRC-001` | [`docs/acceptance/wp-a1-02-owner-acceptance-20261108.md`](../acceptance/wp-a1-02-owner-acceptance-20261108.md) | `TESTED` / `PENDING_OWNER_APPROVAL` | **未作出**（`ACCEPT_WITH_BOUNDED_RESIDUALS` / `RETURN_FOR_REWORK`） |
+
+两份是**两个独立**的验收对象，不互相代表、不合并决定。实施提交分别为 `6cb514a66ebf6587fc5899bf0a7a4cbe1dd4c66e` 与 `8fa20a4374418ea24150fc5234ccd577389802dd`。审计台账 §13.1 与 §9 状态列已同步登记。
+
+### 43.4 本轮实测结果（2026-11-08）
+
+| 命令 | 实测结果 | 退出码 |
+|---|---|---|
+| `pnpm.cmd build` | `✓ built in 3.82s` | 0 |
+| `node --test server/procurement-sourcing-pricing.test.js` | 5 / 5 PASS | 0 |
+| `node scripts/testing/run-tests.js fast` | 576 / 576 PASS | 0 |
+| `node scripts/acceptance/m1c-wp6-outsourcing-responsive-uat.mjs` | `PASS=24 FAIL=0 TOTAL=24` | 0 |
+| `node scripts/testing/run-tests.js fast --filter procurement-sourcing-pricing` | `[run-tests] suite=fast files=0` → 无文件参数的 `node --test` 回退为默认全仓发现：3441 tests / 429 suites，3437 pass，**4 fail** | **1** |
+| `node scripts/docs/check-doc-consistency.mjs --mode current --target HEAD` | 见 §43.6 交付锚点 | — |
+| `node scripts/docs/check-doc-consistency.mjs --mode migration` | 见 §43.6 交付锚点 | — |
+| `git diff --check` | 见 §43.6 交付锚点 | — |
+
+**最后一行命令的登记事实（不得省略）**：`server/procurement-sourcing-pricing.test.js` 登记在 **FULL**（FAST=29 / FULL=222 / HEAVY=7），不在 FAST；该过滤条件选出 **0** 个文件，runner 以无文件参数启动 `node --test`，Node 回退为默认全仓发现，因而把未登记在任何套件清单中的 `server/production-safety.test.js` 纳入。4 项失败全部在该文件：① 陈旧断言（Demo Seed 现创建 7 个用户，测试仍断言 5，源自 2026-11-02 M1-Core WP-0 的 M1-P-03 角色种子）；②③ Windows `EBUSY` 临时库 `unlink` 级联（由 ① 断言失败后未执行 `db.close()` 引起）；④ 文件级汇总。该失败与本轮变更无关（本轮只改 Markdown 与日志），**不记为 PASS**，也**不**归因于 `AUD-FE-001` / `AUD-PRC-001`。
+
+### 43.5 必须随验收披露的限制
+
+1. **旧功能 UAT 为 15 / 28，不是 PASS**：全套 28 项中仅 15 项通过，其中**只有 UAT-04 按新合同通过**（配额 GET 200 + 决策 POST 409）；其余失败集中在收货与委外既有链路。
+2. **FULL 回归未完成，不记为 PASS**：曾启动但因耗时停止，**停止前**仍出现既有 `m1-core-g07-diagnostics.test.js` 临时证据文件 `SetAccessControl` 权限拒绝。
+3. **没有本轮真实 MySQL Gate 证据**：未连接任何真实 MySQL，未执行任何 disposable MySQL Gate，MySQL 与 SQLite 双端等价**未被证明**。
+
+三项限制已在两份候签记录中逐条披露，**不得**被隐藏或改写成 PASS。
+
+### 43.6 交付锚点与校验
+
+| 项 | 值 |
+|---|---|
+| 基线 | `master` @ `a39beac7a334ab4cf32fd5bc6b33ef978d6a6d65` |
+| 变更范围 | 仅治理与文档（`docs/design/procurement-outsourcing.md`、`docs/acceptance/**`、`docs/audits/b3101-b3121-code-audit-20261107.md`、`docs/status/PROJECT_STATUS.md`、`log/2026-11-08.md`）；**未**修改任何 `src/` / `server/` 生产代码、schema、migration、API、权限、状态机或业务测试 |
+| 文档一致性（current） | `node scripts/docs/check-doc-consistency.mjs --mode current --target HEAD`：N1 / N3–N9 PASS，N2 `RETIRED`（**不记为 PASS**） |
+| 文档一致性（migration） | `node scripts/docs/check-doc-consistency.mjs --mode migration`（固定 G0 锚点，不带 `--target`）：C1–C6 全部 PASS |
+| 空白检查 | `git diff --check`：exit 0 |
+| 远端状态 | **未** Push / Merge / Tag / Release / Deploy；`package.json` version 与 release tag 未变化 |
+
+### 43.7 本轮明确未发生的事项
+
+- **未**修改 `server/`、`src/`、`scripts/` 下任何文件；**未**修改数据库 Schema / Migration；**未**执行任何数据库写入、Reset、Bootstrap、Cleanup；
+- **未**连接、重置或修改任何真实 MySQL；**未**运行 `test:mysql` / `test:mysql:concurrency` / 任何 disposable MySQL Gate；
+- **未**修改 `docs/requirements/`、`document.md`、`solution.md`、`docs/status/CAPABILITY_MATRIX.md`；
+- **未**签发任何 Acceptance / Freeze / `DESIGN_PASS`；**未**把两项状态改写为 `ACCEPTED`；
+- **未**改变 `AUD-OUT-001`（仍 `DEFERRED_NOT_AUTHORIZED`）、`AUD-PRC-002` Hash、VMI 全部 Issue、M1-Core 七 Gate 7/7 `PASS`、`R-01`～`R-20`、`D-01`～`D-04`、`WP-I` / `WP-J`、`M-15`、`SCP-01`～`SCP-16` 的原状态；
+- **未**把 `PRC-06` 变为 `COVERED`；B3101 / B3121 仍 `BLOCKED`；Procurement & Outsourcing Domain Acceptance 仍 `NOT READY`；
+- **未** Push / Merge / Tag / Release / Deploy；**未**改写 Git 历史。
+
+### 43.8 待业务所有者确认的两个独立决定
+
+| # | 对象 | 可选决定 | 当前 |
+|---|---|---|---|
+| 1 | `WP-A1-01` / `AUD-FE-001` | `ACCEPT_WITH_BOUNDED_RESIDUALS` 或 `RETURN_FOR_REWORK` | **未作出** |
+| 2 | `WP-A1-02` / `AUD-PRC-001` | `ACCEPT_WITH_BOUNDED_RESIDUALS` 或 `RETURN_FOR_REWORK` | **未作出** |
+
+在业务所有者**分别**作出决定之前，两项保持 `TESTED` / `PENDING_OWNER_APPROVAL`。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
