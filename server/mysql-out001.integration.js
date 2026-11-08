@@ -321,18 +321,22 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
       });
       assert.equal(mysqlSessionState(session), 'IDLE_TRUSTED');
 
-      // 一次未确认的命名锁释放会经生产函数把适配器隔离，并最终到达
-      // TERMINATION_CONFIRMED。先由 victim 自己释放服务器端锁，但保留本地
-      // 登记，再调用生产 release 函数，稳定得到 RELEASE_LOCK=0。
-      const lockName = `out001-m3-unverified-${Date.now()}`;
-      assert.equal(Number(session.prepare('SELECT GET_LOCK(?,10) acquired').get(lockName).acquired), 1);
+      // victim 真实持有 sentinelLock，但本地幂等锁集合只登记一个从未持有的
+      // unownedLock。生产 release 函数对 unownedLock 得到 NOT_OWNER 后隔离并
+      // 终止 victim；sentinelLock 只能随该真实会话终止而由服务器释放。
+      const sentinelLock = `out001-m3-sentinel-${Date.now()}`;
+      const unownedLock = `out001-m3-unowned-${Date.now()}`;
+      assert.equal(Number(session.prepare('SELECT GET_LOCK(?,10) acquired').get(sentinelLock).acquired), 1);
       const other = openIndependentSession();
       try {
         const victimId = Number(session.prepare('SELECT CONNECTION_ID() id').get()?.id);
         const beforeIds = processListIds(other);
-        session._idempotencyLocks = new Set([lockName]);
+        assert.equal(Number(other.prepare('SELECT IS_USED_LOCK(?) owner').get(sentinelLock)?.owner), victimId,
+          'sentinelLock 必须由 victim 真实持有');
+        assert.equal(Number(other.prepare('SELECT GET_LOCK(?,0) acquired').get(sentinelLock)?.acquired), 0,
+          'victim 终止前 observer 不得取得 sentinelLock');
+        session._idempotencyLocks = new Set([unownedLock]);
         session._idempotencyLockEpoch = session.sessionEpoch;
-        assert.equal(Number(session.prepare('SELECT RELEASE_LOCK(?) released').get(lockName)?.released), 1);
         const release = releaseMySqlIdempotencyLocks(session);
         assert.equal(release.attempted, 1);
         assert.equal(release.verified.length, 0);
@@ -344,11 +348,11 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
         assert.equal(state.state, 'TERMINATION_CONFIRMED', 'R1 要求终止已确认');
         assert.equal(session.sessionState, 'TERMINATED');
         assert.equal(mysqlSessionState(session), 'TERMINATED');
-        assert.equal(Number(other.prepare('SELECT IS_FREE_LOCK(?) free').get(lockName)?.free), 1,
+        assert.equal(Number(other.prepare('SELECT IS_FREE_LOCK(?) free').get(sentinelLock)?.free), 1,
           'observer 必须证明原命名锁已在服务器端释放');
-        assert.equal(Number(other.prepare('SELECT GET_LOCK(?,5) acquired').get(lockName)?.acquired), 1,
+        assert.equal(Number(other.prepare('SELECT GET_LOCK(?,5) acquired').get(sentinelLock)?.acquired), 1,
           'observer 必须能够重新取得同一命名锁');
-        assert.equal(Number(other.prepare('SELECT RELEASE_LOCK(?) released').get(lockName)?.released), 1);
+        assert.equal(Number(other.prepare('SELECT RELEASE_LOCK(?) released').get(sentinelLock)?.released), 1);
         assert.equal(Number(other.prepare(
           'SELECT COUNT(*) n FROM information_schema.PROCESSLIST WHERE ID=?',
         ).get(victimId)?.n || 0), 0, 'victim session 必须从 PROCESSLIST 消失');

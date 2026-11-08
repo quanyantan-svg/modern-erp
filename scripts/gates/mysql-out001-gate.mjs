@@ -156,7 +156,7 @@ async function main() {
       for (const entry of children) {
         const exited = await ensureOut001ChildExited(entry);
         if (!exited) return false;
-        try { entry.context.markChildExited(entry.child.pid, entry.childStartedAt); } catch {}
+        entry.context.markChildExited(entry.child.pid, entry.childStartedAt);
       }
       return true;
     },

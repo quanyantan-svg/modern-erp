@@ -2692,6 +2692,21 @@ I3a-S 先实施并独立提交；I3a-S 的验收断言**只能是**固定拒绝�
 
 Gate 状态保持：`GATE_IMPLEMENTED` **达成**；`GATE_READY` **未达成（待 Owner 技术复核）**；`GATE_AUTHORIZED` **未达成**；`GATE_EXECUTED = NOT_RUN`；`GATE_ACCEPTED` **未达成**。`AUD-OUT-001` 仍为 `TESTED` / `PENDING_OWNER_APPROVAL`，`NOT_PROVEN_ON_REAL_MYSQL` 保留。
 
+### 45.14 OUT-001 MySQL Gate Final Focused Review 修补（2026-11-08）
+
+本节只登记 Owner 最终 focused review 指定的四项 Gate 修补及离线证据；不重建 Gate，不改变业务代码、Schema、Migration、`M1_CORE_MANIFEST` 或数据库权限。
+
+| 复核项 | 最终修补与离线证据 |
+|---|---|
+| Windows Process Tree | `taskkill /T /F` 的 callback error 与真实 exit code 均须成功；执行前通过 `Win32_Process` 固化父进程及全部已知后代 PID，执行后同时确认 Node 父进程退出与全部已知 PID 从进程表消失，任一查询、终止或确认失败均返回 `false`，不再使用仅终止父进程的 fallback。真实离线父进程 + 孙进程用例逐项确认二者均退出 |
+| PowerShell 5.1 native argv | 外层双引号由 `[char]34` 明确生成，内部双引号及尾部反斜杠继续按 Windows native argv 规则转义；独立含空格临时目录下用 Windows PowerShell 5.1 `Start-Process` 调用 Node argv 回显程序，repository、Capability、target proof、child script 四类路径及内嵌双引号值全部逐项原值相等 |
+| M3 因果关系 | victim 真实持有且本地登记不包含 `sentinelLock`；本地集合只登记未持有的 `unownedLock`。真实 `releaseMySqlIdempotencyLocks()` 对后者得到 `NOT_OWNER` 并 quarantine；只有 victim 到达 `TERMINATION_CONFIRMED` 后 observer 才观察到 sentinel 释放、重新取得该锁并确认 victim 已从 PROCESSLIST 消失。不存在提前手动释放 sentinel 的语句；真实不确定 COMMIT 仍为 `NOT_PROVEN_ON_REAL_MYSQL` |
+| Root Children 状态 | `childrenExited` 只在 `stopChildren() === true` 且全部登记项 `exited === true` 时成立；`markChildExited` 异常不再吞掉。离线用例证明「stop 成功但登记未完成」与「退出登记抛错」均 `childrenExited=false`、cleanup 0 次并进入 quarantine |
+
+本地验证（均未连接真实 MySQL）：Gate infrastructure **14/14 PASS**；disposable target guard **10/10 PASS**；OUT-001 SQLite focused **28/28 PASS**；FAST **594/594 PASS**；Build PASS；Docs current N1/N3～N9 PASS、N2 `RETIRED`；Docs migration C1～C6 PASS；`git diff --check` PASS。首次在受限沙箱内执行进程树 focused 因 `Get-CimInstance` / `taskkill` 被拒绝而退出 1；按 Windows 进程测试所需权限在沙箱外原命令重跑后 14/14、退出 0，父/孙 PID 均消失。FULL 本轮未重跑；上一轮 **3380/3381**、唯一既有 Windows ACL `SetAccessControl` 失败的事实保持不变。
+
+Gate 状态不推进：`GATE_IMPLEMENTED` 已达成；`GATE_READY` 仍待 Owner 最终技术复核；`GATE_AUTHORIZED` / `GATE_ACCEPTED` 未达成；`GATE_EXECUTED = NOT_RUN`。`AUD-OUT-001` 仍为 `TESTED` / `PENDING_OWNER_APPROVAL`，未生成 ACK-4 Capability，未签发 Acceptance，真实 MySQL 与 RESET / BOOTSTRAP / CLEANUP 始终 `NOT_RUN`。
+
 ### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
 
 以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：

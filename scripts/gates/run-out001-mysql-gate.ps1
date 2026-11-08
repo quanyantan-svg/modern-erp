@@ -83,7 +83,8 @@ function ConvertTo-NativeArgument([string]$Argument) {
   if ($Argument -notmatch '[\s"]') { return $Argument }
   $escaped = [regex]::Replace($Argument, '(\\*)"', '$1$1\"')
   $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
-  return '"' + $escaped + '"'
+  $quote = [char]34
+  return $quote + $escaped + $quote
 }
 
 # Runs a native helper and keeps its stdout and its stderr apart. A native

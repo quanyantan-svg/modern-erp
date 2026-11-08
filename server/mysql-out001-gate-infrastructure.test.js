@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { describe, test } from 'node:test';
 import {
   consumeAck4Record, OUT_001_MYSQL_MANIFEST, OUT_001_MYSQL_MANIFEST_NAME,
@@ -10,7 +10,7 @@ import {
 import { runOut001MySqlLifecycle } from '../scripts/gates/mysql-out001-root-lifecycle.mjs';
 import {
   collectOut001Child, ensureOut001ChildExited, parseOut001OperationOutput,
-  parseOut001PostflightOutput,
+  parseOut001PostflightOutput, terminateProcessTree,
 } from '../scripts/gates/mysql-out001-process-lifecycle.mjs';
 import {
   assertOut001MySqlStaticPreflight, OUT_001_MYSQL_REQUIRED_ENVIRONMENT,
@@ -106,6 +106,36 @@ function lifecycleDependencies(root, { clean = true } = {}) {
   };
 }
 
+function waitForLine(stream, timeoutMs = 5_000) {
+  return new Promise((resolveLine, reject) => {
+    let output = '';
+    const timer = setTimeout(() => reject(new Error('timed out waiting for child output')), timeoutMs);
+    const onData = (chunk) => {
+      output += chunk;
+      const newline = output.indexOf('\n');
+      if (newline < 0) return;
+      clearTimeout(timer);
+      stream.off('data', onData);
+      resolveLine(output.slice(0, newline).trim());
+    };
+    stream.on('data', onData);
+  });
+}
+
+function processExists(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ESRCH') return false;
+    throw error;
+  }
+}
+
+function quotePowerShellLiteral(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
 describe('OUT-001 protected MySQL Gate infrastructure (offline)', () => {
   test('static preflight binds the fixed target, exact Manifest and fixed suite without opening MySQL', () => {
     const proof = assertOut001MySqlStaticPreflight({ target, environment: environment() });
@@ -142,8 +172,138 @@ describe('OUT-001 protected MySQL Gate infrastructure (offline)', () => {
     assert.match(launcher, /GetFullPath\(\$Ack4Capability\)/);
     const processLifecycle = readFileSync(new URL('../scripts/gates/mysql-out001-process-lifecycle.mjs', import.meta.url), 'utf8');
     assert.match(processLifecycle, /'taskkill', \['\/PID', String\(child\.pid\), '\/T', '\/F'\]/);
+    assert.match(processLifecycle, /taskkill\.error \|\| taskkill\.exitCode !== 0/);
+    assert.doesNotMatch(processLifecycle, /child\.kill\('SIGKILL'\)/);
+    assert.doesNotMatch(runner, /markChildExited[^\n]+catch \{\}/);
     assert.match(launcher, /ProtectedData\]::Unprotect/);
     assert.match(launcher, /\$rootState -eq 'CLEANUP_UNVERIFIED'/);
+  });
+
+  test('Windows taskkill confirms both parent and grandchild exit before reporting process-tree termination', {
+    skip: process.platform === 'win32' ? false : 'Windows-only process-tree evidence',
+  }, async () => {
+    const parent = spawn(process.execPath, ['-e', [
+      "const { spawn } = require('node:child_process');",
+      "const grandchild = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore', windowsHide: true });",
+      'process.stdout.write(String(grandchild.pid) + "\\n");',
+      'setInterval(()=>{},1000);',
+    ].join('')], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const grandchildPid = Number(await waitForLine(parent.stdout));
+    assert.equal(processExists(parent.pid), true, 'parent must be running before termination');
+    assert.equal(processExists(grandchildPid), true, 'grandchild must be running before termination');
+    try {
+      assert.equal(await terminateProcessTree(parent), true,
+        'termination may pass only after taskkill and known-tree verification');
+      assert.equal(processExists(parent.pid), false, 'parent must have exited');
+      assert.equal(processExists(grandchildPid), false, 'grandchild must have exited');
+    } finally {
+      if (processExists(parent.pid)) spawnSync('taskkill', ['/PID', String(parent.pid), '/T', '/F'], { windowsHide: true });
+      else if (processExists(grandchildPid)) spawnSync('taskkill', ['/PID', String(grandchildPid), '/T', '/F'], { windowsHide: true });
+    }
+  });
+
+  test('Windows PowerShell 5.1 Start-Process preserves every quoted path and embedded quote', {
+    skip: process.platform === 'win32' ? false : 'Windows PowerShell 5.1-only argument evidence',
+  }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'modern erp out001 args '));
+    try {
+      const repositoryPath = join(dir, 'repository path with spaces');
+      const childScriptPath = join(repositoryPath, 'child scripts', 'argv echo child.mjs');
+      const capabilityPath = join(dir, 'capability path', 'owner capability.json');
+      const targetProofPath = join(dir, 'target proof path', 'target proof.json');
+      const outputPath = join(dir, 'argument output.json');
+      const errorPath = join(dir, 'argument error.txt');
+      const harnessPath = join(dir, 'powershell 5.1 argument harness.ps1');
+      mkdirSync(join(repositoryPath, 'child scripts'), { recursive: true });
+      mkdirSync(join(dir, 'capability path'), { recursive: true });
+      mkdirSync(join(dir, 'target proof path'), { recursive: true });
+      writeFileSync(capabilityPath, '{}');
+      writeFileSync(targetProofPath, '{}');
+      writeFileSync(childScriptPath, [
+        'process.stdout.write(JSON.stringify({',
+        '  scriptPath: process.argv[1], cwd: process.cwd(), argv: process.argv.slice(2),',
+        '}));',
+      ].join('\n'));
+
+      const launcher = readFileSync(new URL('../scripts/gates/run-out001-mysql-gate.ps1', import.meta.url), 'utf8');
+      const functionSource = launcher.match(/function ConvertTo-NativeArgument[\s\S]*?^}/m)?.[0];
+      assert.ok(functionSource, 'launcher quoting function must be extractable for the native invocation proof');
+      const quotedValue = 'embedded "quote" and trailing slash\\';
+      writeFileSync(harnessPath, [
+        "$ErrorActionPreference = 'Stop'",
+        functionSource,
+        '$nativeArguments = @(',
+        `  (ConvertTo-NativeArgument ${quotePowerShellLiteral(childScriptPath)}),`,
+        "  '--repository-path',", `  (ConvertTo-NativeArgument ${quotePowerShellLiteral(repositoryPath)}),`,
+        "  '--ack4-capability',", `  (ConvertTo-NativeArgument ${quotePowerShellLiteral(capabilityPath)}),`,
+        "  '--target-proof',", `  (ConvertTo-NativeArgument ${quotePowerShellLiteral(targetProofPath)}),`,
+        "  '--quoted-value',", `  (ConvertTo-NativeArgument ${quotePowerShellLiteral(quotedValue)})`,
+        ')',
+        `$process = Start-Process -FilePath 'node' -ArgumentList $nativeArguments -WorkingDirectory ${quotePowerShellLiteral(repositoryPath)} -NoNewWindow -Wait -PassThru -RedirectStandardOutput ${quotePowerShellLiteral(outputPath)} -RedirectStandardError ${quotePowerShellLiteral(errorPath)}`,
+        'exit $process.ExitCode',
+      ].join('\r\n'));
+
+      const powershell51 = join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+      const run = spawnSync(powershell51, [
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', harnessPath,
+      ], { encoding: 'utf8', windowsHide: true });
+      assert.equal(run.status, 0, `PowerShell 5.1 harness failed: ${run.stderr || readFileSync(errorPath, 'utf8')}`);
+      const echoed = JSON.parse(readFileSync(outputPath, 'utf8'));
+      assert.equal(resolve(echoed.scriptPath), resolve(childScriptPath), 'child script path must remain one argv item');
+      assert.equal(resolve(echoed.cwd), resolve(repositoryPath), 'repository working path must remain exact');
+      assert.deepEqual(echoed.argv, [
+        '--repository-path', repositoryPath,
+        '--ack4-capability', capabilityPath,
+        '--target-proof', targetProofPath,
+        '--quoted-value', quotedValue,
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('Root refuses cleanup when stop succeeds but any registered child lacks exited=true', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'modern-erp-out001-child-state-'));
+    try {
+      const root = consumeSimulatedRoot(dir, '123e4567-e89b-42d3-a456-426614174024');
+      const { calls, input } = lifecycleDependencies(root);
+      input.quarantineDir = join(dir, 'quarantine');
+      input.runHttpFixtures = async (context) => {
+        calls.push('RUN_OUT001_HTTP_FIXTURES');
+        context.issueChild({ childPid: 299, childStartedAt: 'unconfirmed-child' });
+        return { passed: true };
+      };
+      const report = await runOut001MySqlLifecycle(input);
+      assert.equal(report.state, 'CLEANUP_UNVERIFIED');
+      assert.equal(report.childrenExited, false);
+      assert.equal(report.cleanupProven, false);
+      assert.equal(report.cleanupAttempts, 0);
+      assert.deepEqual(calls, ['RESET_SCHEMA_PRE_RUN', 'BOOTSTRAP_CURRENT_SCHEMA', 'RUN_OUT001_HTTP_FIXTURES']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('Root propagates child exit registration failure and quarantines without cleanup', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'modern-erp-out001-child-mark-fail-'));
+    try {
+      const root = consumeSimulatedRoot(dir, '123e4567-e89b-42d3-a456-426614174025');
+      const { calls, input } = lifecycleDependencies(root);
+      input.quarantineDir = join(dir, 'quarantine');
+      input.stopChildren = async () => { throw new Error('OUT_001_MYSQL_UNREGISTERED_CHILD_EXIT'); };
+      await assert.rejects(() => runOut001MySqlLifecycle(input), (error) => {
+        assert.match(error.message, /UNREGISTERED_CHILD_EXIT/);
+        assert.equal(error.out001Lifecycle.state, 'CLEANUP_UNVERIFIED');
+        assert.equal(error.out001Lifecycle.childrenExited, false);
+        assert.equal(error.out001Lifecycle.cleanupAttempts, 0);
+        return true;
+      });
+      assert.deepEqual(calls, [
+        'RESET_SCHEMA_PRE_RUN', 'BOOTSTRAP_CURRENT_SCHEMA', 'RUN_OUT001_HTTP_FIXTURES',
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test('lifecycle executes the exact order and reaches FINISHED only after independent cleanup proof', async () => {
@@ -229,6 +389,10 @@ describe('OUT-001 protected MySQL Gate infrastructure (offline)', () => {
     assert.equal(await collectOut001Child({ child: normal, mode: 'test', operation: 'POSTFLIGHT' }, { timeoutMs: 5_000 }), 0);
     assert.equal(stdout, 'complete');
     assert.equal(stderr, 'done');
+    if (process.platform === 'win32') {
+      assert.equal(await terminateProcessTree(normal), false,
+        'an already-exited Windows parent alone cannot prove that its process tree exited');
+    }
 
     const hanging = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {
       stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,

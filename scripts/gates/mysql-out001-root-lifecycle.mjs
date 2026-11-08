@@ -82,7 +82,7 @@ export async function runOut001MySqlLifecycle({
     if (rootLease) {
       try {
         const stopped = await stopChildren(Object.freeze([...registeredChildren]));
-        childrenExited = stopped === true && registeredChildren.every((child) => child.exited || stopped === true);
+        childrenExited = stopped === true && registeredChildren.every((child) => child.exited === true);
       } catch (error) {
         primaryError ||= error;
         childrenExited = false;
