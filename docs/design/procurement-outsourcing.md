@@ -1530,3 +1530,192 @@ Final verdict：`NOT READY`。后续修复必须继续遵守本节既有 source/
 **验收边界**：本增补仅为 **Design Review 修订候选**，不得自动把 §31.14 标为 `APPROVED`、把 §26.34 标为 `DESIGN_PASS`、把 `AUD-OUT-001` 标为已验证或将 B3101/B3121 变为 `COVERED`。M1-Core 七 Gate 的 7/7 PASS 继续仅对原范围有效；`D-P01/D-P02`、`B-P01/B-P02`、`SCP-01..10/12..15`、`M-15` 原状态不变。
 
 **未发生事项**：本轮没有修改 `docs/requirements/`、`document.md`、`server/`、`src/`、数据库 Schema/Migration、运行测试或 MySQL Gate，也没有提交、Push、Merge、Tag、Release、Deploy。Design Review 文本完成后 **HARD STOP**；接下来须由业务 Owner 明确批准 Requirement、此 Design Amendment、Implementation 范围，以及各个 Schema/Migration 的独立授权。A1-I1/I2 可在获得明确实施授权后优先单独推进；A1-I3/I4 不得绕开本表阻塞项。
+
+---
+
+#### 26.34.8 A1 小修：WIP 幂等合同（`body.idempotencyKey`）（2026-11-08；PENDING_REVIEW）
+
+> **定位 / Owner / 状态**：本小节属于 `docs/design/procurement-outsourcing.md` §26.34 的待审 Design，Owner 为 Procurement & Outsourcing Domain Owner。它把 §26.34.4.1「最终 HTTP replay 形式须与既有已批准接口风格核对」收敛为**固定合同**，并把幂等键来源固定为请求体 `body.idempotencyKey`。它不构成第二份权威 Design，不变更 Requirement §31.14、M1-Core 已批准七 Gate、`B-P01/B-P02`、`D-P01/D-P02`，不签发 `DESIGN_PASS`，不授权 Implementation 或 Migration。
+>
+> **代码核验锚点**：`master` @ `a39beac7a334ab4cf32fd5bc6b33ef978d6a6d65`。`createWipTransfer()` 位于 `server/modules/outsourcing-finance.js:397`；当前 `assertAllowedFields()` 只允许 `sourceOrderId/targetOrderId/materialListId/quantity/transferDate`，**没有**幂等键。通用幂等原语位于 `server/modules/financial-controls.js`：`requestFingerprint()` / `idempotencyReplay()` / `saveIdempotency()`。以下为**目标合同**，不是现有实现事实。
+
+##### 26.34.8.1 键来源、作用域与固定响应
+
+- 幂等键的**唯一来源**是请求体字段 `body.idempotencyKey`（`POST /api/procurement/outsourcing/wip-transfers`）。本 Design **不**使用 HTTP `Idempotency-Key` 头；头部不得作为回退来源。
+- 键必须为非空字符串，去除首尾空白后长度有界。缺失或全空白 → **400 `IDEMPOTENCY_KEY_REQUIRED`**，零业务写入、零幂等记录。
+- 固定作用域：`operationType = 'OUTSOURCING_WIP_TRANSFER'`，`documentId = sourceOrderId`。调用形式固定为 `idempotencyReplay(db, 'OUTSOURCING_WIP_TRANSFER', sourceOrderId, key, fingerprint)`；`saveIdempotency()` 使用同一组 `(operationType, documentId, key)`。
+- 固定响应合同：
+
+| 情形 | HTTP | 响应体 |
+|---|---|---|
+| 首次成功 | 201 | `{ id, transferNo }` |
+| 同 Key 同内容（精确重放） | 201 | `{ id, transferNo, replayed: true }` |
+| 同 Key 异内容 | 409 | `OUTSOURCING_WIP_TRANSFER_IDEMPOTENCY_CONFLICT` |
+| 缺少 Key | 400 | `IDEMPOTENCY_KEY_REQUIRED` |
+
+- 幂等记录中保存**不含** `replayed` 标记的基准结果 `{ id, transferNo }`；`replayed: true` 由入口在重放命中时统一附加，避免幂等载荷随重放次数变化。
+- 缺键判定必须在调用 `idempotencyReplay()` **之前**由业务入口完成：共享原语对缺键抛的是无稳定 code 的通用 400，业务入口必须先行拦截以产出固定 code `IDEMPOTENCY_KEY_REQUIRED`；**不得**为此修改 `financial-controls.js` 的全局幂等合同。
+- 同 Key 异载荷的 409 由共享原语的指纹比对抛出（消息为通用文案）；业务入口必须把该 409 映射为固定 code `OUTSOURCING_WIP_TRANSFER_IDEMPOTENCY_CONFLICT`，并按 §26.34.9.2 第 8 条走**单一边界**拒绝审计（恰好一条），不得由 handler 与统一错误层重复记录。
+
+##### 26.34.8.2 规范化指纹
+
+指纹由 `requestFingerprint()` 对**规范化载荷**计算。规范化载荷必须覆盖以下字段，且字段顺序无关（`requestFingerprint()` 自身按键排序）：
+
+| 字段 | 规范化规则 |
+|---|---|
+| `sourceOrderId` | 原样字符串 |
+| `targetOrderId` | 原样字符串 |
+| `materialListId` | **源**物料行 ID（原样字符串） |
+| `quantity` | 经基础 UOM 与产品精度规范化为**定点可比较**的数值表示；浮点尾差不得参与比较 |
+| `uom` | 源物料行 `outsourcing_material_list.unit` 的基础 UOM；**不在请求体新增 UOM 入参** |
+| `transferDate` | `YYYY-MM-DD` 业务日期 |
+| 身份选择字段 | 第一实施候选（§26.34.4.3：`identity_key='NONE'`、非跟踪产品）下固定为显式常量 `identityKey:'NONE'`；候选之外的身份取值必须**先**回到 §26.34.4.3 复核，不得在本小修中放宽 |
+
+- 指纹只覆盖上述集合。目标订单的物料行 ID **不**进入指纹：目标行由 `(targetOrderId, product_id)` 唯一判定（§26.34.4.2），而 `product_id` 由源行派生；把派生结果放进指纹会让同一业务语义的不同表示产生不同指纹。
+- 载荷字段的**缺失**与**显式空值**必须归一为同一表示（例如 `remark` 缺失与 `''` 归一），否则同一业务语义会因请求书写差异产生不同指纹而绕过精确重放。
+
+##### 26.34.8.3 原子性与重放边界
+
+- 幂等记录、转移事实（`outsourcing_wip_transfers` 行）、数量效力（源/目标 `issued_quantity` 增减）、身份效力（配对的 `TRANSFER_OUT` / `TRANSFER_IN` 与 `TRANSFER_ORIGIN` 分配，见 §26.34.4.3）与**成功审计**必须在**同一业务事务**内提交。任一失败整体回滚，不得产生半个转移。
+- 精确重放**不得**新增转移行、不得新增身份 effect/分配、不得改动任何数量、不得新增成功审计。精确重放的响应内容必须与首次成功的响应**逐字段一致**（仅多 `replayed: true`）。
+- 幂等记录读取（`idempotencyReplay()`）在业务事务**之外**执行；幂等记录写入（`saveIdempotency()`）在业务事务**之内**执行。这与仓库既有调用方（如 `server/modules/consignment.js`）的既有约定一致。
+- 幂等记录的唯一约束为 `UNIQUE(operation_type, document_id, idempotency_key)`（`idempotency_records`），因此「同 Key 异载荷」在并发下由该唯一约束与 MySQL 命名锁共同收敛，不得依赖应用层「先查后写」的时序假设。
+- `transferNo` 的稳定、冲突安全生成方式属 §26.34.4.1 已登记的待修项；本小修**不改变**该结论，也不在本小修中指定新的编号算法。
+
+#### 26.34.9 A1 小修：MySQL 命名锁释放与事务边界合同（2026-11-08；PENDING_REVIEW）
+
+> **定位 / Owner / 状态**：同 §26.34.8。本小节**只核对并固定** `server/db.js` 与 `server/modules/financial-controls.js` 的**既有**锁与事务释放合同，**不修改其实现**。它是 WIP 幂等（§26.34.8）与 VMI 幂等（§26.34.10）必须遵守的调用侧约束。
+
+##### 26.34.9.1 既有实现的核验事实
+
+以下为 `master` @ `a39beac7a334ab4cf32fd5bc6b33ef978d6a6d65` 的**既有实现事实**（本轮只读核验，零改动）：
+
+| 事实 | 位置 |
+|---|---|
+| `idempotencyReplay()` 在**未命中**记录时 `return null` 且**不释放** MySQL 命名锁；锁由当前请求继续持有 | `server/modules/financial-controls.js:52` |
+| `idempotencyReplay()` 在**命中**记录时经 `releaseMySqlIdempotencyLocks(db, { lockNames: [lockName] })` 释放；随后指纹不符抛 409，一致则返回 `result_json` | `server/modules/financial-controls.js:55-57` |
+| `idempotencyReplay()` 的查找异常路径同样经该公共合同释放 | `server/modules/financial-controls.js:49` |
+| `transaction()` 在 COMMIT 成功后释放命名锁 | `server/db.js:2371` |
+| `transaction()` 在 ROLLBACK、终态失败、不可证明回滚与不确定 COMMIT 各路径释放命名锁 | `server/db.js:2389 / 2395 / 2401` |
+| MySQL `BEGIN` 启动失败由 `settleFailedTransactionStart(db, startupError)` 处理，其默认 `releaseLocks = true` 会执行释放 | `server/db.js:2277-2297`、`server/db.js:2353` |
+| `assertMySqlTransactionAdmission(db)` 位于 `transaction()` 内部 `try` **之前**；拒绝时直接抛出，**不**经过任何释放路径 | `server/db.js:2338`（`try` 起于 `server/db.js:2344`） |
+| `readTransaction()` 的 BEGIN 失败路径以 `{ releaseLocks: false }` 调用 `settleFailedTransactionStart()`；读路径不拥有命名锁 | `server/db.js:2422` |
+| `releaseMySqlIdempotencyLocks()` 是**唯一**权威释放合同；`RELEASE_LOCK` 返回 1 才算已确认释放，其余结果（0 / NULL / 异常 / 超时）一律视为**未确认**并隔离该连接 | `server/db.js:2195-2272` |
+| 不确定 COMMIT（`mysqlRequestTimeout` / `sessionLost`）**永不**被自动重试为写操作 | `server/db.js:2398-2403` |
+
+##### 26.34.9.2 调用侧必须遵守的释放合同
+
+1. **未命中即持锁**：调用 `idempotencyReplay()` 得到 `null`（无重放）时，MySQL 命名锁**仍由当前请求持有**，直到本请求的 `transaction()` 结束或调用侧显式释放。调用方**不得**因为「没有重放结果」而假设锁已释放。
+2. **正常路径**：正常 COMMIT 或 ROLLBACK 之后，`transaction()` 自行释放锁。调用侧**不得**在事务之后再重复释放一次——重复释放会产生 `LOCK_ABSENT` 之类的未确认结果并触发既有连接隔离机制。
+3. **BEGIN 启动失败**：由 `settleFailedTransactionStart()` 的默认行为释放，调用侧无需重复处理。
+4. **admission 拒绝**：`assertMySqlTransactionAdmission()` 在 `transaction()` 内部 `try` 之前，失败时**没有任何内部释放路径**。因此调用方**必须**提供外层释放保障：以 `try { transaction(db, work) } finally { releaseMySqlIdempotencyLocks(db) }` 包裹，使 admission 拒绝、事务外异常与事务内回滚三种情形都收敛到同一个公共释放合同。
+   - `finally` 中的释放在 SQLite 路径是**空操作**（`releaseMySqlIdempotencyLocks()` 在 `db.dialect !== 'mysql'` 时直接返回空结果），因此同一段调用代码可同时服务 SQLite 与 MySQL 两条路径，不需要分支。
+5. **禁止绕过公共合同**：调用侧**不得**直接执行 `RELEASE_LOCK()` 或任何等价的私有释放语句；不得自建第二套锁释放实现；不得吞掉 `releaseMySqlIdempotencyLocks()` 的返回值。
+6. **未确认释放的处置**：`releaseMySqlIdempotencyLocks()` 的 `unverified` 非空时，该连接已被既有机制隔离（`quarantineMySqlAdapter(db, 'idempotency_lock_release_unverified')`）。调用侧**不得**在隔离连接上继续发起任何语句，**不得**把未确认释放当作已释放，**不得**自行恢复该连接。SQLite 路径没有命名锁，其既有连接隔离机制保持不变。
+7. **不确定 COMMIT**：`transaction()` 对不确定 COMMIT 不会自动重试写操作。调用侧**不得**在捕获该错误后自动重发写请求；此类请求只能在调用方**确认业务事实**之后，以新的幂等键重新发起。
+8. **业务拒绝的单一边界**：任何业务门禁拒绝（409）必须在**事务回滚之后**由**单一**边界调用 `auditBusinessRejection()` 记录恰好一条拒绝审计；不得在事务内先写成功审计再回滚，也不得由 handler 与统一错误层各记一条。`auditBusinessRejection()` 只对 `status === 409` 的 `HttpError` 生效，400 / 403 沿既有合同处理。
+
+##### 26.34.9.3 本小修的边界
+
+- 本小修**不修改** `server/db.js`、`server/modules/financial-controls.js` 或任何其他生产代码。
+- 若将来需要改变 `idempotencyReplay()` 的「未命中不释放」行为，或 `assertMySqlTransactionAdmission()` 的位置，必须**先**回到 Requirement / Design 层并取得单独批准；不得在 Implementation 中顺手调整。
+- 本小修**不引入**新的锁原语、新的锁命名空间或新的事务层级。
+
+#### 26.34.10 A1 小修：VMI 幂等合同（2026-11-08；PENDING_REVIEW）
+
+##### 26.34.10.1 三个独立 operationType
+
+| 操作 | `operationType` | `documentId`（作用域） | 幂等键来源 |
+|---|---|---|---|
+| Receipt 创建 | `VMI_RECEIPT_CREATE` | `create-request:${idempotencyKey}` | `body.idempotencyKey` |
+| Receipt 确认 | `VMI_RECEIPT_CONFIRM` | `receiptId` | `body.idempotencyKey` |
+| Consumption 创建 | `VMI_CONSUMPTION_CREATE` | `receiptId` | `body.idempotencyKey` |
+
+- 三个操作**互不共享**重放记录：`operationType` 不同即不同作用域。同一把键在三个操作上分别成立，不得跨操作重放，也不得跨权限边界共享重放结果。
+- 幂等键唯一来源为请求体 `body.idempotencyKey`；不读取 HTTP 头。
+- 缺少 Key → **400 `IDEMPOTENCY_KEY_REQUIRED`**，零业务写入、零库存变化、零幂等记录。判定必须在调用 `idempotencyReplay()` 之前完成（理由同 §26.34.8.1）。
+- Receipt Confirm 端点当前不读取请求体；本 Design 要求它**接受并只接受** `idempotencyKey` 一个字段的请求体。Consumption 端点的允许字段集合须新增 `idempotencyKey`。Receipt 创建端点已允许 `idempotencyKey`，保持不变。
+
+##### 26.34.10.2 规范化指纹
+
+| 操作 | 指纹覆盖字段 |
+|---|---|
+| Receipt 创建 | `supplierId`、`warehouseId`、`productId`、`quantity`（规范化）、`receivedDate`（`YYYY-MM-DD`）、`remark`、`agreementId` |
+| Receipt 确认 | `receiptId`、操作类型（`VMI_RECEIPT_CONFIRM`） |
+| Consumption 创建 | `receiptId`（消费所依据的 Receipt，即 `body.vmiReceiptId`）、`quantity`（规范化）、`consumedDate`（`YYYY-MM-DD`）、`destination`、`remark` |
+
+- 三个指纹的**归一规则**一致：字符串去除首尾空白；缺失与显式空值归一为同一表示；数量按基础 UOM 与产品精度规范化为定点可比较表示；日期按 `YYYY-MM-DD`。
+- Receipt 确认的指纹只覆盖 `receiptId` 与操作类型：确认动作的业务语义由 Receipt 自身的权威状态决定（`PENDING → CONFIRMED`），请求侧没有其他可变载荷。若将来确认动作引入可变入参，必须先扩展本小节再实施。
+- Consumption 的指纹以**消费所依据的 Receipt** 为作用域，而不是以新建的 Consumption 文档为作用域：这保证「同一 Receipt 上同一载荷的重复消费」被精确重放，而「同一 Receipt 上不同载荷的重复消费」被稳定拒绝。
+
+##### 26.34.10.3 固定响应合同
+
+| 操作 | 情形 | HTTP | 响应体 |
+|---|---|---|---|
+| Receipt 创建 | 首次成功 | 201 | `{ id, receiptNo }` |
+| Receipt 创建 | 精确重放 | 201 | `{ id, receiptNo, replayed: true }` |
+| Receipt 确认 | 首次成功 | 200 | `{ ok: true }` |
+| Receipt 确认 | 精确重放 | 200 | `{ ok: true, replayed: true }` |
+| Consumption 创建 | 首次成功 | 201 | `{ id, consumptionNo }` |
+| Consumption 创建 | 精确重放 | 201 | 原结果 `{ id, consumptionNo }` + `replayed: true` |
+| 三个操作 | 同 Key 异载荷 | 409 | `VMI_IDEMPOTENCY_KEY_PAYLOAD_CONFLICT` |
+| 三个操作 | 缺少 Key | 400 | `IDEMPOTENCY_KEY_REQUIRED` |
+
+- 幂等记录保存**不含** `replayed` 标记的基准结果；`replayed: true` 由入口在命中时统一附加。
+- 同 Key 异载荷的 409 由共享原语的指纹比对抛出，业务入口必须映射为固定 code `VMI_IDEMPOTENCY_KEY_PAYLOAD_CONFLICT`，并按 §26.34.9.2 第 8 条走单一边界拒绝审计（恰好一条）。
+- **新 Key 不是重放**：同一 Receipt 用一把**新**键再次确认时，重放查找不命中，随后由既有状态门禁「只有待确认状态可以确认」拒绝（409），库存零变化；不得因为「键不同」而放行第二次确认。
+
+##### 26.34.10.4 原子性与库存副作用
+
+- Receipt 确认：canonical `applyInventoryMutation()` 的 SUPPLIER owner 入库腿、`vmi_receipts.business_status = 'CONFIRMED'`、幂等成功记录与成功审计必须在**同一业务事务**内提交。内部库存 mutation key 固定为 `VMI_RECEIPT:<stableReceiptId>`（§26.34.3）。
+- Consumption 创建：canonical `applyInventoryMutation()` 的 SUPPLIER owner 出库腿、`vmi_consumptions` 事实行、幂等成功记录与成功审计必须在**同一业务事务**内提交。内部库存 mutation key 固定为 `VMI_CONSUMPTION:<stableConsumptionId>`；`stableConsumptionId` 必须是**权威业务 ID**，不得在重试时新生成随机 UUID。
+- 精确重放**不得**新增库存变化、不得新增 Consumption / Receipt 事实、不得新增成功审计。
+- 业务拒绝审计只能在**事务回滚之后**由**单一**边界执行；400 与 403 沿既有合同。
+
+#### 26.34.11 A1 小修：VMI 旧 `idempotency_key` 字段兼容合同（2026-11-08；PENDING_REVIEW）
+
+##### 26.34.11.1 保留与并存
+
+- `vmi_receipts.idempotency_key TEXT UNIQUE` 是**既有**列与既有唯一约束（`server/migrations/procurement-outsourcing-schema.js:416`）。**保留**该列与该约束；**不删除**该表、该列或该约束，**不**重建表。
+- 新建 Receipt **继续**写入该列（保持现状：`body.idempotencyKey` 写入 `vmi_receipts.idempotency_key`）。
+- **同时**使用通用幂等表 `idempotency_records` 保存**完整指纹**与**响应结果**（§26.34.10）。
+- **权威重放记录**是通用幂等记录 `idempotency_records`；`vmi_receipts.idempotency_key` 只是**遗留键列**，不承载指纹，不承载响应。
+- 本小修**不新增**任何 Schema。`vmi_receipts.agreement_id` 仍是 §26.34.6.1 的**独立** Migration 候选，**未授权、未执行**；它**不**因幂等问题被顺带引入。
+
+##### 26.34.11.2 通用记录未命中时的遗留键核对
+
+通用幂等记录未命中（即 `idempotencyReplay()` 返回 `null`）时，**必须**再按遗留键列核对：
+
+1. 以 `idempotency_key = <key>` 查询 `vmi_receipts`。该列有 UNIQUE 约束，最多命中一行。
+2. **未命中** → 正常创建新 Receipt（写遗留键列 + 写通用幂等记录）。
+3. **命中** → 用该历史行**持久化字段**重建规范化指纹的**可证明部分**：`supplier_id`、`warehouse_id`、`product_id`、`quantity`、`received_date`、`remark`。
+   - `agreementId` **不可证明**：当前 `vmi_receipts` **没有** `agreement_id` 列，历史行无法证明该字段。
+     - 本次请求**未提供** `agreementId`（归一为空）→ 可证明部分即为完整指纹；
+     - 本次请求**提供了** `agreementId` → 该字段无法与历史行比对 → 返回 **409 `VMI_RECEIPT_IDEMPOTENCY_LEGACY_UNVERIFIED`**（不得据此新建第二个 Receipt，也不得猜测历史绑定）。
+   - 完全匹配 → **返回原 Receipt**（201 + 原 `id` / `receiptNo` + `replayed: true`），**不重复创建**，不新增库存变化，不新增成功创建审计。
+   - 内容不一致 → **409 `VMI_IDEMPOTENCY_KEY_PAYLOAD_CONFLICT`**（与 §26.34.10.3 同一 code）。
+   - 无法证明历史载荷（`agreementId` 不可比对，或历史行的任一指纹字段缺失 / 不可归一）→ **409 `VMI_RECEIPT_IDEMPOTENCY_LEGACY_UNVERIFIED`**。
+4. **并发**：同键并发创建由 `vmi_receipts.idempotency_key` 的 UNIQUE 约束与 MySQL 命名锁（§26.34.9）共同收敛。遗留键写入触发 UNIQUE 冲突时，必须映射为上述稳定 409 code；**不得**把数据库唯一约束错误直接暴露为 500，也不得据此新建第二个 Receipt。
+
+##### 26.34.11.3 历史数据的只读与不可回填
+
+- **不自动回填**历史记录：不得为历史 Receipt 补写 `idempotency_records` 行。
+- **不修改**历史业务行：不得回写 `vmi_receipts` 的任何既有列（含 `idempotency_key`、`business_status` 与数量）。
+- **NULL 历史键保持 NULL**：`idempotency_key IS NULL` 的历史行**不参与**任何遗留键匹配；不得推断、不得补写，也不得据 NULL 推断「该行无幂等保护」。
+- 历史 `CONSUMED` / `TRANSFERRED` 等状态**不**被当作新的结算事实或已批准物权变更（§26.34.3 / §26.34.6.2 保持有效）。
+- 遗留核对是**只读**路径：命中历史行时不写任何历史行、不写库存、不新增成功创建审计；如需留痕，只能按既有幂等重放口径记录，且**不得**被记为成功创建。
+
+##### 26.34.11.4 边界
+
+- 本小修**不**授权、**不**执行任何 Schema / Migration；`agreement_id` 候选的 preflight、DDL、parity 与回滚仍按 §26.34.6.1 / §26.34.6.3 独立授权。
+- 本小修**不**改变 VMI-05 的状态：`POST /api/procurement/vmi/ownership-transfers` 继续返回 409 `VMI_SETTLEMENT_POLICY_PENDING`，物权、库存、Supplier Bill、AP/GL 零变化。幂等合同**不**得成为开放 VMI-05 的理由。
+- 本小修**不**变更 §26.34.6.2 关于历史 `agreement_id=NULL` Receipt 只读兼容与 fail closed 的结论。
+
+#### 26.34.12 A1 小修的边界与 HARD STOP（2026-11-08；PENDING_REVIEW）
+
+- §26.34.8～§26.34.11 是 §26.34 的**待审 Design 修订**，全部为 `PENDING_REVIEW`。它们**不**签发 `DESIGN_PASS`，**不**授权 Implementation、Schema / Migration、数据库操作或真实 MySQL Gate。
+- §26.34.7 的四个 Owner Review Gate 状态**全部保持不变**：`A1-D-RV-01` / `A1-D-RV-02` / `A1-D-RV-03` 仍为 `PENDING_OWNER_REVIEW`，`A1-D-RV-04` 仍为 `BLOCKED_ON_OWNER_DECISION`。本小修**不关闭**其中任何一项，也不改变其通过条件。
+- §26.34.8 / §26.34.10 的幂等合同**不**构成对 A1-I1 / A1-I2 验收状态的任何改变，也**不**等同于 Design PASS。
+- `AUD-OUT-001` 的 `DEFERRED_NOT_AUTHORIZED` 状态、`M1C-G03/G06` 的既有 7/7 PASS、`B-P01/B-P02`、`D-P01/D-P02`、`SCP-01..10/12..15` 与 `M-15` 的原状态**全部不变**。
+- 本小修只修改 `docs/design/procurement-outsourcing.md`。**未**修改 `docs/requirements/`、`document.md`、`server/`、`src/`、`scripts/`、数据库 Schema / Migration；**未**运行 Migration、数据库写入、真实 MySQL Gate 或任何业务测试。
+- Design 修订完成后 **HARD STOP**：须由业务 Owner 明确批准 Requirement §31.14、§26.34 及其小修、Implementation 范围，以及各个 Schema / Migration 的独立授权，方可进入实现阶段。
