@@ -18,6 +18,8 @@
 > 当前项目状态见 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §37。
 
 > **2026-11-07 范围增补**：§26.34 是 §31.14 的有界 Design；仅在 A1 SAFE_CLOSE 与 VMI-01..05 最小范围上取代 §26.4/§26.16/§26.20 对应旧目标。§26.33 仍保留给 M1 全范围候选设计，不在此复用；M1-Core Active Design 与既有 Gate Acceptance 均不改写。
+>
+> **2026-11-08 OUT-001 有界批准**：§26.34 中 **OUT-001 相关范围**（§26.34.2、§26.34.4.2～§26.34.4.3、§26.34.5、§26.34.8、§26.34.9、§26.34.13、§26.34.14）已获业务所有者**有界批准**用于 Implementation；其身份链引用的唯一权威修正见 **§26.34.15.2**，两批实施范围见 **§26.34.15.3**。该批准**不**等于 §26.34 整体 `DESIGN_PASS`，**不**把 §31.14 整节标为 `APPROVED`，**不**改变 VMI、`PRC-06`、`B-P01/B-P02`、`AUD-OUT-001` 的原状态，也**不**授权 Schema / Migration、数据库操作或真实 MySQL Gate。
 
 ## 26. Procurement & Outsourcing Domain Technical Design
 
@@ -1450,7 +1452,7 @@ Final verdict：`NOT READY`。后续修复必须继续遵守本节既有 source/
 ##### 26.34.4.3 身份效力与允许路径
 
 - 第一实施候选仅评估**可证明的非跟踪产品**（`products.tracking_policy='NONE'`）、`identity_key='NONE'`、来源证明齐全、同一 Supplier WIP 物理位置不变且不存在成本携带的订单间**逻辑数量归属**。LOT/SERIAL、历史残差、身份政策冲突及成本/价值不可证明的路径继续 fail closed，不能因有迁移能力而放宽 `B-P01` 延期边界。
-- 对候选合法路径，不得只更新两条 `outsourcing_material_list.issued_quantity`。必须在同一事务内形成配对的 `TRANSFER_OUT`（源行 `CONSUME`）与 `TRANSFER_IN`（目标行 `SUPPLY`）身份效力，并以已有 `TRANSFER_ORIGIN` 分配和 `source_effect_id`（经过代码级契约核验后）串起可用源供给、源转出、目标转入。每笔供给被消费/转移的累计分配不得超过原供给；`Σ transfer_out = Σ transfer_in = requested quantity`。如现有 schema/消费者无法准确表达该链，不得伪造成功，应返回待裁定的 409 并回到 Design/Schema 审批。
+- 对候选合法路径，不得只更新两条 `outsourcing_material_list.issued_quantity`。必须在同一事务内形成配对的 `TRANSFER_OUT`（源行 `CONSUME`）与 `TRANSFER_IN`（目标行 `SUPPLY`）身份效力，并以已有 `TRANSFER_ORIGIN` 分配和 `source_effect_id`（经过代码级契约核验后）串起可用源供给、源转出、目标转入。每笔供给被消费/转移的累计分配不得超过原供给；`Σ transfer_out = Σ transfer_in = requested quantity`。如现有 schema/消费者无法准确表达该链，不得伪造成功，应返回待裁定的 409 并回到 Design/Schema 审批。该链的**权威规范正文**见 **§26.34.15.2**（含「禁止把 `TRANSFER_OUT` 作为 `source_supply_effect_id` 的供给来源」）。
 - 必须同时验证 `supplier_wip_remaining` 与 canonical WIP 身份账的数量。初始和最终两订单各自的身份可用量、`issued_quantity + supplemented_quantity - returned_quantity - backflushed_quantity` 的定义一致；组合总量守恒。物理库存 `inventory_positions/inventory_transactions/tracked_inventory_movements` **无新增数量移动**，企业所有权不变。目标行尚未拥有可核对的估值来源时，不得使下游成本携带/会计路径意外可执行。
 - `outsourcing_wip_identity_effects` 中的 `TRANSFER_IN/OUT` 已在 schema 声明，**不代表**实现或 Gate 已完成。当前 `recordSupply/recordConsumption` 是私有实现且主要服务物理发退倒冲；Implementation 应通过唯一规范 Owner 进行有界扩展，禁止复制第二套 ledger、绕过现有分配或更改已批准的物理腿写者。
 
@@ -1765,7 +1767,7 @@ Final verdict：`NOT READY`。后续修复必须继续遵守本节既有 source/
 | # | 事项 | 合同要点 | 依赖 |
 |---|---|---|---|
 | I3a-P-1 | 成对身份效力 | 同一事务内形成源行 `TRANSFER_OUT`（`effect_direction='CONSUME'`，`signed_quantity<0`）与目标行 `TRANSFER_IN`（`effect_direction='SUPPLY'`，`signed_quantity>0`），`business_event_id` 恒等于转移事实 ID | **I3b** |
-| I3a-P-2 | `TRANSFER_ORIGIN` 分配 | 源行 `TRANSFER_OUT` 按供给占用比例分配到源行既有 SUPPLY effect；目标行 `TRANSFER_IN` 分配指向该 `TRANSFER_OUT` effect；每笔供给的累计分配不得超过原供给 | **I3b** |
+| I3a-P-2 | `TRANSFER_ORIGIN` 分配 | 源行 `TRANSFER_OUT` 按供给占用比例分配到源行既有 SUPPLY effect（`allocation_kind='TRANSFER_ORIGIN'`，`source_supply_effect_id` 指向合法的**原始 SUPPLY effect**）；目标行 `TRANSFER_IN` 通过 `source_effect_id` 关联该 `TRANSFER_OUT` effect，**不得**以分配行表达该关联；每笔供给的累计分配不得超过原供给。身份链的权威规范正文见 **§26.34.15.2** | **I3b** |
 | I3a-P-3 | 数量与身份守恒 | `Σ transfer_out = Σ transfer_in = requested quantity`；源行 `available_quantity` 相应减少、目标行 `available_quantity` 相应增加；`available_quantity = supplied - consumed` 恒成立 | **I3b** |
 | I3a-P-4 | 物理与成本不变量 | 物理库存 `inventory_positions` / `inventory_transactions` / `tracked_inventory_movements` **无新增数量移动**；企业所有权不变；成本字段保持未证实，**零携带** | **I3b** |
 | I3a-P-5 | 正向验收断言 | 合法 NONE 路径必须断言**固定 201** `{id, transferNo}`，并断言身份 effect / 分配链 / 数量守恒 / 物理零移动。**禁止**以 `201 || 409` 作为正向验收 | **I3b** |
@@ -1792,7 +1794,8 @@ Final verdict：`NOT READY`。后续修复必须继续遵守本节既有 source/
   - **I3a-P** 与 **I3b** 必须**同批**批准（依据 §26.34.14.1），并与 §26.34.14.2 的编号方案、§26.34.14.3 的恢复条件一并获批。
   - **I3b 不以任何 additive Migration 为前置条件**（依据 §26.34.14.1 与 §26.34.13.3）；可选便利项 `source_material_list_id` 若被提出，须单独申请 additive Migration 授权。
 - I3a-S 的实施须先具备：Requirement 侧可引用的「数量归属守恒 + 不可证明路径 fail closed」合同（§31.14.2 当前为 `PENDING_APPROVAL`）与本 Design 的批准（§26.34 当前为 `PENDING_REVIEW`）。
-- 本小节**不**改变 `AUD-OUT-001` 的 `DEFERRED_NOT_AUTHORIZED` 标签，**不**改变 M1C-G03 / G06 既有 7/7 `PASS` 的范围，**不**改变 `B-P01` / `B-P02`、`D-P01` / `D-P02`、`M-15`、`SCP-01`～`SCP-16` 的原状态，也**不**开放 VMI-05。
+- **2026-11-08 更新**：上述两项前置对 **OUT-001 本工作包**已由业务所有者**有界批准**满足（§31.14.2 获批为适用合同；§26.34 中 OUT-001 相关范围获有界批准），两批实施范围与身份链修正见 **§26.34.15**。本小节其余结论不变。
+- 本小节自身**不**改变 `AUD-OUT-001` 的 `DEFERRED_NOT_AUTHORIZED` 标签（该标签的实际迁移见 **§26.34.15.4**），**不**改变 M1C-G03 / G06 既有 7/7 `PASS` 的范围，**不**改变 `B-P01` / `B-P02`、`D-P01` / `D-P02`、`M-15`、`SCP-01`～`SCP-16` 的原状态，也**不**开放 VMI-05。
 - **HARD STOP**：本小节完成后不进入生产代码 Implementation。
 
 #### 26.34.14 OUT-001 Design Dependency Review（2026-11-08；PENDING_REVIEW）
@@ -1901,3 +1904,64 @@ transferNo = `WIP-XFER-${businessDateYYYYMMDD}-${randomUUID 去连字符后取�
 - 探针脚本位于仓库之外的一次性临时目录，**未**在仓库内创建或修改任何文件；其观测结论以本节 F1～F8 的源码事实为准。
 
 **HARD STOP**：本小节完成后不进入生产代码 Implementation。
+
+#### 26.34.15 OUT-001 有界实施授权、身份链引用修正与两批范围登记（2026-11-08；OUT-001 相关范围已获有界批准）
+
+> **定位 / Owner / 状态**：本小节属于 `docs/design/procurement-outsourcing.md` §26.34，Owner 为 Procurement & Outsourcing Domain Owner。业务所有者于 **2026-11-08** 在本轮任务说明中**有界批准** §26.34 中 **OUT-001 相关范围**（即 §26.34.2、§26.34.4.2～§26.34.4.3、§26.34.5、§26.34.8、§26.34.9、§26.34.13、§26.34.14）的 Implementation，并**同时**修正其身份链引用、登记两批实施范围。它**不**签发 §26.34 整体 `DESIGN_PASS`，**不**把 §31.14 整节标为 `APPROVED`，**不**授权 Schema / Migration、数据库操作或真实 MySQL Gate，也**不**签发任何 Acceptance。
+
+##### 26.34.15.1 Owner 有界批准的边界
+
+| 项 | 决定 |
+|---|---|
+| Requirement | §31.14.2 按「现有数量归属守恒 + 历史不可证明 fail closed + 成本携带延期」三项原则，**批准为 OUT-001 本工作包的适用合同**。§31.14 **整节**的其余内容（VMI-01..05）**未**获批准 |
+| Design | §26.34 中 OUT-001 相关范围**有界批准**：允许先完成 §26.34.15.2 的最小身份链引用纠正，再连续执行 §26.34.15.3 登记的两批 Implementation |
+| **未**批准 | §31.14 / §26.34 **全域闭合**；VMI（VMI-01..05 与 `D-P01` / `D-P02`）；`PRC-06`；`B-P01` / `B-P02` —— **原状态一律不变** |
+| **未**批准 | 任何新增 Schema / Migration（含 §26.34.13.3 I3b-2 的可选便利项 `source_material_list_id`）；连接真实 MySQL 或生产数据库；Push / Merge / Tag / Release / Deploy |
+
+##### 26.34.15.2 身份链引用修正（规范正文）
+
+本小节是 §26.34.4.3 与 §26.34.13.2b（I3a-P-1 / I3a-P-2）身份链引用的**唯一权威修正正文**。跨订单 WIP 数量归属转移的身份链固定为：
+
+```text
+原始 SUPPLY（源行 · effect_direction='SUPPLY' · event_type ∈ {ISSUE, SUPPLEMENT}）
+   │  TRANSFER_ORIGIN 分配：effect_id = TRANSFER_OUT effect
+   │                       source_supply_effect_id = 上面的原始 SUPPLY effect
+   ▼
+TRANSFER_OUT（源行 · effect_direction='CONSUME' · signed_quantity < 0）
+   │  source_effect_id：目标行 effect → TRANSFER_OUT effect
+   ▼
+TRANSFER_IN（目标行 · effect_direction='SUPPLY' · signed_quantity > 0）
+```
+
+| # | 规则 | 规范正文 |
+|---|---|---|
+| C1 | `TRANSFER_OUT` = **源行** `CONSUME` | `material_list_id` = **源**物料行 ID；`effect_direction='CONSUME'`；`signed_quantity = -转移数量`；`event_type='TRANSFER_OUT'` |
+| C2 | `TRANSFER_OUT` 使用 `TRANSFER_ORIGIN` 分配 | `allocation_kind='TRANSFER_ORIGIN'`；`effect_id` = 该 `TRANSFER_OUT` effect；`source_supply_effect_id` **必须指向合法的原始 SUPPLY effect**（源行既有 `effect_direction='SUPPLY'` 且 `event_type ∈ {ISSUE, SUPPLEMENT}` 的 effect），按供给占用比例分配，累计分配不得超过该供给数量 |
+| C3 | `TRANSFER_IN` = **目标行** `SUPPLY` | `material_list_id` = **目标**物料行 ID；`effect_direction='SUPPLY'`；`signed_quantity = +转移数量`；`event_type='TRANSFER_IN'` |
+| C4 | `TRANSFER_IN` 通过 `source_effect_id` 关联对应 `TRANSFER_OUT` | `source_effect_id` = 同一次转移的 `TRANSFER_OUT` effect ID；该关联**只**由 `source_effect_id` 表达，**不得**用分配行表达 |
+| C5 | **禁止**把 `TRANSFER_OUT` 作为 `source_supply_effect_id` 的供给来源 | `TRANSFER_OUT` 是 `CONSUME` 效应而非供给。把它当作供给来源会建立「分配指向非供给」的记录，破坏「每笔供给被消费/转移的累计分配不得超过原供给」的算术前提，并把来源链方向倒置 |
+| C6 | 源 / 目标 effect 的 `business_event_id` 必须关联**同一个** WIP Transfer ID | 两侧 effect 的 `business_event_id` 恒等于 `outsourcing_wip_transfers.id`；这是 `transferId → 源行 / 目标行` 双向追溯的唯一锚点 |
+
+C2 与 C4 合起来表达「原始供给 → 源转出 → 目标转入」的完整链条；C5 明确排除把 C4 的关联倒置为分配语义。C1～C6 与既有 Schema 完全相容：`TRANSFER_IN` / `TRANSFER_OUT` / `TRANSFER_ORIGIN` 早已在 `outsourcing_wip_identity_effects` / `..._effect_allocations` 的 CHECK 约束中声明，缺的只是 Writer，因此**不需要**任何 additive Migration。
+
+##### 26.34.15.3 两批 Implementation 范围登记
+
+| 批次 | 范围 | 依赖 | 可观测结果 |
+|---|---|---|---|
+| **I3a-S** | §26.34.13.2 的 I3a-S-1 ～ I3a-S-11 | 无（不依赖 I3b） | **不含任何正向 201**；稳定 400 / 403 / 404 / 409 + 固定 code + 零业务副作用 + 单次拒绝审计 |
+| **I3a-P + I3b** | §26.34.13.2b 的 I3a-P-1 ～ I3a-P-5 与 §26.34.13.3 的 I3b-1 ～ I3b-6；身份链按 §26.34.15.2 | 两项**同批**实施 | 合法 NONE 路径**固定 201**；同 Key 精确重放 201 `replayed:true`；同 Key 异载荷 409；身份链与数量账守恒；物理库存零新增移动 |
+
+两批的顺序与边界：
+
+1. I3a-S 先实施并独立提交。I3a-S 的验收断言**只能是**固定拒绝结果；**不得**声称正向 201、成功幂等精确重放或身份链已在本阶段验证。
+2. I3a-S 通过后连续实施 I3a-P + I3b；两批各自形成**独立**的本地逻辑 commit。
+3. I3b **不以任何 additive Migration 为前置条件**；可选便利项 `source_material_list_id` 本轮**未获授权**，因此不实施、不申请，且**不得**成为两批交付的前置条件。
+4. 两批的 `transferNo` 按 §26.34.14.2 的最小稳定编号方案生成；幂等键来源、作用域与固定响应按 §26.34.8；MySQL 命名锁释放与不确定 COMMIT 处置按 §26.34.9.2 与 §26.34.14.3。
+
+##### 26.34.15.4 本轮边界与 HARD STOP
+
+- 本小节**不**改变 §26.34 中 OUT-001 相关范围以外的任何既有状态；`A1-D-RV-01` ～ `A1-D-RV-04` 四个 Owner Review Gate 状态不变。
+- `AUD-OUT-001` 的标签由 `DEFERRED_NOT_AUTHORIZED` 迁移为 `IMPLEMENTATION_AUTHORIZED`（有界，见 §26.34.15.1 与 §26.34.15.3）。该迁移**只**表示本工作包获得了实施授权，**不**表示缺陷已修复或已验收；两批实施与本地验证完成后**仍不**签发 `AUD-OUT-001` 的 Acceptance，其状态最多推进到 `TESTED` / `PENDING_OWNER_APPROVAL`。
+- `M1C-G03` / `M1C-G06` 既有 7/7 `PASS` 及其范围、`B-P01` / `B-P02`、`D-P01` / `D-P02`、`M-15`、`SCP-01` ～ `SCP-16`、`PRC-06` 与 B3101 / B3121 状态**全部不变**。
+- 本轮**未**授权真实 MySQL Gate：不得运行、不得声称 PASS；`FULL` 回归若未完成须记录 `NOT_RUN`；旧功能 UAT 的既有失败**不得**改写为 PASS。
+- **HARD STOP**：两批 Implementation 完成后停止，等待 Owner 技术复核与真实 MySQL Gate 授权；不得 Push / Merge / Tag / Release / Deploy。

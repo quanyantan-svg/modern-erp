@@ -2535,6 +2535,61 @@ OUT-001（`AUD-OUT-001`）的实现前置以 [`docs/design/procurement-outsourci
 
 该修订**只是 Design 候审修订**，**不**签发 Requirement 验收或 `DESIGN_PASS`，**不**授权任何 Implementation、Schema / Migration、数据库操作或真实 MySQL Gate。**Design 完成后 HARD STOP。**
 
+## 45. OUT-001 有界实施授权与两批范围登记（2026-11-08）
+
+### 45.1 本节定位与边界
+
+本节是 `AUD-OUT-001`（OUT-001）**实施授权**与其**两批范围**的唯一增量登记；§44 与更早章节的历史结论**原样保留**，未被改写。
+
+- 本节**不**签发 Requirement 验收、Design PASS、Capability Freeze、Domain Acceptance、Manual Closure 或 Release Readiness。
+- 本节**不**授权任何 Schema / Migration、数据库写入、真实 MySQL Gate 或远端 Git 操作。
+- 本节编号为 **§45**，按既有「H2 = 日期化顶层章节」规则**追加**在 §44 之后；历史编号未重排。
+
+### 45.2 Owner 有界批准决定
+
+业务所有者于 **2026-11-08** 在本轮任务说明中作出以下**有界**批准：
+
+| 项 | 决定 | 记录位置 |
+|---|---|---|
+| Requirement | §31.14.2 按「现有数量归属守恒 + 历史不可证明 fail closed + 成本携带延期」三项原则，**批准为 OUT-001 本工作包的适用合同** | [`docs/design/procurement-outsourcing.md`](../design/procurement-outsourcing.md) §26.34.15.1 |
+| Design | §26.34 中 **OUT-001 相关范围**（§26.34.2、§26.34.4.2～§26.34.4.3、§26.34.5、§26.34.8、§26.34.9、§26.34.13、§26.34.14）**有界批准**用于 Implementation；身份链引用按 §26.34.15.2 修正 | 同上 §26.34.15.1 / §26.34.15.2 |
+| **未**批准 | §31.14 / §26.34 **全域闭合**；VMI（VMI-01..05、`D-P01` / `D-P02`）；`PRC-06`；`B-P01` / `B-P02` —— **原状态一律不变** | 同上 §26.34.15.1 |
+| **未**批准 | 任何新增 Schema / Migration（含可选便利项 `source_material_list_id`）；连接真实 MySQL 或生产数据库；Push / Merge / Tag / Release / Deploy | 同上 §26.34.15.1 / §26.34.15.4 |
+
+**决定来源的边界（不得虚构）**：来源是**业务所有者在当前对话中的明确授权**；仓库侧可核验的复核对象为 `master` @ `cc184dbd709fc5906d85c1c21506c867ca15eb1f` 的代码、§26.34 的 Design 正文与本节登记。**不存在虚构的手写签名、电子签章或外部审批单**；本节**不代为杜撰**评审编号与逐项发现。
+
+### 45.3 状态迁移
+
+```text
+Before : AUD-OUT-001 = DEFERRED_NOT_AUTHORIZED
+After  : AUD-OUT-001 = IMPLEMENTATION_AUTHORIZED（有界；§26.34.15.1 / §26.34.15.3）
+```
+
+该迁移**只**表示本工作包获得了实施授权，**不**表示缺陷已修复或已验收。`AUD-OUT-001` 的状态**不得**在两批实施与本地验证完成前推进到 `ACCEPTED`；完成后最多推进到 `TESTED` / `PENDING_OWNER_APPROVAL`，仍需 Owner 技术复核与真实 MySQL Gate。
+
+### 45.4 两批实施范围
+
+| 批次 | 范围 | 依赖 | 可观测结果 |
+|---|---|---|---|
+| **I3a-S** | §26.34.13.2 的 I3a-S-1 ～ I3a-S-11 | 无 | **不含任何正向 201**；固定 400 / 403 / 404 / 409 + 固定 code + 零业务副作用 + 单次拒绝审计 |
+| **I3a-P + I3b** | §26.34.13.2b 的 I3a-P-1 ～ I3a-P-5 与 §26.34.13.3 的 I3b-1 ～ I3b-6；身份链按 §26.34.15.2 | 两项**同批** | 合法 NONE 路径**固定 201**；同 Key 精确重放 201 `replayed:true`；同 Key 异载荷 409；身份链与数量账守恒；物理库存零新增移动 |
+
+I3a-S 先实施并独立提交；I3a-S 的验收断言**只能是**固定拒绝结果，**不得**声称正向 201、成功幂等精确重放或身份链已验证。I3a-S 通过后连续实施 I3a-P + I3b，两批各自形成**独立**的本地逻辑 commit。
+
+### 45.5 明确不因本节改变的事项
+
+- §31.14 整节仍**非** `APPROVED`（仅 §31.14.2 获批为 OUT-001 本工作包的适用合同）；§26.34 仍**非**整体 `DESIGN_PASS`；`A1-D-RV-01` ～ `A1-D-RV-04` 四个 Owner Review Gate 状态不变。
+- `AUD-PRC-002`（Hash）、`AUD-FE-002` / `AUD-FE-003`、`AUD-PRC-003` ～ `AUD-PRC-009`、`AUD-VMI-001` ～ `AUD-VMI-003`、`AUD-OUT-002` 的状态**全部不变**。
+- `M1C-G03` / `M1C-G06` 既有 7/7 `PASS` 及其范围、`R-01` ～ `R-20`、`D-01` ～ `D-04`、`WP-I` / `WP-J`、`M-15`、`SCP-01` ～ `SCP-16` 原状态不变。
+- `PRC-06` **不**变为 `COVERED`；`docs/status/CAPABILITY_MATRIX.md` 不更新；B3101 / B3121 继续 `BLOCKED`；Procurement & Outsourcing Domain Acceptance 继续 `NOT READY`。
+- `VMI-01` ～ `VMI-05`、`D-P01` / `D-P02`、`B-P01` / `B-P02`、`M1-F-07` / `M1-F-11` 原状态不变；VMI-05 继续 409 `VMI_SETTLEMENT_POLICY_PENDING`。
+
+### 45.6 本节的验证限制声明
+
+- **真实 MySQL 8 Gate 未获授权**：不得运行、不得声称 PASS；`FULL` 回归若未完成须记录 `NOT_RUN`。
+- 旧功能 UAT 的既有失败**不得**改写为 PASS。
+- 本节**未**运行任何测试；两批实施后的实测证据另见本节后续增量或当天 `log/`。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
