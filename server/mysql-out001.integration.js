@@ -283,6 +283,10 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
       await issueWip(source.orderId, source.materialRow, 5);
       const before = out001BusinessSnapshot(fixture.db);
       const physicalBefore = out001PhysicalFinanceSnapshot(fixture.db);
+      const transfersBefore = countRows(
+        fixture.db,
+        'outsourcing_wip_transfers',
+      );
 
       const race = await runG07GateRace({
         db: barrier,
@@ -305,7 +309,20 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
       assert.equal(rejected[0].data.code, 'OUTSOURCING_WIP_TRANSFER_OVERDRAW');
 
       // 无双写、无超额：最终可用量与身份账一致。
-      assert.equal(countRows(fixture.db, 'outsourcing_wip_transfers'), 1, '并发不得双写转移事实');
+      assert.equal(
+        countRows(fixture.db, 'outsourcing_wip_transfers') - transfersBefore,
+        1,
+        '并发只能新增一笔 WIP Transfer',
+      );
+      assert.equal(
+        Number(fixture.db.prepare(`
+          SELECT COUNT(*) AS n
+          FROM outsourcing_wip_transfers
+          WHERE source_order_id=? AND target_order_id=?
+        `).get(source.orderId, target.orderId).n),
+        1,
+        '本次源目标订单只能形成一笔转移事实',
+      );
       const sourceRow = fixture.db.prepare('SELECT * FROM outsourcing_material_list WHERE id=?').get(source.materialRow.id);
       const targetRow = fixture.db.prepare('SELECT * FROM outsourcing_material_list WHERE id=?').get(target.materialRow.id);
       assert.equal(Number(sourceRow.issued_quantity), 2);
