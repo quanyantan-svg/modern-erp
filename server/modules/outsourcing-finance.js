@@ -567,8 +567,11 @@ export async function createWipTransfer(db, req, res, actor) {
         throw wipTransferConflict('OUTSOURCING_WIP_TRANSFER_IDENTITY_UNSUPPORTED', 'LOT/SERIAL 跟踪产品的 WIP 转移身份归属尚未批准');
       }
       const baseUom = String(product.base_uom_code || product.unit || 'EA').toUpperCase();
-      if (String(sourceMaterial.unit || '').toUpperCase() !== baseUom) {
-        throw wipTransferConflict('OUTSOURCING_WIP_TRANSFER_UOM_MISMATCH', '源物料行单位与产品基础单位不一致');
+      const sourceUom = String(sourceMaterial.unit || '').toUpperCase();
+      const targetUom = String(targetMaterial.unit || '').toUpperCase();
+      // 源行、目标行与产品基础 UOM 必须三者一致：跨 UOM 的数量归属不是同一物料的数量转移。
+      if (sourceUom !== baseUom || targetUom !== baseUom || targetUom !== sourceUom) {
+        throw wipTransferConflict('OUTSOURCING_WIP_TRANSFER_UOM_MISMATCH', '源/目标物料行单位与产品基础单位不一致');
       }
       // 同一供应商 WIP 物理位置不变：跨供应商或跨 WIP 仓位都不是逻辑数量归属。
       const sourceSupplier = db.prepare('SELECT id,supplier_wip_warehouse_id FROM suppliers WHERE id=?').get(sourceOrder.supplier_id);

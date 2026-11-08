@@ -1445,6 +1445,7 @@ Final verdict：`NOT READY`。后续修复必须继续遵守本节既有 source/
 
 - API 的 `materialListId` **表示源行**；数据库旧表 `outsourcing_wip_transfers.material_list_id` 在既有实现中**表示目标行**。这两个语义必须显式映射，不得直接将 API 字段覆盖为同一个数据库事实。
 - 源行按 `(id=materialListId, order_id=sourceOrderId)` 唯一核定；目标行按 `(order_id=targetOrderId, product_id=source.product_id)` 查询并检查候选数严格为 1；`get()`/`LIMIT 1` 不能证明唯一。还要验证产品、基础 UOM、同一供应商 WIP 物理位置、两订单状态、业务日期和权限，任何不一致均拒绝，不允许跨仓物理移动借用逻辑转移接口。
+- **UOM 三方一致**：源行 `unit`、目标行 `unit` 与产品基础 UOM 必须三者一致。跨 UOM 的数量归属不是同一物料的数量转移，任何一方不一致即固定 409 `OUTSOURCING_WIP_TRANSFER_UOM_MISMATCH`，零业务副作用、单次拒绝审计；不得静默换算，也不得由请求方指定 UOM。
 - **最小 Schema 候选（单独授权）**：保留旧 `material_list_id` 对应目标行的历史语义，仅为 `outsourcing_wip_transfers` 新增 `source_material_list_id TEXT NULL`（可选 FK→`outsourcing_material_list.id`）与必要查询索引。所有新转移写入显式源行 ID，目标行仍写现有 `material_list_id`；二者在确认后不可普通修改。历史行的新增列保持 NULL，不根据订单+产品猜回填；历史来源不可证明时只读标 `SOURCE_UNVERIFIED`。新增列是否必需以及是否另建不可变来源关联，须完成 migration 评审再批准；不得在 Design Review 当下执行 DDL。
 - 转移事实能从 `transferId → sourceOrderId + sourceMaterialListId → targetOrderId + targetMaterialListId` 正向、反向追溯；源/目标 ID、数量、UOM、业务日期、身份效力来源、操作人和审计具有稳定关联。仅凭旧表里的 `source_order_id` + 目标产品作事后 JOIN 不算确定性证据。
 - 源行与目标行的 `legacy_unverified_wip_quantity` 只有在证明为已核验数据时才参与。`NULL` 表示未知，绝不 `COALESCE(...,0)` 后获得转移容量。不得仅因 `outsourcing_wip_identity_balances` 行数为 0 就认定历史 WIP 为合法可转移数量。
@@ -1470,10 +1471,10 @@ Final verdict：`NOT READY`。后续修复必须继续遵守本节既有 source/
 
 | 条件 | 目标行为 | 数据影响及审计 |
 |---|---|---|
-| 缺键、NaN/Infinity、0/负数、精度/UOM/日期格式非法 | 400 | 零业务写入；沿现有 400 审计约定 |
+| 缺键、NaN/Infinity、0/负数、精度/UOM/日期格式非法、**源/目标订单相同** | 400 | 零业务写入；沿现有 400 审计约定 |
 | 未授权 / 跨授权范围 | 403 | 零业务写入；不得泄露别人的订单与余额 |
 | 源订单或源行确不存在 | 404 | 零业务写入；不扩大既有 404 审计义务 |
-| 多个目标候选、无效订单状态、同源同目标、不一致供应商 WIP 仓、关闭业务期间 | 409 + 具有稳定 code 的具体原因 | 零业务副作用；单次拒绝审计 |
+| 多个目标候选、无效订单状态、不一致供应商 WIP 仓、**源/目标物料行 UOM 与产品基础单位不一致**、关闭业务期间 | 409 + 具有稳定 code 的具体原因 | 零业务副作用；单次拒绝审计 |
 | 历史余额未证实 / 身份无法追溯 / LOT/SERIAL 或成本延期路径 | 409 + `OUTSOURCING_WIP_TRANSFER_SOURCE_UNVERIFIED` / `..._IDENTITY_UNSUPPORTED` / `..._COST_POLICY_PENDING`（按实际原因选择） | 零业务副作用；单次拒绝审计 |
 | 超额 / 并发败方 | 409 + `OUTSOURCING_WIP_TRANSFER_OVERDRAW` / `..._CONCURRENT_CONFLICT` | 零业务副作用；单次拒绝审计 |
 | 同 Key 异载荷 | 409 `OUTSOURCING_WIP_TRANSFER_IDEMPOTENCY_CONFLICT` | 不生成第二个转移/身份证据；单次拒绝审计 |
@@ -1746,7 +1747,7 @@ Final verdict：`NOT READY`。后续修复必须继续遵守本节既有 source/
 
 | # | 事项 | 合同要点 | 依据 |
 |---|---|---|---|
-| I3a-S-1 | 请求合同与输入校验 | 允许字段集合新增 `body.idempotencyKey`（当前该字段被 400 `VALIDATION` 拒绝）；数量必须有限正数、精度合法；业务日期 `YYYY-MM-DD`；源 / 目标订单不同；缺键 400 `IDEMPOTENCY_KEY_REQUIRED`；非法输入 400 且零业务写入 | §26.34.8.1、§26.34.5.2 |
+| I3a-S-1 | 请求合同与输入校验 | 允许字段集合新增 `body.idempotencyKey`（当前该字段被 400 `VALIDATION` 拒绝）；数量必须有限正数、精度合法；业务日期 `YYYY-MM-DD`；源 / 目标订单不同，固定 400 `OUTSOURCING_WIP_TRANSFER_SAME_ORDER`（**属输入校验，不是业务门禁 409**）；缺键 400 `IDEMPOTENCY_KEY_REQUIRED`；非法输入 400 且零业务写入 | §26.34.8.1、§26.34.5.2 |
 | I3a-S-2 | 事务内权威重读 | 源 / 目标订单状态、源 / 目标物料行余额、产品跟踪策略、身份余额、期间状态一律在**事务内**重读；**不得**沿用事务外读取的余额作为写入依据 | §26.34.5.1 第 2 条 |
 | I3a-S-3 | 幂等合同落地 | 键来源、作用域、指纹、固定响应与同事务提交按 §26.34.8 执行；不得自行更改全局幂等合同 | §26.34.8 |
 | I3a-S-4 | 数量守恒与并发守卫 | 源减目标增必须成对；以受影响行数 / 余额条件更新（CAS）保证不超额；竞争败方 409 且零业务副作用 | §26.34.4.3、§26.34.5.3 |
@@ -1941,6 +1942,8 @@ TRANSFER_IN（目标行 · effect_direction='SUPPLY' · signed_quantity > 0）
 | C4 | `TRANSFER_IN` 通过 `source_effect_id` 关联对应 `TRANSFER_OUT` | `source_effect_id` = 同一次转移的 `TRANSFER_OUT` effect ID；该关联**只**由 `source_effect_id` 表达，**不得**用分配行表达 |
 | C5 | **禁止**把 `TRANSFER_OUT` 作为 `source_supply_effect_id` 的供给来源 | `TRANSFER_OUT` 是 `CONSUME` 效应而非供给。把它当作供给来源会建立「分配指向非供给」的记录，破坏「每笔供给被消费/转移的累计分配不得超过原供给」的算术前提，并把来源链方向倒置 |
 | C6 | 源 / 目标 effect 的 `business_event_id` 必须关联**同一个** WIP Transfer ID | 两侧 effect 的 `business_event_id` 恒等于 `outsourcing_wip_transfers.id`；这是 `transferId → 源行 / 目标行` 双向追溯的唯一锚点 |
+
+C2 的**供给来源封闭性**（2026-11-08 定向修补确认）：`TRANSFER_IN` 本身也是 `effect_direction='SUPPLY'`，因此 C2 的「原始 SUPPLY effect」必须按 `event_type ∈ {ISSUE, SUPPLEMENT}` 进一步限定；`TRANSFER_IN` **不得**被当作原始供给来源。源行没有可覆盖本次转移数量的原始 ISSUE / SUPPLEMENT 供给时，该转移固定 409 `OUTSOURCING_WIP_TRANSFER_SOURCE_UNVERIFIED`、零业务副作用、单次拒绝审计。本轮**不新增**多级递归来源功能：跨级追溯（目标行的 `TRANSFER_IN` 再向下追溯到更早订单的原始供给）属**未批准**能力，不得以任何形式实现或暗示。
 
 C2 与 C4 合起来表达「原始供给 → 源转出 → 目标转入」的完整链条；C5 明确排除把 C4 的关联倒置为分配语义。C1～C6 与既有 Schema 完全相容：`TRANSFER_IN` / `TRANSFER_OUT` / `TRANSFER_ORIGIN` 早已在 `outsourcing_wip_identity_effects` / `..._effect_allocations` 的 CHECK 约束中声明，缺的只是 Writer，因此**不需要**任何 additive Migration。
 

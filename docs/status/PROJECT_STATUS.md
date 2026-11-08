@@ -2620,6 +2620,34 @@ I3a-S 先实施并独立提交；I3a-S 的验收断言**只能是**固定拒绝�
 
 **本增量明确不改变的**：§31.14 / §26.34 的整体状态（未签发 Requirement 验收或 `DESIGN_PASS`）；`A1-D-RV-01`～`A1-D-RV-04`；M1C-G03 / G06 既有 7/7 `PASS` 及其范围；`B-P01` / `B-P02`、`D-P01` / `D-P02`、`VMI-01`～`VMI-05`、`M1-F-07` / `M1-F-11`、`PRC-06`、B3101 / B3121、Domain Acceptance、`docs/status/CAPABILITY_MATRIX.md`。本批次**未**新增 Schema / Migration、**未**连接真实 MySQL 或生产数据库、**未**运行任何 MySQL Gate、**未** Push / Merge / Tag / Release / Deploy。
 
+### 45.10 Acceptance 前定向修补增量（2026-11-08）
+
+本节登记独立 Review 发现的两项边界修补与一处合同一致性更正。**未**重新设计 OUT-001，**未**新增 Schema / Migration，**未**建立第二套 WIP ledger，**未**改变已批准的物理库存 / 成本边界。
+
+| 项 | 内容 |
+|---|---|
+| 修补一：目标 UOM | `createWipTransfer()` 在**事务内**核验 `targetMaterial.unit`、`sourceMaterial.unit` 与产品基础 UOM **三者一致**；任一不一致固定 409 `OUTSOURCING_WIP_TRANSFER_UOM_MISMATCH`，零业务副作用、单次拒绝审计。跨 UOM 的数量归属不是同一物料的数量转移 |
+| 修补二：`TRANSFER_ORIGIN` 供给来源封闭性 | §26.34.15.2 C2 的供给来源按 `event_type ∈ {ISSUE, SUPPLEMENT}` 封闭：`TRANSFER_IN` 本身也是 `effect_direction='SUPPLY'`，**不得**被当作原始供给。源行没有可覆盖本次转移数量的原始供给时，固定 409 `OUTSOURCING_WIP_TRANSFER_SOURCE_UNVERIFIED`、零业务副作用、单次拒绝审计。**本轮未新增多级递归来源功能** |
+| 合同一致性 | §26.34.5.2 表格把「同源同目标」由 409 行更正为 **400 输入校验行**；§26.34.13.2 I3a-S-1 明确其固定 code 为 `OUTSOURCING_WIP_TRANSFER_SAME_ORDER`。**对外行为未改变**：既有实现本就返回 400，本次只更正 Design 表述 |
+| 实施文件 | `server/modules/outsourcing-finance.js`（UOM 三方一致门禁）、`server/modules/outsourcing-inventory.js`（`recordConsumption` 增补可选 `supplyEventTypes` 限定供给来源类型，既有物理腿调用点行为不变；`recordWipTransferIdentity` 传入原始供给类型并把供给不可证明映射为固定 code）、`server/outsourcing-wip-transfer.test.js`（新增 2 项定向断言）、`docs/design/procurement-outsourcing.md`（§26.34.4.2、§26.34.5.2、§26.34.13.2、§26.34.15.2 的必要表述） |
+| 新增测试 | ①**目标 UOM 负向**：源 `PCS` / 目标 `BOX` → 409 `OUTSOURCING_WIP_TRANSFER_UOM_MISMATCH`；再以源 `EA`（合法）/ 目标 `BOX` **隔离**验证目标行门禁本身生效；两次均逐字段零副作用（转移事实 / 身份 effect / 物料数量 / 幂等成功记录 / 库存与财务事实）+ 拒绝审计恰好一次；恢复一致单位后同一源行可正常 201。②**多级转移定向**：A 原始 `ISSUE` SUPPLY → A→B 合法 201（`TRANSFER_ORIGIN` 指向 A 的 `ISSUE` effect，`TRANSFER_IN` 不冒充原始供给）→ B→C 固定 409 `OUTSOURCING_WIP_TRANSFER_SOURCE_UNVERIFIED` 且零副作用、拒绝审计恰好一次、以 `TRANSFER_IN` 为 `source_supply_effect_id` 的分配行数为 0；A→B 的 201 与全部事实不受影响 |
+| 非空洞性证明 | 两次 mutation 均被 focused 断言捕获：①移除目标 UOM 门禁 → UOM 定向断言失败；②取消 `TRANSFER_ORIGIN` 的供给类型限定 → 多级转移断言由期望 409 变为实际 **201**（即原实现确实会把 `TRANSFER_IN` 冒充原始供给）。实验后实现已完整还原并复测通过 |
+| 状态 | `AUD-OUT-001` 仍为 `TESTED` / `PENDING_OWNER_APPROVAL`；**未**签发 `AUD-OUT-001` Acceptance |
+
+**本增量明确不改变的**：§31.14 / §26.34 的整体状态；`A1-D-RV-01`～`A1-D-RV-04`；M1C-G03 / G06 既有 7/7 `PASS`；`B-P01` / `B-P02`、`D-P01` / `D-P02`、`VMI-01`～`VMI-05`、`PRC-06`、B3101 / B3121、Domain Acceptance、`docs/status/CAPABILITY_MATRIX.md`。本轮**未**触碰 VMI、PRC-005、PRC-006 或任何其它审计 Issue；**未**新增 Schema / Migration、**未**建立第二套 WIP ledger、**未**改变物理库存 / 成本边界；**未**连接真实 MySQL 或生产数据库、**未**运行任何 MySQL Gate、**未** Push / Merge / Tag / Release / Deploy。
+
+### 45.11 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
+
+沿用 §45.9，并补充本轮定向修补相关项：
+
+| # | 待验项 | 说明 |
+|---|---|---|
+| M1 | **命名锁** | `idempotencyReplay()` 的 MySQL 命名锁在「未命中即持锁 → 事务提交 / 回滚 → `releaseMySqlIdempotencyLocks()` 确认释放」全链路上不产生 `LOCK_ABSENT` / 未确认释放 / 连接隔离 |
+| M2 | **不同 Key 并发** | 不同幂等键的同源并发转移在 MySQL 行锁下的败方 code（SQLite 本地因事务串行化表现为 `OUTSOURCING_WIP_TRANSFER_OVERDRAW`，MySQL 行锁下应表现为 `OUTSOURCING_WIP_TRANSFER_CONCURRENT_CONFLICT`），最终可用量不为负、无双写、无重复 effect |
+| M3 | **COMMIT 不确定** | `transaction()` 的不确定 COMMIT 路径（`mysqlRequestTimeout` / `sessionLost`）不自动重试写操作、不产生第二笔转移事实；§26.34.14.3 的 R1～R5 恢复条件在真实会话终止 / epoch 变化证据下可判定 |
+| M4 | **CHECK / UNIQUE / FK** | `outsourcing_wip_identity_effects` / `..._effect_allocations` / `..._identity_balances` 在 MySQL 8 下的 CHECK（`available_quantity = supplied − consumed`、`available_quantity >= 0`）、UNIQUE（`event_type, business_event_id, business_event_item_id, identity_key`；`effect_id, source_supply_effect_id, allocation_kind`；`transfer_no`）与 FK 语义与 SQLite 等价 |
+| M5 | **编号碰撞** | `transferNo`（`WIP-XFER-<业务日期>-<12 位十六进制>`，48 位熵）在 MySQL 并发下的 `UNIQUE` 冲突路径确实映射为 409 `OUTSOURCING_WIP_TRANSFER_NO_CONFLICT`，而不是 500 |
+
 ### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
 
 以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：

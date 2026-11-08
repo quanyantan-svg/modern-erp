@@ -94,7 +94,7 @@ function recordSupply(db, { material, identity, eventType, eventId, eventItemId,
   return db.prepare('SELECT * FROM outsourcing_wip_identity_effects WHERE id=?').get(effectId);
 }
 
-function recordConsumption(db, { material, identity, eventType, eventId, eventItemId, quantity, businessDate, idempotencyKey, allocationKind = 'CONSUMPTION' }) {
+function recordConsumption(db, { material, identity, eventType, eventId, eventItemId, quantity, businessDate, idempotencyKey, allocationKind = 'CONSUMPTION', supplyEventTypes = null }) {
   const existing = db.prepare('SELECT * FROM outsourcing_wip_identity_effects WHERE idempotency_key=?').get(idempotencyKey);
   const requestFingerprint = fingerprint({ materialListId: material.id, identityKey: identity.identityKey, eventType, eventId, eventItemId, quantity, businessDate });
   if (existing) {
@@ -111,11 +111,15 @@ function recordConsumption(db, { material, identity, eventType, eventId, eventIt
   }
   // 供给来源只取 `effect_direction='SUPPLY'` 的 effect。`CONSUME` 效应（含
   // TRANSFER_OUT）因此**永远不可能**成为 `source_supply_effect_id`（§26.34.15.2 C5）。
+  // `supplyEventTypes` 进一步把候选限制到指定来源类型：TRANSFER_ORIGIN 只允许
+  // 原始 ISSUE / SUPPLEMENT 供给，**不得**把 TRANSFER_IN 冒充原始供给（C2）。
+  const restricted = Array.isArray(supplyEventTypes) && supplyEventTypes.length > 0;
+  const typeFilter = restricted ? ` AND e.event_type IN (${supplyEventTypes.map(() => '?').join(',')})` : '';
   const supplies = db.prepare(`SELECT e.*,
     e.signed_quantity-COALESCE((SELECT SUM(a.allocated_quantity) FROM outsourcing_wip_identity_effect_allocations a WHERE a.source_supply_effect_id=e.id),0) remaining
     FROM outsourcing_wip_identity_effects e
-    WHERE e.material_list_id=? AND e.identity_key=? AND e.effect_direction='SUPPLY'
-    ORDER BY e.created_at,e.id`).all(material.id, identity.identityKey);
+    WHERE e.material_list_id=? AND e.identity_key=? AND e.effect_direction='SUPPLY'${typeFilter}
+    ORDER BY e.created_at,e.id`).all(material.id, identity.identityKey, ...(restricted ? supplyEventTypes : []));
   let remaining = quantity;
   const allocations = [];
   for (const supply of supplies) {
@@ -126,7 +130,10 @@ function recordConsumption(db, { material, identity, eventType, eventId, eventIt
     remaining -= allocated;
     if (remaining <= EPS) break;
   }
-  if (remaining > EPS) throw codedConflict('WIP_IDENTITY_EVIDENCE_MISSING', 'WIP 供给身份证据无法覆盖本次消费');
+  if (remaining > EPS) {
+    if (restricted) throw codedConflict('WIP_IDENTITY_ORIGIN_SUPPLY_UNPROVEN', 'WIP 原始供给身份证据无法覆盖本次转移');
+    throw codedConflict('WIP_IDENTITY_EVIDENCE_MISSING', 'WIP 供给身份证据无法覆盖本次消费');
+  }
   const now = new Date().toISOString();
   const effectId = randomUUID();
   db.prepare(`INSERT INTO outsourcing_wip_identity_effects(
@@ -269,22 +276,37 @@ export function executeOutsourcingBackflush(db, {
  *
  * 两侧 effect 的 `business_event_id` 恒等于同一个 WIP Transfer ID（C6），
  * 这是 `transferId → 源行 / 目标行` 双向追溯的唯一锚点。
+ *
+ * C2 的落地：TRANSFER_ORIGIN 的供给来源**只允许**源行既有的原始
+ * ISSUE / SUPPLEMENT 供给。TRANSFER_IN 本身也是 `effect_direction='SUPPLY'`，
+ * 因此必须被显式排除 —— 否则一次转移的转入量会被下一次转移冒充成原始供给，
+ * 形成未被批准的多级递归来源链。源行没有可覆盖本次数量的原始供给时，
+ * 该转移固定失败，不产生任何身份事实。
  */
+const TRANSFER_ORIGIN_SOURCE_EVENT_TYPES = Object.freeze(['ISSUE', 'SUPPLEMENT']);
+
 export function recordWipTransferIdentity(db, {
   sourceMaterial, targetMaterial, quantity, transferId, businessDate,
 }) {
   const identity = resolveOutsourcingIdentity(db, sourceMaterial.product_id, {});
-  const transferOut = recordConsumption(db, {
-    material: sourceMaterial,
-    identity,
-    eventType: 'TRANSFER_OUT',
-    eventId: transferId,
-    eventItemId: sourceMaterial.id,
-    quantity,
-    businessDate,
-    idempotencyKey: `WIP_TRANSFER:${transferId}:OUT:${sourceMaterial.id}:${identity.identityKey}`,
-    allocationKind: 'TRANSFER_ORIGIN',
-  });
+  let transferOut;
+  try {
+    transferOut = recordConsumption(db, {
+      material: sourceMaterial,
+      identity,
+      eventType: 'TRANSFER_OUT',
+      eventId: transferId,
+      eventItemId: sourceMaterial.id,
+      quantity,
+      businessDate,
+      idempotencyKey: `WIP_TRANSFER:${transferId}:OUT:${sourceMaterial.id}:${identity.identityKey}`,
+      allocationKind: 'TRANSFER_ORIGIN',
+      supplyEventTypes: TRANSFER_ORIGIN_SOURCE_EVENT_TYPES,
+    });
+  } catch (error) {
+    if (error?.code !== 'WIP_IDENTITY_ORIGIN_SUPPLY_UNPROVEN') throw error;
+    throw codedConflict('OUTSOURCING_WIP_TRANSFER_SOURCE_UNVERIFIED', '转移数量的原始供给身份证据不可证明');
+  }
   const transferIn = recordSupply(db, {
     material: targetMaterial,
     identity,

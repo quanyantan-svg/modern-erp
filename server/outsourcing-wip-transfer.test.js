@@ -619,6 +619,92 @@ describe('OUT-001 委外跨单 WIP 数量归属转移', () => {
       assert.equal(Number(identityBalance(target.materialRow.id).available_quantity), 3);
     });
 
+    test('OUT-001 边界：目标行 UOM 与源行/产品基础单位不一致固定 409 UOM_MISMATCH，零业务副作用、单次拒绝审计', async () => {
+      const source = await createOrderWithMaterial();
+      const target = await createOrderWithMaterial();
+      await issueWip(source.orderId, source.materialRow, 5);
+
+      // 情形一：源行 PCS、目标行 BOX —— 两侧都与产品基础单位不一致。
+      fixture.db.prepare('UPDATE outsourcing_material_list SET unit=? WHERE id=?').run('PCS', source.materialRow.id);
+      fixture.db.prepare('UPDATE outsourcing_material_list SET unit=? WHERE id=?').run('BOX', target.materialRow.id);
+      const beforeMismatch = businessSnapshot();
+      const auditsBefore = rejectionAuditCount(source.orderId);
+      const mismatch = await fixture.request('POST', '/api/procurement/outsourcing/wip-transfers', fixture.tokens.admin,
+        transferBody(source, target, 3));
+      assert.equal(mismatch.status, 409);
+      assert.equal(mismatch.data.code, 'OUTSOURCING_WIP_TRANSFER_UOM_MISMATCH');
+      assert.equal(businessSnapshot(), beforeMismatch, 'UOM 不一致必须零业务副作用（转移事实/身份 effect/物料数量/幂等记录/库存与财务事实）');
+      assert.equal(rejectionAuditCount(source.orderId), auditsBefore + 1, 'UOM 拒绝必须恰好记录一条拒绝审计');
+
+      // 情形二：源行与产品基础单位一致、只有目标行 BOX —— 隔离验证目标行 UOM 门禁本身生效。
+      fixture.db.prepare('UPDATE outsourcing_material_list SET unit=? WHERE id=?').run('EA', source.materialRow.id);
+      const beforeTargetOnly = businessSnapshot();
+      const auditsBeforeTarget = rejectionAuditCount(source.orderId);
+      const targetOnly = await fixture.request('POST', '/api/procurement/outsourcing/wip-transfers', fixture.tokens.admin,
+        transferBody(source, target, 3));
+      assert.equal(targetOnly.status, 409);
+      assert.equal(targetOnly.data.code, 'OUTSOURCING_WIP_TRANSFER_UOM_MISMATCH');
+      assert.equal(businessSnapshot(), beforeTargetOnly, '目标行 UOM 不一致必须零业务副作用');
+      assert.equal(rejectionAuditCount(source.orderId), auditsBeforeTarget + 1, '目标行 UOM 拒绝必须恰好记录一条拒绝审计');
+
+      // 恢复一致单位后，同一源行必须可正常转移（证明上述拒绝来自 UOM 门禁本身）。
+      fixture.db.prepare('UPDATE outsourcing_material_list SET unit=? WHERE id=?').run('EA', target.materialRow.id);
+      const allowed = await fixture.request('POST', '/api/procurement/outsourcing/wip-transfers', fixture.tokens.admin,
+        transferBody(source, target, 3));
+      assert.equal(allowed.status, 201, JSON.stringify(allowed.data));
+    });
+
+    test('OUT-001 边界：A→B→C 多级转移：TRANSFER_ORIGIN 只认原始 ISSUE/SUPPLEMENT 供给，第二次转移固定 409 且零副作用', async () => {
+      const orderA = await createOrderWithMaterial();
+      const orderB = await createOrderWithMaterial();
+      const orderC = await createOrderWithMaterial();
+      await issueWip(orderA.orderId, orderA.materialRow, 5);
+
+      // A → B：合法转移，TRANSFER_ORIGIN 必须指向 A 的原始 ISSUE SUPPLY effect。
+      const first = await fixture.request('POST', '/api/procurement/outsourcing/wip-transfers', fixture.tokens.admin,
+        transferBody(orderA, orderB, 3));
+      assert.equal(first.status, 201, JSON.stringify(first.data));
+      const transferOutA = fixture.db.prepare(
+        "SELECT * FROM outsourcing_wip_identity_effects WHERE business_event_id=? AND event_type='TRANSFER_OUT'"
+      ).get(first.data.id);
+      const transferInB = fixture.db.prepare(
+        "SELECT * FROM outsourcing_wip_identity_effects WHERE business_event_id=? AND event_type='TRANSFER_IN'"
+      ).get(first.data.id);
+      assert.equal(transferOutA.material_list_id, orderA.materialRow.id);
+      assert.equal(transferInB.material_list_id, orderB.materialRow.id);
+      const originAllocation = fixture.db.prepare(
+        "SELECT * FROM outsourcing_wip_identity_effect_allocations WHERE effect_id=? AND allocation_kind='TRANSFER_ORIGIN'"
+      ).get(transferOutA.id);
+      assert.ok(originAllocation, 'A→B 必须产生 TRANSFER_ORIGIN 分配');
+      const originSupply = fixture.db.prepare('SELECT * FROM outsourcing_wip_identity_effects WHERE id=?')
+        .get(originAllocation.source_supply_effect_id);
+      assert.equal(originSupply.effect_direction, 'SUPPLY');
+      assert.equal(originSupply.event_type, 'ISSUE', 'TRANSFER_ORIGIN 必须指向原始 ISSUE 供给');
+      assert.equal(originSupply.material_list_id, orderA.materialRow.id);
+      assert.notEqual(originSupply.id, transferInB.id, 'TRANSFER_IN 不得冒充原始供给');
+
+      // B → C：B 的 WIP 全部来自 A 的 TRANSFER_IN，没有可覆盖的原始 ISSUE/SUPPLEMENT 供给。
+      const beforeSecond = businessSnapshot();
+      const auditsBefore = rejectionAuditCount(orderB.orderId);
+      const second = await fixture.request('POST', '/api/procurement/outsourcing/wip-transfers', fixture.tokens.admin,
+        transferBody(orderB, orderC, 3));
+      assert.equal(second.status, 409);
+      assert.equal(second.data.code, 'OUTSOURCING_WIP_TRANSFER_SOURCE_UNVERIFIED');
+      assert.equal(businessSnapshot(), beforeSecond, '第二次转移必须零业务副作用');
+      assert.equal(rejectionAuditCount(orderB.orderId), auditsBefore + 1, '第二次转移拒绝必须恰好记录一条拒绝审计');
+      assert.equal(fixture.db.prepare(
+        'SELECT COUNT(*) n FROM outsourcing_wip_identity_effect_allocations WHERE source_supply_effect_id=?'
+      ).get(transferInB.id).n, 0, 'TRANSFER_IN 不得被当作原始供给来源');
+
+      // A→B 的合法 201 不受影响。
+      assert.equal(Number(materialRow(orderA.materialRow.id).issued_quantity), 2);
+      assert.equal(Number(materialRow(orderB.materialRow.id).issued_quantity), 3);
+      assert.equal(Number(identityBalance(orderA.materialRow.id).available_quantity), 2);
+      assert.equal(Number(identityBalance(orderB.materialRow.id).available_quantity), 3);
+      assert.equal(fixture.db.prepare('SELECT COUNT(*) n FROM outsourcing_wip_transfers WHERE id=?').get(first.data.id).n, 1);
+      assert.equal(fixture.db.prepare('SELECT COUNT(*) n FROM outsourcing_wip_identity_effects WHERE business_event_id=?').get(first.data.id).n, 2);
+    });
+
     test('I3a-P-4 转移不新增物理库存移动、估值、AP 或 GL', async () => {
       const source = await createOrderWithMaterial();
       const target = await createOrderWithMaterial();
