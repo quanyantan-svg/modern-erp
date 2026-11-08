@@ -2590,6 +2590,20 @@ I3a-S 先实施并独立提交；I3a-S 的验收断言**只能是**固定拒绝�
 - 旧功能 UAT 的既有失败**不得**改写为 PASS。
 - 本节**未**运行任何测试；两批实施后的实测证据另见本节后续增量或当天 `log/`。
 
+### 45.7 Phase B（I3a-S 安全加固）实施与验证增量（2026-11-08）
+
+| 项 | 内容 |
+|---|---|
+| 实施文件 | `server/modules/outsourcing-finance.js`（`createWipTransfer` 重写）、`server/lib/inventory-mutation.js`（把既有 `assertInventoryPeriodOpen` 提到模块作用域并导出，供不改动物理库存的写路径复用同一实现）、`server/outsourcing-wip-transfer.test.js`（新增）、`server/outsourcing-finance.test.js`（修正宽松断言）、`scripts/testing/test-suites.js`（新测试文件登记 FULL） |
+| 修复的既有缺陷 | 数量 0 / 负数 / `NaN` / `Infinity` / 非法精度曾被接受并可能返回错误的 201；请求体 `idempotencyKey` 曾被 400 `VALIDATION` 拒绝；余额与身份在事务外读取；目标行唯一性未证明；`transferNo` 用毫秒时间戳；409 拒绝审计边界不唯一；无幂等合同、无并发守卫、无历史可证明性守卫 |
+| 固定业务 code | `IDEMPOTENCY_KEY_REQUIRED`、`IDEMPOTENCY_KEY_INVALID`、`OUTSOURCING_WIP_TRANSFER_INVALID_QUANTITY`、`OUTSOURCING_WIP_TRANSFER_INVALID_DATE`、`OUTSOURCING_WIP_TRANSFER_INVALID_INPUT`、`OUTSOURCING_WIP_TRANSFER_SAME_ORDER`、`OUTSOURCING_WIP_TRANSFER_ORDER_STATE_INVALID`、`OUTSOURCING_WIP_TRANSFER_TARGET_NOT_UNIQUE`、`OUTSOURCING_WIP_TRANSFER_UOM_MISMATCH`、`OUTSOURCING_WIP_TRANSFER_SUPPLIER_MISMATCH`、`OUTSOURCING_WIP_TRANSFER_WAREHOUSE_MISMATCH`、`OUTSOURCING_WIP_TRANSFER_SOURCE_UNVERIFIED`、`OUTSOURCING_WIP_TRANSFER_OVERDRAW`、`OUTSOURCING_WIP_TRANSFER_IDENTITY_UNSUPPORTED`、`OUTSOURCING_WIP_TRANSFER_CONCURRENT_CONFLICT`、`OUTSOURCING_WIP_TRANSFER_IDEMPOTENCY_CONFLICT`、`OUTSOURCING_WIP_TRANSFER_NO_CONFLICT` |
+| 实测证据 | focused `server/outsourcing-wip-transfer.test.js` **12/12 PASS**（退出码 0）；focused `server/outsourcing-finance.test.js` **7/7 PASS**（退出码 0）；FAST **576/576 PASS**（退出码 0）；FULL **3358/3358 PASS**（退出码 0）；`pnpm build` PASS（退出码 0）；`git diff --check` PASS（退出码 0） |
+| I3a-S 的正确定性 | **不含任何正向 201**：本批次**未**产生任何 WIP 转移成功记录，也未产生任何转移成功审计（focused 断言逐项固定）。身份链（`TRANSFER_OUT` / `TRANSFER_IN` / `TRANSFER_ORIGIN`）在本批次**未**实现、**未**验证；正向 201 属 Phase C（I3a-P + I3b） |
+| 幂等三态 | 缺键 → 400 `IDEMPOTENCY_KEY_REQUIRED`；同键异载荷 → 409 `OUTSOURCING_WIP_TRANSFER_IDEMPOTENCY_CONFLICT` + 恰好一条拒绝审计；精确重放分支以**预置历史幂等记录**验证（返回已持久化的 `{id, transferNo, replayed:true}`，零新增转移事实、零新增成功审计）——本批次**自身**未产生任何可供重放的成功记录 |
+| 状态 | `AUD-OUT-001` 仍为 `IMPLEMENTATION_AUTHORIZED`；Phase C（I3a-P + I3b）**未**开始。**未**签发任何 Acceptance |
+
+**本增量明确不改变的**：`AUD-OUT-001` 的 `IMPLEMENTATION_AUTHORIZED` 标签（Phase B 不构成验收）；M1C-G03 / G06 既有 7/7 `PASS`；`B-P01` / `B-P02`、`D-P01` / `D-P02`、`VMI-01`～`VMI-05`、`PRC-06`、B3101 / B3121、Domain Acceptance；§31.14 / §26.34 的整体状态。本批次**未**新增 Schema / Migration、**未**连接真实 MySQL、**未**运行任何 MySQL Gate、**未** Push / Merge / Tag / Release / Deploy。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。

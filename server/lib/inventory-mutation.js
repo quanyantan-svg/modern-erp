@@ -263,6 +263,28 @@ function writeTrackedMovement(db, input, identity, direction, businessDate, move
   return tmId;
 }
 
+// INV-32 sec 27.41: canonical inventory period gate. Rejects BEFORE mutation
+// when businessDate falls in any CLOSED inventory_period_closure row.
+// Exported at module scope so write paths that do not move physical stock
+// (for example the outsourcing WIP logical transfer) reuse this single
+// implementation instead of duplicating the period rule.
+export function assertInventoryPeriodOpen(db, businessDate) {
+  const rows = db.prepare(`SELECT period_key FROM inventory_period_closures WHERE status='CLOSED' ORDER BY period_key`).all();
+  if (!rows.length) return;
+  for (const r of rows) {
+    const [yyyy, mm] = String(r.period_key).split('-').map(Number);
+    if (!yyyy || !mm) continue;
+    const lastDay = new Date(Date.UTC(yyyy, mm, 0)).getUTCDate();
+    const cutoff = `${r.period_key}-${String(lastDay).padStart(2, '0')}`;
+    if (businessDate <= cutoff) {
+      throw new HttpError(409, `inventory period closed to ${r.period_key}`, {
+        code: 'INVENTORY_PERIOD_CLOSED',
+        resolution: 'use business date after closed period',
+      });
+    }
+  }
+}
+
 export function applyInventoryMutation(input) {
   if (!input || typeof input !== 'object') throw new HttpError(400, 'mutation input 必填');
   if (!input.sourceType || !SOURCE_TYPES.has(input.sourceType)) throw new HttpError(400, 'sourceType 不合法');
@@ -473,25 +495,6 @@ export function applyInventoryMutation(input) {
         trackedMovement: movement.trackedMovement || null,
       })),
     };
-  };
-
-  // INV-32 sec 27.41: canonical inventory period gate. Rejects BEFORE mutation
-  // when businessDate falls in any CLOSED inventory_period_closure row.
-  const assertInventoryPeriodOpen = (db, businessDate) => {
-    const rows = db.prepare(`SELECT period_key FROM inventory_period_closures WHERE status='CLOSED' ORDER BY period_key`).all();
-    if (!rows.length) return;
-    for (const r of rows) {
-      const [yyyy, mm] = String(r.period_key).split('-').map(Number);
-      if (!yyyy || !mm) continue;
-      const lastDay = new Date(Date.UTC(yyyy, mm, 0)).getUTCDate();
-      const cutoff = `${r.period_key}-${String(lastDay).padStart(2, '0')}`;
-      if (businessDate <= cutoff) {
-        throw new HttpError(409, `inventory period closed to ${r.period_key}`, {
-          code: 'INVENTORY_PERIOD_CLOSED',
-          resolution: 'use business date after closed period',
-        });
-      }
-    }
   };
 
   // Detect an already-open transaction so nested callers (e.g. VMI/transfer

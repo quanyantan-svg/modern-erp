@@ -293,6 +293,7 @@ const FULL = [
   'server/outsourcing.test.js',
   'server/procurement-reports.test.js',
   'server/outsourcing-finance.test.js',
+  'server/outsourcing-wip-transfer.test.js',
   'server/procurement-return-execution.test.js',
   'server/procurement-execution-suite.test.js',
   'server/out-final-acceptance.test.js',

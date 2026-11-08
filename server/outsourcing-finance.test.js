@@ -213,7 +213,7 @@ describe('Procurement Wave H/I closure: outsourcing receipt, processing fee bill
     assert.equal(apply.data.code, 'OUTSOURCING_DIFFERENCE_APPROVAL_PENDING');
   });
 
-  test('OUT-23 WIP Transfer: no cross-order overdraw, enterprise ownership unchanged', async () => {
+  test('OUT-23 WIP Transfer: 跨单数量归属转移按固定结果拒绝，零转移事实', async () => {
     await qualifyOutsourceSupplier();
     const orderA = await createReleasedOrderWithMaterial({ orderQty: 100, material: { productId: 'product-003', requiredQuantity: 10, unit: 'PCS' } });
     const orderB = await createReleasedOrderWithMaterial({ orderQty: 100, material: { productId: 'product-003', requiredQuantity: 10, unit: 'PCS' } });
@@ -224,17 +224,30 @@ describe('Procurement Wave H/I closure: outsourcing receipt, processing fee bill
     });
     // Transfer 3 from A to B (B has its own material list row for product-003)
     const matB = fixture.db.prepare('SELECT id FROM outsourcing_material_list WHERE order_id=? AND product_id=?').get(orderB, 'product-003').id;
+    const transfersBefore = fixture.db.prepare('SELECT COUNT(*) n FROM outsourcing_wip_transfers').get().n;
     const transfer = await fixture.request('POST', '/api/procurement/outsourcing/wip-transfers', fixture.tokens.admin, {
       sourceOrderId: orderA, targetOrderId: orderB, materialListId: matA, quantity: 3, transferDate: isoDate(0),
+      idempotencyKey: `xfer-${orderA}-${orderB}-3`,
     });
     // Note: matA is source's row, but matB is target's row (different row ids). WIP transfer is per source row.
-    // Either way, the test verifies no cross-order overdraw.
-    assert.equal(transfer.status === 201 || transfer.status === 409, true);
+    // product-003 没有权威估值余额，发料未生效，源行因此没有可证明 WIP：固定 409 超额拒绝。
+    assert.equal(transfer.status, 409);
+    assert.equal(transfer.data.code, 'OUTSOURCING_WIP_TRANSFER_OVERDRAW');
     // Try overdraw
     const overTransfer = await fixture.request('POST', '/api/procurement/outsourcing/wip-transfers', fixture.tokens.admin, {
       sourceOrderId: orderA, targetOrderId: orderB, materialListId: matA, quantity: 9999, transferDate: isoDate(0),
+      idempotencyKey: `xfer-${orderA}-${orderB}-9999`,
     });
     assert.equal(overTransfer.status, 409);
+    assert.equal(overTransfer.data.code, 'OUTSOURCING_WIP_TRANSFER_OVERDRAW');
+    // 缺幂等键固定 400
+    const noKey = await fixture.request('POST', '/api/procurement/outsourcing/wip-transfers', fixture.tokens.admin, {
+      sourceOrderId: orderA, targetOrderId: orderB, materialListId: matA, quantity: 3, transferDate: isoDate(0),
+    });
+    assert.equal(noKey.status, 400);
+    assert.equal(noKey.data.code, 'IDEMPOTENCY_KEY_REQUIRED');
+    // 拒绝路径不得产生任何转移事实
+    assert.equal(fixture.db.prepare('SELECT COUNT(*) n FROM outsourcing_wip_transfers').get().n, transfersBefore);
   });
 
   test('PRC-26 Procurement Scan: bounded wedge resolves PO + product → draft line', async () => {
