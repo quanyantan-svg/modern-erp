@@ -7,7 +7,7 @@ import {
 import { ensurePayableSource } from './settlement-core.js';
 import { assertQualityGate } from './quality-gates.js';
 import { assertSupplierBillGlPostable } from './outsourcing-gl-policy.js';
-import { executeOutsourcingBackflush, receiveOutsourcingFinishedGoods } from './outsourcing-inventory.js';
+import { executeOutsourcingBackflush, receiveOutsourcingFinishedGoods, recordWipTransferIdentity } from './outsourcing-inventory.js';
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 import { assertInventoryPeriodOpen } from '../lib/inventory-mutation.js';
 
@@ -472,6 +472,27 @@ function rejectWipTransfer(db, actor, sourceOrderId, error) {
   return error;
 }
 
+// 物料行 WIP 数量账（issued+supplemented-returned-backflushed）与 canonical WIP 身份账
+// 必须逐项对账（§26.34.4.3 / I3a-P-3）。不一致即表示该行的 WIP 数量不可证明，
+// 一律 fail closed —— 不得以任一侧单独为准推定另一侧。
+function readReconciledWipIdentity(db, materialRow, capacity, code) {
+  const balance = db.prepare('SELECT * FROM outsourcing_wip_identity_balances WHERE material_list_id=? AND identity_key=?')
+    .get(materialRow.id, 'NONE');
+  if (!balance) {
+    if (Math.abs(capacity) > WIP_TRANSFER_EPS) {
+      throw wipTransferConflict(code, '该委外物料行的 WIP 数量没有可证明的身份证据');
+    }
+    return null;
+  }
+  if (String(balance.evidence_state) !== 'QUANTITY_ONLY') {
+    throw wipTransferConflict(code, '该委外物料行的 WIP 身份证据状态与产品跟踪策略不一致');
+  }
+  if (Math.abs(Number(balance.available_quantity) - capacity) > WIP_TRANSFER_EPS) {
+    throw wipTransferConflict(code, '该委外物料行的数量账与身份账不一致');
+  }
+  return balance;
+}
+
 export async function createWipTransfer(db, req, res, actor) {
   assertMaterialPermission(actor);
   const body = await readJson(req);
@@ -564,6 +585,10 @@ export async function createWipTransfer(db, req, res, actor) {
         || sourceMaterial.legacy_unverified_wip_quantity === undefined) {
         throw wipTransferConflict('OUTSOURCING_WIP_TRANSFER_SOURCE_UNVERIFIED', '该委外物料行的历史 WIP 不可证明');
       }
+      if (targetMaterial.legacy_unverified_wip_quantity === null
+        || targetMaterial.legacy_unverified_wip_quantity === undefined) {
+        throw wipTransferConflict('OUTSOURCING_WIP_TRANSFER_SOURCE_UNVERIFIED', '目标委外物料行的历史 WIP 不可证明');
+      }
       const capacity = Number(sourceMaterial.issued_quantity) + Number(sourceMaterial.supplemented_quantity)
         - Number(sourceMaterial.returned_quantity) - Number(sourceMaterial.backflushed_quantity);
       if (capacity + WIP_TRANSFER_EPS < quantity) {
@@ -572,26 +597,18 @@ export async function createWipTransfer(db, req, res, actor) {
       if (String(sourceMaterial.identity_evidence_state || '') !== 'VERIFIED') {
         throw wipTransferConflict('OUTSOURCING_WIP_TRANSFER_SOURCE_UNVERIFIED', '源物料行缺少已验证的 WIP 身份证据状态');
       }
-      // I3a-S-6：身份路径继续 fail closed —— 源行存在任何身份余额时拒绝。
-      // I3a-S 不放宽该门禁；身份效力的成对实现属 I3a-P + I3b。
-      const identityBalances = db.prepare('SELECT COUNT(*) n FROM outsourcing_wip_identity_balances WHERE material_list_id=?')
-        .get(sourceMaterial.id);
-      if (Number(identityBalances.n) > 0) {
-        throw wipTransferConflict('OUTSOURCING_WIP_TRANSFER_IDENTITY_UNSUPPORTED', '该委外物料行存在身份证据余额，跨单 WIP 转移的身份归属尚未批准');
+      // 身份账与数量账对账：两侧都必须可证明，且彼此一致（§26.34.4.3 / I3a-P-3）。
+      const sourceIdentity = readReconciledWipIdentity(db, sourceMaterial, capacity, 'OUTSOURCING_WIP_TRANSFER_SOURCE_UNVERIFIED');
+      if (!sourceIdentity) {
+        throw wipTransferConflict('OUTSOURCING_WIP_TRANSFER_SOURCE_UNVERIFIED', '源物料行没有可证明的 WIP 身份证据');
       }
+      if (Number(sourceIdentity.available_quantity) + WIP_TRANSFER_EPS < quantity) {
+        throw wipTransferConflict('OUTSOURCING_WIP_TRANSFER_OVERDRAW', '转移数量超过源订单 supplier WIP 剩余');
+      }
+      const targetCapacity = Number(targetMaterial.issued_quantity) + Number(targetMaterial.supplemented_quantity)
+        - Number(targetMaterial.returned_quantity) - Number(targetMaterial.backflushed_quantity);
+      readReconciledWipIdentity(db, targetMaterial, targetCapacity, 'OUTSOURCING_WIP_TRANSFER_SOURCE_UNVERIFIED');
       assertInventoryPeriodOpen(db, businessDate);
-      // ── 数量守恒与并发守卫：源减目标增成对，CAS 条件更新保证不超额 ──
-      const decremented = db.prepare(`UPDATE outsourcing_material_list SET issued_quantity=issued_quantity-?, updated_at=?
-        WHERE id=? AND (issued_quantity+supplemented_quantity-returned_quantity-backflushed_quantity) >= ? - ?`)
-        .run(quantity, now, sourceMaterial.id, quantity, WIP_TRANSFER_EPS);
-      if (Number(decremented.changes ?? decremented.affectedRows) !== 1) {
-        throw wipTransferConflict('OUTSOURCING_WIP_TRANSFER_CONCURRENT_CONFLICT', '源订单 WIP 余额已被并发占用');
-      }
-      const incremented = db.prepare('UPDATE outsourcing_material_list SET issued_quantity=issued_quantity+?, updated_at=? WHERE id=?')
-        .run(quantity, now, targetMaterial.id);
-      if (Number(incremented.changes ?? incremented.affectedRows) !== 1) {
-        throw wipTransferConflict('OUTSOURCING_WIP_TRANSFER_CONCURRENT_CONFLICT', '目标订单物料行已被并发占用');
-      }
       // ── 转移事实：既有 `material_list_id` 继续表示**目标行**（§26.34.4.2 / I3b-2）──
       transferId = randomUUID();
       transferNo = buildWipTransferNo(businessDate);
@@ -603,7 +620,24 @@ export async function createWipTransfer(db, req, res, actor) {
         if (!isWipTransferUniqueConstraintError(error)) throw error;
         throw wipTransferConflict('OUTSOURCING_WIP_TRANSFER_NO_CONFLICT', 'WIP 转移单号冲突');
       }
-      // 幂等记录、转移事实、数量效力与成功审计同一事务提交。
+      // ── 身份效力（I3b-1 / §26.34.15.2）：同一事务内形成配对的 TRANSFER_OUT / TRANSFER_IN
+      //    与 TRANSFER_ORIGIN 分配。物理库存零新增移动，企业所有权不变，成本零携带。
+      recordWipTransferIdentity(db, {
+        sourceMaterial, targetMaterial, quantity, transferId, businessDate,
+      });
+      // ── 数量守恒与并发守卫：源减目标增成对，CAS 条件更新保证不超额 ──
+      const decremented = db.prepare(`UPDATE outsourcing_material_list SET issued_quantity=issued_quantity-?, updated_at=?
+        WHERE id=? AND (issued_quantity+supplemented_quantity-returned_quantity-backflushed_quantity) >= ? - ?`)
+        .run(quantity, now, sourceMaterial.id, quantity, WIP_TRANSFER_EPS);
+      if (Number(decremented.changes ?? decremented.affectedRows) !== 1) {
+        throw wipTransferConflict('OUTSOURCING_WIP_TRANSFER_CONCURRENT_CONFLICT', '源订单 WIP 余额已被并发占用');
+      }
+      const incremented = db.prepare("UPDATE outsourcing_material_list SET issued_quantity=issued_quantity+?, identity_evidence_state='VERIFIED', updated_at=? WHERE id=?")
+        .run(quantity, now, targetMaterial.id);
+      if (Number(incremented.changes ?? incremented.affectedRows) !== 1) {
+        throw wipTransferConflict('OUTSOURCING_WIP_TRANSFER_CONCURRENT_CONFLICT', '目标订单物料行已被并发占用');
+      }
+      // 幂等记录、转移事实、身份效力、数量效力与成功审计同一事务提交。
       saveIdempotency(db, WIP_TRANSFER_OPERATION, sourceOrderId, idempotencyKey, fingerprint, { id: transferId, transferNo });
       audit(db, actor.id, 'TRANSFER', 'OUTSOURCING_WIP_TRANSFER', transferId, transferNo);
     });

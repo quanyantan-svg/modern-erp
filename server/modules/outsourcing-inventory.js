@@ -62,7 +62,7 @@ function effectRow(db, materialListId, identityKey) {
   return db.prepare('SELECT * FROM outsourcing_wip_identity_balances WHERE material_list_id=? AND identity_key=?').get(materialListId, identityKey);
 }
 
-function recordSupply(db, { material, identity, eventType, eventId, eventItemId, quantity, businessDate, idempotencyKey }) {
+function recordSupply(db, { material, identity, eventType, eventId, eventItemId, quantity, businessDate, idempotencyKey, sourceEffectId = null }) {
   const existing = db.prepare('SELECT * FROM outsourcing_wip_identity_effects WHERE idempotency_key=?').get(idempotencyKey);
   const requestFingerprint = fingerprint({ materialListId: material.id, identityKey: identity.identityKey, eventType, eventId, eventItemId, quantity, businessDate });
   if (existing) {
@@ -74,9 +74,9 @@ function recordSupply(db, { material, identity, eventType, eventId, eventItemId,
   db.prepare(`INSERT INTO outsourcing_wip_identity_effects(
     id,material_list_id,identity_key,identity_type,lot_id,serial_id,effect_direction,signed_quantity,
     event_type,business_event_id,business_event_item_id,source_effect_id,business_date,idempotency_key,request_fingerprint,created_at
-  ) VALUES(?,?,?,?,?,?,'SUPPLY',?,?,?,?,NULL,?,?,?,?)`).run(
+  ) VALUES(?,?,?,?,?,?,'SUPPLY',?,?,?,?,?,?,?,?,?)`).run(
     effectId, material.id, identity.identityKey, identity.identityType, identity.lotId, identity.serialId,
-    quantity, eventType, eventId, eventItemId, businessDate, idempotencyKey, requestFingerprint, now,
+    quantity, eventType, eventId, eventItemId, sourceEffectId, businessDate, idempotencyKey, requestFingerprint, now,
   );
   const current = effectRow(db, material.id, identity.identityKey);
   const supplied = Number(current?.supplied_quantity || 0) + quantity;
@@ -94,7 +94,7 @@ function recordSupply(db, { material, identity, eventType, eventId, eventItemId,
   return db.prepare('SELECT * FROM outsourcing_wip_identity_effects WHERE id=?').get(effectId);
 }
 
-function recordConsumption(db, { material, identity, eventType, eventId, eventItemId, quantity, businessDate, idempotencyKey }) {
+function recordConsumption(db, { material, identity, eventType, eventId, eventItemId, quantity, businessDate, idempotencyKey, allocationKind = 'CONSUMPTION' }) {
   const existing = db.prepare('SELECT * FROM outsourcing_wip_identity_effects WHERE idempotency_key=?').get(idempotencyKey);
   const requestFingerprint = fingerprint({ materialListId: material.id, identityKey: identity.identityKey, eventType, eventId, eventItemId, quantity, businessDate });
   if (existing) {
@@ -109,6 +109,8 @@ function recordConsumption(db, { material, identity, eventType, eventId, eventIt
       || (identity.identityType !== 'NONE' && balance.evidence_state !== 'TRACKED')) {
     throw codedConflict('WIP_IDENTITY_POLICY_MISMATCH', 'WIP 身份证据与产品跟踪策略不一致');
   }
+  // 供给来源只取 `effect_direction='SUPPLY'` 的 effect。`CONSUME` 效应（含
+  // TRANSFER_OUT）因此**永远不可能**成为 `source_supply_effect_id`（§26.34.15.2 C5）。
   const supplies = db.prepare(`SELECT e.*,
     e.signed_quantity-COALESCE((SELECT SUM(a.allocated_quantity) FROM outsourcing_wip_identity_effect_allocations a WHERE a.source_supply_effect_id=e.id),0) remaining
     FROM outsourcing_wip_identity_effects e
@@ -136,8 +138,8 @@ function recordConsumption(db, { material, identity, eventType, eventId, eventIt
   );
   const insertAllocation = db.prepare(`INSERT INTO outsourcing_wip_identity_effect_allocations(
     id,effect_id,source_supply_effect_id,allocation_kind,allocated_quantity,created_at
-  ) VALUES(?,?,?,'CONSUMPTION',?,?)`);
-  for (const allocation of allocations) insertAllocation.run(randomUUID(), effectId, allocation.sourceEffectId, allocation.quantity, now);
+  ) VALUES(?,?,?,?,?,?)`);
+  for (const allocation of allocations) insertAllocation.run(randomUUID(), effectId, allocation.sourceEffectId, allocationKind, allocation.quantity, now);
   const consumed = Number(balance.consumed_quantity) + quantity;
   db.prepare(`UPDATE outsourcing_wip_identity_balances SET consumed_quantity=?,available_quantity=supplied_quantity-?,last_effect_id=?,updated_at=?
     WHERE material_list_id=? AND identity_key=?`).run(consumed, consumed, effectId, now, material.id, identity.identityKey);
@@ -249,6 +251,52 @@ export function executeOutsourcingBackflush(db, {
     quantity, businessDate, idempotencyKey: `BACKFLUSH:${receipt.id}:${material.id}:${identity.identityKey}`,
   });
   return { mutation, valuation, effect, identity, wipWarehouseId };
+}
+
+/**
+ * OUT-001 / I3b-1：跨订单 WIP 数量归属转移的身份效力写入。
+ *
+ * 唯一规范 Owner 是本模块（既有 WIP 身份账的 recordSupply / recordConsumption 分配算术）；
+ * **不新建第二套账本**，也不绕过既有分配口径。
+ *
+ * 身份链（docs/design/procurement-outsourcing.md §26.34.15.2）：
+ *
+ *   原始 SUPPLY（源行 · event_type ∈ {ISSUE, SUPPLEMENT}）
+ *     └ TRANSFER_ORIGIN 分配（effect_id = TRANSFER_OUT，source_supply_effect_id = 原始 SUPPLY effect）
+ *        └ TRANSFER_OUT（源行 · effect_direction='CONSUME' · signed_quantity < 0）
+ *           └ source_effect_id
+ *              └ TRANSFER_IN（目标行 · effect_direction='SUPPLY' · signed_quantity > 0）
+ *
+ * 两侧 effect 的 `business_event_id` 恒等于同一个 WIP Transfer ID（C6），
+ * 这是 `transferId → 源行 / 目标行` 双向追溯的唯一锚点。
+ */
+export function recordWipTransferIdentity(db, {
+  sourceMaterial, targetMaterial, quantity, transferId, businessDate,
+}) {
+  const identity = resolveOutsourcingIdentity(db, sourceMaterial.product_id, {});
+  const transferOut = recordConsumption(db, {
+    material: sourceMaterial,
+    identity,
+    eventType: 'TRANSFER_OUT',
+    eventId: transferId,
+    eventItemId: sourceMaterial.id,
+    quantity,
+    businessDate,
+    idempotencyKey: `WIP_TRANSFER:${transferId}:OUT:${sourceMaterial.id}:${identity.identityKey}`,
+    allocationKind: 'TRANSFER_ORIGIN',
+  });
+  const transferIn = recordSupply(db, {
+    material: targetMaterial,
+    identity,
+    eventType: 'TRANSFER_IN',
+    eventId: transferId,
+    eventItemId: targetMaterial.id,
+    quantity,
+    businessDate,
+    idempotencyKey: `WIP_TRANSFER:${transferId}:IN:${targetMaterial.id}:${identity.identityKey}`,
+    sourceEffectId: transferOut.id,
+  });
+  return { transferOut, transferIn, identity };
 }
 
 export function receiveOutsourcingFinishedGoods(db, {

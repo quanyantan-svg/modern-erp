@@ -2563,6 +2563,7 @@ OUT-001（`AUD-OUT-001`）的实现前置以 [`docs/design/procurement-outsourci
 ```text
 Before : AUD-OUT-001 = DEFERRED_NOT_AUTHORIZED
 After  : AUD-OUT-001 = IMPLEMENTATION_AUTHORIZED（有界；§26.34.15.1 / §26.34.15.3）
+         → 两批实施完成后迁移为 TESTED / PENDING_OWNER_APPROVAL（§45.8；未签发 Acceptance）
 ```
 
 该迁移**只**表示本工作包获得了实施授权，**不**表示缺陷已修复或已验收。`AUD-OUT-001` 的状态**不得**在两批实施与本地验证完成前推进到 `ACCEPTED`；完成后最多推进到 `TESTED` / `PENDING_OWNER_APPROVAL`，仍需 Owner 技术复核与真实 MySQL Gate。
@@ -2603,6 +2604,32 @@ I3a-S 先实施并独立提交；I3a-S 的验收断言**只能是**固定拒绝�
 | 状态 | `AUD-OUT-001` 仍为 `IMPLEMENTATION_AUTHORIZED`；Phase C（I3a-P + I3b）**未**开始。**未**签发任何 Acceptance |
 
 **本增量明确不改变的**：`AUD-OUT-001` 的 `IMPLEMENTATION_AUTHORIZED` 标签（Phase B 不构成验收）；M1C-G03 / G06 既有 7/7 `PASS`；`B-P01` / `B-P02`、`D-P01` / `D-P02`、`VMI-01`～`VMI-05`、`PRC-06`、B3101 / B3121、Domain Acceptance；§31.14 / §26.34 的整体状态。本批次**未**新增 Schema / Migration、**未**连接真实 MySQL、**未**运行任何 MySQL Gate、**未** Push / Merge / Tag / Release / Deploy。
+
+### 45.8 Phase C（I3a-P + I3b 正向转移）实施与验证增量（2026-11-08）
+
+| 项 | 内容 |
+|---|---|
+| 实施文件 | `server/modules/outsourcing-inventory.js`（新增唯一规范身份写入 `recordWipTransferIdentity()`；`recordSupply` 增补 `sourceEffectId`、`recordConsumption` 增补 `allocationKind` 两个有界参数，既有调用点行为不变）、`server/modules/outsourcing-finance.js`（身份链落地、数量账与身份账对账、目标行身份证据状态）、`server/outsourcing-wip-transfer.test.js`（新增 I3a-P + I3b 断言） |
+| 身份链（§26.34.15.2） | `TRANSFER_OUT` = 源行 `CONSUME`（`signed_quantity < 0`）→ `TRANSFER_ORIGIN` 分配指向合法**原始 SUPPLY effect** → `TRANSFER_IN` = 目标行 `SUPPLY`（`signed_quantity > 0`，经 `source_effect_id` 关联 `TRANSFER_OUT`）；两侧 `business_event_id` 关联同一 WIP Transfer ID；`TRANSFER_OUT` **不得**成为任何 `source_supply_effect_id` |
+| 守恒 | `Σ transfer_out = Σ transfer_in = requested quantity`；源 `available_quantity` 减、目标增；`available_quantity = supplied − consumed` 恒成立；物料行数量账与身份账逐项对账，不一致即 fail closed |
+| 物理与成本不变量 | 物理库存 `inventory` / `inventory_transactions` / `tracked_inventory_movements` / `inventory_mutation_log` / `inventory_valuation_movements` / `inventory_valuation_balances` 与 `supplier_bills` / `account_payables` / `accounting_vouchers` / `accounting_entries` **逐字段零变化**；企业所有权不变；成本零携带（`B-P01` 继续延期） |
+| 幂等 | 首次 201 `{id, transferNo}`；精确重放 201 `{id, transferNo, replayed:true}` 且零新增转移事实 / 身份 effect / 数量变化 / 成功审计；同 Key 异载荷 409 `OUTSOURCING_WIP_TRANSFER_IDEMPOTENCY_CONFLICT` + 恰好一条拒绝审计；幂等记录、身份 effect、转移事实、数量更新与成功审计**同一事务**提交 |
+| 实测证据 | focused `server/outsourcing-wip-transfer.test.js` **19/19 PASS** + `server/outsourcing-finance.test.js` **7/7 PASS**（合计 26/26，退出码 0）；FAST **576/576 PASS**（退出码 0）；FULL **3365/3365 PASS**（退出码 0）；`pnpm build` PASS（退出码 0）；`git diff --check` PASS（退出码 0） |
+| 非空洞性证明 | 三次 mutation 实验均被 focused 断言捕获：①`TRANSFER_IN.source_effect_id` 置空 → 身份链断言失败；②`TRANSFER_ORIGIN` 改为 `CONSUMPTION` → 身份链断言失败；③源减改为源增 → 守恒断言与并发断言失败 |
+| 状态迁移 | `AUD-OUT-001`：`IMPLEMENTATION_AUTHORIZED` → **`TESTED` / `PENDING_OWNER_APPROVAL`**。**未**签发 `AUD-OUT-001` 的 Acceptance，仍待 Owner 技术复核与真实 MySQL Gate |
+
+**本增量明确不改变的**：§31.14 / §26.34 的整体状态（未签发 Requirement 验收或 `DESIGN_PASS`）；`A1-D-RV-01`～`A1-D-RV-04`；M1C-G03 / G06 既有 7/7 `PASS` 及其范围；`B-P01` / `B-P02`、`D-P01` / `D-P02`、`VMI-01`～`VMI-05`、`M1-F-07` / `M1-F-11`、`PRC-06`、B3101 / B3121、Domain Acceptance、`docs/status/CAPABILITY_MATRIX.md`。本批次**未**新增 Schema / Migration、**未**连接真实 MySQL 或生产数据库、**未**运行任何 MySQL Gate、**未** Push / Merge / Tag / Release / Deploy。
+
+### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
+
+以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：
+
+1. `idempotencyReplay()` 的 **MySQL 命名锁**在「未命中即持锁 → 事务提交/回滚 → `releaseMySqlIdempotencyLocks()` 确认释放」全链路上不产生 `LOCK_ABSENT` / 未确认释放 / 连接隔离。
+2. `transaction()` 的 **COMMIT 不确定**路径（`mysqlRequestTimeout` / `sessionLost`）下不自动重试写操作，且不产生第二笔转移事实；§26.34.14.3 的 R1～R5 恢复条件在真实会话终止 / epoch 变化证据下可判定。
+3. **CAS 并发**：不同幂等键的同源并发转移在 MySQL 行锁下，败方走 `OUTSOURCING_WIP_TRANSFER_CONCURRENT_CONFLICT`（SQLite 本地路径因事务串行化而表现为 `OUTSOURCING_WIP_TRANSFER_OVERDRAW`），最终可用量不为负、无双写、无重复 effect。
+4. `outsourcing_wip_identity_effects` / `..._effect_allocations` / `..._identity_balances` 在 **MySQL 8** 下的 CHECK / UNIQUE / FK 语义与 SQLite 等价（含 `available_quantity = supplied − consumed`、`available_quantity >= 0`、`UNIQUE(event_type, business_event_id, business_event_item_id, identity_key)`、`UNIQUE(effect_id, source_supply_effect_id, allocation_kind)`）。
+5. `transfer_no` 的 **UNIQUE 冲突**在 MySQL 下映射为 `OUTSOURCING_WIP_TRANSFER_NO_CONFLICT`（而非 500）。
+6. MySQL 与 SQLite 的 **Schema parity**（本次未新增 DDL，故只验证既有表的列 / 约束 / 索引一致性）。
 
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
