@@ -223,6 +223,10 @@ describe('OUT-001 protected MySQL Gate infrastructure (offline)', () => {
     assert.doesNotMatch(runner, /markChildExited[^\n]+catch \{\}/);
     assert.match(launcher, /ProtectedData\]::Unprotect/);
     assert.match(launcher, /\$rootState -eq 'CLEANUP_UNVERIFIED'/);
+    assert.match(launcher, /\$item\.tap\.passed/);
+    assert.match(launcher, /\$item\.tap\.failed/);
+    assert.doesNotMatch(launcher, /\$item\.tap\.pass\b/);
+    assert.doesNotMatch(launcher, /\$item\.tap\.fail\b/);
     assert.match(runner, /ERP_OUT_001_DESCENDANT_REGISTRY/);
     assert.match(runner, /await ensureOut001ChildExited\(entry\)/);
   });

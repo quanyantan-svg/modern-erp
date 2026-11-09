@@ -296,7 +296,7 @@ if ($null -ne $rootReport -and $null -ne $rootReport.evidence) {
   foreach ($item in $rootReport.evidence) {
     $tapSummary = 'n/a'
     if ($null -ne $item.tap) {
-      $tapSummary = "tests=$($item.tap.tests) pass=$($item.tap.pass) fail=$($item.tap.fail) skipped=$($item.tap.skipped) cancelled=$($item.tap.cancelled)"
+      $tapSummary = "tests=$($item.tap.tests) pass=$($item.tap.passed) fail=$($item.tap.failed) skipped=$($item.tap.skipped) cancelled=$($item.tap.cancelled)"
     }
     Write-Host ("  [{0}] exit={1} tapParsed={2} {3}" -f $item.suite, $item.exitCode, $item.tapParsed, $tapSummary)
     Write-Host ("      stdout : {0} ({1} bytes, sha256 {2})" -f $item.stdoutPath, $item.stdoutBytes, $item.stdoutSha256)

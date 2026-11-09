@@ -2804,6 +2804,45 @@ M3 不确定 COMMIT 在真实 MySQL 下仍为 `NOT_PROVEN_ON_REAL_MYSQL`，不�
 
 **历史重写的边界与后续**：N7 修复只重写了本地工作分支 `fix/out001-mysql-test-fixtures`；`master` 与 `github/master` 仍指向旧历史，因此其 N7 仍为 FAIL，直到 Owner 批准把重写后的历史推送 / 合并为止。旧候选分支 `candidate/out001-97eea5a` 与本地备份分支均未被覆盖或删除。
 
+### 45.18 OUT-001 第二次受保护真实 MySQL 8 Gate 执行与 Launcher 报告链阻塞（2026-11-09）
+
+本节登记 Owner 对冻结候选 `candidate/out001-075e0f6` @ `075e0f6e61108a423c4ae0b194199edec2bc9465`
+的一次性真实 MySQL 8 Gate 授权、实际执行结果与执行后最小离线修补。它只登记本次执行事实，**不签发**
+`AUD-OUT-001` Acceptance、Domain Acceptance、Capability Freeze、Release 或 Deploy。
+
+| 项 | 实际结果 |
+|---|---|
+| Preflight | Windows PowerShell `5.1.26100.9711`；DPAPI CurrentUser PASS；MySQL `8.0.37`；`DATABASE()`、`CURRENT_USER()`、server UUID、grants SHA-256 与固定八字段身份完全一致；least privilege PASS；tables/views/triggers/routines/events=`0/0/0/0/0`；无 ACK-4 quarantine；Issuer 的显式 `System.Security` 与 SID-only ACL 合同 PASS |
+| ACK-4 | RunId `0adfecb6-7db9-4015-9c41-cc36ad42ec48`；Issuer exit `0`；10 分钟窗口；明文 approval 已删除；DPAPI Capability 仅当前 SID；Capability 已原子移动到 `ack4/consumed`，不得复用 |
+| RESET | exit `0`；初始 dropped=`0`；五类对象均为 `0` |
+| BOOTSTRAP | exit `0`；`bootstrapped=true` |
+| RUN | `server/mysql-out001.integration.js` exit `0`；真实 TAP `34 tests / 34 PASS / 0 FAIL / 0 SKIP / 0 CANCELLED`；M1、M1b、M2、M3、M4、M5 全部 PASS |
+| CLEANUP | exit `0`；dropped=`331`；inventory=`[]` |
+| Root Postflight | exit `0`；tables/views/triggers/routines/events=`0/0/0/0/0` |
+| 独立事后 Postflight | 同一固定身份与 least privilege 再次 PASS；五类对象仍为 `0/0/0/0/0`；无 quarantine |
+| 进程退出 | 4 个 ACK-4 child、3 个登记的 `OUT001_HTTP_APP` 后代与 Root PID 均已退出；没有残留应用子进程 |
+| Evidence | `%LOCALAPPDATA%\ModernERP\mysql-gate\evidence\0adfecb6-7db9-4015-9c41-cc36ad42ec48\`；5 组 `stdout.tap` / `stderr.log` / `result.json` 的实际字节数与 SHA-256 全部匹配；RunId 全部一致；密码、approval 明文与明文 Capability 文件均未出现 |
+| Root 终态 | 根据 `runOut001MySqlLifecycle()` 的唯一状态机与已持久化的 `testsPassed=true`、全部登记进程退出、Cleanup/Postflight 成功、无 quarantine，Root 已进入 `FINISHED`；但冻结 Launcher 未持久化最终 Root JSON，该 JSON 在下述报告阶段异常后丢失，故**完整 Root JSON 证据要求未满足** |
+| Launcher | exit `8`。数据库 Gate 已结束后，证据摘要读取不存在的 `tap.pass` / `tap.fail`，而持久化合同实际为 `tap.passed` / `tap.failed`；PowerShell StrictMode 抛出属性不存在异常。该失败不回滚已完成的 Gate，也不得被包装成 Launcher PASS |
+
+状态严格登记为：
+
+| 状态 | 本轮结论 |
+|---|---|
+| `GATE_READY` | 达成（本轮真实 DPAPI / ACL / target preflight 证据） |
+| `GATE_AUTHORIZED` | 达成且已消费（仅 RunId `0adfecb6-...`） |
+| `GATE_EXECUTED` | **EXECUTED**（真实 MySQL 套件与 Root cleanup/postflight 均实际运行） |
+| Gate 技术 PASS 登记 | **BLOCKED**：Launcher exit `8` 且最终 Root JSON 未持久化；不得登记完整 Gate PASS |
+| `GATE_ACCEPTED` | **NOT_ACCEPTED**；未签发 `AUD-OUT-001` Acceptance |
+| M3 真实不确定 COMMIT | 继续为 `NOT_PROVEN_ON_REAL_MYSQL`；本次 M3 PASS 不改变该残余边界 |
+
+执行后自动失败诊断确认唯一新增缺陷位于测试证据报告层。按 Owner 已授权的失败处置边界，从冻结候选创建
+本地分支 `fix/out001-launcher-tap-summary-0adfecb6`，仅将 Launcher 汇总字段修正为 `tap.passed` /
+`tap.failed`，并在 `server/mysql-out001-gate-infrastructure.test.js` 增加静态合同断言。离线 focused
+`27/27 PASS`；FAST 首次在受限沙箱复现已知 CIM/taskkill 权限失败并被终止，随后在所需权限下原命令
+`607/607 PASS`。**未**签发第二张 ACK-4、未再次运行数据库 Gate、未修改业务合同、Schema、Migration、
+数据库权限或版本号；未 Push / Merge / Tag / Release / Deploy。
+
 ### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
 
 以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：
