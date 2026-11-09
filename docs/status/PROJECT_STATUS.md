@@ -3295,6 +3295,24 @@ HTTP 后代；原登记簿验收、恢复入口与离线对账仍硬编码三个
 离线 focused **72/72 PASS**。旧候选及旧 ACK-4 不复用。下一步是在新提交上签发独立
 `ACK4_RECOVERY_V1`，先证明旧进程均已退出，再清理与 Postflight，随后分析 M3 真正失败原因。
 
+### 45.30 OUT-001 M3 真实协议诊断与修复（2026-11-09）
+
+恢复 RunId `6f043b64-decf-4255-b027-51d6dff7e985` 以新
+`ACK4_RECOVERY_V1` 完成旧进程退出检查、单次清理及 Postflight，终态 `FINISHED`。
+随后候选 `0699b02b9eaa6d60ef523762256850ddd6584ee0` 的 Gate RunId
+`2e0ebab7-24ce-48f1-b3b4-4d97ea0fd6a9`：suite **33/34**，M3 提前返回
+HTTP 201；四后代退出证明、CLEANUP、Postflight 全部通过，ACK-4 终态 `FAILED`，
+目标未隔离。诊断候选 `4a3f71246bba02bed9e020c8fcba9fe10c07fb13` 的
+RunId `7aa8d4f0-e33c-4363-b61a-8b3727029de1` 同样 **33/34**、清理证明通过；
+代理计数 `commitsForwarded=0`、`commitsWithheld=0`，而转移 HTTP 返回 201。
+
+根因在本机 `mysql2` 与 MySQL 8 协商 `CLIENT_QUERY_ATTRIBUTES` 后的 `COM_QUERY`
+编码：零属性时 SQL 前仍有 `parameter_count=0`、`parameter_set_count=1` 两字节；
+旧代理直接从命令字节后解析 SQL，因而未识别真实 `COMMIT`。代理现仅额外识别该精确
+两字节前缀，非零属性报文仍不当作 COMMIT；离线协议回归新增带前缀的真实代理暂存
+场景，M3 focused **24/24 PASS**。下一步在新候选上重跑完整真实 Gate，不沿用任何
+已消费 ACK-4 或历史 PASS。
+
 ### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
 
 以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：

@@ -78,7 +78,9 @@ export function createMySqlPacketParser() {
 }
 
 /**
- * True only for a COM_QUERY whose statement is exactly `COMMIT`.
+ * True only for a COM_QUERY whose statement is exactly `COMMIT`. MySQL 8 may
+ * negotiate CLIENT_QUERY_ATTRIBUTES; mysql2 then prefixes even an empty
+ * attribute set with parameter_count=0 and parameter_set_count=1.
  *
  * A prepared-statement execution (COM_STMT_EXECUTE) carries SQL text too and
  * must never be treated as a COMMIT; neither may `ROLLBACK`, `COMMIT AND
@@ -87,7 +89,9 @@ export function createMySqlPacketParser() {
 export function isCommitQueryPayload(payload) {
   if (!Buffer.isBuffer(payload) || payload.length < 2) return false;
   if (payload[0] !== MYSQL_COM_QUERY) return false;
-  const statement = payload.subarray(1).toString('utf8').trim().replace(/;+\s*$/, '').trim();
+  const body = payload.subarray(1);
+  const sql = body.length >= 3 && body[0] === 0 && body[1] === 1 ? body.subarray(2) : body;
+  const statement = sql.toString('utf8').trim().replace(/;+\s*$/, '').trim();
   return /^COMMIT$/i.test(statement);
 }
 

@@ -106,7 +106,8 @@ async function startFakeMySqlServer({ connectionId = 4242, respondToCommit = tru
     socket.on('data', (chunk) => {
       for (const packet of parser.push(chunk)) {
         if (packet.payload[0] !== 0x03) continue;
-        const statement = packet.payload.subarray(1).toString('utf8').trim();
+        const body = packet.payload.subarray(1);
+        const statement = (body[0] === 0 && body[1] === 1 ? body.subarray(2) : body).toString('utf8').trim();
         seen.statements.push(statement);
         if (/^COMMIT$/i.test(statement)) {
           seen.commits += 1;
@@ -203,6 +204,11 @@ describe('OUT-001 M3 离线回归：COMMIT 拦截代理', () => {
     assert.equal(isCommitQueryPayload(comQuery('commit')), true);
     assert.equal(isCommitQueryPayload(comQuery('  COMMIT  ')), true);
     assert.equal(isCommitQueryPayload(comQuery('COMMIT;')), true);
+    assert.equal(isCommitQueryPayload(Buffer.concat([Buffer.from([0x03, 0x00, 0x01]), Buffer.from('COMMIT')])), true,
+      'MySQL 8 CLIENT_QUERY_ATTRIBUTES zero-attribute prefix must be recognized');
+    assert.equal(isCommitQueryPayload(Buffer.concat([Buffer.from([0x03, 0x01, 0x01]), Buffer.from('COMMIT')])), false,
+      'nonzero query attributes are unsupported and must fail closed');
+    assert.equal(isCommitQueryPayload(Buffer.from([0x03, 0x00, 0x01])), false);
     assert.equal(isCommitQueryPayload(comQuery('ROLLBACK')), false);
     assert.equal(isCommitQueryPayload(comQuery('COMMIT AND CHAIN')), false);
     assert.equal(isCommitQueryPayload(comQuery('COMMIT WORK')), false);
@@ -268,6 +274,27 @@ describe('OUT-001 M3 离线回归：COMMIT 拦截代理', () => {
         'COMMIT OK 不得被转发给客户端',
       );
       assert.ok(events.some((event) => event.name === 'COMMIT_FORWARDED'));
+    } finally {
+      client.close();
+      await proxy.close();
+      await server.close();
+    }
+  });
+
+  test('M3-O04b MySQL 8 零属性 COM_QUERY 的 COMMIT OK 同样被暂存', async () => {
+    const server = await startFakeMySqlServer();
+    const proxy = createCommitWithholdingProxy({ upstreamHost: '127.0.0.1', upstreamPort: server.port });
+    await proxy.listen();
+    const client = createRawMySqlClient(proxy.port);
+    try {
+      await client.waitFor((packet) => packet.payload[0] === 10);
+      client.socket.write(encodePacket(1, Buffer.concat([Buffer.from([0x03, 0x00, 0x01]), Buffer.from('COMMIT')])));
+      const withheld = await proxy.waitForEvent('COMMIT_RESPONSE_WITHHELD', 5000);
+      assert.equal(withheld.connectionId, 4242);
+      assert.equal(server.seen.commits, 1);
+      assert.equal(proxy.stats.commitsForwarded, 1);
+      assert.equal(proxy.stats.commitsWithheld, 1);
+      assert.equal(client.received.filter((packet) => packet.payload[0] === 0x00).length, 0);
     } finally {
       client.close();
       await proxy.close();

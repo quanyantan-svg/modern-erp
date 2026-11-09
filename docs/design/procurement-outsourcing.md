@@ -2028,7 +2028,7 @@ OUT-001 使用**独立**的 ACK-4 Manifest `OUT_001_MYSQL_V1`，操作范围固�
 | 监听 | 只绑定 `127.0.0.1` 的临时端口，**不监听**外部网络 |
 | 上游 | 只连接**已经授权**的那一个 MySQL host/port |
 | 协议 | 解析 MySQL packet framing（3 字节长度 + 1 字节 sequence id），正确处理 TCP 分包与粘包；`COM_STMT_PREPARE` / `COM_STMT_EXECUTE` 等非 `COM_QUERY` 报文原样透传 |
-| 拦截 | 只识别 `COM_QUERY` 且语句**恰好**为 `COMMIT` 的报文；原样转发给真实服务端，等待服务端的 OK 报文后**暂存不转发**，并上报 `COMMIT_RESPONSE_WITHHELD` |
+| 拦截 | 只识别 `COM_QUERY` 且语句**恰好**为 `COMMIT` 的报文；兼容 MySQL 8 `CLIENT_QUERY_ATTRIBUTES` 的零属性、单参数集前缀，非零属性或其他语句不作为 COMMIT 拦截；原样转发给真实服务端，等待服务端的 OK 报文后**暂存不转发**，并上报 `COMMIT_RESPONSE_WITHHELD` |
 | 日志 | **不记录**认证包、口令、SQL 参数或任何原始报文，只记录事件名与字节数 |
 | TLS | **不修改** TLS 配置。目标若启用 TLS，代理无法在不解析密文的前提下检查协议，因此调用方必须 **fail closed** |
 
