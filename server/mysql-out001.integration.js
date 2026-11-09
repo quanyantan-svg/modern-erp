@@ -16,14 +16,16 @@ import { after, before, describe, test } from 'node:test';
 import { createProcurementFixture, seedApprovedOutsourceBom } from './test-support/procurement-http-fixture.js';
 import { MySqlSyncAdapter } from './database/mysql-adapter.js';
 import { resolveDatabaseConfig } from './database/config.js';
-import { releaseMySqlIdempotencyLocks, transaction, mysqlSessionState } from './db.js';
+import {
+  MYSQL_TRANSACTION_ADMISSION_REFUSED, releaseMySqlIdempotencyLocks, transaction, mysqlSessionState,
+} from './db.js';
 import { runG07GateRace, waitForNewTransaction } from './test-utils/m1-core-g07-lock-wait.js';
 import {
   compareTableParity, readMySqlInformationSchemaContract,
 } from './test-utils/m1-core-schema-parity.js';
 import {
   countRows, out001BusinessSnapshot, out001IdempotencyLockName,
-  out001PhysicalFinanceSnapshot,
+  out001PhysicalFinanceSnapshot, snapshotTables,
 } from './test-utils/mysql-out001-target.js';
 import { isWipTransferUniqueConstraintError } from './modules/outsourcing-finance.js';
 import {
@@ -49,6 +51,15 @@ const OUT_001_PARITY_TABLES = Object.freeze([
   'idempotency_records',
 ]);
 
+const OUT_001_M1B_ZERO_SIDE_EFFECT_TABLES = Object.freeze([
+  'outsourcing_wip_transfers',
+  'outsourcing_wip_identity_effects',
+  'outsourcing_wip_identity_effect_allocations',
+  'outsourcing_wip_identity_balances',
+  'outsourcing_material_list',
+  'idempotency_records',
+]);
+
 function openIndependentSession() {
   const config = resolveDatabaseConfig({ backend: 'mysql' });
   return new MySqlSyncAdapter({
@@ -64,6 +75,21 @@ function processListIds(db) {
   ).all(config.user).map((row) => Number(row.id));
 }
 
+/**
+ * 强制回收独立 HTTP 应用子进程。
+ *
+ * 失败的测试绝不允许把子进程留给下一次 Gate：未退出的进程会继续持有
+ * MySQL 会话与命名锁，让后续的「后代退出证明」永远无法通过。
+ */
+async function killOut001App(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  try { child.kill('SIGKILL'); } catch { /* the process is already gone */ }
+  await new Promise((resolveExit) => {
+    if (child.exitCode !== null || child.signalCode !== null) { resolveExit(); return; }
+    child.once('exit', resolveExit);
+  });
+}
+
 async function startIndependentOut001App() {
   const child = fork(new URL('../scripts/gates/mysql-out001-http-app-child.mjs', import.meta.url), [], {
     env: { ...process.env }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
@@ -71,14 +97,14 @@ async function startIndependentOut001App() {
   let stderr = '';
   child.stderr.on('data', (chunk) => { stderr += chunk; });
   const readyPromise = new Promise((resolveReady, reject) => {
-    const timer = setTimeout(() => reject(new Error('OUT001_M2_APP_START_TIMEOUT')), 30_000);
+    const timer = setTimeout(() => reject(new Error('OUT001_HTTP_APP_START_TIMEOUT')), 30_000);
     child.on('message', (message) => {
       if (message?.type === 'READY') { clearTimeout(timer); resolveReady(message); }
       if (message?.type === 'ERROR') { clearTimeout(timer); reject(new Error(message.message)); }
     });
     child.once('exit', (code) => {
       clearTimeout(timer);
-      reject(new Error(`OUT001_M2_APP_EXIT_${code}:${stderr}`));
+      reject(new Error(`OUT001_HTTP_APP_EXIT_${code}:${stderr}`));
     });
   });
   let ready;
@@ -94,7 +120,7 @@ async function startIndependentOut001App() {
     }
     ready = await readyPromise;
   } catch (error) {
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await killOut001App(child);
     await readyPromise.catch(() => {});
     throw error;
   }
@@ -103,14 +129,15 @@ async function startIndependentOut001App() {
     child,
     async close() {
       if (child.exitCode !== null || child.signalCode !== null) return;
-      child.send({ type: 'STOP' });
-      await new Promise((resolveClose, reject) => {
-        const timer = setTimeout(() => {
-          child.kill('SIGKILL');
-          reject(new Error('OUT001_M2_APP_STOP_TIMEOUT'));
-        }, 15_000);
-        child.once('exit', () => { clearTimeout(timer); resolveClose(); });
+      try { child.send({ type: 'STOP' }); } catch { /* the IPC channel may already be closed */ }
+      const exited = await new Promise((resolveClose) => {
+        const timer = setTimeout(() => resolveClose(false), 15_000);
+        child.once('exit', () => { clearTimeout(timer); resolveClose(true); });
       });
+      if (exited) return;
+      // 优雅退出超时：强制回收后再报错，绝不把仍然存活的子进程留给下一次 Gate。
+      await killOut001App(child);
+      throw new Error('OUT001_HTTP_APP_STOP_TIMEOUT');
     },
   };
 }
@@ -235,38 +262,115 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
     }
   });
 
-  test('M1b 命名锁在请求进行中被持有，并在业务拒绝（ROLLBACK）后释放', { skip: isMySql ? false : MYSQL_ONLY }, async () => {
+  test('M1b 命名锁在请求进行中被持有，并在业务拒绝（ROLLBACK）后释放', { skip: isMySql ? false : MYSQL_ONLY }, async (t) => {
     const barrier = openIndependentSession();
     const probe = openIndependentSession();
+    let app = null;
+    let barrierOpen = false;
+    // 清理钩子必须在任何可能抛错的步骤**之前**注册：否则夹具准备阶段失败
+    // 就会遗留两个已打开的 MySQL 会话。存活的子进程还会继续持有 MySQL
+    // 会话与命名锁，让下一次 Gate 的「后代退出证明」永远无法通过。
+    t.after(async () => {
+      if (barrierOpen) {
+        try { barrier.exec('ROLLBACK'); } catch (error) {
+          t.diagnostic(`M1B_BARRIER_ROLLBACK_FAILED ${error.message}`);
+        }
+        barrierOpen = false;
+      }
+      try { barrier.close(); } catch (error) { t.diagnostic(`M1B_BARRIER_CLOSE_FAILED ${error.message}`); }
+      try { probe.close(); } catch (error) { t.diagnostic(`M1B_PROBE_CLOSE_FAILED ${error.message}`); }
+      if (app) {
+        try {
+          await app.close();
+        } catch (error) {
+          t.diagnostic(`M1B_APP_CLOSE_FAILED ${error.message}`);
+        }
+        if (app.child.exitCode === null && app.child.signalCode === null) {
+          await killOut001App(app.child);
+          t.diagnostic('M1B_APP_FORCE_KILLED_AFTER_FAILURE');
+        }
+      }
+    });
     const source = await createOrderWithMaterial();
     const target = await createOrderWithMaterial();
     await issueWip(source.orderId, source.materialRow, 5);
     const key = `out001-m1b-${Date.now()}`;
     const appLock = out001IdempotencyLockName('OUTSOURCING_WIP_TRANSFER', source.orderId, key);
-    try {
-      // 屏障会话持有全局事务门禁：应用请求会阻塞在门禁上，但它**已经**取得
-      // 自己的幂等命名锁。
-      barrier.exec('START TRANSACTION');
-      barrier.prepare('SELECT gate_id FROM mysql_transaction_gates WHERE gate_id=1 FOR UPDATE').get();
-      // 超额请求会在取得全局事务门禁、重读余额后抛出业务错误，使
-      // transaction() 走真实 ROLLBACK；幂等命名锁仍必须在回滚后释放。
-      const pending = postTransfer(fixture.baseUrl, fixture.tokens.admin, transferBody(source, target, 6, key));
-      await waitForNewTransaction(barrier, new Set(), 'OUT001_M1B');
-      // 请求进行中：独立会话拿不到应用的幂等锁。
-      assert.equal(Number(probe.prepare('SELECT GET_LOCK(?,1) acquired').get(appLock).acquired), 0,
-        '请求进行中应用必须持有幂等命名锁');
-      barrier.exec('COMMIT');
-      const response = await pending;
-      assert.equal(response.status, 409, JSON.stringify(response.data));
-      assert.equal(response.data.code, 'OUTSOURCING_WIP_TRANSFER_OVERDRAW');
-      // 请求完成后：锁已被释放。
-      assert.equal(Number(probe.prepare('SELECT GET_LOCK(?,5) acquired').get(appLock).acquired), 1,
-        '请求完成后应用必须释放幂等命名锁');
-      assert.equal(Number(probe.prepare('SELECT RELEASE_LOCK(?) released').get(appLock).released), 1);
-    } finally {
-      barrier.close();
-      probe.close();
-    }
+    const zeroSideEffectsBefore = snapshotTables(fixture.db, OUT_001_M1B_ZERO_SIDE_EFFECT_TABLES);
+    const physicalBefore = out001PhysicalFinanceSnapshot(fixture.db);
+    const rejectionsBefore = countRows(
+      fixture.db,
+      'audit_logs',
+      "action='REJECT' AND entity_type='OUTSOURCING_ORDER' AND entity_id=?",
+      [source.orderId],
+    );
+    app = await startIndependentOut001App();
+    assert.notEqual(app.pid, process.pid, 'M1b HTTP 应用必须位于独立 Node.js 进程');
+    t.diagnostic(`M1B_APP_STARTED pid=${app.pid}`);
+    // 屏障会话持有全局事务门禁：应用请求会阻塞在门禁上，但它**已经**取得
+    // 自己的幂等命名锁（`idempotencyReplay()` 在 `transaction()` 之前取锁）。
+    barrier.exec('START TRANSACTION');
+    barrierOpen = true;
+    barrier.prepare('SELECT gate_id FROM mysql_transaction_gates WHERE gate_id=1 FOR UPDATE').get();
+    t.diagnostic('M1B_BARRIER_HELD');
+    // 超额请求会在取得全局事务门禁、重读余额后抛出业务错误，使
+    // transaction() 走真实 ROLLBACK；幂等命名锁仍必须在回滚后释放。
+    const requestState = { settled: false, outcome: null };
+    const pending = postTransfer(app.baseUrl, app.tokens.admin, transferBody(source, target, 6, key)).then(
+      (value) => {
+        requestState.settled = true;
+        requestState.outcome = { status: 'fulfilled', value };
+        return value;
+      },
+      (reason) => {
+        requestState.settled = true;
+        requestState.outcome = { status: 'rejected', reason };
+        throw reason;
+      },
+    );
+    const waiter = await waitForNewTransaction(barrier, new Set(), 'OUT001_M1B', { requestState });
+    assert.equal(requestState.settled, false, '观察到门禁等待者时 HTTP 请求必须仍在进行中');
+    t.diagnostic(`M1B_HTTP_PENDING waiter=${waiter}`);
+    // 请求进行中：独立会话拿不到应用的幂等锁。
+    assert.equal(Number(probe.prepare('SELECT GET_LOCK(?,1) acquired').get(appLock).acquired), 0,
+      '请求进行中应用必须持有幂等命名锁');
+    t.diagnostic('M1B_NAMED_LOCK_HELD');
+    barrier.exec('COMMIT');
+    barrierOpen = false;
+    t.diagnostic('M1B_BARRIER_RELEASED');
+    const response = await pending;
+    assert.equal(response.status, 409, JSON.stringify(response.data));
+    assert.equal(response.data.code, 'OUTSOURCING_WIP_TRANSFER_OVERDRAW');
+    t.diagnostic(`M1B_HTTP_RESPONSE status=${response.status} code=${response.data.code}`);
+    // 请求完成后：锁已被释放。
+    assert.equal(Number(probe.prepare('SELECT GET_LOCK(?,5) acquired').get(appLock).acquired), 1,
+      '请求完成后应用必须释放幂等命名锁');
+    assert.equal(Number(probe.prepare('SELECT RELEASE_LOCK(?) released').get(appLock).released), 1);
+    t.diagnostic('M1B_NAMED_LOCK_RELEASED');
+    assert.equal(
+      snapshotTables(fixture.db, OUT_001_M1B_ZERO_SIDE_EFFECT_TABLES),
+      zeroSideEffectsBefore,
+      '业务拒绝必须保持 WIP、身份、数量与幂等事实零副作用',
+    );
+    assert.equal(out001PhysicalFinanceSnapshot(fixture.db), physicalBefore,
+      '业务拒绝不得产生物理库存、估值或财务副作用');
+    assert.equal(
+      countRows(
+        fixture.db,
+        'audit_logs',
+        "action='REJECT' AND entity_type='OUTSOURCING_ORDER' AND entity_id=?",
+        [source.orderId],
+      ),
+      rejectionsBefore + 1,
+      '超额拒绝必须恰好记录一条拒绝审计',
+    );
+    t.diagnostic('M1B_REJECTION_AUDIT count=1');
+    t.diagnostic('M1B_ZERO_SIDE_EFFECTS_PROVEN');
+    // 子进程必须正常退出：退出码 0 且不得被信号终止。
+    await app.close();
+    assert.equal(app.child.exitCode, 0, 'M1b 独立 HTTP 应用必须正常退出');
+    assert.equal(app.child.signalCode, null, 'M1b 独立 HTTP 应用不得被信号终止');
+    t.diagnostic(`M1B_APP_EXITED pid=${app.pid} code=${app.child.exitCode}`);
   });
 
   test('M2 不同 Key、两个独立应用进程、同源并发竞争不得超额或双写', { skip: isMySql ? false : MYSQL_ONLY }, async () => {
@@ -338,19 +442,38 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
       assert.equal(physicalBefore, out001PhysicalFinanceSnapshot(fixture.db), '并发不得产生物理库存/估值/财务副作用');
     } finally {
       try { barrier?.close(); } catch {}
-      await Promise.all([fixtureA, fixtureB].filter(Boolean).map((app) => app.close()));
+      // 逐个关闭：其中一个关闭失败不得让另一个仍然存活的子进程被遗留。
+      for (const app of [fixtureA, fixtureB].filter(Boolean)) {
+        try {
+          await app.close();
+        } catch {
+          await killOut001App(app.child);
+        }
+      }
     }
   });
 
-  test('M3 会话状态、锁释放未确认隔离与不确定 COMMIT 不重跑业务体', { skip: isMySql ? false : MYSQL_ONLY }, async () => {
+  test('M3 会话状态、锁释放未确认隔离与不确定 COMMIT 不重跑业务体', { skip: isMySql ? false : MYSQL_ONLY }, async (t) => {
     const session = openIndependentSession();
     try {
       // R1/R3 的可判定前提：会话状态机在真实 MySQL 上可观测。
-      assert.equal(mysqlSessionState(session), 'IDLE_TRUSTED');
+      assert.equal(mysqlSessionState(session), 'FRESH');
+      t.diagnostic('M3_STATE FRESH');
       transaction(session, () => {
         assert.equal(mysqlSessionState(session), 'ACTIVE');
+        t.diagnostic('M3_COMMIT_PATH ACTIVE');
       });
       assert.equal(mysqlSessionState(session), 'IDLE_TRUSTED');
+      t.diagnostic('M3_COMMIT_PATH IDLE_TRUSTED');
+
+      const rollbackProbe = new Error('OUT001_M3_ROLLBACK_PROBE');
+      assert.throws(() => transaction(session, () => {
+        assert.equal(mysqlSessionState(session), 'ACTIVE');
+        t.diagnostic('M3_ROLLBACK_PATH ACTIVE');
+        throw rollbackProbe;
+      }), (error) => error === rollbackProbe);
+      assert.equal(mysqlSessionState(session), 'IDLE_TRUSTED');
+      t.diagnostic('M3_ROLLBACK_PATH IDLE_TRUSTED');
 
       // victim 真实持有 sentinelLock，但本地幂等锁集合只登记一个从未持有的
       // unownedLock。生产 release 函数对 unownedLock 得到 NOT_OWNER 后隔离并
@@ -380,12 +503,40 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
         assert.equal(release.verified.length, 0);
         assert.deepEqual(release.unverified.map((item) => item.outcome), ['NOT_OWNER']);
         assert.equal(release.quarantined, true, '未确认释放必须由生产函数触发 quarantine');
+        t.diagnostic('M3_QUARANTINE CONFIRMED');
         const state = session.quarantineState;
         assert.equal(state.state, 'TERMINATION_PENDING');
+
+        // 终止**未确认**时禁止连接复用（§26.34.14.3 P3）：被隔离的适配器
+        // 必须拒绝 admission，并且不得再向服务器发出任何语句。
+        let reuseCalls = 0;
+        assert.throws(() => transaction(session, () => { reuseCalls += 1; }), (error) => {
+          assert.equal(error.code, MYSQL_TRANSACTION_ADMISSION_REFUSED);
+          assert.equal(error.reason, 'ADAPTER_QUARANTINED');
+          return true;
+        });
+        assert.equal(reuseCalls, 0, '终止未确认时不得在该连接上重放业务体');
+        const blockedRelease = releaseMySqlIdempotencyLocks(session);
+        assert.equal(blockedRelease.attempted, 0, '被隔离的适配器不得再尝试释放任何命名锁');
+        assert.equal(blockedRelease.quarantined, true);
+        t.diagnostic('M3_REUSE_BLOCKED_WHILE_TERMINATION_PENDING');
+
         await state.termination;
         assert.equal(state.state, 'TERMINATION_CONFIRMED', 'R1 要求终止已确认');
         assert.equal(session.sessionState, 'TERMINATED');
-        assert.equal(mysqlSessionState(session), 'TERMINATED');
+        // 隔离是终态：适配器一旦隔离就不再是可复用会话，`mysqlSessionState()`
+        // 因此报告 QUARANTINED 而不是 IDLE_TRUSTED（§26.34.14.3 R1 / P3）。
+        assert.equal(mysqlSessionState(session), 'QUARANTINED',
+          '终止已确认的隔离会话不得回到可复用的可信空闲状态');
+        t.diagnostic('M3_TERMINATION CONFIRMED');
+        // 终止已确认后仍然禁止复用同一连接。
+        let reuseAfterTermination = 0;
+        assert.throws(() => transaction(session, () => { reuseAfterTermination += 1; }), (error) => {
+          assert.equal(error.code, MYSQL_TRANSACTION_ADMISSION_REFUSED);
+          return true;
+        });
+        assert.equal(reuseAfterTermination, 0, '终止已确认后也不得在该连接上重放业务体');
+        t.diagnostic('M3_REUSE_BLOCKED_AFTER_TERMINATION_CONFIRMED');
         assert.equal(Number(other.prepare('SELECT IS_FREE_LOCK(?) free').get(sentinelLock)?.free), 1,
           'observer 必须证明原命名锁已在服务器端释放');
         assert.equal(Number(other.prepare('SELECT GET_LOCK(?,5) acquired').get(sentinelLock)?.acquired), 1,
@@ -394,6 +545,11 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
         assert.equal(Number(other.prepare(
           'SELECT COUNT(*) n FROM information_schema.PROCESSLIST WHERE ID=?',
         ).get(victimId)?.n || 0), 0, 'victim session 必须从 PROCESSLIST 消失');
+        // R3：核验连接必须可信且与原会话不同。
+        assert.ok(['IDLE_TRUSTED', 'FRESH'].includes(mysqlSessionState(other)),
+          '核验连接必须是可信会话');
+        assert.notEqual(Number(other.prepare('SELECT CONNECTION_ID() id').get()?.id), victimId,
+          '核验连接必须与原会话不同');
         assert.deepEqual(
           processListIds(other), beforeIds.filter((id) => id !== victimId),
           '隔离不得意外创建新的业务会话',
@@ -425,15 +581,35 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
       user: config.user, password: config.password, ssl: config.ssl,
     }, { workerUrl: recoveryWorker });
     let workCalls = 0;
+    let uncertainError = null;
     try {
       assert.throws(() => transaction(mockAdapter, () => {
         workCalls += 1;
-        // 在业务体末尾布置一次操作错误，使随后的 COMMIT 失败。
+        // 先布置一次会话错误：连接丢失后重新建链会失败，因此随后的 ROLLBACK
+        // 无法被证明。未确认的 ROLLBACK 必须让适配器进入隔离，而不是回到
+        // 可信空闲状态。
+        mockAdapter.prepare('SELECT 1 FROM __recovery_inject_session_error WHERE code = ?').run('PROTOCOL_CONNECTION_LOST');
+        // 再布置一次连接丢失，使随后的 COMMIT 失败且结果未知：服务端可能已
+        // 提交，客户端无法区分「已提交」与「已回滚」。
         mockAdapter.prepare('SELECT 1 FROM __recovery_inject_op_error WHERE code = ?').run('PROTOCOL_CONNECTION_LOST');
-      }));
-      assert.equal(workCalls, 1, 'COMMIT 失败后业务体不得被重跑');
+      }), (error) => { uncertainError = error; return true; });
+      assert.equal(workCalls, 1, '不确定 COMMIT 之后业务体不得被重跑');
+      assert.equal(uncertainError?.code, 'PROTOCOL_CONNECTION_LOST',
+        '不确定 COMMIT 的原始错误必须原样透出，调用侧才能按 §26.34.14.3 处置');
+      assert.equal(uncertainError?.sessionLost, true,
+        '连接丢失必须携带 sessionLost 标记，否则调用侧无法识别不确定 COMMIT');
+      assert.equal(mockAdapter.quarantined, true,
+        '未确认的 ROLLBACK 必须让适配器进入隔离');
       assert.notEqual(mysqlSessionState(mockAdapter), 'IDLE_TRUSTED',
-        'COMMIT 失败的会话不得回到可信空闲状态');
+        '不确定 COMMIT 之后会话不得回到可信空闲状态');
+      t.diagnostic('M3_UNCERTAIN_COMMIT workCalls=1 sessionLost=true quarantined=true');
+      // 被隔离的连接不得用于重放业务体（§26.34.14.3 P3）。
+      let reuseCalls = 0;
+      assert.throws(() => transaction(mockAdapter, () => { reuseCalls += 1; }), (error) => {
+        assert.equal(error.code, MYSQL_TRANSACTION_ADMISSION_REFUSED);
+        return true;
+      });
+      assert.equal(reuseCalls, 0, '隔离后不得在该连接上重放业务体');
     } finally {
       try { mockAdapter.close(); } catch { /* the mock worker may already be torn down */ }
     }

@@ -2763,6 +2763,47 @@ Gate 状态不推进：`GATE_READY`、`GATE_AUTHORIZED`、`GATE_ACCEPTED` 均未
 
 M3 不确定 COMMIT 在真实 MySQL 下仍为 `NOT_PROVEN_ON_REAL_MYSQL`，不得随 OUT-001 其他用例通过而自动关闭。只有真实 MySQL 套件通过、所有子进程退出得到证明、Cleanup 与独立 Postflight 通过，才能登记 Gate 执行完成；Owner Acceptance 另行签发。
 
+### 45.17 OUT-001 一次性收尾修复：M1b / M3 / TAP 持久化 / N7 追溯（2026-11-09）
+
+本节登记本轮一次性收尾修复的**范围、证据与仍未关闭的事项**。本轮只修复 Gate 基础设施、测试层断言与文档追溯，**不改变** OUT-001 业务实现、Schema、Migration、ACK-4 Manifest、数据库权限、版本号与既有 release tag。
+
+| 项 | 本轮结果 |
+|---|---|
+| M1b 结构 | 改为「独立 HTTP 应用子进程 + 屏障会话」：父进程持有全局事务门禁，独立应用进程先取得自己的幂等命名锁、再阻塞在门禁上；观察到门禁等待者后证明命名锁在请求期间确实被持有；解除屏障后请求返回固定 409 `OUTSOURCING_WIP_TRANSFER_OVERDRAW`；ROLLBACK 后命名锁可被第三方会话重新取得；拒绝审计恰好一条；WIP / 身份 / 数量 / 幂等记录逐字段零变化；物理库存、估值与财务逐字段零变化；子进程正常退出（退出码 0 且无信号终止） |
+| M1b 异常与清理路径 | 清理钩子在任何可能抛错的步骤**之前**注册：屏障回滚、两个独立会话关闭与子进程回收在断言失败时同样执行；优雅退出超时先 `SIGKILL` 再报错，绝不把存活的子进程留给下一次 Gate；M2 的两个应用改为逐个关闭，一个关闭失败不阻断另一个的回收 |
+| 后代登记计数 | 独立 HTTP 应用进程由 2 个增至 3 个（M1b 1 个 + M2 2 个）；受控 registry 的条数校验同步收紧，少登记即 fail closed |
+| M3 会话状态 | `FRESH → ACTIVE → IDLE_TRUSTED` 的 COMMIT 路径与 ROLLBACK 路径各自独立断言；ROLLBACK 路径额外断言原始异常对象原样透出 |
+| M3 quarantine → 终止确认 | 锁释放未确认 → `NOT_OWNER` → `quarantine` → `TERMINATION_PENDING` → `TERMINATION_CONFIRMED` → `sessionState === 'TERMINATED'` 全链断言。**终止未确认时**与**终止已确认后**两次断言该连接不得再启动业务体（`MYSQL_TRANSACTION_ADMISSION_REFUSED` / `ADAPTER_QUARANTINED`）；核验连接必须可信且与原会话不同（R3） |
+| M3 不确定 COMMIT | recovery worker 夹具补齐与真实 Worker 一致的 `sessionLost` 标记；业务体注入连接丢失使 COMMIT 结果未知，并使随后的 ROLLBACK 同样无法被证明，因此适配器进入隔离而不是回到可信空闲状态；断言业务体只执行一次、原始错误原样透出且携带 `sessionLost` |
+| TAP 持久化 | 每个子进程（RESET / BOOTSTRAP / Suite / CLEANUP / Postflight）的 stdout 与 stderr **完整**写入 `%LOCALAPPDATA%\ModernERP\mysql-gate\evidence\<RunId>\suites\<label>\` 下的 `stdout.tap` / `stderr.log` / `result.json`；落盘路径绑定 RunId；成功、非零退出、超时与流异常路径都留下证据；TAP 不再只在内存中收集；必须等 Child 退出、两路输出流结束且文件 fd 关闭之后才计算字节数与 SHA-256 |
+| TAP 判定 | `result.json` 记录 suite 名、退出码、stdout/stderr 字节数与 SHA-256、替换次数与 TAP 汇总。TAP 解析要求 `tests/pass/fail/skipped` 齐全且 `pass+fail+cancelled+skipped+todo === tests`，否则判为解析失败；**TAP 解析失败、有失败项、有取消项或退出码非零时 `testsPassed` 一律不得为 true** |
+| 证据密钥 | 数据库密码、DPAPI 解密内容、Capability 明文与 approval 明文不落盘：输出在字节层被替换为 `[REDACTED]` 并记录替换次数；替换边界保证跨 chunk 与被 chunk 边界切开的密钥都不会先落盘再被替换 |
+| N7 追溯修复 | `a40e356` 新增 `docs/status/PROJECT_STATUS.md` §45.16，却未在提交消息中引用该章节编号或该文件完整路径，N7 因此 FAIL。修复方式为**只改提交消息**的有界本地历史重写：文件树、作者、提交者与时间戳逐项保持不变，新旧 HEAD 的 `git diff --exit-code` 为 0；原始历史由本地备份分支 `backup/n7-pre-rewrite-20261109-97eea5a5` 与既有候选分支 `candidate/out001-97eea5a` 继续保留 |
+| 摘要 | Gate 的最终 JSON summary 与 PowerShell Launcher 输出都逐条列出每个 suite 的证据文件路径、字节数与 SHA-256 |
+
+**本轮实际验证结果**（全部未连接真实 MySQL、未执行任何数据库写操作）：
+
+| 检查 | 命令 | 退出码 | 结果 |
+|---|---|---|---|
+| 语法检查 | `node --check`（11 个受影响的 js/mjs 文件） | 0 | 11/11 OK |
+| OUT-001 focused SQLite | `node --test server/mysql-out001.integration.js` | 0 | 34 tests：28 PASS / 6 SKIP（6 个真实 MySQL 用例）/ 0 FAIL |
+| disposable target guard | `node --test server/mysql-disposable-target-guard.test.js` | 0 | 10/10 PASS |
+| Gate infrastructure | `node --test server/mysql-out001-gate-infrastructure.test.js` | 0 | 27/27 PASS（其中 10 项为本轮新增的证据持久化用例） |
+| FAST | `pnpm test:fast` | 0 | 607/607 PASS / 0 FAIL / 0 SKIP |
+| FULL | `pnpm test` | 0 | 3398/3398 PASS / 0 FAIL / 0 SKIP |
+| Build | `pnpm build` | 0 | PASS |
+| Docs current | `node scripts/docs/check-doc-consistency.mjs --mode current --target HEAD` | 0 | N1、N3–N9 PASS，N2 `RETIRED` |
+| Docs migration | `node scripts/docs/check-doc-consistency.mjs --mode migration` | 0 | C1–C6 PASS |
+| `git diff --check` | `git diff --check` | 0 | PASS |
+
+**本轮明确未发生**：真实 MySQL Gate 未重新运行；未连接真实 MySQL；未执行 RESET / BOOTSTRAP / CLEANUP / Migration / DDL；未重新签发或消费 ACK-4（上一轮 ACK-4 的 RunId 已消费，不可复用）；未修改生产业务合同、Schema、Migration、命名锁合同、全局事务门禁与超时配置；未修改 `AUD-OUT-001` 的 `TESTED` / `PENDING_OWNER_APPROVAL` 状态；未把 `PRC-06` 改为 `COVERED`；未改变 M1-Core 七 Gate 的既有结果；未修改 `package.json` 版本与既有 release tag；未 Push / Merge / Tag / Release / Deploy。
+
+**仍未关闭的事项**：M3 的**真实**不确定 COMMIT 仍为 `NOT_PROVEN_ON_REAL_MYSQL`（真实库需要 `CONNECTION_ADMIN` 在提交中途 `KILL CONNECTION`，一次性 least-privilege 账户刻意没有该权限）；`GATE_READY` / `GATE_AUTHORIZED` / `GATE_EXECUTED` / `GATE_ACCEPTED` 仍未签发；`AUD-OUT-001` 仍为 `TESTED` / `PENDING_OWNER_APPROVAL`。
+
+**关于既有 Windows ACL 失败**：§45.16 记录的「既有 3380/3381、唯一 Windows ACL `SetAccessControl` 失败」在本轮 FULL 中**未复现**——本轮 FULL 为 3398/3398、0 FAIL，对应用例 `production evidence writer creates a readable sanitized file with platform restriction applied` 本轮 PASS。本轮**未修改**该用例、该 ACL 代码或任何权限配置，因此只登记「本轮未复现」这一事实，不把它记作已修复。
+
+**历史重写的边界与后续**：N7 修复只重写了本地工作分支 `fix/out001-mysql-test-fixtures`；`master` 与 `github/master` 仍指向旧历史，因此其 N7 仍为 FAIL，直到 Owner 批准把重写后的历史推送 / 合并为止。旧候选分支 `candidate/out001-97eea5a` 与本地备份分支均未被覆盖或删除。
+
 ### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
 
 以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：

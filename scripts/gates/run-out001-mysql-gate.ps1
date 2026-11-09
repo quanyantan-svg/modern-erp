@@ -288,6 +288,25 @@ Remove-Item -LiteralPath $targetProofPath -Force -ErrorAction SilentlyContinue
 Exit-GateLock $gateLock
 $gateLock = $null
 
+# The evidence is persisted by the gate itself; the launcher only reports the
+# paths so that a failed run can be reviewed without re-running anything.
+Write-Step ''
+Write-Step 'Gate evidence (stdout / stderr / result per child):'
+if ($null -ne $rootReport -and $null -ne $rootReport.evidence) {
+  foreach ($item in $rootReport.evidence) {
+    $tapSummary = 'n/a'
+    if ($null -ne $item.tap) {
+      $tapSummary = "tests=$($item.tap.tests) pass=$($item.tap.pass) fail=$($item.tap.fail) skipped=$($item.tap.skipped) cancelled=$($item.tap.cancelled)"
+    }
+    Write-Host ("  [{0}] exit={1} tapParsed={2} {3}" -f $item.suite, $item.exitCode, $item.tapParsed, $tapSummary)
+    Write-Host ("      stdout : {0} ({1} bytes, sha256 {2})" -f $item.stdoutPath, $item.stdoutBytes, $item.stdoutSha256)
+    Write-Host ("      stderr : {0} ({1} bytes, sha256 {2})" -f $item.stderrPath, $item.stderrBytes, $item.stderrSha256)
+    Write-Host ("      result : {0}" -f $item.resultPath)
+  }
+} else {
+  Write-Host '  (no evidence was produced)'
+}
+
 Write-Step ''
 if ($gateExit -eq 0 -and $rootState -eq 'FINISHED' -and $null -ne $rootReport -and
     $rootReport.testsPassed -eq $true -and $rootReport.cleanupProven -eq $true -and $rootReport.childrenExited -eq $true) {
