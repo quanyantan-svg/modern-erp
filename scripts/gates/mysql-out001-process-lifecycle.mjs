@@ -8,8 +8,18 @@ export const OUT_001_CHILD_TIMEOUT_MS = Object.freeze({
   BOOTSTRAP_CURRENT_SCHEMA: 10 * 60_000,
   RUN_OUT001_HTTP_FIXTURES: 30 * 60_000,
   CLEANUP_SCHEMA_POST_RUN: 5 * 60_000,
+  CLEANUP_SCHEMA_RECOVERY: 5 * 60_000,
   POSTFLIGHT: 2 * 60_000,
 });
+
+export function out001ChildEnvironment(environment, mode) {
+  if (mode === 'operation') return { ...environment };
+  const { ERP_MYSQL_TEST_ALLOW_RESET: _allowReset,
+    ERP_MYSQL_TEST_DISPOSABLE_TARGET: _disposableTarget,
+    ERP_MYSQL_TEST_DESTRUCTIVE_OPERATIONS: _destructiveOperations,
+    ...readOnlyEnvironment } = environment;
+  return readOnlyEnvironment;
+}
 
 const TERMINATION_CONFIRM_TIMEOUT_MS = 15_000;
 const WINDOWS_PROCESS_QUERY = [
@@ -173,7 +183,7 @@ export function parseOut001OperationOutput(stdout, operation) {
     }
   } else if (operation === 'BOOTSTRAP_CURRENT_SCHEMA') {
     if (result.bootstrapped !== true) throw new Error('OUT_001_MYSQL_BOOTSTRAP_RESULT_UNVERIFIED');
-  } else if (operation === 'CLEANUP_SCHEMA_POST_RUN') {
+  } else if (operation === 'CLEANUP_SCHEMA_POST_RUN' || operation === 'CLEANUP_SCHEMA_RECOVERY') {
     if (!Number.isSafeInteger(result.dropped) || result.dropped < 0) {
       throw new Error('OUT_001_MYSQL_CLEANUP_RESULT_UNVERIFIED');
     }

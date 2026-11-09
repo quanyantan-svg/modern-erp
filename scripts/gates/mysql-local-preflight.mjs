@@ -76,8 +76,9 @@ try {
     .filter(([, count]) => count !== 0)
     .map(([kind, count]) => `${kind}=${count}`);
 
+  const recoveryInspection = process.argv.includes('--recovery-inspection');
   result = {
-    ok: drift.length === 0 && nonEmpty.length === 0,
+    ok: drift.length === 0 && (recoveryInspection || nonEmpty.length === 0),
     identity: {
       database: identity.database,
       currentUser: identity.currentUser,

@@ -113,7 +113,15 @@ export function resetAuthorizedDisposableMySqlSchema(db, config, env = process.e
       deferral,
     });
   }
-  assertActivePortableChildOperation(['RESET_SCHEMA_PRE_RUN', 'CLEANUP_SCHEMA_POST_RUN']);
+  const lease = assertActivePortableChildOperation([
+    'RESET_SCHEMA_PRE_RUN', 'CLEANUP_SCHEMA_POST_RUN', 'CLEANUP_SCHEMA_RECOVERY',
+  ]);
+  if (lease.operation === 'RESET_SCHEMA_PRE_RUN' && requireEmpty !== true) {
+    throw new Error('MYSQL DISPOSABLE TARGET REFUSED: RESET lease cannot DROP objects');
+  }
+  if (lease.operation !== 'RESET_SCHEMA_PRE_RUN' && requireEmpty === true) {
+    throw new Error('MYSQL DISPOSABLE TARGET REFUSED: cleanup lease cannot masquerade as RESET');
+  }
   const authorization = assertAuthorizedDisposableMySqlTarget(config, env);
   const actualDatabase = db.prepare('SELECT DATABASE() database_name').get()?.database_name;
   if (actualDatabase !== config.database) {

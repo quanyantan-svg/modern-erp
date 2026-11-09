@@ -22,6 +22,7 @@ export function out001RootEvidencePaths(runId, options = {}) {
     report: join(dir, 'root-report.json'),
     manifest: join(dir, 'root-manifest.json'),
     launcherResult: join(dir, 'launcher-result.json'),
+    launcherManifest: join(dir, 'launcher-manifest.json'),
     reconciliation: join(dir, 'root-reconciliation.json'),
   });
 }
@@ -123,13 +124,43 @@ export function rootEvidenceIsPassing(report, gateExitCode) {
     && report.cleanupProven === true && report.childrenExited === true;
 }
 
+export function readAndValidateOut001LauncherEvidence({ runId, commitSha, manifest, options = {} }) {
+  const paths = out001RootEvidencePaths(runId, options);
+  const bytes = readFileSync(paths.launcherResult);
+  let index;
+  let result;
+  try {
+    index = JSON.parse(readFileSync(paths.launcherManifest, 'utf8'));
+    result = JSON.parse(bytes);
+  } catch { throw new Error('OUT_001_LAUNCHER_EVIDENCE_JSON_INVALID'); }
+  if (index?.version !== 1 || index.runId !== runId || index.commitSha !== commitSha
+    || index.manifest !== manifest || index.resultFile !== basename(paths.launcherResult)
+    || index.resultBytes !== bytes.length || index.resultSha256 !== sha256(bytes)
+    || result?.runId !== runId || result.commitSha !== commitSha || result.manifest !== manifest) {
+    throw new Error('OUT_001_LAUNCHER_MANIFEST_INVALID');
+  }
+  if (result.rootEvidenceValid === true) {
+    const root = readAndValidateOut001RootEvidence({ runId, commitSha, manifest, options });
+    if (result.rootState !== root.report.state) throw new Error('OUT_001_LAUNCHER_ROOT_STATE_MISMATCH');
+    const expected = rootEvidenceIsPassing(root.report, result.gateExitCode)
+      ? 'PASS' : root.report.state === 'BLOCKED' ? 'BLOCKED' : 'FAIL';
+    if (result.result !== expected) throw new Error('OUT_001_LAUNCHER_RESULT_MISMATCH');
+  } else if (result.result !== 'BLOCKED') {
+    throw new Error('OUT_001_LAUNCHER_UNVERIFIED_ROOT_CANNOT_PASS');
+  }
+  return Object.freeze({ valid: true, result, manifest: index });
+}
+
 async function cli() {
   const value = (name) => process.argv[process.argv.indexOf(name) + 1];
-  const verified = readAndValidateOut001RootEvidence({
+  const input = {
     runId: required(value('--run-id'), 'OUT_001_ROOT_CLI_RUN_ID_REQUIRED'),
     commitSha: required(value('--commit-sha'), 'OUT_001_ROOT_CLI_SHA_REQUIRED'),
     manifest: required(value('--manifest'), 'OUT_001_ROOT_CLI_MANIFEST_REQUIRED'),
-  });
+  };
+  const verified = process.argv.includes('--launcher')
+    ? readAndValidateOut001LauncherEvidence(input)
+    : readAndValidateOut001RootEvidence(input);
   process.stdout.write(`${JSON.stringify({ valid: true, report: verified.report, manifest: verified.manifest })}\n`);
 }
 

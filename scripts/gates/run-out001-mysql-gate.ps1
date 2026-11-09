@@ -61,13 +61,26 @@ function Write-LauncherResult([System.Collections.IDictionary]$Result) {
   $rootDir = Join-Path $localDir "evidence\$RunId\root"
   [System.IO.Directory]::CreateDirectory($rootDir) | Out-Null
   $target = Join-Path $rootDir 'launcher-result.json'
+  $manifestTarget = Join-Path $rootDir 'launcher-manifest.json'
   if (Test-Path -LiteralPath $target) { throw 'OUT_001_LAUNCHER_RESULT_OVERWRITE_REFUSED' }
+  if (Test-Path -LiteralPath $manifestTarget) { throw 'OUT_001_LAUNCHER_MANIFEST_OVERWRITE_REFUSED' }
   $temporary = Join-Path $rootDir ('.launcher-result.' + [guid]::NewGuid().ToString() + '.tmp')
   try {
     $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes(($Result | ConvertTo-Json -Depth 20) + "`n")
     $stream = [System.IO.File]::Open($temporary, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
     try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
     [System.IO.File]::Move($temporary, $target)
+    $hasher = [System.Security.Cryptography.SHA256]::Create()
+    try { $digest = [BitConverter]::ToString($hasher.ComputeHash($bytes)).Replace('-', '').ToLowerInvariant() }
+    finally { $hasher.Dispose() }
+    $index = [ordered]@{
+      version = 1; runId = $RunId; commitSha = $commitSha; manifest = $manifestName
+      resultFile = 'launcher-result.json'; resultBytes = $bytes.Length; resultSha256 = $digest
+    }
+    $manifestBytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes(($index | ConvertTo-Json -Compress) + "`n")
+    $manifestTemp = Join-Path $rootDir ('.launcher-manifest.' + [guid]::NewGuid().ToString() + '.tmp')
+    [System.IO.File]::WriteAllBytes($manifestTemp, $manifestBytes)
+    [System.IO.File]::Move($manifestTemp, $manifestTarget)
   } finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
 }
 
@@ -115,7 +128,7 @@ function Invoke-NodeHelper {
   try {
     $previousPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    $process = Start-Process -FilePath 'node' -ArgumentList (ConvertTo-NativeArgument $HelperPath) -NoNewWindow -Wait -PassThru `
+    $process = Start-Process -FilePath 'node' -ArgumentList (ConvertTo-NativeArgument $HelperPath) -WindowStyle Hidden -Wait -PassThru `
       -WorkingDirectory $repoRoot -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile
     $ErrorActionPreference = $previousPreference
     $stdoutText = (Get-Content -Raw -Encoding UTF8 $stdoutFile) -replace "`0", ''
@@ -274,7 +287,7 @@ try {
     '--target-proof', (ConvertTo-NativeArgument $targetProofPath)
   )
   $gate = Start-Process -FilePath 'node' -ArgumentList $gateArguments `
-    -NoNewWindow -Wait -PassThru -WorkingDirectory $repoRoot -RedirectStandardOutput $gateOutFile -RedirectStandardError $gateErrFile
+    -WindowStyle Hidden -Wait -PassThru -WorkingDirectory $repoRoot -RedirectStandardOutput $gateOutFile -RedirectStandardError $gateErrFile
   $gateExit = $gate.ExitCode
   $ErrorActionPreference = $previousPreference
 } finally {
@@ -313,14 +326,20 @@ $launcherResult = [ordered]@{
     $rootReport.testsPassed -eq $true -and $rootReport.cleanupProven -eq $true -and $rootReport.childrenExited -eq $true) { 'PASS' }
     elseif ($rootState -eq 'BLOCKED') { 'BLOCKED' } else { 'FAIL' }
   diagnostic = if ($rootEvidenceValid) { $null } else { $rootEvidenceDiagnostic }
-  gateStdoutBytes = (Get-Item -LiteralPath $gateOutFile).Length
-  gateStderrBytes = (Get-Item -LiteralPath $gateErrFile).Length
-  gateStdoutSha256 = (Get-FileHash -LiteralPath $gateOutFile -Algorithm SHA256).Hash.ToLowerInvariant()
-  gateStderrSha256 = (Get-FileHash -LiteralPath $gateErrFile -Algorithm SHA256).Hash.ToLowerInvariant()
+  gateOutputRetention = 'EPHEMERAL';
   createdAt = [DateTime]::UtcNow.ToString('o')
 }
 try { Write-LauncherResult $launcherResult } catch {
   $rootEvidenceValid = $false; $rootState = 'BLOCKED'; $rootEvidenceDiagnostic = $_.Exception.Message
+}
+if ($rootEvidenceValid) {
+  try {
+    $launcherVerify = & node $rootEvidenceVerifier --launcher --run-id $RunId --commit-sha $commitSha --manifest $manifestName 2>&1
+    if ($LASTEXITCODE -ne 0) { throw ($launcherVerify -join "`n") }
+    if ((($launcherVerify -join "`n") | ConvertFrom-Json).valid -ne $true) { throw 'launcher verifier did not return valid=true' }
+  } catch {
+    $rootEvidenceValid = $false; $rootState = 'BLOCKED'; $rootEvidenceDiagnostic = $_.Exception.Message
+  }
 }
 Remove-Item $gateOutFile, $gateErrFile -ErrorAction SilentlyContinue
 

@@ -102,8 +102,14 @@ export async function runOut001MySqlLifecycle({
           beginAck4RootOperation(rootLease, 'CLEANUP_SCHEMA_POST_RUN', expected);
           await cleanup(out001OperationContext(rootLease, 'CLEANUP_SCHEMA_POST_RUN', registeredChildren));
           const verification = await verifyCleanup();
+          if (verification?.postflightChild) {
+            registeredChildren.push(verification.postflightChild);
+            childrenExited = childrenExited && verification.postflightChild.exited === true;
+          } else {
+            childrenExited = false;
+          }
           inventory = Array.isArray(verification?.inventory) ? verification.inventory : [];
-          cleanupProven = verification?.clean === true && inventory.length === 0;
+          cleanupProven = verification?.clean === true && childrenExited && inventory.length === 0;
         } catch (error) {
           primaryError ||= error;
           cleanupProven = false;
@@ -115,6 +121,7 @@ export async function runOut001MySqlLifecycle({
   if (!rootLease) throw primaryError || new Error('ACK4_ROOT_LEASE_REQUIRED');
   const state = finalizeAck4Run(rootLease, {
     testsPassed, cleanupProven, childrenExited, quarantineDir, inventory,
+    children: registeredChildren,
   });
   const report = Object.freeze({
     runId: rootLease.runId,

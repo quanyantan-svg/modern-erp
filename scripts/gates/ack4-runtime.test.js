@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import {
   Ack4BlockedError, ACK4_CONSUME_WINDOW_MS, ACK4_RECOVERY_MANIFEST, M1_CORE_MANIFEST, assertNoAck4Quarantine,
-  consumeAck4Record, consumeChildLease, consumePortableChildLease, finalizeAck4Run,
+  beginAck4RootOperation, consumeAck4Record, consumeChildLease, consumePortableChildLease, finalizeAck4Run,
   issueChildLease, issuePortableChildLease, recoverAck4Quarantine, validateAck4Approval,
 } from './ack4/ack4-runtime.mjs';
 
@@ -123,11 +123,32 @@ describe('ACK-4 pure simulation (no database and no MySQL connection)', () => {
         expected: { ...expected(), runId: recovery.runId, manifest: 'ACK4_RECOVERY_V1', operations: ACK4_RECOVERY_MANIFEST },
         decrypt: (bytes) => JSON.parse(bytes), rootPid: 101, rootStartedAt: 'recovery-root',
       });
+      beginAck4RootOperation(recoveryLease, 'INSPECT_QUARANTINE', {
+        commitSha, target, manifest: 'ACK4_RECOVERY_V1',
+      });
+      beginAck4RootOperation(recoveryLease, 'CLEANUP_SCHEMA_RECOVERY', {
+        commitSha, target, manifest: 'ACK4_RECOVERY_V1',
+      });
       const result = recoverAck4Quarantine(recoveryLease, { quarantineDir: join(dir, 'quarantine'), target, cleanupProven: true, childrenExited: true });
       assert.equal(result.recoveredRunId, failed.runId);
       assert.equal(result.state, 'FINISHED');
       assert.doesNotThrow(() => assertNoAck4Quarantine(join(dir, 'quarantine'), target));
       assert.throws(() => recoverAck4Quarantine(recoveryLease, { quarantineDir: join(dir, 'quarantine'), target, cleanupProven: true, childrenExited: true }), /active root lease|marker is missing/);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('cleanup cannot be the first operation of a fresh root lease', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'modern-erp-ack4-order-'));
+    try {
+      const issued = join(dir, 'order.issued');
+      writeFileSync(issued, JSON.stringify(record()));
+      const root = consumeAck4Record({ issuedPath: issued, consumedDir: join(dir, 'consumed'),
+        expected: expected(), decrypt: (bytes) => JSON.parse(bytes),
+        rootPid: 100, rootStartedAt: 'root-start' });
+      assert.throws(() => beginAck4RootOperation(root, 'CLEANUP_SCHEMA_POST_RUN', {
+        commitSha, target, manifest: 'M1_CORE_G07_V1',
+      }), /cleanup prerequisite/);
+      assert.deepEqual(root.completedOperations, []);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

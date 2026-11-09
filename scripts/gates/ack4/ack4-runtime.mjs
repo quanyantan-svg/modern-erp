@@ -218,7 +218,15 @@ export function beginAck4RootOperation(rootLease, operation, expected) {
   if (index < 0) throw new Ack4BlockedError('root operation is outside the approved manifest', 'ACK4_ROOT_SCOPE_ESCALATION');
   if (rootLease.completedOperations.includes(operation)) throw new Ack4BlockedError('root operation cannot be reused', 'ACK4_OPERATION_REPLAY');
   const cleanup = operation === 'CLEANUP_SCHEMA_POST_RUN' || operation === 'CLEANUP_SCHEMA_RECOVERY';
-  if (!cleanup) {
+  if (cleanup) {
+    // A failed bootstrap or suite may skip later work, but cleanup must never
+    // be the first action of a newly consumed capability.
+    const prerequisite = operation === 'CLEANUP_SCHEMA_RECOVERY'
+      ? 'INSPECT_QUARANTINE' : 'RESET_SCHEMA_PRE_RUN';
+    if (!rootLease.completedOperations.includes(prerequisite)) {
+      throw new Ack4BlockedError('cleanup prerequisite was not started', 'ACK4_OPERATION_ORDER_MISMATCH');
+    }
+  } else {
     const firstUnfinished = rootLease.operations.find((item) => !rootLease.completedOperations.includes(item));
     if (firstUnfinished !== operation) throw new Ack4BlockedError('root operation order drifted', 'ACK4_OPERATION_ORDER_MISMATCH');
   }
@@ -237,7 +245,7 @@ export function assertActivePortableChildOperation(operations) {
   return activePortableChildLease;
 }
 
-export function finalizeAck4Run(rootLease, { testsPassed, cleanupProven, childrenExited, quarantineDir, inventory = [] }) {
+export function finalizeAck4Run(rootLease, { testsPassed, cleanupProven, childrenExited, quarantineDir, inventory = [], children = [] }) {
   if (rootLease.state !== 'CONSUMED') throw new Ack4BlockedError('only a consumed run can finish', 'ACK4_STATE_INVALID');
   const state = cleanupProven && childrenExited ? (testsPassed ? 'FINISHED' : 'FAILED') : 'CLEANUP_UNVERIFIED';
   rootLease.state = state;
@@ -247,15 +255,21 @@ export function finalizeAck4Run(rootLease, { testsPassed, cleanupProven, childre
     writeFileSync(join(quarantineDir, `${digest(rootLease.target)}.json`), JSON.stringify({
       version: ACK4_VERSION, runId: rootLease.runId, state, target: rootLease.target,
       commitSha: rootLease.commitSha, manifest: rootLease.manifest, inventory,
+      rootPid: rootLease.rootPid, rootStartedAt: rootLease.rootStartedAt,
+      children: children.map(({ childPid, childStartedAt, operation }) => ({ childPid, childStartedAt, operation })),
     }, null, 2), { flag: 'wx', mode: 0o600 });
   }
   return state;
 }
 
 export function assertNoAck4Quarantine(quarantineDir, target) {
-  if (existsSync(join(quarantineDir, `${digest(normalizeAck4Target(target))}.json`))) {
+  if (existsSync(ack4QuarantineMarkerPath(quarantineDir, target))) {
     throw new Ack4BlockedError('target is quarantined; a new recovery approval is required', 'ACK4_TARGET_QUARANTINED');
   }
+}
+
+export function ack4QuarantineMarkerPath(quarantineDir, target) {
+  return join(quarantineDir, `${digest(normalizeAck4Target(target))}.json`);
 }
 
 export function recoverAck4Quarantine(recoveryLease, { quarantineDir, target, cleanupProven, childrenExited }) {
@@ -267,12 +281,7 @@ export function recoverAck4Quarantine(recoveryLease, { quarantineDir, target, cl
   if (!existsSync(markerPath)) throw new Ack4BlockedError('quarantine marker is missing', 'ACK4_QUARANTINE_MISSING');
   const marker = JSON.parse(readFileSync(markerPath, 'utf8'));
   if (marker.runId === recoveryLease.runId) throw new Ack4BlockedError('recovery requires a new runId', 'ACK4_RECOVERY_REPLAY');
-  beginAck4RootOperation(recoveryLease, 'INSPECT_QUARANTINE', {
-    commitSha: recoveryLease.commitSha, target, manifest: 'ACK4_RECOVERY_V1',
-  });
-  beginAck4RootOperation(recoveryLease, 'CLEANUP_SCHEMA_RECOVERY', {
-    commitSha: recoveryLease.commitSha, target, manifest: 'ACK4_RECOVERY_V1',
-  });
+  exactArray(recoveryLease.completedOperations, ACK4_RECOVERY_MANIFEST, 'completed recovery operations');
   if (!cleanupProven || !childrenExited) throw new Ack4BlockedError('recovery cleanup is unverified', 'ACK4_RECOVERY_UNVERIFIED');
   rmSync(markerPath);
   recoveryLease.state = 'FINISHED';

@@ -20,13 +20,13 @@ import {
   assertNoAck4Quarantine, consumeAck4Record, OUT_001_MYSQL_MANIFEST, OUT_001_MYSQL_MANIFEST_NAME,
 } from './ack4/ack4-runtime.mjs';
 import {
-  collectOut001Child, ensureOut001ChildExited, OUT_001_CHILD_TIMEOUT_MS,
+  collectOut001Child, ensureOut001ChildExited, out001ChildEnvironment, OUT_001_CHILD_TIMEOUT_MS,
   parseOut001OperationOutput, parseOut001PostflightOutput,
 } from './mysql-out001-process-lifecycle.mjs';
 import { createOut001EvidenceWriter, out001SuitePassed } from './mysql-out001-evidence.mjs';
 import { runOut001MySqlLifecycle } from './mysql-out001-root-lifecycle.mjs';
 import { persistOut001RootEvidence } from './mysql-out001-root-evidence.mjs';
-import { initializeOut001DescendantRegistry } from './mysql-out001-descendant-registry.mjs';
+import { initializeOut001DescendantRegistry, readWindowsProcessIdentity } from './mysql-out001-descendant-registry.mjs';
 import { assertOut001MySqlStaticPreflight, OUT_001_MYSQL_SUITE_FILE } from './mysql-out001-static-preflight.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -99,7 +99,6 @@ async function main() {
   };
 
   const spawnRegistered = async (context, { mode, operation, extraEnv = {} }) => {
-    const childStartedAt = new Date().toISOString();
     const leasePath = join(childDir, `${mode}-${children.length}.lease.json`);
     const evidence = createOut001EvidenceWriter({
       runId,
@@ -114,14 +113,14 @@ async function main() {
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: {
-          ...process.env,
+          ...out001ChildEnvironment(process.env, mode),
           ...extraEnv,
           ERP_OUT_001_ACK4_CHILD_LEASE: leasePath,
           ERP_OUT_001_ACK4_CHILD_CONSUMED_DIR: join(childDir, 'consumed'),
           ERP_OUT_001_ACK4_ROOT_PUBLIC_KEY: rootLease.childLeasePublicKey,
           ERP_OUT_001_ROOT_PID: String(process.pid),
-          ERP_OUT_001_CHILD_STARTED_AT: childStartedAt,
           ERP_OUT_001_COMMIT_SHA: commitSha,
+          ERP_OUT_001_MANIFEST: manifest,
           ERP_OUT_001_TARGET_PROOF: targetPath,
           ERP_OUT_001_OPERATION: operation,
         },
@@ -132,6 +131,25 @@ async function main() {
       throw error;
     }
     evidence.attach(child);
+    let identity;
+    try { identity = await readWindowsProcessIdentity(child.pid); }
+    catch (error) {
+      child.kill();
+      try { await collectOut001Child({ child, mode, operation }, { timeoutMs: 5_000 }); }
+      catch (terminationError) { error.cause = terminationError; }
+      await finalizeEvidence({ evidence }, { exitCode: child.exitCode, failure: error });
+      throw error;
+    }
+    if (!identity) {
+      child.kill();
+      let terminationError = null;
+      try { await collectOut001Child({ child, mode, operation }, { timeoutMs: 5_000 }); }
+      catch (error) { terminationError = error; }
+      await finalizeEvidence({ evidence }, { exitCode: child.exitCode,
+        failure: terminationError || new Error('OUT_001_MYSQL_CHILD_PROCESS_IDENTITY_UNVERIFIED') });
+      throw new Error('OUT_001_MYSQL_CHILD_PROCESS_IDENTITY_UNVERIFIED');
+    }
+    const childStartedAt = identity.processCreatedAt;
     const lease = context.issuePortableChild({ childPid: child.pid, childStartedAt });
     writeFileSync(leasePath, JSON.stringify(lease), { flag: 'wx', mode: 0o600 });
     const entry = { child, context, childStartedAt, leasePath, mode, operation, evidence };
@@ -185,6 +203,8 @@ async function main() {
 
   const report = await runOut001MySqlLifecycle({
     consumeRoot: async () => {
+      const rootIdentity = await readWindowsProcessIdentity(process.pid);
+      if (!rootIdentity) throw new Error('OUT_001_MYSQL_ROOT_PROCESS_IDENTITY_UNVERIFIED');
       rootLease = consumeAck4Record({
         issuedPath: resolve(capabilityPath),
         consumedDir: join(storeRoot, 'consumed'),
@@ -198,7 +218,7 @@ async function main() {
           sid: process.env.USER_SID || process.env.USERNAME,
         },
         rootPid: process.pid,
-        rootStartedAt: new Date().toISOString(),
+        rootStartedAt: rootIdentity.processCreatedAt,
       });
       // Capability 明文与 approval 明文只在内存里用于「识别并替换」，从不落盘。
       addSecret(rootLease?.approval?.summary);
@@ -269,18 +289,30 @@ async function main() {
         operation: 'POSTFLIGHT',
         secrets: [...secretValues],
       });
+      const postflightReadyPath = join(childDir, 'postflight.ready');
       const postflight = spawn(process.execPath, [join(repoRoot, 'scripts/gates/mysql-out001-child.mjs'), '--mode', 'postflight'], {
         cwd: repoRoot,
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: {
-          ...process.env,
+          ...out001ChildEnvironment(process.env, 'postflight'),
           ERP_OUT_001_TARGET_PROOF: targetPath,
           ERP_OUT_001_COMMIT_SHA: commitSha,
           ERP_OUT_001_ROOT_PID: String(process.pid),
+          ERP_OUT_001_POSTFLIGHT_READY: postflightReadyPath,
         },
       });
       postflightEvidence.attach(postflight);
+      const postflightIdentity = await readWindowsProcessIdentity(postflight.pid);
+      if (!postflightIdentity) {
+        postflight.kill();
+        throw new Error('OUT_001_POSTFLIGHT_PROCESS_IDENTITY_UNVERIFIED');
+      }
+      const postflightChild = {
+        childPid: postflight.pid, childStartedAt: postflightIdentity.processCreatedAt,
+        operation: 'POSTFLIGHT', exited: false, exitCode: null,
+      };
+      writeFileSync(postflightReadyPath, '', { flag: 'wx', mode: 0o600 });
       let code = null;
       let failure = null;
       try {
@@ -295,17 +327,22 @@ async function main() {
         failure: failure ? { code: failure.code || 'POSTFLIGHT_UNVERIFIED', message: failure.message } : null,
       });
       evidenceEntries.push(persisted);
-      if (failure) return { clean: false, inventory: [failure.code || 'POSTFLIGHT_UNVERIFIED'] };
-      if (code !== 0) return { clean: false, inventory: [`POSTFLIGHT_EXIT_${code}`] };
+      if (await ensureOut001ChildExited({ child: postflight, operation: 'POSTFLIGHT' })) {
+        const current = await readWindowsProcessIdentity(postflight.pid);
+        postflightChild.exited = !current || current.processCreatedAt !== postflightIdentity.processCreatedAt;
+        postflightChild.exitCode = code;
+      }
+      if (failure) return { clean: false, inventory: [failure.code || 'POSTFLIGHT_UNVERIFIED'], postflightChild };
+      if (code !== 0 || !postflightChild.exited) return { clean: false, inventory: [`POSTFLIGHT_EXIT_${code}`], postflightChild };
       const stdout = readFileSync(persisted.stdoutPath, 'utf8');
       const result = parseOut001PostflightOutput(stdout);
       if (!result) {
-        return { clean: false, inventory: ['POSTFLIGHT_UNVERIFIED'] };
+        return { clean: false, inventory: ['POSTFLIGHT_UNVERIFIED'], postflightChild };
       }
       const inventory = Object.entries(result.inventory)
         .filter(([, count]) => count !== 0)
         .map(([kind, count]) => `${kind}=${count}`);
-      return { clean: inventory.length === 0, inventory };
+      return { clean: inventory.length === 0, inventory, postflightChild };
     },
   });
 

@@ -2081,3 +2081,30 @@ OUT-001 使用**独立**的 ACK-4 Manifest `OUT_001_MYSQL_V1`，操作范围固�
 | `GATE_ACCEPTED` | Owner 依据执行证据接受该 Gate 的结论 | **未达成** |
 
 本轮**不**执行真实 MySQL Gate，**不**手动设置破坏性环境变量，**不**执行 Migration / DDL，**不**连接生产数据库，**不**创建 ACK-4 Capability，**不**签发 OUT-001 Acceptance。
+
+##### 26.34.16.5 OUT-001 Gate 保护闭合修订（2026-11-09）
+
+> Owner：Procurement & Outsourcing / Platform。状态：本节为 §26.34.16 的有界技术修订，
+> 仅约束 OUT-001 Gate 与其独立恢复入口；业务 Requirement §31.14.2、业务 Schema、
+> `OUT_001_MYSQL_V1` 四项操作及业务 M1～M5 判定不变。
+
+1. **进程身份与顺序**：Root 和每个持子 Lease 的进程分别读取 Windows `Win32_Process.CreationDate`；
+   子 Lease 的 `childStartedAt` 取自操作系统并由子进程独立重验。ACK-4 原语禁止
+   `CLEANUP_SCHEMA_POST_RUN` 作为首个操作；正常失败可跳过未启动的后续步骤，但须已启动 RESET。
+   恢复清理须先完成 `INSPECT_QUARANTINE`。
+2. **DROP 与环境隔离**：`RESET_SCHEMA_PRE_RUN` 只在五类对象全零时返回，原语层禁止该 Lease
+   进入 DROP 分支；DROP 仅接受 `CLEANUP_SCHEMA_POST_RUN` 或独立恢复 Lease
+   `CLEANUP_SCHEMA_RECOVERY`。只读套件、HTTP 子进程和 Postflight 不继承三个破坏性环境变量；
+   已建 Schema 的目标身份由固定 target proof、连接身份、最小权限和独立子 Lease 核验。
+3. **Postflight 与证据**：Postflight 仍在独立会话执行，只读核验五类对象；Root 登记其 PID 与
+   操作系统创建时间、证明确实退出后，才允许 `childrenExited=true` 与 Gate PASS。
+   Launcher 结果独立写入不可覆盖的 `launcher-result.json` / `launcher-manifest.json`；
+   后者绑定结果字节数和 SHA-256，独立校验器对照 Root 证据重新计算 PASS/FAIL。
+   Launcher 临时 stdout/stderr 在退出时删除，不把其不可复查的哈希写成持久证据。
+4. **隔离恢复**：`run-out001-mysql-recovery.ps1` 是唯一恢复入口，必须由操作者另行签发
+   `ACK4_RECOVERY_V1` 的新 UUIDv4 RunId、完整 SHA 与同一目标的两项操作能力。
+   恢复预检只读地允许非空对象，但仍拒绝身份/授权漂移。恢复 Root 必须证明旧 Root、
+   已登记子进程及三个 HTTP 后代均已退出，缺记录或仍活动即拒绝；然后只运行一次
+   `CLEANUP_SCHEMA_RECOVERY` 和独立只读 Postflight。仅在五类对象归零且新子进程退出
+   得证后，才调用 `recoverAck4Quarantine` 清除旧 marker。恢复不运行业务套件、不重试旧 Gate、
+   不使用旧 ACK-4，也不改变任何业务数据的接受结论。

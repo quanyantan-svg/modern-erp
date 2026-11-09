@@ -19,7 +19,7 @@ import { resolve } from 'node:path';
 import { MySqlSyncAdapter } from '../database/mysql-adapter.js';
 import { resolveDatabaseConfig } from '../database/config.js';
 import { readWave10ConnectedIdentity } from './mysql-wave10-campaign-target.js';
-import { deferMySqlCleanup, mysqlCleanupDeferralState, assertAuthorizedDisposableMySqlTarget } from './mysql-disposable-target.js';
+import { deferMySqlCleanup, mysqlCleanupDeferralState, mysqlDisposableTargetIdentity } from './mysql-disposable-target.js';
 
 export { deferMySqlCleanup, mysqlCleanupDeferralState };
 
@@ -92,8 +92,13 @@ export function openOut001MySqlAdapter({ targetProofPath }) {
   const authorizedConfig = proxyBinding
     ? { ...config, host: proxyBinding.upstreamHost, port: proxyBinding.upstreamPort }
     : config;
-  // MySQL 夹具只允许指向那个被明确批准的一次性目标；这不是建议，是拒绝条件。
-  assertAuthorizedDisposableMySqlTarget(authorizedConfig);
+  // This adapter only reads an already bootstrapped schema. It must not need
+  // the destructive RESET flags passed to the suite or its HTTP descendants.
+  const identity = mysqlDisposableTargetIdentity(authorizedConfig);
+  if (!/(?:test|disposable)/i.test(authorizedConfig.database)
+    || identity !== `mysql://${target.user}@${target.host}:${target.port}/${target.database}`) {
+    throw new Error('OUT_001_MYSQL_READ_TARGET_REFUSED');
+  }
   if (proxyBinding) {
     // The proxy must forward to exactly the approved target.
     if (String(proxyBinding.upstreamHost) !== String(target.host)

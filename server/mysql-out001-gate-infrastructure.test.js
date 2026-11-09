@@ -10,7 +10,7 @@ import {
 } from '../scripts/gates/ack4/ack4-runtime.mjs';
 import { runOut001MySqlLifecycle } from '../scripts/gates/mysql-out001-root-lifecycle.mjs';
 import {
-  collectOut001Child, ensureOut001ChildExited, parseOut001OperationOutput,
+  collectOut001Child, ensureOut001ChildExited, out001ChildEnvironment, parseOut001OperationOutput,
   parseOut001PostflightOutput, terminateProcessTree,
 } from '../scripts/gates/mysql-out001-process-lifecycle.mjs';
 import {
@@ -21,16 +21,18 @@ import {
   MYSQL_LOCAL_DISPOSABLE_TARGET, MYSQL_LOCAL_TARGET,
 } from '../scripts/gates/mysql-local-target-contract.mjs';
 import {
-  appendOut001DescendantRegistration, initializeOut001DescendantRegistry,
+  appendOut001DescendantRegistration, initializeOut001DescendantRegistry, readWindowsProcessIdentity,
   out001DescendantRegistryPath,
 } from '../scripts/gates/mysql-out001-descendant-registry.mjs';
 import {
   createOut001EvidenceWriter, out001SuitePassed, parseOut001TapSummary,
 } from '../scripts/gates/mysql-out001-evidence.mjs';
 import {
-  persistOut001RootEvidence, readAndValidateOut001RootEvidence, rootEvidenceIsPassing,
+  atomicWriteOut001Evidence, persistOut001RootEvidence, readAndValidateOut001LauncherEvidence,
+  readAndValidateOut001RootEvidence, rootEvidenceIsPassing,
 } from '../scripts/gates/mysql-out001-root-evidence.mjs';
 import { reconcileOut001RunEvidence } from '../scripts/gates/reconcile-out001-run-evidence.mjs';
+import { assertOldTreeExited } from '../scripts/gates/mysql-out001-recovery.mjs';
 
 const commitSha = 'b'.repeat(40);
 const target = Object.freeze({
@@ -107,6 +109,21 @@ describe('OUT-001 root evidence and offline reconciliation', () => {
   test('FAILED is preserved as failure rather than PASS', () => {
     assert.equal(rootEvidenceIsPassing(rootReport({ state: 'FAILED', testsPassed: false }), 0), false);
   });
+  test('launcher result has an independently checked byte manifest and root verdict', () => withTemp((localAppData) => {
+    const saved = persistOut001RootEvidence({ report: rootReport(), options: { localAppData } });
+    const result = { version: 1, runId: rootRunId, commitSha, manifest,
+      gateExitCode: 0, rootEvidenceValid: true, rootState: 'FINISHED', result: 'PASS' };
+    const bytes = Buffer.from(`${JSON.stringify(result)}\n`);
+    atomicWriteOut001Evidence(saved.paths.launcherResult, bytes);
+    atomicWriteOut001Evidence(saved.paths.launcherManifest, Buffer.from(JSON.stringify({
+      version: 1, runId: rootRunId, commitSha, manifest, resultFile: 'launcher-result.json',
+      resultBytes: bytes.length, resultSha256: createHash('sha256').update(bytes).digest('hex'),
+    })));
+    const input = { runId: rootRunId, commitSha, manifest, options: { localAppData } };
+    assert.equal(readAndValidateOut001LauncherEvidence(input).result.result, 'PASS');
+    writeFileSync(saved.paths.launcherResult, Buffer.from(`${JSON.stringify({ ...result, gateExitCode: 1 })}\n`));
+    assert.throws(() => readAndValidateOut001LauncherEvidence(input), /MANIFEST_INVALID/);
+  }));
   test('root evidence redacts password, private key and lease secret bytes', () => withTemp((localAppData) => {
     const secrets = ['db-password-secret', 'private-key-secret', 'lease-secret-value'];
     const saved = persistOut001RootEvidence({
@@ -245,7 +262,9 @@ function lifecycleDependencies(root, { clean = true } = {}) {
       },
       stopChildren: async () => true,
       cleanup: completeChild('CLEANUP_SCHEMA_POST_RUN'),
-      verifyCleanup: async () => ({ clean, inventory: clean ? [] : ['tables=1'] }),
+      verifyCleanup: async () => ({ clean, inventory: clean ? [] : ['tables=1'],
+        postflightChild: { childPid: 299, childStartedAt: 'postflight-start',
+          operation: 'POSTFLIGHT', exited: true, exitCode: 0 } }),
     },
   };
 }
@@ -320,6 +339,48 @@ function killTestProcessTree(pid) {
 }
 
 describe('OUT-001 protected MySQL Gate infrastructure (offline)', () => {
+  test('read-only suite and postflight inherit no destructive reset flags', () => {
+    const environment = { ERP_DB_PASSWORD: 'unprinted-secret', ERP_MYSQL_TEST_ALLOW_RESET: 'true',
+      ERP_MYSQL_TEST_DISPOSABLE_TARGET: 'one-target',
+      ERP_MYSQL_TEST_DESTRUCTIVE_OPERATIONS: 'DROP_ALL_TABLES,RECREATE_SCHEMA,DROP_ALL_TABLES_ON_CLEANUP' };
+    for (const mode of ['suite', 'postflight']) {
+      const child = out001ChildEnvironment(environment, mode);
+      assert.equal(child.ERP_DB_PASSWORD, environment.ERP_DB_PASSWORD);
+      for (const key of ['ERP_MYSQL_TEST_ALLOW_RESET', 'ERP_MYSQL_TEST_DISPOSABLE_TARGET',
+        'ERP_MYSQL_TEST_DESTRUCTIVE_OPERATIONS']) assert.equal(child[key], undefined);
+    }
+    assert.equal(out001ChildEnvironment(environment, 'operation').ERP_MYSQL_TEST_ALLOW_RESET, 'true');
+  });
+  test('recovery has a dedicated executable entry and cannot run the business suite', () => {
+    const runner = readFileSync(new URL('../scripts/gates/mysql-out001-recovery.mjs', import.meta.url), 'utf8');
+    const launcher = readFileSync(new URL('../scripts/gates/run-out001-mysql-recovery.ps1', import.meta.url), 'utf8');
+    assert.match(runner, /recoverAck4Quarantine\(/);
+    assert.match(runner, /ACK4_RECOVERY_V1/);
+    assert.doesNotMatch(runner, /runHttpFixtures|--mode['"],?\s*['"]suite|operation:\s*['"]RUN_OUT001_HTTP_FIXTURES/);
+    assert.match(launcher, /mysql-local-preflight\.mjs/);
+    assert.match(launcher, /Global\\ModernERP\.MySqlGate/);
+  });
+  test('recovery blocks live old processes and missing HTTP descendant proof', async () => {
+    const marker = { state: 'CLEANUP_UNVERIFIED', runId: '123e4567-e89b-42d3-a456-426614174066',
+      rootPid: 100, rootStartedAt: '2026-11-09T00:00:00.000Z',
+      children: [{ childPid: 200, childStartedAt: '2026-11-09T00:01:00.000Z',
+        operation: 'CLEANUP_SCHEMA_POST_RUN' }] };
+    await assert.rejects(() => assertOldTreeExited(marker, 'unused', async (pid) =>
+      pid === 100 ? { pid, processCreatedAt: marker.rootStartedAt } : null), /STILL_ACTIVE/);
+    await assert.doesNotReject(() => assertOldTreeExited(marker, 'unused', async () => null));
+    await assert.rejects(() => assertOldTreeExited({ ...marker, children: [
+      { ...marker.children[0], operation: 'RUN_OUT001_HTTP_FIXTURES' },
+    ] }, 'missing-store', async () => null), /DESCENDANT_PROOF_MISSING/);
+  });
+  test('Windows child lease creation time comes from the operating system', {
+    skip: process.platform === 'win32' ? false : 'Windows process identity is required',
+  }, async () => {
+    const identity = await readWindowsProcessIdentity(process.pid);
+    assert.equal(identity.pid, process.pid);
+    assert.ok(Number.isFinite(Date.parse(identity.processCreatedAt)));
+    const runner = readFileSync(new URL('../scripts/gates/mysql-out001-gate.mjs', import.meta.url), 'utf8');
+    assert.match(runner, /childStartedAt = identity\.processCreatedAt/);
+  });
   test('static preflight binds the fixed target, exact Manifest and fixed suite without opening MySQL', () => {
     const proof = assertOut001MySqlStaticPreflight({ target, environment: environment() });
     assert.equal(proof.manifest, 'OUT_001_MYSQL_V1');
@@ -405,6 +466,7 @@ describe('OUT-001 protected MySQL Gate infrastructure (offline)', () => {
       const report = await runOut001MySqlLifecycle(input);
       assert.equal(report.state, 'FINISHED');
       assert.equal(report.childrenExited, true);
+      assert.equal(report.childCount, 5);
       assert.equal(report.cleanupAttempts, 1);
       assert.equal(report.cleanupProven, true);
     } finally {
