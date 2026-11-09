@@ -3313,7 +3313,32 @@ RunId `7aa8d4f0-e33c-4363-b61a-8b3727029de1` 同样 **33/34**、清理证明通�
 场景，M3 focused **24/24 PASS**。下一步在新候选上重跑完整真实 Gate，不沿用任何
 已消费 ACK-4 或历史 PASS。
 
-### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
+### 45.31 OUT-001 有界验收 PASS（2026-11-09）
+
+业务所有者本轮明确委托修复 R-1～R-7、执行真实 MySQL 8 Gate、遇错自行修复并完成
+OUT-001 Acceptance，且明确不因旧 hard stop 中断。固定执行候选为本地
+`candidate/out001-3d0aacf` @ `3d0aacf2793b3fd24373545dd1856829bc723d5e`，
+`package.json` 仍为 `1.6.2`。完整验收证据见
+[`out001-real-mysql-acceptance-20261109.md`](../acceptance/out001-real-mysql-acceptance-20261109.md)。
+
+| 项 | 当前结论与锚点 |
+|---|---|
+| `GATE_READY` / `GATE_AUTHORIZED` / `GATE_EXECUTED` | **PASS / 已执行**；新一次性 ACK-4 RunId `3e6041a4-3167-4434-aeea-13c331aa50a3` 绑定完整候选 SHA、`OUT_001_MYSQL_V1`、同一 disposable 目标与四项操作，已消费 |
+| 真实 MySQL 8 Gate | **PASS**：HTTP TAP **34/34**（M1/M1b/M2/M3/M4/M5 全部通过），Root `FINISHED`，五个子进程及四个 HTTP 后代退出，CLEANUP 一次与独立 Postflight 通过；Launcher exit `0`、结果 `PASS` |
+| 独立证据 | Root/Launcher 两个 Manifest 独立校验均 `valid=true`；Root report SHA-256 `4b7bf3e338f14e301e0dc771906210332ca852075759376230ad7f8b1465ea95`；Launcher result SHA-256 `83aacafb8969785273bc74c63cc2cd69acb6e8e38ecced8b46266add210a436d` |
+| 目标收尾 | Gate 后只读复检身份/授权指纹不漂移，五类对象均零，quarantine marker `0`；MySQL `8.0.37`，专用库 `modern_erp_domain_test` |
+| 最终离线与构建 | 固定候选 FAST **631/631 PASS**、FULL 最终重跑 **3446/3446 PASS**、HEAVY **67/67 PASS**、Build PASS、`git diff --check` PASS；FULL 首轮曾 3445/3446，未完整保存失败输出，原因不推断，已在验收证据中披露 |
+| `GATE_ACCEPTED` / `AUD-OUT-001` | **`GATE_ACCEPTED=PASS`；`AUD-OUT-001=ACCEPTED`（仅 §31.14.2 的有界 OUT-001 工作包）**。基于用户本轮委托授权与原始证据登记，不宣称存在事后独立人工复核或手写签名 |
+
+历史失败 RunId `3cd3409c-…` 的 `CLEANUP_UNVERIFIED` 已由独立恢复 RunId
+`6f043b64-…` 关闭，恢复证据与旧失败证据均保留；另两次 `FAILED` 的清理亦已证明，
+均未冒充本次 PASS。下一阶段开发可用上述固定 SHA 与有界验收结果作为输入，
+但本结论不签发成本携带 `B-P01/B-P02`、VMI、PRC-06、B3101/B3121 Manual Closure、
+Domain Acceptance、Release 或 Deploy。当前无 Push、Merge、Tag、发布或部署。
+
+### 45.9 历史待验证清单（2026-11-08 时点；当前 OUT-001 结论见 §45.31）
+
+> 本节保留当时的风险清单与证据边界；OUT-001 对应的当前真实 MySQL 结果以 §45.31 为准。
 
 以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：
 
