@@ -3039,6 +3039,66 @@ Owner 已确认正式关闭 **OUT-001 最终离线收尾修复**。本节只登�
 
 **HARD STOP**：本轮修正与离线验证完成，等待 Owner Review。**不得**自行签发 `GATE_READY`、ACK-4 或任何 Acceptance。
 
+### 45.24 OUT-001 M3 远端同步记录（2026-11-09）
+
+本节只登记 M3 最终提交在 **GitHub** 上的远端同步事实与前置核验结果。它**不**改写 §45.18、§45.19、§45.20、§45.21、§45.22、§45.23 的任何结论；**不**创建 Candidate Freeze；**不**签发 `GATE_READY` / `GATE_AUTHORIZED` / `GATE_ACCEPTED` 或任何 Acceptance。本工作包**未**发生 Merge、Tag、Release、Deploy、任何数据库操作，也**未**签发或消费 ACK-4。
+
+#### 45.24.1 前置核验（实际值）
+
+| 项 | 实际核验结果 |
+|---|---|
+| 工作分支 | `fix/out001-launcher-tap-summary-0adfecb6` |
+| 本地 HEAD | `7fda3e990aaa5d62340b1c489922c43b4e6a9295` |
+| 该提交的父提交 | `dc58771ba91ea41b1876b4de3e14cb78848b32ce` |
+| 该提交的标题 | 同步 OUT-001 M3 的 R3 合同并消除旧 epoch 语义 |
+| GitHub 工作分支 HEAD（核验时点） | `7fda3e990aaa5d62340b1c489922c43b4e6a9295`，与本地一致 |
+| 工作树 | clean（无未提交、无未跟踪文件） |
+| `master`（本地 = GitHub） | `97eea5a58bad774b36fbe0e94d60a1e35c2c3a3b`（未变） |
+| `candidate/out001-075e0f6`（GitHub） | `075e0f6e61108a423c4ae0b194199edec2bc9465`（未变） |
+| `candidate/out001-97eea5a`（GitHub） | `97eea5a58bad774b36fbe0e94d60a1e35c2c3a3b`（未变） |
+| `candidate/out001-a5fffd1`（GitHub） | `a5fffd10835336fc5137ff2768290f5c34def4ea`（未变） |
+| `fix/out001-mysql-test-fixtures`（GitHub） | `075e0f6e61108a423c4ae0b194199edec2bc9465`（保持不变） |
+| `package.json` version | `1.6.2`（未变） |
+| release tags | 本地 `29` 个；GitHub `3` 个（`v1.6.0`、`v1.6.1`、`v1.6.2`）；Gitee `29` 个 —— 数量与构成均**未变** |
+
+**核验发现的本地/远端 ref 差异（如实登记）**：本地还存在一条**仅本地**的分支 `candidate/out001-163e43c`（`163e43cdb7b52e2f90f711539573284db3b4c123`，"修复门禁：为 ACK-4 签发器加载 DPAPI 程序集"，是 `master` 的祖先）。它在 **GitHub 上没有对应 ref**，也不属于上述三条旧 candidate，因此**不在**本次同步范围内，且本工作包**未**推送它。
+
+#### 45.24.2 远端同步事实
+
+- M3 最终提交 `7fda3e990aaa5d62340b1c489922c43b4e6a9295`（父提交 `dc58771ba91ea41b1876b4de3e14cb78848b32ce`）**已同步至 GitHub** 的 `fix/out001-launcher-tap-summary-0adfecb6`。该状态在本工作包开始时即已成立（由 `git ls-remote` 核验），并非本次推送的结果。
+- 本次 §45.24 记录提交按授权**仅**推送到 GitHub 的同一工作分支 `fix/out001-launcher-tap-summary-0adfecb6`。推送后本地 HEAD 与 GitHub 远端 HEAD 将同为该记录的提交 SHA，工作树保持 clean；提交后的最终 SHA、`git ls-remote` 输出与 `git status` 实际结果登记在本轮交付报告。
+- **未**推送 Gitee、**未**推送 `master`、**未**推送任何 candidate、**未**推送 `fix/out001-mysql-test-fixtures`；**未**执行 Merge / Tag / Release / Deploy。
+
+#### 45.24.3 Gitee 同步状态（如实登记）
+
+**本次是 GitHub 单远端同步，不是双远端同步。** 实际核验结果：
+
+| Gitee（`origin`）上的 ref | 实际状态 |
+|---|---|
+| `fix/out001-launcher-tap-summary-0adfecb6` | **不存在** —— OUT-001 的工作分支从未同步到 Gitee |
+| `candidate/out001-075e0f6` | **不存在** |
+| `candidate/out001-97eea5a` | **不存在** |
+| `candidate/out001-a5fffd1` | **不存在** |
+| `fix/out001-mysql-test-fixtures` | **不存在** |
+| `master` | `a17ef2bb45b658d1c23136406f560e83634f0bbf`，与 GitHub 的 `master`（`97eea5a58bad774b36fbe0e94d60a1e35c2c3a3b`）**不同** |
+
+因此：GitHub 上的 M3 分支与三条 candidate **仅**存在于 GitHub；Gitee 上既没有这些分支，其 `master` 也处于另一个提交。任何把本次同步表述为「双远端同步」的描述都不成立。
+
+#### 45.24.4 本轮状态与边界
+
+| 状态 | 本轮结论 |
+|---|---|
+| M3 最终提交 `7fda3e9` 的 GitHub 同步 | **已达成并核验**（`git ls-remote` 匹配本地 HEAD） |
+| 本次 §45.24 记录提交的推送 | 仅推送到 GitHub 的原工作分支；推送后核验结果登记在本轮交付报告 |
+| Candidate Freeze | **未创建** |
+| `GATE_READY` / `GATE_AUTHORIZED` / 新的 `GATE_EXECUTED` / 技术 PASS / `GATE_ACCEPTED` | **未签发** |
+| `AUD-OUT-001` | 仍为 `TESTED` / `PENDING_OWNER_APPROVAL` |
+| M3 真实不确定 COMMIT | 继续为 `NOT_PROVEN_ON_REAL_MYSQL`（§45.22.4 清单不变） |
+| Merge / Tag / Release / Deploy / 数据库操作 / ACK-4 | **全部未发生** |
+| `master` / 三条 candidate / `fix/out001-mysql-test-fixtures` / `package.json` version / release tags | **全部未变** |
+
+**HARD STOP**：本工作包完成，等待 Owner Review。**不得**自行签发 `GATE_READY`、ACK-4、Candidate Freeze 或任何 Acceptance。
+
 ### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
 
 以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：
