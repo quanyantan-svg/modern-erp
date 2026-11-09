@@ -3099,6 +3099,60 @@ Owner 已确认正式关闭 **OUT-001 最终离线收尾修复**。本节只登�
 
 **HARD STOP**：本工作包完成，等待 Owner Review。**不得**自行签发 `GATE_READY`、ACK-4、Candidate Freeze 或任何 Acceptance。
 
+### 45.25 OUT-001 Candidate Freeze（技术候选基线冻结）（2026-11-09）
+
+本节登记 OUT-001 的**技术候选基线冻结**。它**不**改写 §45.18、§45.19、§45.20、§45.21、§45.22、§45.23、§45.24 的任何结论；**不**签发 `GATE_READY` / `GATE_AUTHORIZED` / `GATE_ACCEPTED` / 任何 Acceptance；**不**构成业务 Capability Freeze、Domain Acceptance、Manual Closure、Release Readiness。本工作包**未** Push、未 Merge、未 Tag、未 Release / Deploy、未连接 MySQL、未执行 RESET / BOOTSTRAP / CLEANUP、未签发或消费 ACK-4。完整冻结证据见 [`docs/acceptance/out001-candidate-freeze-20261109.md`](../acceptance/out001-candidate-freeze-20261109.md)。
+
+#### 45.25.1 冻结对象
+
+| 项 | 值 |
+|---|---|
+| Candidate 名称 | `candidate/out001-d4c97a8`（**本地分支**，本轮**未 Push**） |
+| 冻结 SHA（完整） | `d4c97a8f8be5da56e43fc8346fc5b916f8c6a7ec` |
+| Source branch / Source SHA | `fix/out001-launcher-tap-summary-0adfecb6` / `d4c97a8f8be5da56e43fc8346fc5b916f8c6a7ec`（与冻结 SHA **精确相等**） |
+| Candidate HEAD 与冻结 SHA | **完全一致**（两个 `git rev-parse` 实测同一 SHA） |
+| Candidate 分支新增提交 | **0 条**；冻结后仍精确指向 `d4c97a8` |
+| 前置核验 | 工作树 clean；本地与 GitHub source HEAD 均为 `d4c97a8`；`candidate/out001-d4c97a8` 本地与 GitHub **均不存在**（未覆盖任何既有候选）；`master` = `97eea5a58bad774b36fbe0e94d60a1e35c2c3a3b`；三条旧 candidate 与 `fix/out001-mysql-test-fixtures` 全部保留未变；`package.json` version `1.6.2`；release tags 本地 `29` / GitHub `3` / Gitee `29` 均未变 |
+
+#### 45.25.2 候选上的离线回归（真实退出码，全为 0）
+
+| # | 命令 | 退出码 | 结果 |
+|---|---|---|---|
+| 1 | `node --test server/mysql-out001-m3-uncertain-commit.test.js` | `0` | `23/23 PASS` |
+| 2 | `node --test server/mysql-out001-gate-infrastructure.test.js` | `0` | `44/44 PASS` |
+| 3 | `node --test server/mysql-disposable-target-guard.test.js` | `0` | `10/10 PASS` |
+| 4 | `node --test server/outsourcing-wip-transfer.test.js` | `0` | `21/21 PASS` |
+| 5 | `node --test server/outsourcing-finance.test.js` | `0` | `7/7 PASS` |
+| 6 | `node --test server/outsourcing.test.js` | `0` | `5/5 PASS` |
+| 7 | `pnpm test:fast` | `0` | `624/624 PASS` |
+| 8 | `pnpm test`（FULL） | `0` | `3438/3438 PASS` |
+| 9 | `pnpm build` | `0` | 构建通过 |
+| 10 | Docs migration | `0` | `ALL CHECKS PASSED`（C1～C6） |
+| 11 | Docs current | `0` | `ALL CHECKS PASSED`（N1、N3～N9 含 N7；N2 `RETIRED`） |
+| 12 | `git diff --check` | `0` | 无空白错误 |
+
+#### 45.25.3 已证明 / 未证明边界
+
+| 项 | 结论 |
+|---|---|
+| 离线已证明 | M1～M5 的**代码路径**与离线夹具在本候选上全部通过；M3 的不确定 COMMIT 处置顺序、账户身份核验口径与 R3 合同有确定性离线证据（含两条变异实验证明防回归断言非空洞） |
+| 真实 MySQL 未证明 | **M1～M5 的真实执行未在本候选上重跑**。§45.18 的真实 Gate 34/34 PASS 是**旧候选 `075e0f6`** 的历史事实；本候选相对它改动了 `server/db.js` 与 `server/modules/outsourcing-finance.js`，二者都在 M1/M2/M4/M5 的执行路径上。**旧候选的 PASS 不得被描述为本候选的 PASS** |
+| M3 真实不确定 COMMIT | 继续为 **`NOT_PROVEN_ON_REAL_MYSQL`** —— 从未在任何候选上被真实证明 |
+| `GATE_READY` | **尚未签发** |
+| `AUD-OUT-001` | 仍为 `TESTED` / `PENDING_OWNER_APPROVAL` |
+| 不包含 | 真实 MySQL Acceptance、ACK-4、Capability Freeze、Domain Acceptance、Manual Closure、Release Readiness、Release、Deploy —— **全部不包含** |
+
+#### 45.25.4 本轮状态与边界
+
+| 状态 | 本轮结论 |
+|---|---|
+| Candidate Freeze | **达成**：`candidate/out001-d4c97a8` = `d4c97a8f8be5da56e43fc8346fc5b916f8c6a7ec`，本地，12 项离线回归全绿 |
+| 旧 candidate | **全部保留**：`candidate/out001-075e0f6`、`candidate/out001-97eea5a`、`candidate/out001-a5fffd1` 的 ref 与 SHA 均未改动；本地仅本地分支 `candidate/out001-163e43c` 未在同步范围内、未被改动 |
+| 远端 | 本候选与本冻结记录**均未 Push**；`master`、三条 candidate、`fix/out001-mysql-test-fixtures`、release tags、`package.json` version 全部未变；Gitee 未触碰 |
+| 后续授权边界 | 远端 Push 该 candidate、真实 MySQL Gate 的授权与执行、`GATE_READY` 签发、任何 Acceptance 签发，均需**单独**的 Owner 授权；真实 Gate 若获授权必须使用**全新** RunId / ACK-4，既有已消费的 ACK-4 不得复用，候选必须仍是本节登记的 SHA |
+
+**HARD STOP**：本工作包完成，等待 Owner Review 与远端 Push 的单独授权。**不得**自行 Push、Merge、Tag、Release / Deploy 或签发 `GATE_READY` / ACK-4 / 任何 Acceptance。
+
 ### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
 
 以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：
