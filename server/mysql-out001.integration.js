@@ -640,9 +640,13 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
       // 代理无法在不解析 TLS 的前提下检查协议，必须 fail closed。
       throw new Error('M3_PROXY_TLS_UNSUPPORTED: 真实 MySQL 使用 TLS，代理无法安全检查协议');
     }
+    const proxyEvents = [];
     const proxy = createCommitWithholdingProxy({
       upstreamHost: targetConfig.host,
       upstreamPort: targetConfig.port,
+      onEvent: ({ name, connectionId, reason }) => {
+        proxyEvents.push({ name, connectionId: connectionId ?? null, reason: reason ?? null });
+      },
     });
     let victimApp = null;
     let observer = null;
@@ -716,7 +720,9 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
         transferProbe.then((value) => ({ kind: 'TRANSFER_RESPONSE', value })),
       ]);
       if (firstOutcome.kind === 'TRANSFER_RESPONSE') {
-        throw new Error(`OUT001_M3_TRANSFER_RETURNED_BEFORE_COMMIT:${JSON.stringify(firstOutcome.value)}`);
+        throw new Error(`OUT001_M3_TRANSFER_RETURNED_BEFORE_COMMIT:${JSON.stringify({
+          response: firstOutcome.value, proxyStats: proxy.stats, proxyEvents,
+        })}`);
       }
       const withheld = firstOutcome.value;
       assert.equal(Number(withheld.connectionId), victimConnectionId,
