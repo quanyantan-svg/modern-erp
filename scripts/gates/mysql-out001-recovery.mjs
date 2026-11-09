@@ -10,7 +10,7 @@ import {
   ACK4_RECOVERY_MANIFEST, ack4QuarantineMarkerPath, beginAck4RootOperation, consumeAck4Record,
   issuePortableChildLease, recoverAck4Quarantine,
 } from './ack4/ack4-runtime.mjs';
-import { readWindowsProcessIdentity } from './mysql-out001-descendant-registry.mjs';
+import { OUT_001_EXPECTED_HTTP_APP_COUNT, readWindowsProcessIdentity } from './mysql-out001-descendant-registry.mjs';
 import { collectOut001Child, ensureOut001ChildExited, out001ChildEnvironment, parseOut001OperationOutput,
   parseOut001PostflightOutput, OUT_001_CHILD_TIMEOUT_MS } from './mysql-out001-process-lifecycle.mjs';
 import { createOut001EvidenceWriter } from './mysql-out001-evidence.mjs';
@@ -55,7 +55,7 @@ export async function assertOldTreeExited(marker, store, readIdentity = readWind
     const registry = join(store, 'children', marker.runId, 'descendants', `${marker.runId}.jsonl`);
     if (!existsSync(registry)) throw new Error('OUT_001_RECOVERY_DESCENDANT_PROOF_MISSING');
     const lines = readFileSync(registry, 'utf8').trim().split(/\r?\n/);
-    if (lines.length !== 3) throw new Error('OUT_001_RECOVERY_DESCENDANT_PROOF_INCOMPLETE');
+    if (lines.length !== OUT_001_EXPECTED_HTTP_APP_COUNT) throw new Error('OUT_001_RECOVERY_DESCENDANT_PROOF_INCOMPLETE');
     for (const line of lines) {
       const item = JSON.parse(line);
       if (item.runId !== marker.runId || item.purpose !== 'OUT001_HTTP_APP') {

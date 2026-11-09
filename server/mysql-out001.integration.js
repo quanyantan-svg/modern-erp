@@ -711,7 +711,14 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
 
       // ── 提交真实 WIP Transfer（独立 HTTP 应用进程，经代理连库） ───────
       const transferProbe = requestProbe(victimApp, 'TRANSFER', body);
-      const withheld = await proxy.waitForEvent('COMMIT_RESPONSE_WITHHELD', 120_000);
+      const firstOutcome = await Promise.race([
+        proxy.waitForEvent('COMMIT_RESPONSE_WITHHELD', 120_000).then((value) => ({ kind: 'WITHHELD', value })),
+        transferProbe.then((value) => ({ kind: 'TRANSFER_RESPONSE', value })),
+      ]);
+      if (firstOutcome.kind === 'TRANSFER_RESPONSE') {
+        throw new Error(`OUT001_M3_TRANSFER_RETURNED_BEFORE_COMMIT:${JSON.stringify(firstOutcome.value)}`);
+      }
+      const withheld = firstOutcome.value;
       assert.equal(Number(withheld.connectionId), victimConnectionId,
         '被拦截的 COMMIT 必须属于 victim 会话');
       assert.ok(proxy.stats.commitsForwarded >= 1, 'COMMIT 必须被真实转发给服务端');

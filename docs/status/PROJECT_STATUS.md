@@ -3278,6 +3278,23 @@ FAST 首次因新增静态测试的断言过宽而 629/630，已修正并在 foc
 HEAVY **67/67 PASS**；最终候选 SHA、FAST 与文档检查以随后冻结记录为准。
 本节不签发真实 MySQL Gate PASS 或 OUT-001 Acceptance；真实 Gate、ACK-4、数据库操作在本节登记时均未执行。
 
+### 45.29 OUT-001 首轮真实 MySQL Gate 失败与恢复准备（2026-11-09）
+
+用户已授权修复残余并连续执行真实 Gate。本地冻结候选 `candidate/out001-05ff63a` =
+`05ff63a1d36144dde1ed6409a61f63ed2826df2b`，新 ACK-4 RunId
+`3cd3409c-0af7-438c-bf50-dd21883d3f75`。Launcher 对专用空库
+`modern_erp_domain_test` 的只读预检通过，五类对象均为零；随后真实执行 RESET 与
+BOOTSTRAP 均成功。HTTP suite 为 **33/34 PASS**，M1/M1b/M2/M4/M5 通过，M3 的真实
+`COMMIT_RESPONSE_WITHHELD` 等待 120 秒超时。此次 Root 的 `CLEANUP_UNVERIFIED`、
+`cleanupAttempts=0`、`childrenExited=false` 与 quarantine marker 均保留为失败事实，
+**不签发 Gate PASS**。
+
+直接清理阻塞原因已定位：真实套件登记 M1b 一个、M2 两个、M3 victim 一个，合计四个
+HTTP 后代；原登记簿验收、恢复入口与离线对账仍硬编码三个，导致即便后代全部退出也拒绝
+退出证明。实现与 Design §26.34.16.5 现统一为四个，并增加 M3 提前返回时的明确错误诊断；
+离线 focused **72/72 PASS**。旧候选及旧 ACK-4 不复用。下一步是在新提交上签发独立
+`ACK4_RECOVERY_V1`，先证明旧进程均已退出，再清理与 Postflight，随后分析 M3 真正失败原因。
+
 ### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
 
 以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：

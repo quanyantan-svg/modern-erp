@@ -2104,7 +2104,8 @@ OUT-001 使用**独立**的 ACK-4 Manifest `OUT_001_MYSQL_V1`，操作范围固�
 4. **隔离恢复**：`run-out001-mysql-recovery.ps1` 是唯一恢复入口，必须由操作者另行签发
    `ACK4_RECOVERY_V1` 的新 UUIDv4 RunId、完整 SHA 与同一目标的两项操作能力。
    恢复预检只读地允许非空对象，但仍拒绝身份/授权漂移。恢复 Root 必须证明旧 Root、
-   已登记子进程及三个 HTTP 后代均已退出，缺记录或仍活动即拒绝；然后只运行一次
+   已登记子进程及四个 HTTP 后代（M1b 一个、M2 两个、M3 victim 一个）均已退出，
+   缺记录或仍活动即拒绝；然后只运行一次
    `CLEANUP_SCHEMA_RECOVERY` 和独立只读 Postflight。仅在五类对象归零且新子进程退出
    得证后，才调用 `recoverAck4Quarantine` 清除旧 marker。恢复不运行业务套件、不重试旧 Gate、
    不使用旧 ACK-4，也不改变任何业务数据的接受结论。

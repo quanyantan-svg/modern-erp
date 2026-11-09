@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { atomicWriteOut001Evidence, out001RootEvidencePaths } from './mysql-out001-root-evidence.mjs';
 import { out001EvidenceRoot, parseOut001TapSummary } from './mysql-out001-evidence.mjs';
-import { readWindowsProcessIdentity } from './mysql-out001-descendant-registry.mjs';
+import { OUT_001_EXPECTED_HTTP_APP_COUNT, readWindowsProcessIdentity } from './mysql-out001-descendant-registry.mjs';
 
 export const OUT_001_RECONCILIATION_VERSION = 1;
 const OPERATIONS = Object.freeze([
@@ -83,7 +83,7 @@ async function processProof(runId, commitSha, localAppData) {
   }
   const descendantPath = join(childRoot, 'descendants', `${runId}.jsonl`);
   const descendants = readFileSync(descendantPath, 'utf8').trim().split(/\r?\n/).map(JSON.parse);
-  if (descendants.length !== 3 || descendants.some((item) => item.runId !== runId || !Number.isSafeInteger(item.pid)
+  if (descendants.length !== OUT_001_EXPECTED_HTTP_APP_COUNT || descendants.some((item) => item.runId !== runId || !Number.isSafeInteger(item.pid)
       || !item.processCreatedAt || item.purpose !== 'OUT001_HTTP_APP')) {
     throw new Error('OUT_001_RECONCILIATION_DESCENDANTS_INVALID');
   }

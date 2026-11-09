@@ -22,6 +22,7 @@ import {
 } from '../scripts/gates/mysql-local-target-contract.mjs';
 import {
   appendOut001DescendantRegistration, initializeOut001DescendantRegistry, readWindowsProcessIdentity,
+  OUT_001_EXPECTED_HTTP_APP_COUNT,
   out001DescendantRegistryPath,
 } from '../scripts/gates/mysql-out001-descendant-registry.mjs';
 import {
@@ -159,7 +160,7 @@ describe('OUT-001 root evidence and offline reconciliation', () => {
     ['RESET_SCHEMA_PRE_RUN', 'BOOTSTRAP_CURRENT_SCHEMA', 'RUN_OUT001_HTTP_FIXTURES', 'CLEANUP_SCHEMA_POST_RUN'].forEach((operation, index) => {
       writeFileSync(join(childRoot, 'consumed', `${index}.consumed.json`), JSON.stringify({ runId, commitSha, manifest, rootPid: 9000, childPid: 9100 + index, childStartedAt: `2026-11-09T00:00:0${index}.000Z`, operation }));
     });
-    const descendants = [0, 1, 2].map((index) => JSON.stringify({ version: 1, runId, purpose: 'OUT001_HTTP_APP', pid: 9200 + index, processCreatedAt: `2026-11-09T00:01:0${index}.000Z`, registeredAt: '2026-11-09T00:02:00.000Z' })).join('\n');
+    const descendants = Array.from({ length: OUT_001_EXPECTED_HTTP_APP_COUNT }, (_, index) => JSON.stringify({ version: 1, runId, purpose: 'OUT001_HTTP_APP', pid: 9200 + index, processCreatedAt: `2026-11-09T00:01:0${index}.000Z`, registeredAt: '2026-11-09T00:02:00.000Z' })).join('\n');
     writeFileSync(join(childRoot, 'descendants', `${runId}.jsonl`), `${descendants}\n`);
     return evidenceRoot;
   }
@@ -167,7 +168,7 @@ describe('OUT-001 root evidence and offline reconciliation', () => {
   test('offline reconciliation validates five evidence groups and process records', () => withTemp(async (localAppData) => {
     createReconciliationFixture(localAppData, reconciliationRunId);
     const report = await reconcileOut001RunEvidence({ runId: reconciliationRunId, commitSha, localAppData, write: false });
-    assert.equal(report.groups.length, 5); assert.equal(report.processes.leases.length, 4); assert.equal(report.processes.descendants.length, 3);
+    assert.equal(report.groups.length, 5); assert.equal(report.processes.leases.length, 4); assert.equal(report.processes.descendants.length, OUT_001_EXPECTED_HTTP_APP_COUNT);
   }));
   test('offline reconciliation rejects a tampered stream', () => withTemp(async (localAppData) => {
     const evidenceRoot = createReconciliationFixture(localAppData, reconciliationRunId);
@@ -311,15 +312,16 @@ function descendantEvidence(dir, runId, { initialize = true } = {}) {
 function spawnSuiteParent({ exitAfterChildren }) {
   const childCode = "setInterval(()=>{},1000)";
   // The descendant registry requires exactly one registration per independent
-  // HTTP application process: M1b's application plus M2's two applications.
+  // HTTP application process: M1b's application, M2's two, and M3's victim.
   const parentCode = [
     "const { spawn } = require('node:child_process');",
     `const a=spawn(process.execPath,['-e',${JSON.stringify(childCode)}],{stdio:'ignore',windowsHide:true,detached:true});`,
     `const b=spawn(process.execPath,['-e',${JSON.stringify(childCode)}],{stdio:'ignore',windowsHide:true,detached:true});`,
     `const c=spawn(process.execPath,['-e',${JSON.stringify(childCode)}],{stdio:'ignore',windowsHide:true,detached:true});`,
-    'process.stdout.write(JSON.stringify({pids:[a.pid,b.pid,c.pid]})+"\\n");',
+    `const d=spawn(process.execPath,['-e',${JSON.stringify(childCode)}],{stdio:'ignore',windowsHide:true,detached:true});`,
+    'process.stdout.write(JSON.stringify({pids:[a.pid,b.pid,c.pid,d.pid]})+"\\n");',
     exitAfterChildren
-      ? "let left=3;const done=()=>{left-=1;if(left===0)process.exit(0)};a.once('exit',done);b.once('exit',done);c.once('exit',done);"
+      ? "let left=4;const done=()=>{left-=1;if(left===0)process.exit(0)};a.once('exit',done);b.once('exit',done);c.once('exit',done);d.once('exit',done);"
       : "process.stdin.resume();process.stdin.once('data',()=>process.exit(0));",
   ].join('');
   return spawn(process.execPath, ['-e', parentCode], {
