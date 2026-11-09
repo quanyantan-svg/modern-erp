@@ -2995,6 +2995,50 @@ Owner 已确认正式关闭 **OUT-001 最终离线收尾修复**。本节只登�
 
 **HARD STOP**：本轮实现与离线回归全部通过，等待 Owner Review。**不得**自行签发 `GATE_READY`、ACK-4 或任何 Acceptance。
 
+### 45.23 OUT-001 M3 R3 合同一致性最小修正（2026-11-09）
+
+本节是对 §45.22 的**一致性收尾**，只追加、不改写 §45.18、§45.19、§45.20、§45.21、§45.22 的任何结论。Owner 复核指出：§45.22 已在代码与 §26.34.16.3.1 修正了 R3 合同，但**基础合同正文 §26.34.14.3 仍保留旧的 epoch 措辞**，代理的 `dropSession` 旧 JSDoc 也仍在声称跨会话比较 epoch。本节登记该最小修正及其离线验证。本轮**未连接真实 MySQL**、未执行 RESET / BOOTSTRAP / CLEANUP、未签发或消费 ACK-4、未签发任何 Gate 状态或 Acceptance、未 Push。
+
+#### 45.23.1 修正内容
+
+| # | 位置 | 修正 |
+|---|---|---|
+| 1 | `docs/design/procurement-outsourcing.md` §26.34.14.3 的 **R3 基础合同行** | 与 §26.34.16.3.1 同步为三项：核验连接由**独立创建的 Adapter** 提供；它是**可信会话**（`mysqlSessionState()` ∈ `{IDLE_TRUSTED, FRESH}`）；其 **connection id** 与原会话不同。显式写明**禁止跨 Adapter 比较会话 epoch**（epoch 是每个 Worker 内部的局部计数器，两个独立 Adapter 的原始数字互不可比），且 **epoch 只用于证明同一 Worker 自身的 session replacement**。判定依据补引 `server/test-utils/out001-m3-identity.js` |
+| 2 | `docs/design/procurement-outsourcing.md` §26.34.14.3 的**审计义务** | 旧的「终止状态、epoch 变化」措辞会持续暗示跨 Worker 的 epoch 比较。改为「终止状态、原会话自身的会话替换证据」，并显式规定：审计记录会话标识时只允许使用**原会话自身**可证明的标识（其 connection id，以及其 Worker 自身 epoch 的递增），**禁止**把核验连接的 epoch 与原会话的 epoch 互相比较 |
+| 3 | `server/database/test-fixtures/mysql-commit-withholding-proxy.js` 的 `dropSession` JSDoc | 旧说明称它「使 victim 的 session epoch 与核验连接的 epoch 可证明地不同」，属于跨会话比较的旧语义。改为：它只触发**持有该会话的客户端自身**的一次 session replacement（victim 自己的 MySQL Worker 重连、开启新 MySQL 会话、获得新 connection id），这是它**唯一**证明的事情，且只关于 victim；它对任何其它适配器不作任何断言。会话 epoch 是 per-Worker 计数器，**从不跨 Adapter 比较**，因此该夹具刻意完全不建模 epoch。默认 reason 同步改为 `M3_VICTIM_SESSION_REPLACED` |
+| 4 | `server/mysql-out001-m3-uncertain-commit.test.js` | 新增两项防回归断言（`M3-O16`、`M3-O17`）并强化 `M3-O15`：`M3-O16` 定位 Design §26.34.14.3，禁止旧措辞（`epoch 与原会话不同` / `epoch 与核验连接不同` / `epoch 不同`）、要求 R3 行含「独立创建」「IDLE_TRUSTED」「connection id」「同一 Worker 自身」、要求审计义务不再使用裸的「epoch 变化」并显式禁止跨 Worker 比较；`M3-O17` 要求代理源码不含 `sessionEpoch` 标识符、`dropSession` 的说明必须点明 victim 与 session replacement、不得再出现「核验连接 epoch」措辞；`M3-O15` 增加标识符级的双向防线（`victimEpoch` 与 `observer` 不得相邻比较） |
+
+#### 45.23.2 修正范围与边界
+
+本轮**只**修正文档措辞、测试夹具注释与离线断言：**未修改**生产事务逻辑（`server/db.js`、`server/modules/outsourcing-finance.js`）、**未修改** Schema / Migration / 数据库权限（含 `PROCESS` / `CONNECTION_ADMIN` / `SUPER`）、**未修改** ACK-4 Manifest、**未修改**其它任何业务合同；master、candidate、release tag、`package.json` version 全部未变。§26.34.16.3 与 §26.34.16.3.1 在 §45.22 中已与新合同一致，本轮**无需**再改。
+
+#### 45.23.3 离线验证结果（真实退出码）
+
+| # | 命令 | 退出码 | 结果 |
+|---|---|---|---|
+| 1 | M3 相关修改文件 `node --check` | `0` | 通过 |
+| 2 | `node --test server/mysql-out001-m3-uncertain-commit.test.js` | `0` | `23/23 PASS`（较 §45.22 的 21 项新增 `M3-O16`、`M3-O17` 两项防回归断言） |
+| 3 | `node scripts/docs/check-doc-consistency.mjs --mode migration` | `0` | `ALL CHECKS PASSED`（C1～C6 全 PASS） |
+| 4 | `node scripts/docs/check-doc-consistency.mjs`（current） | 提交后 `0` | `ALL CHECKS PASSED`（N1、N3～N9 全 PASS，N2 `RETIRED`） |
+| 5 | `git diff --check` | `0` | 无空白错误 |
+
+本轮**未**重复运行完整 FULL 套件：本轮不修改任何生产代码，改动仅限一份设计文档、一处测试夹具注释与一份离线测试文件；受影响的 M3 focused 套件已全量重跑并全绿。
+
+**防回归断言的有效性（非空洞证明）**：把 §26.34.14.3 的 R3 行改回旧措辞后，`M3-O16` 立即失败；把代理 `dropSession` 的 JSDoc 改回旧措辞后，`M3-O17` 立即失败。两条断言各自承载实际重量，改动随即恢复。
+
+#### 45.23.4 本轮状态与边界
+
+| 状态 | 本轮结论 |
+|---|---|
+| R3 合同一致性 | **已修正并离线验证**：基础合同正文、验证方法、代理注释与离线断言四处口径一致 |
+| M3 真实故障注入装置 | 仍为 `GATE_IMPLEMENTED`（**未执行**） |
+| M3 真实不确定 COMMIT | 继续为 `NOT_PROVEN_ON_REAL_MYSQL`（§45.22.4 清单不变） |
+| `GATE_READY` / `GATE_AUTHORIZED` / 新的 `GATE_EXECUTED` / 技术 PASS / `GATE_ACCEPTED` | **未签发** |
+| `AUD-OUT-001` | 仍为 `TESTED` / `PENDING_OWNER_APPROVAL` |
+| Schema / Migration / 数据库权限 / ACK-4 Manifest / 生产事务逻辑 / `package.json` version / release tag / master / candidate / 远端 | **全部未变**；本轮**未 Push** |
+
+**HARD STOP**：本轮修正与离线验证完成，等待 Owner Review。**不得**自行签发 `GATE_READY`、ACK-4 或任何 Acceptance。
+
 ### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
 
 以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：

@@ -1879,7 +1879,7 @@ transferNo = `WIP-XFER-${businessDateYYYYMMDD}-${randomUUID 去连字符后取�
 |---|---|---|
 | R1 | **原会话已终止且终止已确认** | 原适配器已被隔离，且 `quarantineState.state === 'TERMINATION_CONFIRMED'`（`sessionState === 'TERMINATED'`）。`TERMINATION_PENDING` 与 `TERMINATION_FAILED` **均不满足**本条件 | `server/database/mysql-adapter.js:131-157` |
 | R2 | **未决事务已随会话收束** | R1 成立后，服务端回收该会话，其开放事务被回滚、其命名锁被释放。原会话**仍存活**（含仅 `TERMINATION_PENDING`）时本条件**不成立** | `server/db.js:2287-2288`（`sessionDestroyed` 释放路径） |
-| R3 | **核验连接可信且与原会话不同** | 核验必须在**另一条**可信连接上执行：`mysqlSessionState()` ∈ `{IDLE_TRUSTED, FRESH}`，且会话 epoch 与原会话不同。**禁止**在被隔离的适配器上核验 | `server/db.js:2152-2159` |
+| R3 | **核验连接可信且与原会话不同** | 核验必须在**另一条**可信连接上执行，且由三项共同成立：(a) 核验连接由**独立创建的 Adapter** 提供（不是其它会话的复用，也不是被隔离适配器的复用）；(b) 该连接是**可信会话**：`mysqlSessionState()` ∈ `{IDLE_TRUSTED, FRESH}`；(c) 该连接的 **connection id** 与原会话不同。**禁止**跨 Adapter 比较会话 epoch —— epoch 是**每个 Worker 内部**的局部计数器，两个独立 Adapter 的原始数字互不可比；epoch 只用于证明**同一 Worker 自身**的 session replacement。**禁止**在被隔离的适配器上核验 | `server/db.js:2152-2159`、`server/test-utils/out001-m3-identity.js` |
 | R4 | **核验在 R1 之后执行且为只读** | 顺序不可颠倒：先确认会话终止，再只读核验 `(operationType, documentId, key)` 作用域下的幂等记录与转移事实行；核验必须是只读事务，**不得**写任何行 | `server/db.js:2409`（`readTransaction`） |
 | R5 | **无并发未决写入** | 作用域的 MySQL 命名锁在核验与重试之间**不得**被他人持有；重试必须经由正常路径的 `idempotencyReplay()` 重新获取该锁，使并发写入被串行化 | `server/modules/financial-controls.js:35-41` |
 
@@ -1907,7 +1907,7 @@ transferNo = `WIP-XFER-${businessDateYYYYMMDD}-${randomUUID 去连字符后取�
 
 上层 handler 的对应义务：不确定 COMMIT **不是**已确认的业务拒绝，因此**不得**写入普通拒绝审计、**不得**在已被隔离的适配器上继续写入、**不得**产生第二笔业务事实；原异常原样上抛，处置由 R1～R5 决定。普通业务错误、明确 `ROLLBACK` 与可证明安全的重试路径保持既有行为不变。
 
-**审计义务**：恢复决定（成立 / 不成立、依据哪几条条件、终止状态、epoch 变化）必须写入审计；不成立时必须保持隔离并升级处置，**不得**静默降级为普通失败。
+**审计义务**：恢复决定（成立 / 不成立、依据哪几条条件、终止状态、原会话自身的会话替换证据）必须写入审计；不成立时必须保持隔离并升级处置，**不得**静默降级为普通失败。审计记录会话标识时，只允许使用**原会话自身**可证明的标识（其 connection id，以及其 Worker 自身 epoch 的递增）；**禁止**把核验连接的 epoch 与原会话的 epoch 互相比较——两者是互不相干的局部计数器，比较结果没有技术意义。
 
 ##### 26.34.14.4 本轮审查的边界
 

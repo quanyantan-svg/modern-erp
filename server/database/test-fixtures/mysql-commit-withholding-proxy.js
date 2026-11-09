@@ -349,11 +349,18 @@ export function createCommitWithholdingProxy({
       return this.port;
     },
     /**
-     * Deliberately destroy the live session. It is used to make the victim's
-     * session epoch provably different from the verification session's epoch
-     * (the reconnect happens on the client side, in the MySQL Worker).
+     * Deliberately destroy the live session.
+     *
+     * It triggers **one session replacement of the client that owns it**: the
+     * victim's own MySQL Worker reconnects on its next request, opens a new
+     * MySQL session and receives a new connection id. That is the only thing
+     * it proves, and it proves it about the victim alone.
+     *
+     * It says nothing about any other adapter. The session epoch is a
+     * per-Worker counter and is never compared across adapters, so this
+     * fixture deliberately models no epoch at all.
      */
-    dropSession(reason = 'M3_SESSION_PRIMED') {
+    dropSession(reason = 'M3_VICTIM_SESSION_REPLACED') {
       let dropped = 0;
       for (const session of [...sessions]) {
         session.closed = true;

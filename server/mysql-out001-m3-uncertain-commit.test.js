@@ -709,6 +709,12 @@ describe('OUT-001 M3 离线回归：账户身份比较与 R3 合同', () => {
       'M3 必须使用共享的会话替换判定');
     assert.doesNotMatch(integration, /observer\.sessionEpoch/,
       '不得读取 observer 的 session epoch 与 victim 的 epoch 交叉比较');
+    // 标识符级的双向防线：victim 的 epoch 不得与任何其它适配器的 epoch 相邻
+    // 比较。它只用于证明 victim **自身**的 session replacement。
+    assert.doesNotMatch(integration, /victimEpoch[^\n]*observer/i,
+      'victim 的 epoch 不得与 observer 的 epoch 交叉比较');
+    assert.doesNotMatch(integration, /observer[^\n]*victimEpoch/i,
+      'victim 的 epoch 不得与 observer 的 epoch 交叉比较');
     // PROCESSLIST.USER 的判定必须整体交给共享策略：真实 Gate 内不得出现任何
     // 自行断言 PROCESSLIST 用户的写法，因此不可能在那里把它与 CURRENT_USER()
     // 直接比较。
@@ -719,6 +725,54 @@ describe('OUT-001 M3 离线回归：账户身份比较与 R3 合同', () => {
       'CONNECTION_ID 探针必须同时返回 CURRENT_USER()');
     assert.match(child, /DATABASE\(\) databaseName/,
       'CONNECTION_ID 探针必须同时返回 DATABASE()');
+  });
+
+  test('M3-O16 Design §26.34.14.3 的 R3 合同与审计义务不得回退到跨 Worker 的 epoch 语义', () => {
+    const design = readFileSync(resolve(repoRoot, 'docs/design/procurement-outsourcing.md'), 'utf8');
+    const start = design.indexOf('##### 26.34.14.3 ');
+    const end = design.indexOf('##### 26.34.14.4 ', start);
+    assert.ok(start > 0 && end > start, '必须能定位 Design §26.34.14.3');
+    const section = design.slice(start, end);
+
+    // 旧的跨 Adapter epoch 措辞一旦回来，这条断言就会失败。
+    for (const phrase of ['epoch 与原会话不同', 'epoch 与核验连接不同', 'epoch 不同']) {
+      assert.ok(!section.includes(phrase),
+        `§26.34.14.3 不得恢复跨 Adapter 的 epoch 比较措辞: ${phrase}`);
+    }
+    const r3Row = section.split('\n').find((line) => line.startsWith('| R3 |'));
+    assert.ok(r3Row, '§26.34.14.3 必须保留 R3 行');
+    assert.match(r3Row, /独立创建/, 'R3 必须要求独立创建的 Adapter');
+    assert.match(r3Row, /IDLE_TRUSTED/, 'R3 必须要求可信会话');
+    assert.match(r3Row, /connection id/, 'R3 必须以 connection id 判定会话不同');
+    assert.match(r3Row, /同一 Worker 自身/, 'R3 必须明确 epoch 只用于同一 Worker 自身的 session replacement');
+
+    // 审计义务不得继续暗示跨 Worker 的 epoch 比较。
+    const auditRow = section.split('\n').find((line) => line.includes('**审计义务**'));
+    assert.ok(auditRow, '§26.34.14.3 必须保留审计义务');
+    assert.ok(!auditRow.includes('终止状态、epoch 变化'),
+      '审计义务不得继续使用裸的「epoch 变化」措辞');
+    assert.match(auditRow, /禁止/, '审计义务必须显式禁止跨 Worker 比较 epoch');
+    assert.match(auditRow, /原会话自身/, '审计义务必须限定为原会话自身的标识');
+  });
+
+  test('M3-O17 代理的 dropSession 只触发 victim 自身的 session replacement', () => {
+    const proxy = readFileSync(
+      resolve(repoRoot, 'server/database/test-fixtures/mysql-commit-withholding-proxy.js'), 'utf8',
+    );
+    // 代理不得引入 sessionEpoch 语义：它对 epoch 一无所知，也不需要知道。
+    assert.doesNotMatch(proxy, /sessionEpoch/,
+      '代理不得引入 sessionEpoch 语义');
+    const dropIndex = proxy.indexOf('dropSession(');
+    assert.ok(dropIndex > 0, '必须能定位代理的 dropSession');
+    const docStart = proxy.lastIndexOf('/**', dropIndex);
+    const doc = proxy.slice(docStart, dropIndex);
+    assert.match(doc, /victim/i, 'dropSession 的说明必须点明它作用于 victim');
+    assert.match(doc, /session replacement/i,
+      'dropSession 的说明必须声明它触发的是 session replacement');
+    assert.ok(!/verification session/i.test(doc),
+      'dropSession 的说明不得再声称它区分核验连接的 epoch');
+    assert.ok(!/epoch[^.]{0,40}different|different[^.]{0,40}epoch/i.test(doc),
+      'dropSession 的说明不得再出现跨会话的 epoch 差异措辞');
   });
 });
 
