@@ -2720,6 +2720,49 @@ Gate 状态不推进：`GATE_IMPLEMENTED` 已达成；`GATE_READY` 仍待 Owner 
 
 Gate 状态不推进：`GATE_READY`、`GATE_AUTHORIZED`、`GATE_ACCEPTED` 均未签发；`GATE_EXECUTED = NOT_RUN`。`AUD-OUT-001` 仍为 `TESTED` / `PENDING_OWNER_APPROVAL`，未生成 ACK-4 Capability，未签发 Acceptance，真实 MySQL、MySQL integration 与 RESET / BOOTSTRAP / CLEANUP 始终 `NOT_RUN`。
 
+### 45.16 OUT-001 候选基线冻结与真实 MySQL Gate 执行状态（2026-11-09）
+
+本节登记 OUT-001 本轮候选基线与 Gate 执行边界。候选基线只冻结代码与证据，不等于 Gate Acceptance、Domain Acceptance 或 Release Readiness。
+
+| 项 | 冻结值 / 状态 |
+|---|---|
+| Candidate baseline SHA | `a5fffd10835336fc5137ff2768290f5c34def4ea` |
+| Candidate reference branch | `candidate/out001-a5fffd1`（创建时精确指向上述 SHA；不得前移或复用） |
+| master at freeze | `a5fffd10835336fc5137ff2768290f5c34def4ea`；状态台账后续提交不改变 Candidate reference |
+| Commit | `修正 OUT-001 M2 转移事实计数断言` |
+| Tree | `98d9c6402f902900d788cf9c23bbbdd819b2adf4` |
+| 唯一代码变更 | `server/mysql-out001.integration.js`，新增 18 行、删除 1 行 |
+| 版本 / Release tags | `1.6.2`；既有 Release tag 不变 |
+| 工作树 | Owner 提交报告为 clean；本登记不声称远端可验证本地工作树 |
+
+本轮代码修正将 M2 的转移事实断言从全表绝对数量改为并发前后净新增数量，并限定本次 source / target order pair 恰好形成一笔转移事实；其余 M2 断言保持不变。该修正不触及业务实现、Schema、Migration、ACK-4 Manifest、Gate Launcher 或版本文件。
+
+**候选基线已有离线证据（Owner 本轮提交报告）：**
+
+- OUT-001 离线入口：28 PASS；6 个真实 MySQL 用例 SKIP；退出码 0。
+- FAST：597/597 PASS；Build：PASS；Docs current：N1、N3–N9 PASS，N2 `RETIRED`；Docs migration：C1–C6 PASS；`git diff --check`：PASS。
+- 首次受限权限 FAST 因 Windows 进程树夹具无法清理而退出 1；核实并清理遗留测试树后，以所需权限按原命令重跑通过。
+- FULL 本轮未重跑；既有 3380/3381 与唯一 Windows ACL `SetAccessControl` 失败事实继续保留。
+- 以上均不构成真实 MySQL 证据；真实 MySQL、RESET、BOOTSTRAP、CLEANUP 仍为 `NOT_RUN`。
+
+**远端基线检查（2026-11-09）：** 冻结时 GitHub `master` HEAD 与 Candidate SHA 完全一致；该 SHA 未返回 GitHub commit status 或 workflow run。检查时 `master` branch protection 未启用。候选分支仅作为 SHA 锚点，不代表 GitHub branch protection；不得将无 CI 状态解释为 CI PASS。
+
+**ACK-4 与 Gate 状态：**
+
+| 状态项 | 当前登记 |
+|---|---|
+| `GATE_IMPLEMENTED` | COMPLETE |
+| Candidate baseline | FROZEN（固定 SHA 与候选分支） |
+| Owner 本轮执行意图 | 已明确提出受保护真实 MySQL 验证 |
+| `GATE_READY` | PENDING：实际 Windows DPAPI / ACL issuer 检查与只读 MySQL target preflight 尚未提供本轮证据 |
+| ACK-4 Capability | NOT_ISSUED；必须绑定 Candidate SHA、固定目标身份、RunId 与完整 `OUT_001_MYSQL_V1` Manifest |
+| `GATE_EXECUTED` | NOT_RUN |
+| `GATE_ACCEPTED` | NOT_ACCEPTED |
+
+执行目标固定为 `127.0.0.1:3306 / modern_erp_domain_test / modern_erp_test`，仅允许受保护 Launcher 在只读 preflight 确认 MySQL 8、固定 server UUID / CURRENT_USER / grants fingerprint、精确最小权限及五类对象初始均为空后继续。ACK-4 只允许 `RESET_SCHEMA_PRE_RUN → BOOTSTRAP_CURRENT_SCHEMA → RUN_OUT001_HTTP_FIXTURES → CLEANUP_SCHEMA_POST_RUN`；Root 随后必须通过独立只读 Postflight 证明 tables / views / triggers / routines / events 全为零。不得对生产库或含有任何初始对象的库运行；不得跳过 ACL、身份、空库、互斥锁或子进程退出证明。
+
+M3 不确定 COMMIT 在真实 MySQL 下仍为 `NOT_PROVEN_ON_REAL_MYSQL`，不得随 OUT-001 其他用例通过而自动关闭。只有真实 MySQL 套件通过、所有子进程退出得到证明、Cleanup 与独立 Postflight 通过，才能登记 Gate 执行完成；Owner Acceptance 另行签发。
+
 ### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
 
 以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：
