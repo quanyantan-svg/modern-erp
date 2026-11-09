@@ -2858,6 +2858,21 @@ M3 不确定 COMMIT 在真实 MySQL 下仍为 `NOT_PROVEN_ON_REAL_MYSQL`，不�
 
 离线验证：focused `44/44 PASS`（其中新增 Root/对账行为用例 `17/17 PASS`）；FAST `624/624 PASS`；FULL `3415/3415 PASS`；Build PASS；全部修改的 Node 文件语法检查与 PowerShell AST 解析 PASS。文档 current/migration 与最终 `git diff --check` 结果登记于同日日志；本节不构成 Acceptance / Freeze。
 
+### 45.20 OUT-001 离线收尾关闭与下一阶段交接（2026-11-09）
+
+Owner 已确认正式关闭 **OUT-001 最终离线收尾修复**。本节只登记阶段关闭与后续工作包边界，不改写 §45.18 的历史执行事实或 §45.19 的 Root Evidence / 历史 RunId 对账事实。
+
+| 项目 | 正式处理 |
+|---|---|
+| OUT-001 最终离线收尾修复 | **CLOSED**。本轮 Root Evidence 持久化、Launcher 权威校验、历史 RunId 离线对账、行为测试、文档与提交工作均结束；不再围绕历史 Launcher exit 8 或缺失的原始 Root JSON 反复修补。 |
+| 历史记录 | §45.18 与 §45.19 均作为 append-only 历史记录保留，不回写、不重述为新的执行事实。历史 Launcher exit 8、原始 Root JSON 缺失、重建件 `RECONSTRUCTED_NOT_ORIGINAL`、历史进程退出 `REPORTED_NOT_REVERIFIED` 均保持原状。 |
+| Git 边界 | 不更新或合并 `master`；不移动、重建或删除任何 candidate；不创建或移动 release tag；不执行 Merge / Release / Deploy。当前工作分支与提交锚点按本次阶段关闭时的实际远端状态记录。 |
+| 下一阶段名称 | **OUT-001 Final Real MySQL Verification & Owner Acceptance**。该名称仅作为下一阶段工作包标识，不表示已经启动、授权、执行或验收。 |
+| 下一阶段启动条件 | 必须先冻结并核验新的候选 Commit SHA；由 Owner 明确授权唯一 disposable MySQL 目标与操作范围；签发全新的 RunId / ACK-4 Capability；按受保护流程执行真实 MySQL Gate，并取得执行当时原始 Root Artifact、Launcher 结果、完整证据与独立 Postflight。既有已消费 ACK-4 不得复用。 |
+| Acceptance 边界 | 本次阶段关闭不签发 `GATE_READY`、`GATE_AUTHORIZED`、新的 `GATE_EXECUTED`、技术 PASS、`GATE_ACCEPTED` 或 `AUD-OUT-001` Acceptance。既有 `GATE_EXECUTED=EXECUTED` 保持历史事实；`GATE_ACCEPTED=NOT_ACCEPTED`、`AUD-OUT-001=TESTED / PENDING_OWNER_APPROVAL` 与 M3 `NOT_PROVEN_ON_REAL_MYSQL` 均不变。 |
+
+**当前阶段终态**：`OUT-001_FINAL_OFFLINE_CLOSURE=CLOSED`。下一阶段 `OUT-001 Final Real MySQL Verification & Owner Acceptance` 为 **NOT_STARTED / NOT_AUTHORIZED**；本次未连接 MySQL、未执行数据库操作、未签发或消费 ACK-4、未变更数据库 / Schema / Migration / 权限、未更新 master / candidate / tag，亦未发布或部署。
+
 ### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
 
 以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：
