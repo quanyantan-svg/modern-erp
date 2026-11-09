@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { releaseMySqlIdempotencyLocks, transaction } from '../db.js';
+import { isUncertainCommitOutcome, releaseMySqlIdempotencyLocks, transaction } from '../db.js';
 import { audit, auditBusinessRejection } from '../lib/audit.js';
 import {
   HttpError, allow, allowAny, assertAllowedFields, readJson, send,
@@ -647,10 +647,17 @@ export async function createWipTransfer(db, req, res, actor) {
       audit(db, actor.id, 'TRANSFER', 'OUTSOURCING_WIP_TRANSFER', transferId, transferNo);
     });
   } catch (error) {
+    // 不确定 COMMIT 不是**已确认的业务拒绝**：COMMIT 已经发出但确认没有到达，
+    // 服务端可能已经提交。此时写一条普通拒绝审计会同时撒谎（这次请求其实
+    // 没有被拒绝）并可能在一个已被隔离的连接上再次写入。原异常原样上抛，
+    // 处置由 §26.34.14.3 的 R1～R5 恢复条件决定。
+    if (isUncertainCommitOutcome(error)) throw error;
     throw rejectWipTransfer(db, actor, sourceOrderId, error);
   } finally {
     // §26.34.9.2 第 4 条：外层释放保障。正常 COMMIT/ROLLBACK 后事务已自行释放，
     // 此时锁登记已清空，本调用是空操作；admission 拒绝等路径由这里收敛。
+    // 被隔离的适配器在这里绝不发出任何 SQL：命名锁登记只能随会话销毁由服务器
+    // 释放，`releaseMySqlIdempotencyLocks()` 对隔离会话直接返回而不发语句。
     releaseMySqlIdempotencyLocks(db);
   }
   return send(res, 201, { id: transferId, transferNo });

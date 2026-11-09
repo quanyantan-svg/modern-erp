@@ -2,26 +2,20 @@ import { parentPort } from 'node:worker_threads';
 import mysql from 'mysql2/promise';
 import { encodeWorkerResponse } from './mysql-worker-protocol.js';
 import { createStructuredLogger } from '../lib/logger.js';
+import {
+  classifyExecStatement,
+  isReadOnlySql,
+  isRecoverableConnectionError,
+} from './mysql-worker-policy.js';
 
 const logger = createStructuredLogger();
 
-// Codes that indicate a transport-level connection problem we can recover
-// from by establishing a fresh MySQL session. Anything else (SQL constraint
-// errors, parse errors, deadlock retries handled by the application layer)
-// must not silently trigger a reconnect.
-const RECOVERABLE_CONNECTION_CODES = new Set([
-  'PROTOCOL_CONNECTION_LOST',
-  'PROTOCOL_PACKETS_OUT_OF_ORDER',
-  'PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR',
-  'PROTOCOL_ENQUEUE_AFTER_QUIT',
-  'PROTOCOL_SEQUENCE_TIMEOUT',
-  'ECONNRESET',
-  'ECONNREFUSED',
-  'ETIMEDOUT',
-  'EPIPE',
-  'ENOTFOUND',
-  'EAI_AGAIN',
-]);
+// The recovery policy lives in ./mysql-worker-policy.js so that test fixture
+// Workers can share exactly one source of truth without loading this entry
+// point (whose parentPort registration would start a second, real MySQL
+// client inside the fixture's Worker thread). The public exports are
+// unchanged.
+export { classifyExecStatement, isReadOnlySql, isRecoverableConnectionError };
 
 // Application-required session state. Every newly created connection must
 // apply these before being published as usable; otherwise a reconnect could
@@ -29,40 +23,6 @@ const RECOVERABLE_CONNECTION_CODES = new Set([
 const SESSION_TIMEZONE = '+00:00';
 const SESSION_ISOLATION_LEVEL = 'READ COMMITTED';
 const SESSION_INNODB_LOCK_WAIT_TIMEOUT = 2;
-
-export function isRecoverableConnectionError(error) {
-  if (!error) return false;
-  if (typeof error.code === 'string' && RECOVERABLE_CONNECTION_CODES.has(error.code)) {
-    return true;
-  }
-  // mysql2 sometimes surfaces a wrapped error without `code` but with `errno`
-  // for protocol-level conditions.
-  const message = String(error.message || '');
-  if (/Connection lost|Connection terminated|Server has gone away|Packets out of order/i.test(message)) {
-    return true;
-  }
-  return false;
-}
-
-// Conservative read-only classifier. Anything we cannot prove is a read is
-// considered a write and is NOT auto-retried after a recoverable error.
-export function isReadOnlySql(sql) {
-  if (typeof sql !== 'string') return false;
-  const head = sql.trim().replace(/^[\s(]+/, '').toUpperCase();
-  return /^(SELECT|WITH)\b/.test(head)
-    || /^SHOW\b/.test(head)
-    || /^DESCRIBE\b/.test(head)
-    || /^DESC\b/.test(head)
-    || /^EXPLAIN\b/.test(head);
-}
-
-export function classifyExecStatement(sql) {
-  const head = String(sql || '').trim().replace(/;\s*$/, '').replace(/^[\s(]+/, '').toUpperCase();
-  if (/^BEGIN\b/.test(head) || /^START\s+TRANSACTION\b/.test(head)) return 'BEGIN';
-  if (/^COMMIT\b/.test(head)) return 'COMMIT';
-  if (/^ROLLBACK\b/.test(head)) return 'ROLLBACK';
-  return 'OTHER';
-}
 
 function serializableError(error) {
   return {

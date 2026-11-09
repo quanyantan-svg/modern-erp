@@ -1895,6 +1895,18 @@ transferNo = `WIP-XFER-${businessDateYYYYMMDD}-${randomUUID 去连字符后取�
 
 **允许的重试路径**：R1～R5 全部成立后，以**同一**幂等键、**同一**规范化载荷重新进入正常路径（先做重放查找；若记录此时存在，即为重放而非新写）。重试产生的 `id` / `transferNo` 是**新的**业务事实编号，与 §26.34.14.2 一致（原事实已证明未提交）。
 
+**处置的实现合同（2026-11-09 明确）**：`transaction()` 判定「COMMIT 已发出但未被确认」（`mysqlRequestTimeout` 或 `sessionLost`）时，必须**先于任何收尾动作**进入专门的不确定 COMMIT 分支，顺序固定为：
+
+1. 在**原**异常上保留其 `classification`、`sessionLost`、`mysqlRequestTimeout` 与原始错误码，并附加**不确定 COMMIT 标记**传给上层调用者；
+2. **立即隔离**原适配器（原因 `uncertain_commit`），由适配器终止其 Worker；
+3. **禁止**在原适配器上发出 `ROLLBACK`（COMMIT 结果未知，ROLLBACK 可能落在已提交事务之后或另一语句之后）；
+4. **禁止**在替代会话上代替原会话收尾；
+5. **禁止**重跑事务工作体；
+6. **不得**把原适配器恢复成可复用的可信空闲状态；
+7. 命名锁登记**只在**终止确认为 `TERMINATION_CONFIRMED` 之后才按「随会话销毁由服务器回收」清理；`TERMINATION_FAILED` 时保持隔离，**不得**冒充 `SESSION_DESTROYED`。
+
+上层 handler 的对应义务：不确定 COMMIT **不是**已确认的业务拒绝，因此**不得**写入普通拒绝审计、**不得**在已被隔离的适配器上继续写入、**不得**产生第二笔业务事实；原异常原样上抛，处置由 R1～R5 决定。普通业务错误、明确 `ROLLBACK` 与可证明安全的重试路径保持既有行为不变。
+
 **审计义务**：恢复决定（成立 / 不成立、依据哪几条条件、终止状态、epoch 变化）必须写入审计；不成立时必须保持隔离并升级处置，**不得**静默降级为普通失败。
 
 ##### 26.34.14.4 本轮审查的边界
@@ -2000,9 +2012,48 @@ OUT-001 使用**独立**的 ACK-4 Manifest `OUT_001_MYSQL_V1`，操作范围固�
 |---|---|---|---|
 | M1 | 命名锁获取 / COMMIT-ROLLBACK 释放 / 第二会话重新获取 | 两个**独立** MySQL 会话上的 `GET_LOCK` / `RELEASE_LOCK`；并证明应用自身的幂等命名锁在请求进行中被持有、在请求结束后被释放 | GATE_IMPLEMENTED（**未执行**） |
 | M2 | 不同 Key、同源并发 | 两个**独立**应用进程（两个独立 MySQL 会话）+ `mysql_transaction_gates` 全局门禁作确定性屏障，逐个观察门禁等待者 | GATE_IMPLEMENTED（**未执行**） |
-| M3 | COMMIT 不确定 / 会话终止 / R1–R5 | 真实 MySQL 上可判定：会话状态机、锁释放未确认 → 隔离 → `TERMINATION_CONFIRMED`。**真实**的「COMMIT 结果未知」需要以更高权限在提交中途 `KILL CONNECTION`；一次性 least-privilege 账户刻意没有该权限，因此该子项以仓库自带 recovery worker 夹具证明**代码路径**，并在报告中显式标注**未在真实 MySQL 上证明** | GATE_IMPLEMENTED（**未执行**；真实不确定 COMMIT = `NOT_PROVEN_ON_REAL_MYSQL`） |
+| M3 | COMMIT 不确定 / 会话终止 / R1–R5 | 真实 MySQL 上可判定：会话状态机、锁释放未确认 → 隔离 → `TERMINATION_CONFIRMED`；**真实**的「COMMIT 结果未知」由本地 TCP 代理在真实 MySQL 上产生（详见 §26.34.16.3.1）：服务端真的提交、客户端收不到确认，随后由**同一 MySQL 账户**的观察者终止 victim 会话。该路径**不需要** `CONNECTION_ADMIN` / `SUPER` / 额外 `PROCESS` 权限：MySQL 允许一个账户终止**自己**的会话，且同一账户的线程始终出现在自己的 `PROCESSLIST` 视图中。若 `KILL` 被拒绝或身份不匹配，测试**立即失败**，绝不自动提升权限 | GATE_IMPLEMENTED（**未执行**；真实不确定 COMMIT = `NOT_PROVEN_ON_REAL_MYSQL`） |
 | M4 | CHECK / UNIQUE / FK / SQLite-MySQL Schema Parity | 真实 MySQL 上逐条触发并断言**具体**约束错误；双端 Parity 复用仓库既有 `compareTableParity` 比较器 | GATE_IMPLEMENTED（**未执行**） |
 | M5 | `transfer_no` UNIQUE 冲突映射 | 真实 MySQL 重复键错误 + handler 分类器断言（映射为 409 `OUTSOURCING_WIP_TRANSFER_NO_CONFLICT`，不得暴露 500） | GATE_IMPLEMENTED（**未执行**） |
+
+##### 26.34.16.3.1 M3「真实不确定 COMMIT」的验证方法（2026-11-09 修订）
+
+**为什么必须换方法**：先前登记的「一次性 least-privilege 账户刻意没有 `KILL CONNECTION` 权限」这一前提**不成立**。MySQL 允许一个账户终止**自己**的会话，而同一账户的全部线程始终出现在自己的 `information_schema.PROCESSLIST` 视图中。因此「服务端已提交、客户端未收到确认」这一状态**可以在不提升任何权限的前提下**被真实制造出来。M3 因此不再以仓库自带的 recovery worker 夹具冒充真实证据：夹具只保留为**离线**代码路径证明，并被明确标注为离线模拟。
+
+**故障注入装置**（`server/database/test-fixtures/mysql-commit-withholding-proxy.js`，仅测试用）：
+
+| 项 | 约定 |
+|---|---|
+| 传输 | Node.js 内置 `node:net`，**不新增**任何 npm 依赖 |
+| 监听 | 只绑定 `127.0.0.1` 的临时端口，**不监听**外部网络 |
+| 上游 | 只连接**已经授权**的那一个 MySQL host/port |
+| 协议 | 解析 MySQL packet framing（3 字节长度 + 1 字节 sequence id），正确处理 TCP 分包与粘包；`COM_STMT_PREPARE` / `COM_STMT_EXECUTE` 等非 `COM_QUERY` 报文原样透传 |
+| 拦截 | 只识别 `COM_QUERY` 且语句**恰好**为 `COMMIT` 的报文；原样转发给真实服务端，等待服务端的 OK 报文后**暂存不转发**，并上报 `COMMIT_RESPONSE_WITHHELD` |
+| 日志 | **不记录**认证包、口令、SQL 参数或任何原始报文，只记录事件名与字节数 |
+| TLS | **不修改** TLS 配置。目标若启用 TLS，代理无法在不解析密文的前提下检查协议，因此调用方必须 **fail closed** |
+
+**角色与顺序**：
+
+1. **victim** —— 独立 HTTP 应用进程，其 MySQL 会话经代理连到真实服务端；它提交**真实**的 WIP Transfer。
+2. **观察者** —— 与 victim **同一 MySQL 账户**的另一条独立会话，只做只读观察与**精确**终止。
+3. 观察者在执行终止前必须先核验：victim 的 connection id 是有效正整数；victim 的 `USER` 与观察者的 `CURRENT_USER()` 相同；victim 的 `DB` 等于当前批准的测试数据库；victim id 不等于观察者自己的 connection id。核验通过后**只允许**执行 `KILL CONNECTION <verified_victim_id>`；**禁止** `KILL QUERY`、禁止终止未核验的连接、禁止 `GRANT`、禁止获取 `CONNECTION_ADMIN` / `SUPER` / 额外 `PROCESS` 权限、禁止连接其它数据库。权限被拒或身份不匹配时**立即失败**。
+4. 顺序固定为：提交真实业务事务 → 代理暂存服务端 COMMIT OK → 观察者终止 victim → 客户端收到真实连接丢失。
+
+**R1～R5 的逐条判定**（对应 §26.34.14.3）：
+
+| # | 判定 |
+|---|---|
+| R1 | 原适配器被隔离且 `quarantineState.state === 'TERMINATION_CONFIRMED'`（`TERMINATION_PENDING` / `TERMINATION_FAILED` 均不成立） |
+| R2 | 原会话终止后，命名锁由**服务器**释放（`IS_FREE_LOCK(...) = 1`），事务随之收束 |
+| R3 | 核验连接可信（`mysqlSessionState()` ∈ `{IDLE_TRUSTED, FRESH}`），且其 **connection id** 与 **会话 epoch** 均与原会话不同 |
+| R4 | 在 R1 成立**之后**，以**只读事务**核验同一 `(operationType, documentId, idempotencyKey)` 作用域下的幂等记录与 WIP 转移事实：服务端 COMMIT 既然成功，就必须**恰好一笔**转移事实与**恰好一条**幂等记录，且二者指向同一笔事实 |
+| R5 | 作用域的命名锁在核验与重试之间未被他人持有；相同幂等键重新进入**正常** `idempotencyReplay()` 路径，返回**原 id / 原 transferNo** 且 `replayed=true`，不新增转移事实、成功审计、身份 effect、数量效力，物理库存 / 估值 / AP / GL 零变化 |
+
+**R3 的 epoch 可判定性**：会话 epoch 是 Worker 内的单调计数，每次会话被替换才递增。为了让「核验连接的 epoch 与原会话不同」成为**可判定**的事实（而不是两个无关计数器碰巧相等），M3 在故障注入**之前**由代理故意销毁一次客户端会话，使 victim 以**新会话、epoch = 2** 进入故障场景；核验连接是另一条独立会话，其 epoch = 1。该步骤只销毁传输，不触碰任何业务数据。
+
+**禁止项**：不得以新的幂等键重建业务事实（P1）；不得仅以「查询不到记录」作为未提交证明（P2）；不得在被隔离 / 终止未确认 / 终止失败的连接上核验或重试（P3）；不得在未记录恢复决定与审计的情况下自动重试（P4）；不得在 R1～R5 任一不成立时把操作标记为可重试（P5）。**不确定 COMMIT 不等于已确认的业务拒绝**：它不得被写成普通拒绝审计，也不得在已被隔离的适配器上继续写入。
+
+**离线回归与真实证据的边界**：确定性离线套件 `server/mysql-out001-m3-uncertain-commit.test.js` 覆盖 packet framing、COMMIT 识别、非 COMMIT 透传、COMMIT OK 暂存、代理超时 fail closed、无 socket 泄漏、不确定 COMMIT 不进入 `settleTransactionRollback()`、不建立新的 Worker 会话、终止确认后才清理锁登记、终止失败保持隔离、handler 不把不确定 COMMIT 记为普通拒绝、业务体只执行一次。它**不**证明任何真实 InnoDB 行为；真实证据只能由本小节的故障注入在受保护 Gate 中产生。
 
 ##### 26.34.16.4 Gate 状态词汇（不得混用）
 

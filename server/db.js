@@ -2330,6 +2330,59 @@ function isUncertainCommit(error) {
   return error?.mysqlRequestTimeout === true || error?.sessionLost === true;
 }
 
+// The caller-visible marker of an uncertain COMMIT. It is set on the original
+// exception instance so the calling layer can tell "the mutation may already
+// be durable" apart from "the business rejected the request" — the two must
+// never share a disposition (§26.34.14.3).
+export function isUncertainCommitOutcome(error) {
+  return error?.uncertainCommit === true;
+}
+
+// The uncertain-COMMIT disposition.
+//
+// A COMMIT that was issued but never acknowledged has an unknown outcome: the
+// server may already have committed it. That is neither a business rejection
+// nor a provably safe retry, so this path is deliberately different from every
+// other transaction failure:
+//
+//   · the original adapter is quarantined immediately and its Worker is
+//     terminated, so the server reclaims the session and whatever it still
+//     held;
+//   · no ROLLBACK is issued on the original adapter — the COMMIT outcome is
+//     unknown, so a ROLLBACK could land after an already-committed
+//     transaction or behind another statement;
+//   · no ROLLBACK is issued on a replacement session either — that would write
+//     into a session that never owned the transaction;
+//   · the transaction work is never replayed;
+//   · the adapter is never restored to a trusted idle state;
+//   · the named-lock registry is cleared only after the termination is
+//     confirmed, because only then is it true that the server has already
+//     reclaimed the locks of the destroyed session.
+function settleUncertainCommit(db, error) {
+  error.uncertainCommit = true;
+  error.uncertainCommitClassification = error.classification ?? null;
+  error.uncertainCommitSessionLost = error.sessionLost === true;
+  error.uncertainCommitRequestTimeout = error.mysqlRequestTimeout === true;
+  const quarantined = quarantineMySqlAdapter(db, 'uncertain_commit');
+  const state = db?.quarantineState ?? null;
+  if (!quarantined || !state) {
+    // The session state could not be established. Quarantine is the only safe
+    // disposition, so the failure is surfaced instead of being papered over.
+    error.uncertainCommitQuarantineFailed = true;
+    return error;
+  }
+  error.uncertainCommitTermination = state.termination;
+  // `transaction()` is synchronous, so the termination is settled through the
+  // adapter's own termination promise instead of blocking the call chain.
+  Promise.resolve(state.termination).then(() => {
+    // TERMINATION_FAILED keeps the quarantine and the registry untouched: the
+    // session may still be alive, so its locks are not proven to be released.
+    if (state.state !== 'TERMINATION_CONFIRMED') return;
+    releaseMySqlIdempotencyLocks(db, { sessionDestroyed: true });
+  }).catch(() => { /* the termination state already records the failure */ });
+  return error;
+}
+
 export function transaction(db, work) {
   const mysql = db?.dialect === 'mysql';
   const retryLimit = mysql ? mysqlTransactionRetryLimit() : 0;
@@ -2356,6 +2409,9 @@ export function transaction(db, work) {
     } else {
       db.exec('BEGIN IMMEDIATE');
     }
+    // `commitAttempted` is true while a COMMIT has been issued but not yet
+    // acknowledged. It is reset the moment the COMMIT is acknowledged, so an
+    // error raised afterwards can never be mistaken for an uncertain COMMIT.
     let commitAttempted = false;
     try {
       if (mysql) {
@@ -2368,9 +2424,17 @@ export function transaction(db, work) {
       const result = work();
       commitAttempted = true;
       db.exec('COMMIT');
+      commitAttempted = false;
       releaseMySqlIdempotencyLocks(db);
       return result;
     } catch (error) {
+      if (mysql && commitAttempted && isUncertainCommit(error)) {
+        // The COMMIT outcome is unknown, so the mutation may already be
+        // durable. This branch is entered **before** any settlement: no
+        // ROLLBACK may be issued on this adapter, the work is never replayed
+        // and the caller receives the uncertain-COMMIT marker.
+        throw settleUncertainCommit(db, error);
+      }
       let rollback;
       if (mysql) {
         rollback = settleTransactionRollback(db);
@@ -2392,12 +2456,6 @@ export function transaction(db, work) {
       if (!rollback.proven) {
         // A failed or uncertain ROLLBACK is a terminal retry boundary. No
         // further BEGIN may be issued on this session.
-        releaseMySqlIdempotencyLocks(db);
-        throw error;
-      }
-      if (commitAttempted && isUncertainCommit(error)) {
-        // The COMMIT outcome is unknown, so the mutation may already be
-        // durable. It is never retried automatically.
         releaseMySqlIdempotencyLocks(db);
         throw error;
       }

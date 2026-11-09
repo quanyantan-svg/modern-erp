@@ -17,8 +17,9 @@ import { createProcurementFixture, seedApprovedOutsourceBom } from './test-suppo
 import { MySqlSyncAdapter } from './database/mysql-adapter.js';
 import { resolveDatabaseConfig } from './database/config.js';
 import {
-  MYSQL_TRANSACTION_ADMISSION_REFUSED, releaseMySqlIdempotencyLocks, transaction, mysqlSessionState,
+  MYSQL_TRANSACTION_ADMISSION_REFUSED, readTransaction, releaseMySqlIdempotencyLocks, transaction, mysqlSessionState,
 } from './db.js';
+import { createCommitWithholdingProxy } from './database/test-fixtures/mysql-commit-withholding-proxy.js';
 import { runG07GateRace, waitForNewTransaction } from './test-utils/m1-core-g07-lock-wait.js';
 import {
   compareTableParity, readMySqlInformationSchemaContract,
@@ -90,9 +91,9 @@ async function killOut001App(child) {
   });
 }
 
-async function startIndependentOut001App() {
+async function startIndependentOut001App({ env: envOverride = {} } = {}) {
   const child = fork(new URL('../scripts/gates/mysql-out001-http-app-child.mjs', import.meta.url), [], {
-    env: { ...process.env }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    env: { ...process.env, ...envOverride }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   let stderr = '';
   child.stderr.on('data', (chunk) => { stderr += chunk; });
@@ -225,6 +226,54 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
       signal,
     });
     return { status: response.status, data: await response.json().catch(() => ({})) };
+  }
+
+  /**
+   * Ask the independent application child to run one probe and report back.
+   * The child answers on the existing IPC channel; a probe that never answers
+   * is a hard failure, never a silent skip.
+   */
+  function requestProbe(app, probe, body = null, timeoutMs = 120_000) {
+    return new Promise((resolveProbe, rejectProbe) => {
+      const onMessage = (message) => {
+        if (message?.type !== 'PROBE_RESULT' || message.probe !== probe) return;
+        clearTimeout(timer);
+        app.child.off('message', onMessage);
+        resolveProbe(message);
+      };
+      const timer = setTimeout(() => {
+        app.child.off('message', onMessage);
+        rejectProbe(new Error(`OUT001_PROBE_TIMEOUT:${probe}`));
+      }, timeoutMs);
+      app.child.on('message', onMessage);
+      try {
+        app.child.send({ type: 'PROBE', probe, body });
+      } catch (error) {
+        clearTimeout(timer);
+        app.child.off('message', onMessage);
+        rejectProbe(error);
+      }
+    });
+  }
+
+  /**
+   * Wait until the victim connection is gone from the observer's PROCESSLIST
+   * view. This observes an external server-side state change, so it is a
+   * bounded condition wait — never a fixed sleep used as a substitute for
+   * synchronisation.
+   */
+  async function waitUntilProcessListEntryDisappears(observer, connectionId, timeoutMs = 60_000) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const row = observer.prepare(
+        'SELECT COUNT(*) n FROM information_schema.PROCESSLIST WHERE ID=?',
+      ).get(connectionId);
+      if (Number(row?.n || 0) === 0) return true;
+      if (Date.now() > deadline) {
+        throw new Error(`OUT001_M3_VICTIM_STILL_ALIVE:${connectionId}`);
+      }
+      await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+    }
   }
 
   test('M1 命名锁：获取、COMMIT/ROLLBACK 后释放、第二会话可重新获取', { skip: isMySql ? false : MYSQL_ONLY }, async () => {
@@ -453,7 +502,7 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
     }
   });
 
-  test('M3 会话状态、锁释放未确认隔离与不确定 COMMIT 不重跑业务体', { skip: isMySql ? false : MYSQL_ONLY }, async (t) => {
+  test('M3 会话状态、锁释放未确认隔离与真实不确定 COMMIT 不重跑业务体', { skip: isMySql ? false : MYSQL_ONLY }, async (t) => {
     const session = openIndependentSession();
     try {
       // R1/R3 的可判定前提：会话状态机在真实 MySQL 上可观测。
@@ -570,48 +619,212 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
       try { session.close(); } catch { /* the adapter may already be terminated */ }
     }
 
-    // 不确定 COMMIT：业务体**不得**被重跑。真实 MySQL 的「COMMIT 结果未知」
-    // 需要以更高权限在提交中途 KILL CONNECTION；disposable least-privilege
-    // 账户刻意没有该权限，因此这一段用仓库自带的 recovery worker 夹具证明
-    // **代码路径**，并把真实库的不可达性显式记录下来（不得冒充已证明）。
-    const recoveryWorker = new URL('./database/test-fixtures/recovery-mysql-worker.js', import.meta.url);
-    const config = resolveDatabaseConfig({ backend: 'mysql' });
-    const mockAdapter = new MySqlSyncAdapter({
-      host: config.host, port: config.port, database: config.database,
-      user: config.user, password: config.password, ssl: config.ssl,
-    }, { workerUrl: recoveryWorker });
-    let workCalls = 0;
-    let uncertainError = null;
+    // ────────────────────────────────────────────────────────────────────
+    // 第二段：真实不确定 COMMIT（真实 MySQL 故障注入）
+    //
+    // 真实场景：客户端把 COMMIT 发给**真实** MySQL；服务端真的提交了；本地
+    // TCP 代理暂存服务端的 OK 报文不转发；观察者随后终止 victim 会话。客户端
+    // 因此得到真实的连接丢失，而服务端的事务**已经提交**。
+    //
+    // 观察者与 victim 使用**同一个 MySQL 账户**：MySQL 允许一个账户终止自己
+    // 的会话，因此这一步不需要 CONNECTION_ADMIN / SUPER / 额外 PROCESS
+    // 权限，也绝不为了通过而提升权限。
+    // ────────────────────────────────────────────────────────────────────
+    const targetConfig = resolveDatabaseConfig({ backend: 'mysql' });
+    if (targetConfig.ssl) {
+      // 代理无法在不解析 TLS 的前提下检查协议，必须 fail closed。
+      throw new Error('M3_PROXY_TLS_UNSUPPORTED: 真实 MySQL 使用 TLS，代理无法安全检查协议');
+    }
+    const proxy = createCommitWithholdingProxy({
+      upstreamHost: targetConfig.host,
+      upstreamPort: targetConfig.port,
+    });
+    let victimApp = null;
+    let observer = null;
     try {
-      assert.throws(() => transaction(mockAdapter, () => {
-        workCalls += 1;
-        // 先布置一次会话错误：连接丢失后重新建链会失败，因此随后的 ROLLBACK
-        // 无法被证明。未确认的 ROLLBACK 必须让适配器进入隔离，而不是回到
-        // 可信空闲状态。
-        mockAdapter.prepare('SELECT 1 FROM __recovery_inject_session_error WHERE code = ?').run('PROTOCOL_CONNECTION_LOST');
-        // 再布置一次连接丢失，使随后的 COMMIT 失败且结果未知：服务端可能已
-        // 提交，客户端无法区分「已提交」与「已回滚」。
-        mockAdapter.prepare('SELECT 1 FROM __recovery_inject_op_error WHERE code = ?').run('PROTOCOL_CONNECTION_LOST');
-      }), (error) => { uncertainError = error; return true; });
-      assert.equal(workCalls, 1, '不确定 COMMIT 之后业务体不得被重跑');
-      assert.equal(uncertainError?.code, 'PROTOCOL_CONNECTION_LOST',
-        '不确定 COMMIT 的原始错误必须原样透出，调用侧才能按 §26.34.14.3 处置');
-      assert.equal(uncertainError?.sessionLost, true,
-        '连接丢失必须携带 sessionLost 标记，否则调用侧无法识别不确定 COMMIT');
-      assert.equal(mockAdapter.quarantined, true,
-        '未确认的 ROLLBACK 必须让适配器进入隔离');
-      assert.notEqual(mysqlSessionState(mockAdapter), 'IDLE_TRUSTED',
-        '不确定 COMMIT 之后会话不得回到可信空闲状态');
-      t.diagnostic('M3_UNCERTAIN_COMMIT workCalls=1 sessionLost=true quarantined=true');
-      // 被隔离的连接不得用于重放业务体（§26.34.14.3 P3）。
-      let reuseCalls = 0;
-      assert.throws(() => transaction(mockAdapter, () => { reuseCalls += 1; }), (error) => {
-        assert.equal(error.code, MYSQL_TRANSACTION_ADMISSION_REFUSED);
-        return true;
+      await proxy.listen();
+      t.diagnostic(`M3_PROXY_LISTENING 127.0.0.1:${proxy.port} upstream=${targetConfig.host}:${targetConfig.port}`);
+      victimApp = await startIndependentOut001App({
+        env: {
+          ERP_DB_HOST: '127.0.0.1',
+          ERP_DB_PORT: String(proxy.port),
+          ERP_OUT_001_MYSQL_PROXY_BINDING: JSON.stringify({
+            upstreamHost: targetConfig.host,
+            upstreamPort: targetConfig.port,
+          }),
+        },
       });
-      assert.equal(reuseCalls, 0, '隔离后不得在该连接上重放业务体');
+      t.diagnostic(`M3_VICTIM_APP_STARTED pid=${victimApp.pid}`);
+
+      // ── victim 的真实会话身份 ────────────────────────────────────────
+      const firstProbe = await requestProbe(victimApp, 'CONNECTION_ID');
+      assert.equal(firstProbe.ok, true, firstProbe.error);
+      const firstConnectionId = Number(firstProbe.connectionId);
+      assert.ok(Number.isSafeInteger(firstConnectionId) && firstConnectionId > 0,
+        'victim 必须取得有效的正整数 connection id');
+      assert.equal(Number(firstProbe.sessionEpoch), 1);
+      t.diagnostic(`M3_VICTIM_SESSION epoch=1 connectionId=${firstConnectionId}`);
+
+      // 故意让客户端会话被替换一次：核验连接与原会话的 epoch 因此可判定地
+      // 不同（R3），而不是「碰巧都是 1」。代理只销毁传输，不触碰业务数据。
+      assert.equal(proxy.dropSession('M3_SESSION_PRIMED'), 1);
+      const probe = await requestProbe(victimApp, 'CONNECTION_ID');
+      assert.equal(probe.ok, true, probe.error);
+      const victimConnectionId = Number(probe.connectionId);
+      const victimEpoch = Number(probe.sessionEpoch);
+      assert.ok(Number.isSafeInteger(victimConnectionId) && victimConnectionId > 0);
+      assert.equal(victimEpoch, 2, '替换后的会话 epoch 必须递增');
+      assert.notEqual(victimConnectionId, firstConnectionId, '替换后的会话必须拥有新的 connection id');
+      t.diagnostic(`M3_VICTIM_SESSION_REPLACED epoch=${victimEpoch} connectionId=${victimConnectionId}`);
+
+      // ── 观察者会话（同一 MySQL 账户，独立连接） ───────────────────────
+      observer = openIndependentSession();
+      const observerConnectionId = Number(observer.prepare('SELECT CONNECTION_ID() id').get()?.id);
+      const observerUser = String(observer.prepare('SELECT CURRENT_USER() u').get()?.u || '');
+      const observerDatabase = String(observer.prepare('SELECT DATABASE() d').get()?.d || '');
+      assert.ok(Number.isSafeInteger(observerConnectionId) && observerConnectionId > 0);
+      assert.notEqual(observerConnectionId, victimConnectionId, 'observer 不得是 victim 本人的连接');
+      t.diagnostic(`M3_OBSERVER connectionId=${observerConnectionId} user=${observerUser} db=${observerDatabase}`);
+
+      // ── 真实业务前置：源订单、目标订单、WIP 数量与身份余额 ─────────────
+      const source = await createOrderWithMaterial();
+      const target = await createOrderWithMaterial();
+      await issueWip(source.orderId, source.materialRow, 5);
+      const idempotencyKey = `out001-m3-real-${Date.now()}`;
+      const body = transferBody(source, target, 3, idempotencyKey);
+      const appLock = out001IdempotencyLockName('OUTSOURCING_WIP_TRANSFER', source.orderId, idempotencyKey);
+      const physicalBefore = out001PhysicalFinanceSnapshot(fixture.db);
+      const transfersBefore = countRows(fixture.db, 'outsourcing_wip_transfers');
+
+      // ── 提交真实 WIP Transfer（独立 HTTP 应用进程，经代理连库） ───────
+      const transferProbe = requestProbe(victimApp, 'TRANSFER', body);
+      const withheld = await proxy.waitForEvent('COMMIT_RESPONSE_WITHHELD', 120_000);
+      assert.equal(Number(withheld.connectionId), victimConnectionId,
+        '被拦截的 COMMIT 必须属于 victim 会话');
+      assert.ok(proxy.stats.commitsForwarded >= 1, 'COMMIT 必须被真实转发给服务端');
+      assert.equal(proxy.stats.commitsWithheld, 1, '服务端的 COMMIT OK 必须被暂存一次');
+      t.diagnostic(`M3_COMMIT_RESPONSE_WITHHELD connectionId=${withheld.connectionId}`);
+
+      // ── 观察者核验身份后终止 victim 会话 ──────────────────────────────
+      const victimRow = observer.prepare(
+        'SELECT ID id, USER user, DB db FROM information_schema.PROCESSLIST WHERE ID=?',
+      ).get(victimConnectionId);
+      assert.ok(victimRow, 'victim 必须出现在 observer 的 PROCESSLIST 可见范围内');
+      assert.equal(String(victimRow.user), observerUser,
+        'victim 必须与 observer 属于同一 MySQL 账户');
+      assert.equal(String(victimRow.db), targetConfig.database,
+        'victim 必须属于当前批准的测试数据库');
+      assert.equal(String(observerDatabase), targetConfig.database,
+        'observer 必须连接在当前批准的测试数据库上');
+      assert.notEqual(Number(victimRow.id), observerConnectionId,
+        'victim id 不得等于 observer 自己的连接 id');
+      t.diagnostic(`M3_VICTIM_IDENTITY_VERIFIED id=${victimRow.id} user=${victimRow.user} db=${victimRow.db}`);
+      // 只允许执行这一条语句：终止已核验的 victim 连接。
+      observer.prepare(`KILL CONNECTION ${victimConnectionId}`).get();
+      t.diagnostic(`M3_KILL_CONNECTION id=${victimConnectionId}`);
+      await waitUntilProcessListEntryDisappears(observer, victimConnectionId, 60_000);
+      t.diagnostic('M3_VICTIM_GONE_FROM_PROCESSLIST');
+
+      // ── 客户端收到真实连接丢失 ────────────────────────────────────────
+      const transfer = await transferProbe;
+      assert.equal(transfer.ok, true, transfer.error);
+      assert.equal(transfer.status, 500, '不确定 COMMIT 必须失败，绝不能返回 201');
+      assert.equal(transfer.adapter.quarantined, true, '原 Adapter 必须被隔离');
+      assert.equal(transfer.adapter.quarantineReason, 'uncertain_commit');
+      assert.equal(transfer.adapter.quarantineState, 'TERMINATION_CONFIRMED', 'R1：终止必须已确认');
+      assert.notEqual(transfer.adapter.sessionState, 'IDLE_TRUSTED',
+        '不确定 COMMIT 之后不得回到可信空闲状态');
+      assert.equal(transfer.diagnostics.lastError?.sessionLost, true,
+        '原始异常必须保留 sessionLost 标记');
+      assert.equal(transfer.diagnostics.lastError?.classification, 'COMMIT',
+        '原始异常必须保留 COMMIT classification');
+      assert.equal(transfer.diagnostics.lastError?.uncertainCommit, true,
+        '原始异常必须携带不确定 COMMIT 标记');
+      assert.equal(transfer.diagnostics.sessionStateAtQuarantine, 'UNCERTAIN',
+        '隔离发生前，适配器必须已把该会话判定为状态不确定');
+      t.diagnostic('M3_ADAPTER_QUARANTINED TERMINATION_CONFIRMED sessionLost=true classification=COMMIT');
+
+      // ── R2：命名锁已由服务器随会话释放 ───────────────────────────────
+      assert.equal(Number(observer.prepare('SELECT IS_FREE_LOCK(?) free').get(appLock)?.free), 1,
+        'R2：原会话终止后命名锁必须由服务器释放');
+      t.diagnostic('M3_NAMED_LOCK_RELEASED_BY_SERVER');
+
+      // ── R3：核验连接可信且与原会话不同 ───────────────────────────────
+      assert.ok(['IDLE_TRUSTED', 'FRESH'].includes(mysqlSessionState(observer)),
+        'R3：核验连接必须是可信会话');
+      assert.notEqual(observerConnectionId, victimConnectionId,
+        'R3：核验连接的 connection id 必须与原会话不同');
+      assert.notEqual(Number(observer.sessionEpoch), victimEpoch,
+        'R3：核验连接的会话 epoch 必须与原会话不同');
+      t.diagnostic(`M3_VERIFICATION_SESSION epoch=${observer.sessionEpoch} victimEpoch=${victimEpoch}`);
+
+      // ── R4：只读事务核验幂等记录与转移事实 ────────────────────────────
+      const verification = readTransaction(fixture.db, () => ({
+        idempotency: fixture.db.prepare(
+          'SELECT * FROM idempotency_records WHERE operation_type=? AND document_id=? AND idempotency_key=?',
+        ).get('OUTSOURCING_WIP_TRANSFER', source.orderId, idempotencyKey),
+        transfers: fixture.db.prepare(
+          'SELECT * FROM outsourcing_wip_transfers WHERE source_order_id=? AND target_order_id=?',
+        ).all(source.orderId, target.orderId),
+        idempotencyCount: Number(fixture.db.prepare(
+          'SELECT COUNT(*) n FROM idempotency_records WHERE operation_type=? AND document_id=? AND idempotency_key=?',
+        ).get('OUTSOURCING_WIP_TRANSFER', source.orderId, idempotencyKey).n),
+      }));
+      assert.equal(verification.transfers.length, 1,
+        'R4：服务端 COMMIT 已成功，必须恰好存在一笔转移事实');
+      assert.ok(verification.idempotency, 'R4：服务端 COMMIT 已成功，幂等记录必须存在');
+      assert.equal(verification.idempotencyCount, 1, 'R4：幂等记录只能有一笔');
+      assert.equal(JSON.parse(verification.idempotency.result_json).id, verification.transfers[0].id,
+        'R4：幂等记录必须指向同一笔转移事实');
+      assert.equal(countRows(fixture.db, 'outsourcing_wip_transfers'), transfersBefore + 1,
+        'R4：不得产生第二笔转移事实');
+      t.diagnostic(`M3_R4_VERIFIED transferId=${verification.transfers[0].id}`);
+
+      // ── R5：同一幂等键重放走正常 idempotencyReplay 路径 ───────────────
+      const businessBeforeReplay = out001BusinessSnapshot(fixture.db);
+      const physicalBeforeReplay = out001PhysicalFinanceSnapshot(fixture.db);
+      const successAuditsBefore = countRows(
+        fixture.db, 'audit_logs', "action='TRANSFER' AND entity_type='OUTSOURCING_WIP_TRANSFER'",
+      );
+      const replay = await fixture.request('POST', '/api/procurement/outsourcing/wip-transfers', fixture.tokens.admin, body);
+      assert.equal(replay.status, 201, JSON.stringify(replay.data));
+      assert.equal(replay.data.replayed, true, 'R5：重放必须走正常 idempotencyReplay 路径');
+      assert.equal(replay.data.id, verification.transfers[0].id, 'R5：重放必须返回原 id');
+      assert.equal(replay.data.transferNo, verification.transfers[0].transfer_no, 'R5：重放必须返回原 transferNo');
+      assert.equal(countRows(fixture.db, 'outsourcing_wip_transfers'), transfersBefore + 1,
+        'R5：重放不得新增转移事实');
+      assert.equal(countRows(
+        fixture.db, 'audit_logs', "action='TRANSFER' AND entity_type='OUTSOURCING_WIP_TRANSFER'",
+      ), successAuditsBefore, 'R5：重放不得新增成功审计');
+      assert.equal(out001BusinessSnapshot(fixture.db), businessBeforeReplay,
+        'R5：重放不得新增身份 effect、数量效力或幂等事实');
+      assert.equal(out001PhysicalFinanceSnapshot(fixture.db), physicalBeforeReplay,
+        'R5：重放不得产生物理库存、估值、AP 或 GL 变化');
+      assert.equal(out001PhysicalFinanceSnapshot(fixture.db), physicalBefore,
+        'WIP 数量归属转移不得产生物理库存、估值或财务副作用');
+      const transferId = verification.transfers[0].id;
+      assert.equal(countRows(fixture.db, 'outsourcing_wip_identity_effects', 'business_event_id=?', [transferId]), 2,
+        '身份效力必须恰好是一对 TRANSFER_OUT / TRANSFER_IN');
+      assert.equal(countRows(fixture.db, 'outsourcing_wip_identity_effect_allocations', 'effect_id IN (SELECT id FROM outsourcing_wip_identity_effects WHERE business_event_id=?)', [transferId]), 1,
+        '身份分配必须恰好一条');
+      t.diagnostic('M3_R5_REPLAY_OK replayed=true sameId=true sameTransferNo=true');
     } finally {
-      try { mockAdapter.close(); } catch { /* the mock worker may already be torn down */ }
+      if (observer) {
+        try { observer.close(); } catch { /* the observer session may already be gone */ }
+      }
+      if (victimApp) {
+        try {
+          await victimApp.close();
+        } catch {
+          await killOut001App(victimApp.child);
+        }
+        if (victimApp.child.exitCode === null && victimApp.child.signalCode === null) {
+          await killOut001App(victimApp.child);
+          t.diagnostic('M3_VICTIM_APP_FORCE_KILLED_AFTER_FAILURE');
+        }
+      }
+      await proxy.close();
+      t.diagnostic(`M3_PROXY_CLOSED liveSessions=${proxy.liveSessions}`);
     }
   });
 

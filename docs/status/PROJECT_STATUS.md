@@ -2873,6 +2873,74 @@ Owner 已确认正式关闭 **OUT-001 最终离线收尾修复**。本节只登�
 
 **当前阶段终态**：`OUT-001_FINAL_OFFLINE_CLOSURE=CLOSED`。下一阶段 `OUT-001 Final Real MySQL Verification & Owner Acceptance` 为 **NOT_STARTED / NOT_AUTHORIZED**；本次未连接 MySQL、未执行数据库操作、未签发或消费 ACK-4、未变更数据库 / Schema / Migration / 权限、未更新 master / candidate / tag，亦未发布或部署。
 
+### 45.21 OUT-001 M3 不确定 COMMIT 最终专项修复：生产事务代码 + 真实故障注入装置（2026-11-09）
+
+本节登记本轮 **M3 最终专项修复** 的实现与离线验证事实。它**不**改写 §45.18、§45.19、§45.20 的历史记录，**不**签发 `GATE_READY` / `GATE_AUTHORIZED` / 新的 `GATE_EXECUTED` / 技术 PASS / `GATE_ACCEPTED` / `AUD-OUT-001` Acceptance / Capability Freeze / Release / Deploy。本轮**未连接真实 MySQL**、未执行 RESET / BOOTSTRAP / CLEANUP、未签发或消费 ACK-4。
+
+#### 45.21.1 已修复的生产代码
+
+| 文件 | 修复 |
+|---|---|
+| `server/db.js` | `transaction()` 的不确定 COMMIT 分支**前移到任何收尾动作之前**。判定条件为「COMMIT 已发出但未被确认」（`commitAttempted` 且 `mysqlRequestTimeout` / `sessionLost`）。该分支：保留原始 COMMIT 错误及其 `classification` / `sessionLost` / 原始错误码；立即隔离原适配器（原因 `uncertain_commit`）并由适配器终止其 Worker；**不在原适配器上发出 ROLLBACK**；**不在替代会话上代替原会话收尾**；**不重跑事务工作体**；**不把适配器恢复成可信空闲状态**；把不确定 COMMIT 标记传给上层调用者；命名锁登记**只在**终止确认为 `TERMINATION_CONFIRMED` 之后按「随会话销毁由服务器回收」清理，`TERMINATION_FAILED` 时保持隔离且不冒充 `SESSION_DESTROYED`。`commitAttempted` 在 COMMIT 被确认后立即复位，使之后的任何错误都不会被误判为不确定 COMMIT。普通业务错误、明确 ROLLBACK 与可证明安全的重试路径保持既有行为 |
+| `server/modules/outsourcing-finance.js` | `createWipTransfer()` 的 catch/finally：**不确定 COMMIT 不是已确认的业务拒绝**，因此不调用 `rejectWipTransfer()` 写普通拒绝审计、不在已被隔离的适配器上继续写入、保留原始异常、不产生第二笔业务事实；`finally` 的锁释放在隔离会话上不发出任何 SQL。正常 201、精确重放 201 与异载荷 409 的既有合同不变 |
+| `server/database/mysql-worker.js` + 新增 `server/database/mysql-worker-policy.js` | 把恢复策略的三个纯函数（`isRecoverableConnectionError` / `isReadOnlySql` / `classifyExecStatement`）抽到无副作用的独立模块，原模块的公开导出不变。**原因**：夹具 Worker 此前 `import` 生产 Worker 会连带注册其 `parentPort` 处理器，在夹具 Worker 内启动第二个真实 MySQL 客户端（并与夹具竞争同一响应缓冲）。这是 M3 离线夹具必须 hermetic 的直接阻断项 |
+
+#### 45.21.2 新增的真实故障注入装置与测试
+
+| 文件 | 用途 |
+|---|---|
+| `server/database/test-fixtures/mysql-commit-withholding-proxy.js` | 仅测试用的本地 TCP 代理：`node:net`、只绑定 `127.0.0.1`、只连已授权的 MySQL host/port、解析 MySQL packet framing（正确处理分包与粘包）、只识别 `COM_QUERY` 且语句恰为 `COMMIT` 的报文、原样转发给真实服务端、暂存服务端 OK 报文并上报 `COMMIT_RESPONSE_WITHHELD`、非 COMMIT 流量原样透传、服务端不确认时超时 fail closed、异常关闭不残留 socket。**不记录**认证包 / 口令 / SQL 参数 / 原始报文；**不新增** npm 依赖；**不修改** TLS 配置（目标启用 TLS 时调用方必须 fail closed） |
+| `server/database/test-fixtures/out001-m3-uncertain-commit-worker.js` | 仅测试用的夹具 Worker：与生产 Worker 共享同一恢复策略，并上报「会话计数」与「语句分类」，使离线用例可以证明不确定 COMMIT **未建立新的 Worker 会话**且**未发出 ROLLBACK** |
+| `server/mysql-out001-m3-uncertain-commit.test.js` | 确定性离线回归 11 项：packet parser 分包/粘包、只识别 COM_QUERY COMMIT、非 COMMIT 透传、COMMIT OK 暂存、代理超时 fail closed、无 socket 泄漏、不确定 COMMIT 不进入 `settleTransactionRollback()`、不建立新的 Worker 会话、终止确认后才清理锁登记、终止失败保持隔离、handler 不把不确定 COMMIT 记为普通拒绝、业务体只执行一次。已登记入 `FULL` 套件（`scripts/testing/test-suites.js`） |
+| `server/mysql-out001.integration.js` | M3 的**真实**故障注入替换原「以 recovery worker 夹具冒充真实证据」的部分：victim 经代理提交**真实** WIP Transfer；代理暂存真实 COMMIT OK；observer 以**同一 MySQL 账户**核验身份后执行 `KILL CONNECTION <verified_victim_id>`；随后逐条判定 R1～R5 |
+| `scripts/gates/mysql-out001-http-app-child.mjs` | 独立应用进程新增两个 IPC 探针：`CONNECTION_ID`（真实 connection id 与会话 epoch）与 `TRANSFER`（真实 WIP Transfer POST 及适配器自身的隔离 / 终止 / 异常分类结论） |
+| `server/test-utils/mysql-out001-target.js` | 新增可选的 loopback 代理绑定（`ERP_OUT_001_MYSQL_PROXY_BINDING`）。绑定**不改变**目标身份：disposable 目标守卫仍按上游身份判定，代理上游必须与 target proof 完全一致，database / user 仍逐一比对，连接身份（server UUID、grants 摘要、版本、CURRENT_USER、DATABASE）仍必须与 target proof 逐项相符 |
+
+#### 45.21.3 本轮离线验证结果（真实退出码）
+
+| # | 命令 | 退出码 | 结果 |
+|---|---|---|---|
+| 1 | M3 相关文件 `node --check`（11 个文件） | `0` | 全部通过 |
+| 2 | `node --test server/mysql-out001-m3-uncertain-commit.test.js` | `0` | `11/11 PASS`（0 FAIL / 0 SKIP / 0 CANCELLED） |
+| 3 | `node --test server/outsourcing-wip-transfer.test.js server/outsourcing-finance.test.js` | `0` | `28/28 PASS`（OUT-001 SQLite focused） |
+| 4 | `node --test server/mysql-out001-gate-infrastructure.test.js` | `0` | `44/44 PASS` |
+| 5 | `node --test server/mysql-disposable-target-guard.test.js` | `0` | `10/10 PASS` |
+| 6 | `pnpm test:fast` | `0` | `624/624 PASS` |
+| 7 | `pnpm test`（FULL） | `0` | `3426/3426 PASS`（较上一轮 3415 增加本轮新增的 11 项） |
+| 8 | `pnpm build` | `0` | 构建通过 |
+| 9 | `node scripts/docs/check-doc-consistency.mjs --mode migration` | `0` | `ALL CHECKS PASSED`（C1～C6 全 PASS） |
+| 10 | `node scripts/docs/check-doc-consistency.mjs`（current） | 提交前 `1` | 仅 **N7** 失败：N7 按设计拒绝「WORKTREE 含未提交或未跟踪的受治理文件变化」（本轮尚未提交的 `docs/design/procurement-outsourcing.md` 与 `docs/status/PROJECT_STATUS.md`）；N1、N3～N6、N8、N9 全 PASS，N2 为 `RETIRED`。提交后的复跑退出码登记在本轮交付报告 |
+| 11 | `git diff --check` | `0` | 无空白错误 |
+
+#### 45.21.4 真实 MySQL 尚未运行、M3 R1～R5 尚待 Gate 实证的项目
+
+本轮**全部** M3 真实证据仍为 `NOT_PROVEN_ON_REAL_MYSQL`。以下项目只能在受保护的 disposable MySQL Gate 中产生，不得以离线结果冒充：
+
+| 项 | 状态 |
+|---|---|
+| 代理在**真实** MySQL 上拦截真实 COMMIT OK | `NOT_PROVEN_ON_REAL_MYSQL`（离线仅证明 framing、识别、暂存与 fail-closed 行为） |
+| 观察者以同一账户 `KILL CONNECTION` 终止 victim 的真实权限路径 | `NOT_PROVEN_ON_REAL_MYSQL`（离线无真实权限判定） |
+| R1 原会话终止已确认（`TERMINATION_CONFIRMED`） | `NOT_PROVEN_ON_REAL_MYSQL` |
+| R2 命名锁已由服务器随会话释放 | `NOT_PROVEN_ON_REAL_MYSQL` |
+| R3 核验连接可信且 connection id 与会话 epoch 均不同 | `NOT_PROVEN_ON_REAL_MYSQL` |
+| R4 服务端 COMMIT 成功时恰好一笔转移事实、恰好一条幂等记录 | `NOT_PROVEN_ON_REAL_MYSQL` |
+| R5 相同幂等键重放返回原 id / 原 transferNo 且零新增事实 | `NOT_PROVEN_ON_REAL_MYSQL` |
+| 客户端在真实连接丢失下的原异常 classification / `sessionLost` 透出 | `NOT_PROVEN_ON_REAL_MYSQL` |
+
+#### 45.21.5 本轮状态与边界
+
+| 状态 | 本轮结论 |
+|---|---|
+| 生产事务代码 | **已修复并离线验证**：不确定 COMMIT 的处置顺序、标记透传、锁登记清理时机与 handler 处置均已按 §26.34.14.3 收敛 |
+| M3 真实故障注入装置 | **已实现，未执行**：`GATE_IMPLEMENTED`（装置与证据链已就位，等待 Owner 授权的受保护 Gate） |
+| M3 真实不确定 COMMIT | 继续为 `NOT_PROVEN_ON_REAL_MYSQL` |
+| `GATE_READY` / `GATE_AUTHORIZED` / 新的 `GATE_EXECUTED` / 技术 PASS / `GATE_ACCEPTED` | **未签发** |
+| `AUD-OUT-001` | 仍为 `TESTED` / `PENDING_OWNER_APPROVAL` |
+| `GATE_EXECUTED=EXECUTED`（§45.18 历史事实） | 保持不变 |
+| Schema / Migration / 数据库权限 / `package.json` version / release tag / master / candidate | **全部未变** |
+
+**HARD STOP**：本轮实现与离线回归全部通过，等待 Owner Review。**不得**自行签发 `GATE_READY`、ACK-4 或任何 Acceptance。
+
 ### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
 
 以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：

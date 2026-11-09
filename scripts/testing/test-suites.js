@@ -89,6 +89,10 @@ const FULL = [
   'server/sales-gate-retry-admission.test.js',
   'server/mysql-disposable-target-guard.test.js',
   'server/mysql-out001-gate-infrastructure.test.js',
+  // OUT-001 M3 — uncertain-COMMIT offline regression (COMMIT-withholding
+  // proxy, transaction disposition, WIP transfer handler disposition). It
+  // owns a temp SQLite for the handler case, so it is not FAST.
+  'server/mysql-out001-m3-uncertain-commit.test.js',
   'scripts/mysql-sales-wave7-gate-a-runner.test.js',
   'scripts/mysql-sales-wave10-runners.test.js',
   // Transaction Lifecycle Safety — pure fault injection, no real MySQL.

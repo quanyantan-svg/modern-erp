@@ -16,8 +16,10 @@
 // worker's contract. The real worker is exercised end-to-end in the
 // disposable MySQL integration test (server/mysql-v162-connection-recovery.integration.js).
 // The helpers `isRecoverableConnectionError` / `isReadOnlySql` /
-// `classifyExecStatement` are imported from the real worker module to ensure
-// a single source of truth for the recovery policy.
+// `classifyExecStatement` are imported from the shared policy module so that
+// there is a single source of truth for the recovery policy **and** so that
+// this fixture does not also load the production Worker entry point (whose
+// parentPort registration would start a second, real MySQL client here).
 
 import { parentPort } from 'node:worker_threads';
 import { encodeWorkerResponse } from '../mysql-worker-protocol.js';
@@ -25,7 +27,7 @@ import {
   classifyExecStatement,
   isReadOnlySql,
   isRecoverableConnectionError,
-} from '../mysql-worker.js';
+} from '../mysql-worker-policy.js';
 
 const SESSION_TIMEZONE = '+00:00';
 const SESSION_ISOLATION_LEVEL = 'READ COMMITTED';

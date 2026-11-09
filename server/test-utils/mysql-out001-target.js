@@ -50,15 +50,64 @@ export const OUT_001_PHYSICAL_FINANCE_TABLES = Object.freeze([
 ]);
 
 /**
+ * The environment variable that declares a loopback proxy in front of the
+ * authorized target. It is used by the OUT-001 M3 fault injection: the victim
+ * application routes its MySQL session through a local proxy so the test can
+ * withhold the COMMIT acknowledgement.
+ *
+ * The binding never changes WHICH server the process talks to. The connected
+ * identity (server UUID, grants digest, version, CURRENT_USER, DATABASE) must
+ * still match the target proof byte for byte.
+ */
+export const OUT_001_MYSQL_PROXY_BINDING_ENV = 'ERP_OUT_001_MYSQL_PROXY_BINDING';
+
+function readProxyBinding(env = process.env) {
+  const raw = String(env[OUT_001_MYSQL_PROXY_BINDING_ENV] ?? '').trim();
+  if (!raw) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('OUT_001_MYSQL_PROXY_BINDING_INVALID');
+  }
+  const upstreamHost = String(parsed?.upstreamHost ?? '').trim();
+  const upstreamPort = Number(parsed?.upstreamPort);
+  if (!upstreamHost || !Number.isSafeInteger(upstreamPort) || upstreamPort < 1 || upstreamPort > 65535) {
+    throw new Error('OUT_001_MYSQL_PROXY_BINDING_INVALID');
+  }
+  return Object.freeze({ upstreamHost, upstreamPort });
+}
+
+/**
  * 打开已 bootstrap 的 disposable schema，并把会话身份钉在 target proof 上。
  * 该函数**不**执行任何 migration、DDL 或 seed。
  */
 export function openOut001MySqlAdapter({ targetProofPath }) {
   const config = resolveDatabaseConfig({ backend: 'mysql' });
-  // MySQL 夹具只允许指向那个被明确批准的一次性目标；这不是建议，是拒绝条件。
-  assertAuthorizedDisposableMySqlTarget(config);
+  const proxyBinding = readProxyBinding();
   const target = JSON.parse(readFileSync(resolve(targetProofPath), 'utf8'));
-  for (const key of ['host', 'port', 'database', 'user']) {
+  // The disposable-target guard always runs against the identity this process
+  // is authorized to talk to. A loopback proxy only changes the socket
+  // address, never the target.
+  const authorizedConfig = proxyBinding
+    ? { ...config, host: proxyBinding.upstreamHost, port: proxyBinding.upstreamPort }
+    : config;
+  // MySQL 夹具只允许指向那个被明确批准的一次性目标；这不是建议，是拒绝条件。
+  assertAuthorizedDisposableMySqlTarget(authorizedConfig);
+  if (proxyBinding) {
+    // The proxy must forward to exactly the approved target.
+    if (String(proxyBinding.upstreamHost) !== String(target.host)
+      || Number(proxyBinding.upstreamPort) !== Number(target.port)) {
+      throw new Error('OUT_001_MYSQL_PROXY_UPSTREAM_DRIFT');
+    }
+  } else {
+    for (const key of ['host', 'port']) {
+      if (String(config[key]) !== String(target[key])) {
+        throw new Error(`OUT_001_MYSQL_TARGET_CONFIG_DRIFT:${key}`);
+      }
+    }
+  }
+  for (const key of ['database', 'user']) {
     if (String(config[key]) !== String(target[key])) {
       throw new Error(`OUT_001_MYSQL_TARGET_CONFIG_DRIFT:${key}`);
     }
