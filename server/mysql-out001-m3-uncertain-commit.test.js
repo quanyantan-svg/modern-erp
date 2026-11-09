@@ -26,8 +26,11 @@
 //   M3-O12  the transaction work always runs exactly once
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import net from 'node:net';
+import { dirname, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { MySqlSyncAdapter } from './database/mysql-adapter.js';
 import {
@@ -41,7 +44,13 @@ import {
 import { isUncertainCommitOutcome, transaction } from './db.js';
 import { createWipTransfer } from './modules/outsourcing-finance.js';
 import { createProcurementFixture, seedApprovedOutsourceBom } from './test-support/procurement-http-fixture.js';
+import {
+  out001M3AccountIdentityProblems,
+  out001M3R3Problems,
+  out001M3VictimSessionReplacementProblems,
+} from './test-utils/out001-m3-identity.js';
 
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const m3WorkerUrl = new URL('./database/test-fixtures/out001-m3-uncertain-commit-worker.js', import.meta.url);
 
 // ---------------------------------------------------------------------------
@@ -550,9 +559,172 @@ describe('OUT-001 M3 离线回归：WIP 转移的不确定 COMMIT 处置', () =>
 });
 
 // ---------------------------------------------------------------------------
-// helpers
+// M3-O12 / M3-O13 / M3-O14 — the identity and R3 judgement policy
 // ---------------------------------------------------------------------------
 
+describe('OUT-001 M3 离线回归：账户身份比较与 R3 合同', () => {
+  const CONSISTENT_IDENTITY = Object.freeze({
+    victimCurrentUser: 'erp_test@127.0.0.1',
+    observerCurrentUser: 'erp_test@127.0.0.1',
+    victimDatabase: 'modern_erp_domain_test',
+    observerDatabase: 'modern_erp_domain_test',
+    victimProcesslistUser: 'erp_test',
+    victimProcesslistDb: 'modern_erp_domain_test',
+    targetUser: 'erp_test',
+    targetDatabase: 'modern_erp_domain_test',
+    victimConnectionId: 4242,
+    observerConnectionId: 4243,
+  });
+
+  test('M3-O12 账户身份一致时全部条件成立', () => {
+    assert.deepEqual(out001M3AccountIdentityProblems(CONSISTENT_IDENTITY), []);
+  });
+
+  test('M3-O12a victim 与 observer 的 CURRENT_USER() 必须相同', () => {
+    const problems = out001M3AccountIdentityProblems({
+      ...CONSISTENT_IDENTITY,
+      observerCurrentUser: 'other_test@127.0.0.1',
+    });
+    assert.deepEqual(problems, ['CURRENT_USER_MISMATCH']);
+  });
+
+  test('M3-O12b PROCESSLIST.USER 只与配置的用户名比较，绝不与 CURRENT_USER() 比较', () => {
+    // 把 CURRENT_USER() 的完整 `user@host` 串塞进 PROCESSLIST.USER：这正是
+    // 被禁止的比较方式。策略必须判为不匹配，而不是因为两个串相等就放行。
+    const misused = out001M3AccountIdentityProblems({
+      ...CONSISTENT_IDENTITY,
+      victimProcesslistUser: CONSISTENT_IDENTITY.victimCurrentUser,
+    });
+    assert.deepEqual(misused, ['PROCESSLIST_USER_MISMATCH'],
+      'PROCESSLIST.USER 不得与 CURRENT_USER() 直接比较');
+    // 反向：两个 CURRENT_USER() 相同但账户名不是配置的用户名时，两条判定
+    // 必须各自独立成立，互不掩盖。
+    const bothWrong = out001M3AccountIdentityProblems({
+      ...CONSISTENT_IDENTITY,
+      victimProcesslistUser: 'someone_else',
+      observerCurrentUser: 'erp_test@10.0.0.9',
+    });
+    assert.ok(bothWrong.includes('PROCESSLIST_USER_MISMATCH'));
+    assert.ok(bothWrong.includes('CURRENT_USER_MISMATCH'));
+  });
+
+  test('M3-O12c PROCESSLIST.DB 与 observer / victim 的 DATABASE() 必须落在批准的测试库', () => {
+    assert.deepEqual(out001M3AccountIdentityProblems({
+      ...CONSISTENT_IDENTITY,
+      victimProcesslistDb: 'other_database',
+    }), ['PROCESSLIST_DB_MISMATCH']);
+    assert.deepEqual(out001M3AccountIdentityProblems({
+      ...CONSISTENT_IDENTITY,
+      observerDatabase: 'other_database',
+    }), ['OBSERVER_DATABASE_MISMATCH']);
+    assert.deepEqual(out001M3AccountIdentityProblems({
+      ...CONSISTENT_IDENTITY,
+      victimDatabase: 'other_database',
+    }), ['VICTIM_DATABASE_MISMATCH']);
+  });
+
+  test('M3-O12d 两者必须是不同的连接，且 connection id 必须是有效正整数', () => {
+    assert.deepEqual(out001M3AccountIdentityProblems({
+      ...CONSISTENT_IDENTITY,
+      observerConnectionId: CONSISTENT_IDENTITY.victimConnectionId,
+    }), ['SAME_CONNECTION_ID']);
+    assert.deepEqual(out001M3AccountIdentityProblems({
+      ...CONSISTENT_IDENTITY,
+      victimConnectionId: 0,
+    }), ['INVALID_VICTIM_CONNECTION_ID']);
+    assert.deepEqual(out001M3AccountIdentityProblems({
+      ...CONSISTENT_IDENTITY,
+      observerConnectionId: -1,
+    }), ['INVALID_OBSERVER_CONNECTION_ID']);
+  });
+
+  test('M3-O12e 缺失的 CURRENT_USER() 必须被显式判为问题', () => {
+    assert.deepEqual(out001M3AccountIdentityProblems({
+      ...CONSISTENT_IDENTITY,
+      victimCurrentUser: '',
+    }), ['VICTIM_CURRENT_USER_MISSING']);
+    assert.deepEqual(out001M3AccountIdentityProblems({
+      ...CONSISTENT_IDENTITY,
+      observerCurrentUser: '',
+    }), ['OBSERVER_CURRENT_USER_MISSING']);
+  });
+
+  test('M3-O13 R3 由「独立 Adapter + 可信会话 + 不同 connection id」共同证明', () => {
+    const consistent = {
+      observerSessionState: 'IDLE_TRUSTED',
+      observerIsIndependentAdapter: true,
+      observerConnectionId: 4243,
+      victimConnectionId: 4242,
+    };
+    assert.deepEqual(out001M3R3Problems(consistent), []);
+    assert.deepEqual(out001M3R3Problems({ ...consistent, observerSessionState: 'UNCERTAIN' }),
+      ['OBSERVER_SESSION_NOT_TRUSTED']);
+    assert.deepEqual(out001M3R3Problems({ ...consistent, observerSessionState: 'QUARANTINED' }),
+      ['OBSERVER_SESSION_NOT_TRUSTED']);
+    assert.deepEqual(out001M3R3Problems({ ...consistent, observerIsIndependentAdapter: false }),
+      ['OBSERVER_NOT_INDEPENDENT_ADAPTER']);
+    assert.deepEqual(out001M3R3Problems({ ...consistent, observerConnectionId: 4242 }),
+      ['SAME_CONNECTION_ID']);
+    assert.deepEqual(out001M3R3Problems({ ...consistent, observerConnectionId: 0 }),
+      ['INVALID_OBSERVER_CONNECTION_ID']);
+  });
+
+  test('M3-O13a R3 判定不得依赖会话 epoch：两个 Worker 的计数器互不可比', () => {
+    // 策略函数本身不得出现 epoch：session epoch 是每个 Worker 内部的局部
+    // 计数器，跨 Worker 比较原始数字没有技术意义。
+    assert.doesNotMatch(out001M3R3Problems.toString(), /epoch/i,
+      'R3 判定不得引入 epoch 比较');
+    // 传入任意 epoch 取值都不得改变判定结果。
+    const base = {
+      observerSessionState: 'FRESH',
+      observerIsIndependentAdapter: true,
+      observerConnectionId: 4243,
+      victimConnectionId: 4242,
+    };
+    const withEpochs = { ...base, observerEpoch: 1, victimEpoch: 1 };
+    const withOtherEpochs = { ...base, observerEpoch: 99, victimEpoch: 7 };
+    assert.deepEqual(out001M3R3Problems(withEpochs), out001M3R3Problems(withOtherEpochs));
+    assert.deepEqual(out001M3R3Problems(withEpochs), []);
+  });
+
+  test('M3-O14 victim 自身的会话替换由其自身的 epoch 与 connection id 证明', () => {
+    assert.deepEqual(out001M3VictimSessionReplacementProblems({
+      firstConnectionId: 4241, firstEpoch: 1, victimConnectionId: 4242, victimEpoch: 2,
+    }), []);
+    assert.deepEqual(out001M3VictimSessionReplacementProblems({
+      firstConnectionId: 4241, firstEpoch: 1, victimConnectionId: 4242, victimEpoch: 1,
+    }), ['VICTIM_EPOCH_NOT_INCREMENTED']);
+    assert.deepEqual(out001M3VictimSessionReplacementProblems({
+      firstConnectionId: 4241, firstEpoch: 1, victimConnectionId: 4241, victimEpoch: 2,
+    }), ['VICTIM_CONNECTION_ID_NOT_REPLACED']);
+  });
+
+  test('M3-O15 真实 Gate 的 M3 必须使用共享判定，且不得跨 Worker 比较 epoch', () => {
+    const integration = readFileSync(resolve(repoRoot, 'server/mysql-out001.integration.js'), 'utf8');
+    assert.match(integration, /out001M3AccountIdentityProblems\(/,
+      'M3 必须使用共享的账户身份判定');
+    assert.match(integration, /out001M3R3Problems\(/,
+      'M3 必须使用共享的 R3 判定');
+    assert.match(integration, /out001M3VictimSessionReplacementProblems\(/,
+      'M3 必须使用共享的会话替换判定');
+    assert.doesNotMatch(integration, /observer\.sessionEpoch/,
+      '不得读取 observer 的 session epoch 与 victim 的 epoch 交叉比较');
+    // PROCESSLIST.USER 的判定必须整体交给共享策略：真实 Gate 内不得出现任何
+    // 自行断言 PROCESSLIST 用户的写法，因此不可能在那里把它与 CURRENT_USER()
+    // 直接比较。
+    assert.doesNotMatch(integration, /assert[^\n]*victimRow\.user/i,
+      'PROCESSLIST.USER 的判定必须交给共享策略，不得在真实 Gate 内自行断言');
+    const child = readFileSync(resolve(repoRoot, 'scripts/gates/mysql-out001-http-app-child.mjs'), 'utf8');
+    assert.match(child, /CURRENT_USER\(\) currentUser/,
+      'CONNECTION_ID 探针必须同时返回 CURRENT_USER()');
+    assert.match(child, /DATABASE\(\) databaseName/,
+      'CONNECTION_ID 探针必须同时返回 DATABASE()');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
 function isoDate(offsetDays = 0) {
   const d = new Date();
   d.setDate(d.getDate() + offsetDays);

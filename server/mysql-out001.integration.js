@@ -28,6 +28,11 @@ import {
   countRows, out001BusinessSnapshot, out001IdempotencyLockName,
   out001PhysicalFinanceSnapshot, snapshotTables,
 } from './test-utils/mysql-out001-target.js';
+import {
+  out001M3AccountIdentityProblems,
+  out001M3R3Problems,
+  out001M3VictimSessionReplacementProblems,
+} from './test-utils/out001-m3-identity.js';
 import { isWipTransferUniqueConstraintError } from './modules/outsourcing-finance.js';
 import {
   appendOut001DescendantRegistration, OUT_001_DESCENDANT_PURPOSE,
@@ -665,26 +670,34 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
       assert.equal(Number(firstProbe.sessionEpoch), 1);
       t.diagnostic(`M3_VICTIM_SESSION epoch=1 connectionId=${firstConnectionId}`);
 
-      // 故意让客户端会话被替换一次：核验连接与原会话的 epoch 因此可判定地
-      // 不同（R3），而不是「碰巧都是 1」。代理只销毁传输，不触碰业务数据。
-      assert.equal(proxy.dropSession('M3_SESSION_PRIMED'), 1);
+      // 故意让 **victim 自身** 的会话被替换一次。session epoch 是每个
+      // MySQL Worker **内部**的局部计数器，因此这次递增只证明 victim 自己的
+      // 会话被替换（Worker 重连，MySQL 分配了新的 connection id），**不**与
+      // observer 的 epoch 交叉比较。代理只销毁传输，不触碰任何业务数据。
+      assert.equal(proxy.dropSession('M3_VICTIM_SESSION_REPLACED'), 1);
       const probe = await requestProbe(victimApp, 'CONNECTION_ID');
       assert.equal(probe.ok, true, probe.error);
       const victimConnectionId = Number(probe.connectionId);
       const victimEpoch = Number(probe.sessionEpoch);
-      assert.ok(Number.isSafeInteger(victimConnectionId) && victimConnectionId > 0);
-      assert.equal(victimEpoch, 2, '替换后的会话 epoch 必须递增');
-      assert.notEqual(victimConnectionId, firstConnectionId, '替换后的会话必须拥有新的 connection id');
-      t.diagnostic(`M3_VICTIM_SESSION_REPLACED epoch=${victimEpoch} connectionId=${victimConnectionId}`);
+      const victimCurrentUser = String(probe.currentUser || '');
+      const victimDatabase = String(probe.database || '');
+      const replacementProblems = out001M3VictimSessionReplacementProblems({
+        firstConnectionId, firstEpoch: Number(firstProbe.sessionEpoch), victimConnectionId, victimEpoch,
+      });
+      assert.deepEqual(replacementProblems, [],
+        `victim 自身的会话替换必须成立: ${replacementProblems.join(', ')}`);
+      t.diagnostic(`M3_VICTIM_SESSION_REPLACED epoch=${victimEpoch} connectionId=${victimConnectionId} currentUser=${victimCurrentUser}`);
 
       // ── 观察者会话（同一 MySQL 账户，独立连接） ───────────────────────
       observer = openIndependentSession();
-      const observerConnectionId = Number(observer.prepare('SELECT CONNECTION_ID() id').get()?.id);
-      const observerUser = String(observer.prepare('SELECT CURRENT_USER() u').get()?.u || '');
-      const observerDatabase = String(observer.prepare('SELECT DATABASE() d').get()?.d || '');
+      const observerIdentity = observer.prepare(
+        'SELECT CONNECTION_ID() id, CURRENT_USER() currentUser, DATABASE() databaseName',
+      ).get();
+      const observerConnectionId = Number(observerIdentity?.id);
+      const observerCurrentUser = String(observerIdentity?.currentUser || '');
+      const observerDatabase = String(observerIdentity?.databaseName || '');
       assert.ok(Number.isSafeInteger(observerConnectionId) && observerConnectionId > 0);
-      assert.notEqual(observerConnectionId, victimConnectionId, 'observer 不得是 victim 本人的连接');
-      t.diagnostic(`M3_OBSERVER connectionId=${observerConnectionId} user=${observerUser} db=${observerDatabase}`);
+      t.diagnostic(`M3_OBSERVER connectionId=${observerConnectionId} currentUser=${observerCurrentUser} db=${observerDatabase}`);
 
       // ── 真实业务前置：源订单、目标订单、WIP 数量与身份余额 ─────────────
       const source = await createOrderWithMaterial();
@@ -710,15 +723,27 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
         'SELECT ID id, USER user, DB db FROM information_schema.PROCESSLIST WHERE ID=?',
       ).get(victimConnectionId);
       assert.ok(victimRow, 'victim 必须出现在 observer 的 PROCESSLIST 可见范围内');
-      assert.equal(String(victimRow.user), observerUser,
-        'victim 必须与 observer 属于同一 MySQL 账户');
-      assert.equal(String(victimRow.db), targetConfig.database,
-        'victim 必须属于当前批准的测试数据库');
-      assert.equal(String(observerDatabase), targetConfig.database,
-        'observer 必须连接在当前批准的测试数据库上');
-      assert.notEqual(Number(victimRow.id), observerConnectionId,
-        'victim id 不得等于 observer 自己的连接 id');
-      t.diagnostic(`M3_VICTIM_IDENTITY_VERIFIED id=${victimRow.id} user=${victimRow.user} db=${victimRow.db}`);
+      // 身份判定由共享策略给出稳定的问题码：
+      //   · victim 与 observer 的 CURRENT_USER() 必须相同（同一 MySQL 账户）；
+      //   · PROCESSLIST.USER 只给出用户名字符串部分，只能与**配置的用户名**
+      //     比较，绝不与 CURRENT_USER() 比较；
+      //   · 双方连接的数据库必须等于当前批准的测试数据库；
+      //   · 两者必须是不同的连接。
+      const identityProblems = out001M3AccountIdentityProblems({
+        victimCurrentUser,
+        observerCurrentUser,
+        victimDatabase,
+        observerDatabase,
+        victimProcesslistUser: String(victimRow.user ?? ''),
+        victimProcesslistDb: String(victimRow.db ?? ''),
+        targetUser: String(targetConfig.user ?? ''),
+        targetDatabase: String(targetConfig.database ?? ''),
+        victimConnectionId,
+        observerConnectionId,
+      });
+      assert.deepEqual(identityProblems, [],
+        `victim 与 observer 的账户身份必须成立: ${identityProblems.join(', ')}`);
+      t.diagnostic(`M3_VICTIM_IDENTITY_VERIFIED id=${victimRow.id} processlistUser=${victimRow.user} db=${victimRow.db} currentUser=${victimCurrentUser}`);
       // 只允许执行这一条语句：终止已核验的 victim 连接。
       observer.prepare(`KILL CONNECTION ${victimConnectionId}`).get();
       t.diagnostic(`M3_KILL_CONNECTION id=${victimConnectionId}`);
@@ -749,14 +774,24 @@ describe('OUT-001 真实 MySQL 8 专有证据（M1–M5）', { concurrency: fals
         'R2：原会话终止后命名锁必须由服务器释放');
       t.diagnostic('M3_NAMED_LOCK_RELEASED_BY_SERVER');
 
-      // ── R3：核验连接可信且与原会话不同 ───────────────────────────────
-      assert.ok(['IDLE_TRUSTED', 'FRESH'].includes(mysqlSessionState(observer)),
-        'R3：核验连接必须是可信会话');
-      assert.notEqual(observerConnectionId, victimConnectionId,
-        'R3：核验连接的 connection id 必须与原会话不同');
-      assert.notEqual(Number(observer.sessionEpoch), victimEpoch,
-        'R3：核验连接的会话 epoch 必须与原会话不同');
-      t.diagnostic(`M3_VERIFICATION_SESSION epoch=${observer.sessionEpoch} victimEpoch=${victimEpoch}`);
+      // ── R3：核验连接必须是**另一条**可信连接 ──────────────────────────
+      //
+      // session epoch 是每个 MySqlSyncAdapter Worker **内部**的局部计数器：
+      // 两个独立 Worker 的原始数字互不可比，因此 R3 **不**做跨 Worker 的
+      // epoch 比较。R3 由三项共同证明：observer 是**独立创建的 Adapter**、
+      // 它是**可信会话**、它的 **connection id** 与 victim 不同。
+      // victim 自身的 epoch 1→2 只作为「victim 自己的会话被替换」的独立证据，
+      // 已在上面单独判定。
+      const r3Problems = out001M3R3Problems({
+        observerSessionState: mysqlSessionState(observer),
+        observerIsIndependentAdapter: observer instanceof MySqlSyncAdapter
+          && observer !== fixture.db,
+        observerConnectionId,
+        victimConnectionId,
+      });
+      assert.deepEqual(r3Problems, [],
+        `R3：核验必须在另一条可信连接上进行: ${r3Problems.join(', ')}`);
+      t.diagnostic(`M3_R3_VERIFIED observerConnectionId=${observerConnectionId} victimConnectionId=${victimConnectionId}（observer 的 session epoch 不与 victim 交叉比较）`);
 
       // ── R4：只读事务核验幂等记录与转移事实 ────────────────────────────
       const verification = readTransaction(fixture.db, () => ({

@@ -2941,6 +2941,60 @@ Owner 已确认正式关闭 **OUT-001 最终离线收尾修复**。本节只登�
 
 **HARD STOP**：本轮实现与离线回归全部通过，等待 Owner Review。**不得**自行签发 `GATE_READY`、ACK-4 或任何 Acceptance。
 
+### 45.22 OUT-001 M3 Gate 最终技术复核修正：账户身份比较与 R3 合同（2026-11-09）
+
+本节是对 §45.21 的**技术复核修正**，只追加、不改写 §45.18、§45.19、§45.20、§45.21 的任何结论。Owner 在复核 §45.21 的实现时指出两处**身份验证缺陷**：真实 Gate 的 M3 用 `PROCESSLIST.USER` 与 `CURRENT_USER()` 直接比较，且用两个独立 Worker 的原始 `sessionEpoch` 数字互相比较来证明「会话不同」。本节登记这两处的修正与离线验证结果。本轮**未连接真实 MySQL**、未执行 RESET / BOOTSTRAP / CLEANUP、未签发或消费 ACK-4、未签发任何 Gate 状态或 Acceptance。
+
+#### 45.22.1 两处缺陷与修正
+
+| # | 缺陷 | 修正 |
+|---|---|---|
+| 1 | **账户身份比较口径错误**：`CURRENT_USER()` 返回实际用于认证的 `user@host`，`PROCESSLIST.USER` 只返回裸用户名；原实现把两者直接比较，语义不成立，且对「观察者与 victim 是否同一账户」的判定不可靠 | `CONNECTION_ID` IPC 探针改为 `SELECT CONNECTION_ID() id, CURRENT_USER() currentUser, DATABASE() databaseName`，一并返回 `connectionId`、`currentUser`、`database`、`sessionEpoch`、`sessionState`；observer 侧同样取回 `CURRENT_USER()` 与 `DATABASE()`。身份核验固定为五条独立断言：`victimCurrentUser === observerCurrentUser`、`victimRow.user === targetConfig.user`、`victimRow.db === targetConfig.database`、`observerDatabase === targetConfig.database`、`victimConnectionId !== observerConnectionId`。**禁止** `PROCESSLIST.USER` 与 `CURRENT_USER()` 直接比较。**未增加** `PROCESS` / `CONNECTION_ADMIN` / `SUPER` 或任何其它数据库权限 |
+| 2 | **R3 的 epoch 合同无效**：`sessionEpoch` 是每个 `MySqlSyncAdapter` Worker **内部**的局部计数器，两个独立 Adapter 的原始数字互不可比；原实现用 `observer.sessionEpoch !== victimEpoch` 证明会话不同，该比较恒等于「两个无关计数器是否碰巧不等」，没有技术意义 | R3 改由三项共同证明：observer 是**独立创建的 Adapter**、它是**可信会话**（`mysqlSessionState()` ∈ `{IDLE_TRUSTED, FRESH}`）、它的 **connection id** 与 victim 不同。**不再**读取或比较 observer 的 epoch。victim 自身的 epoch `1 → 2` 保留为 **victim 自己**的会话被替换的独立证据（epoch 递增 + MySQL 分配新 connection id 同时成立），并明确**不**与 observer 的 epoch 交叉比较。代理的 `dropSession` 步骤据此重新定义为「触发 victim 自身的 session replacement」 |
+
+#### 45.22.2 判定逻辑的单一来源
+
+新增 `server/test-utils/out001-m3-identity.js`，把三项判定集中为**纯函数**并返回稳定的问题码，真实 Gate 与离线回归共用同一实现：
+
+| 函数 | 判定 |
+|---|---|
+| `out001M3AccountIdentityProblems()` | 账户身份五条断言；问题码含 `CURRENT_USER_MISMATCH`、`PROCESSLIST_USER_MISMATCH`、`PROCESSLIST_DB_MISMATCH`、`VICTIM_DATABASE_MISMATCH`、`OBSERVER_DATABASE_MISMATCH`、`SAME_CONNECTION_ID`、`INVALID_*_CONNECTION_ID`、`*_CURRENT_USER_MISSING` |
+| `out001M3R3Problems()` | R3 三项断言；**签名中没有任何 epoch 参数**，问题码含 `OBSERVER_SESSION_NOT_TRUSTED`、`OBSERVER_NOT_INDEPENDENT_ADAPTER`、`SAME_CONNECTION_ID`、`INVALID_*_CONNECTION_ID` |
+| `out001M3VictimSessionReplacementProblems()` | victim 自身会话替换；问题码含 `VICTIM_EPOCH_NOT_INCREMENTED`、`VICTIM_CONNECTION_ID_NOT_REPLACED` |
+
+#### 45.22.3 离线验证结果（真实退出码）
+
+| # | 命令 | 退出码 | 结果 |
+|---|---|---|---|
+| 1 | M3 相关文件 `node --check` | `0` | 全部通过 |
+| 2 | `node --test server/mysql-out001-m3-uncertain-commit.test.js` | `0` | `21/21 PASS`（较 §45.21 的 11 项新增 10 项：账户身份五条断言各自的失败口径、`PROCESSLIST.USER` 与 `CURRENT_USER()` 不可直接比较、R3 三项断言、R3 判定不含 epoch 且对 epoch 取值不敏感、victim 自身会话替换判定、真实 Gate 必须使用共享判定的源码合同） |
+| 3 | `node --test server/outsourcing-wip-transfer.test.js server/outsourcing-finance.test.js` | `0` | `28/28 PASS` |
+| 4 | `node --test server/mysql-out001-gate-infrastructure.test.js` | `0` | `44/44 PASS` |
+| 5 | `node --test server/mysql-disposable-target-guard.test.js` | `0` | `10/10 PASS` |
+| 6 | `pnpm test:fast` | `0` | `624/624 PASS` |
+| 7 | `pnpm test`（FULL） | `0` | `3436/3436 PASS`（较 §45.21 的 3426 增加本轮新增的 10 项） |
+| 8 | `pnpm build` | `0` | 构建通过 |
+| 9 | `node scripts/docs/check-doc-consistency.mjs --mode migration` | `0` | `ALL CHECKS PASSED`（C1～C6 全 PASS） |
+| 10 | `node scripts/docs/check-doc-consistency.mjs`（current） | 提交后 `0` | `ALL CHECKS PASSED`（N1、N3～N9 全 PASS，N2 `RETIRED`） |
+| 11 | `git diff --check` | `0` | 无空白错误 |
+
+#### 45.22.4 真实 MySQL 尚未运行的项目
+
+本轮**没有**产生任何新的真实 MySQL 证据。§45.21.4 登记的全部项目继续为 `NOT_PROVEN_ON_REAL_MYSQL`，包括：真实 COMMIT OK 拦截、同账户 `KILL CONNECTION` 的真实权限路径、R1 终止已确认、R2 命名锁由服务器释放、R3 核验连接可信且 connection id 不同、R4 恰好一笔转移事实与一条幂等记录、R5 重放返回原 id / 原 transferNo、客户端真实连接丢失下的原异常 classification 透出。**本轮修正的是判定口径本身**，它必须由受保护的 disposable MySQL Gate 才能实证。
+
+#### 45.22.5 本轮状态与边界
+
+| 状态 | 本轮结论 |
+|---|---|
+| 账户身份比较与 R3 合同 | **已修正并离线验证**；判定逻辑集中为单一来源的纯函数，真实 Gate 与离线回归共用 |
+| M3 真实故障注入装置 | 仍为 `GATE_IMPLEMENTED`（**未执行**） |
+| M3 真实不确定 COMMIT | 继续为 `NOT_PROVEN_ON_REAL_MYSQL` |
+| `GATE_READY` / `GATE_AUTHORIZED` / 新的 `GATE_EXECUTED` / 技术 PASS / `GATE_ACCEPTED` | **未签发** |
+| `AUD-OUT-001` | 仍为 `TESTED` / `PENDING_OWNER_APPROVAL` |
+| Schema / Migration / 数据库权限（含 `PROCESS` / `CONNECTION_ADMIN` / `SUPER`）/ `package.json` version / release tag / master / candidate | **全部未变** |
+
+**HARD STOP**：本轮实现与离线回归全部通过，等待 Owner Review。**不得**自行签发 `GATE_READY`、ACK-4 或任何 Acceptance。
+
 ### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
 
 以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：

@@ -8,7 +8,8 @@
 // routes its MySQL session through the loopback COMMIT-withholding proxy, so
 // the child also answers two probes over the existing IPC channel:
 //
-//   CONNECTION_ID — the victim's real MySQL connection id and session epoch;
+//   CONNECTION_ID — the victim's real MySQL connection id, account identity
+//                   (CURRENT_USER() / DATABASE()) and session epoch;
 //   TRANSFER      — a real WIP transfer POST, plus the adapter's own verdict
 //                   about the failure (quarantine, termination, and the
 //                   original error's classification).
@@ -79,12 +80,21 @@ async function handleProbe(message) {
   const probe = String(message?.probe || '');
   try {
     if (probe === 'CONNECTION_ID') {
-      const row = fixture.db.prepare('SELECT CONNECTION_ID() id').get();
+      // The victim's own session identity. `CURRENT_USER()` is the account
+      // that actually authenticated this session (`user@host`); `DATABASE()`
+      // is the schema this session is bound to. Both are reported so that the
+      // parent can compare them with the observer's without ever comparing a
+      // `CURRENT_USER()` value against a `PROCESSLIST.USER` value.
+      const row = fixture.db.prepare(
+        'SELECT CONNECTION_ID() id, CURRENT_USER() currentUser, DATABASE() databaseName',
+      ).get();
       process.send?.({
         type: 'PROBE_RESULT',
         probe,
         ok: true,
         connectionId: Number(row?.id ?? 0),
+        currentUser: String(row?.currentUser ?? ''),
+        database: String(row?.databaseName ?? ''),
         sessionEpoch: fixture.db.sessionEpoch ?? null,
         sessionState: fixture.db.sessionState ?? null,
       });
