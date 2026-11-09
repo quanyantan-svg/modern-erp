@@ -3196,6 +3196,63 @@ Owner 已确认正式关闭 **OUT-001 最终离线收尾修复**。本节只登�
 
 **HARD STOP**：本节为远端发布事实登记，**不**签发 `GATE_READY`，**不**执行真实 Gate。等待 Owner Review。
 
+### 45.27 OUT-001 GATE_READY 前置证据报告（2026-11-09）
+
+本节登记 `GATE_READY` 授权前的**前置证据收集**结果。它**不**改写 §45.18～§45.26 的任何结论，**不**签发 `GATE_READY` / `GATE_AUTHORIZED` / `GATE_EXECUTED` / `GATE_ACCEPTED` 或任何 Acceptance。本工作包**未**连接真实 MySQL 执行 Gate、**未**执行任何 DDL / DML、**未** `SET GLOBAL`、**未** `GRANT` / `REVOKE`、**未**签发或消费 ACK-4、**未**创建 RunId、**未** Merge / Tag / Release / Deploy、**未** Push。完整报告见 [`docs/acceptance/out001-gate-ready-preflight-20261109.md`](../acceptance/out001-gate-ready-preflight-20261109.md)。
+
+**报告状态：`PREFLIGHT_PASS_PENDING_OWNER_REVIEW`**（唯一允许的两种状态之一）。**`GATE_READY` 未签发。**
+
+#### 45.27.1 前置证据摘要
+
+| 项 | 实际结果 |
+|---|---|
+| Source / Candidate | `37a17c091054d5026d1ec7813adf3e344597ec3d` / `d4c97a8f8be5da56e43fc8346fc5b916f8c6a7ec`（候选新增提交 `0` 条；GitHub 两个 ref 均已核实） |
+| 候选上的静态检查 | `node --test`（ACK-4 runtime + Gate infrastructure + disposable target guard + M3）**83/83 PASS**，退出码 `0`；6 个 `node --check` 全部退出码 `0`；**全部在候选上执行**，未在 source branch 上代替 |
+| ACK-4 Runtime 合同 | A1～A8、A10、A11 **已满足**；A9 **部分满足**（见 R-1） |
+| Gate 编排合同 | B1～B3、B5、B7 **已满足**；B4 **已满足**（附 R-4）、B6 **部分满足**（见 R-5） |
+| Windows PowerShell | `5.1.26100.9711`（Desktop，非 PowerShell 7）；`MySQL80` = `Running`；`127.0.0.1:3306` 可连接 |
+| PowerShell AST | `issue-mysql-ack4.ps1` / `run-out001-mysql-gate.ps1` / `setup-mysql-local-gate.ps1` 解析错误数均为 `0`；**只解析、不执行** |
+| DPAPI | `DataProtectionScope.CurrentUser` 往返一致（`True`）；sentinel 明文未打印 |
+| 临时 ACL sentinel | Owner=当前 SID ✓、继承禁用 ✓、显式规则 `1` 条（仅当前 SID / FullControl / Allow）✓、继承规则 `0` 条 ✓、当前 SID 可读 ✓、临时文件已删除 ✓ |
+| 既有凭据 / baseline | `credential.dat` 与 `target.json` 均存在；DPAPI 凭据可由当前 SID 解密（**明文未打印**）；baseline 字段完整 |
+| 真实 MySQL 只读预检 | 退出码 `0`，`ok=true`，`drift=[]`，`nonEmpty=[]`：`DATABASE()`=`modern_erp_domain_test`、`CURRENT_USER()`=`modern_erp_test@127.0.0.1`、ServerUUID=`256c7a4e-d275-11f1-885b-b025aa71d167`、grants SHA-256=`bef61617d1b96913f479c7642176eca53f60410b003773707cd56355e4ce807e`、版本 `8.0.37`、`assertExactLeastPrivilegeGrants` 通过 |
+| 五类对象 inventory | `tables=0, views=0, triggers=0, routines=0, events=0` —— **五类全零** |
+| `log_bin` / `log_bin_trust_function_creators` | `ON` / `ON` —— `log_bin` 开启时后者必须为 `1`，**条件已满足**；**未** `SET GLOBAL`、**未**扩大权限 |
+| quarantine | 目录不存在；`assertNoAck4Quarantine()`（本轮实际 target identity）**PASS**；历史 RunId `0adfecb6-7db9-4015-9c41-cc36ad42ec48` 的 consumed 记录与 children 目录**保留、未复用、未删除**；已消费 RunId 总数仍为 `12`，**本工作包未创建任何新 RunId** |
+| 数据库访问性质 | 全部**只读**；**未**触碰 `calculator_db`；五类对象计数仍为零本身即「未创建任何对象」的证据 |
+
+#### 45.27.2 有界残余（授权前须由 Owner 逐条裁定）
+
+R-1 portable child lease 的 `childStartedAt` 由父进程生成，非操作系统进程创建时间；
+R-2 `CLEANUP` 类操作豁免于「第一个未完成操作」顺序检查；R-3 quarantine 恢复操作集合为另一个
+更窄的 2 操作 manifest 且在 OUT-001 Gate 中无生产调用方；R-4 DROP 原语同时允许 RESET 与
+CLEANUP，RESET 不被允许 DROP 仅靠固定调用方代码；R-5 Launcher Result 仅原子写入、未纳入 root
+manifest 亦未被独立校验器覆盖（Root Evidence 完全可验证）；R-6 破坏性环境变量被每个子进程继承；
+R-7 Postflight 子进程在 lease / 后代登记簿机制之外派生。
+
+七项均**不影响**任何可执行前置检查的通过结果，**不构成** `PREFLIGHT_BLOCKED`，但必须在
+授权 `GATE_READY` 前由 Owner 逐条裁定。
+
+#### 45.27.3 本轮状态与边界
+
+| 状态 | 本轮结论 |
+|---|---|
+| GATE_READY 前置证据 | **`PREFLIGHT_PASS_PENDING_OWNER_REVIEW`** |
+| `GATE_READY` | **未签发** |
+| `GATE_AUTHORIZED` / `GATE_EXECUTED` / 技术 PASS / `GATE_ACCEPTED` | **未签发** |
+| ACK-4 签发或消费 / RunId 创建 | **未发生** |
+| 真实 MySQL Gate 执行 / DDL / DML / `SET GLOBAL` / `GRANT` / `REVOKE` | **未发生** |
+| `calculator_db` | **未触碰** |
+| M1～M5 的真实 MySQL 证据 | 仍**未**在本候选上重跑；旧候选 `075e0f6` 的 §45.18 历史 PASS **不得**描述为本候选的 PASS |
+| M3 真实不确定 COMMIT | 继续为 `NOT_PROVEN_ON_REAL_MYSQL` |
+| `AUD-OUT-001` | 仍为 `TESTED` / `PENDING_OWNER_APPROVAL` |
+| Merge / Tag / Release / Deploy / Push / Gitee 同步 | **全部未发生** |
+| `master` / 三条旧 candidate / `candidate/out001-d4c97a8` / `fix/out001-mysql-test-fixtures` / release tags / `package.json` version | **全部未变** |
+
+**HARD STOP**：本工作包完成，等待业务所有者的独立技术复核与 `GATE_READY` 决定。**不得**自行
+签发 `GATE_READY`、创建 RunId、签发或消费 ACK-4、执行真实 Gate，或 Merge / Tag / Release /
+Deploy / Push。
+
 ### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
 
 以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：
