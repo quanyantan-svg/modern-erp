@@ -3273,6 +3273,9 @@ Active Design 的有界技术修订见 `docs/design/procurement-outsourcing.md` 
 提交前离线 focused **90/90 PASS**，Build PASS，FULL 一次 **3444/3444 PASS**；
 FAST 首次因新增静态测试的断言过宽而 629/630，已修正并在 focused 复核。
 文档 current 模式在未提交工作树上仅 N7 按规则报未提交变更，提交后必须复跑。
+随后精确提交 `476200c` 上 FULL **3445/3445 PASS**；HEAVY 暴露旧的生产安全测试仍按 5 个演示用户断言，
+与已批准的委外双角色种子（现为 7 个）不符。测试断言及失败时连接关闭已修正，focused **15/15 PASS**，
+HEAVY **67/67 PASS**；最终候选 SHA、FAST 与文档检查以随后冻结记录为准。
 本节不签发真实 MySQL Gate PASS 或 OUT-001 Acceptance；真实 Gate、ACK-4、数据库操作在本节登记时均未执行。
 
 ### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
