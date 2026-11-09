@@ -3153,6 +3153,49 @@ Owner 已确认正式关闭 **OUT-001 最终离线收尾修复**。本节只登�
 
 **HARD STOP**：本工作包完成，等待 Owner Review 与远端 Push 的单独授权。**不得**自行 Push、Merge、Tag、Release / Deploy 或签发 `GATE_READY` / ACK-4 / 任何 Acceptance。
 
+### 45.26 OUT-001 Candidate 远端发布记录（2026-11-09）
+
+本节**追加**记录冻结候选 `candidate/out001-d4c97a8` 已在 **GitHub** 上发布的事实。它**不**改写 §45.18～§45.25 的任何结论。
+
+**关键口径**：§45.25 与 [`docs/acceptance/out001-candidate-freeze-20261109.md`](../acceptance/out001-candidate-freeze-20261109.md) 中记录的「本轮**未** Push」是**冻结形成当时**的历史事实，**不回写**、不修改、不删除。远端发布发生在冻结形成**之后**，因此由本节作为**后续事实**追加登记。
+
+#### 45.26.1 远端发布事实（实际核验值）
+
+| 项 | 实际值 |
+|---|---|
+| Frozen candidate | `candidate/out001-d4c97a8` |
+| Candidate SHA（完整） | `d4c97a8f8be5da56e43fc8346fc5b916f8c6a7ec` |
+| GitHub 上的 candidate ref | `refs/heads/candidate/out001-d4c97a8` = `d4c97a8f8be5da56e43fc8346fc5b916f8c6a7ec` —— **已成功推送 GitHub** |
+| Candidate 分支新增提交 | `0` 条（`git rev-list --count d4c97a8..candidate/out001-d4c97a8` = 0），冻结点未被移动 |
+| Source branch | `fix/out001-launcher-tap-summary-0adfecb6` |
+| Source branch HEAD | `37a17c091054d5026d1ec7813adf3e344597ec3d` |
+| GitHub 上的 source ref | `refs/heads/fix/out001-launcher-tap-summary-0adfecb6` = `37a17c091054d5026d1ec7813adf3e344597ec3d`（与本地一致） |
+| `master`（本地 = GitHub） | `97eea5a58bad774b36fbe0e94d60a1e35c2c3a3b` —— **未改变** |
+| `candidate/out001-075e0f6` | `075e0f6e61108a423c4ae0b194199edec2bc9465` —— 保留、未改变 |
+| `candidate/out001-97eea5a` | `97eea5a58bad774b36fbe0e94d60a1e35c2c3a3b` —— 保留、未改变 |
+| `candidate/out001-a5fffd1` | `a5fffd10835336fc5137ff2768290f5c34def4ea` —— 保留、未改变 |
+| `fix/out001-mysql-test-fixtures` | `075e0f6e61108a423c4ae0b194199edec2bc9465` —— 保持不变 |
+| `package.json` version | `1.6.2` —— 未改变 |
+| release tags | 本地 `29` / GitHub `3`（`v1.6.0`、`v1.6.1`、`v1.6.2`）/ Gitee `29` —— 未改变 |
+
+#### 45.26.2 双远端状态（如实登记）
+
+**GitHub 已同步，Gitee 未同步。** 本次发布只涉及 GitHub：Gitee（`origin`）上仍**不存在** `fix/out001-launcher-tap-summary-0adfecb6`、**不存在** `candidate/out001-d4c97a8`、**不存在**三条旧 candidate、**不存在** `fix/out001-mysql-test-fixtures`；Gitee 的 `master` 仍为 `a17ef2bb45b658d1c23136406f560e83634f0bbf`，与 GitHub 的 `master` **不同**。因此**不得**把本次发布描述为「双远端同步」。另如实登记：本地仅本地分支 `candidate/out001-163e43c`（`163e43cdb7b52e2f90f711539573284db3b4c123`）在两个远端上均无对应 ref，未被推送、未被改动。
+
+#### 45.26.3 本节不改变的事项
+
+| 状态 | 结论 |
+|---|---|
+| Candidate Freeze | 保持 §45.25 的 `FROZEN` 技术候选基线冻结；候选分支仍精确指向 `d4c97a8` |
+| M1～M5 的真实 MySQL 证据 | 仍**未**在本候选上重跑；旧候选 `075e0f6` 的 §45.18 历史 PASS **不得**被描述为本候选的 PASS |
+| M3 真实不确定 COMMIT | 继续为 `NOT_PROVEN_ON_REAL_MYSQL` |
+| `GATE_READY` / `GATE_AUTHORIZED` / 新的 `GATE_EXECUTED` / 技术 PASS / `GATE_ACCEPTED` | **未签发** |
+| `AUD-OUT-001` | 仍为 `TESTED` / `PENDING_OWNER_APPROVAL` |
+| 真实 MySQL Acceptance / ACK-4 / Capability Freeze / Domain Acceptance / Release | **全部不包含** |
+| Merge / Tag / Release / Deploy / 数据库操作 / ACK-4 签发或消费 / RunId 创建 | **全部未发生** |
+
+**HARD STOP**：本节为远端发布事实登记，**不**签发 `GATE_READY`，**不**执行真实 Gate。等待 Owner Review。
+
 ### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
 
 以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：
