@@ -65,6 +65,22 @@ function replaceAllBytes(haystack, needle, replacement) {
   return { buffer: Buffer.concat(parts), count };
 }
 
+export function redactOut001EvidenceBytes(input, secrets = []) {
+  let buffer = Buffer.isBuffer(input) ? Buffer.from(input) : Buffer.from(String(input), 'utf8');
+  let count = 0;
+  const rawSecrets = secrets.map((value) => String(value ?? ''));
+  const unique = [...new Set(rawSecrets.flatMap((value) => [value, JSON.stringify(value).slice(1, -1)]))]
+    .filter((value) => value.length >= MIN_SECRET_LENGTH)
+    .map((value) => Buffer.from(value, 'utf8'))
+    .sort((a, b) => b.length - a.length);
+  for (const needle of unique) {
+    const result = replaceAllBytes(buffer, needle, Buffer.from(REDACTION_MARK, 'utf8'));
+    buffer = result.buffer;
+    count += result.count;
+  }
+  return Object.freeze({ buffer, count });
+}
+
 /**
  * 把密钥从输出流里替换掉。
  *

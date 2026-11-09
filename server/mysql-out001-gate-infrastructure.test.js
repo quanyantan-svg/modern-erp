@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -26,6 +27,10 @@ import {
 import {
   createOut001EvidenceWriter, out001SuitePassed, parseOut001TapSummary,
 } from '../scripts/gates/mysql-out001-evidence.mjs';
+import {
+  persistOut001RootEvidence, readAndValidateOut001RootEvidence, rootEvidenceIsPassing,
+} from '../scripts/gates/mysql-out001-root-evidence.mjs';
+import { reconcileOut001RunEvidence } from '../scripts/gates/reconcile-out001-run-evidence.mjs';
 
 const commitSha = 'b'.repeat(40);
 const target = Object.freeze({
@@ -34,6 +39,138 @@ const target = Object.freeze({
   currentUser: 'modern_erp_test@localhost',
   serverUuid: '00000000-0000-0000-0000-000000000001',
   grantsSha256: 'a'.repeat(64),
+});
+
+describe('OUT-001 root evidence and offline reconciliation', () => {
+  const rootRunId = '123e4567-e89b-42d3-a456-426614174099';
+  const manifest = OUT_001_MYSQL_MANIFEST_NAME;
+  const rootReport = (overrides = {}) => ({
+    runId: rootRunId, commitSha, manifest, state: 'FINISHED', testsPassed: true,
+    cleanupProven: true, childrenExited: true, cleanupAttempts: 1, childCount: 1,
+    children: [{ childPid: 123, childStartedAt: '2026-11-09T00:00:00.000Z', operation: 'RESET_SCHEMA_PRE_RUN', exited: true, exitCode: 0 }],
+    suites: [OUT_001_MYSQL_SUITE_FILE], evidence: [{ suite: 'test' }], executionStatus: 'EXECUTED_NOT_ACCEPTED',
+    ...overrides,
+  });
+  const withTemp = async (callback) => {
+    const dir = mkdtempSync(join(tmpdir(), 'modern-erp-out001-root-'));
+    try { return await callback(dir); } finally { rmSync(dir, { recursive: true, force: true }); }
+  };
+
+  test('successful root report is persisted and validates from disk', () => withTemp((localAppData) => {
+    const saved = persistOut001RootEvidence({ report: rootReport(), options: { localAppData } });
+    const verified = readAndValidateOut001RootEvidence({ runId: rootRunId, commitSha, manifest, options: { localAppData } });
+    assert.equal(verified.report.state, 'FINISHED');
+    assert.equal(saved.manifest.evidenceCount, 1);
+  }));
+  test('failed root report is persisted before a verdict can be emitted', () => withTemp((localAppData) => {
+    persistOut001RootEvidence({ report: rootReport({ state: 'FAILED', testsPassed: false }), options: { localAppData } });
+    assert.equal(readAndValidateOut001RootEvidence({ runId: rootRunId, commitSha, manifest, options: { localAppData } }).report.testsPassed, false);
+  }));
+  test('root report manifest binds exact bytes and SHA-256', () => withTemp((localAppData) => {
+    const saved = persistOut001RootEvidence({ report: rootReport(), options: { localAppData } });
+    const bytes = readFileSync(saved.paths.report);
+    assert.equal(saved.manifest.reportBytes, bytes.length);
+    assert.equal(saved.manifest.reportSha256, createHash('sha256').update(bytes).digest('hex'));
+  }));
+  test('root evidence never overwrites an existing run', () => withTemp((localAppData) => {
+    persistOut001RootEvidence({ report: rootReport(), options: { localAppData } });
+    assert.throws(() => persistOut001RootEvidence({ report: rootReport(), options: { localAppData } }), /OVERWRITE_REFUSED/);
+  }));
+  test('missing root report blocks launcher authority validation', () => withTemp((localAppData) => {
+    assert.throws(() => readAndValidateOut001RootEvidence({ runId: rootRunId, commitSha, manifest, options: { localAppData } }));
+  }));
+  test('corrupt root report blocks launcher authority validation', () => withTemp((localAppData) => {
+    const saved = persistOut001RootEvidence({ report: rootReport(), options: { localAppData } });
+    writeFileSync(saved.paths.report, '{corrupt');
+    assert.throws(() => readAndValidateOut001RootEvidence({ runId: rootRunId, commitSha, manifest, options: { localAppData } }), /JSON_INVALID|MANIFEST_INVALID/);
+  }));
+  test('missing mandatory root field blocks launcher authority validation', () => withTemp((localAppData) => {
+    assert.throws(() => persistOut001RootEvidence({ report: rootReport({ childrenExited: undefined }), options: { localAppData } }), /FIELD_INVALID/);
+    assert.throws(() => persistOut001RootEvidence({ report: rootReport({ state: undefined }), options: { localAppData } }), /STATE_INVALID/);
+  }));
+  test('RunId mismatch blocks root evidence validation', () => withTemp((localAppData) => {
+    const saved = persistOut001RootEvidence({ report: rootReport(), options: { localAppData } });
+    const index = JSON.parse(readFileSync(saved.paths.manifest, 'utf8'));
+    index.runId = '123e4567-e89b-42d3-a456-426614174077';
+    writeFileSync(saved.paths.manifest, JSON.stringify(index));
+    assert.throws(() => readAndValidateOut001RootEvidence({ runId: rootRunId, commitSha, manifest, options: { localAppData } }), /MANIFEST_INVALID/);
+  }));
+  test('commit SHA mismatch blocks root evidence validation', () => withTemp((localAppData) => {
+    persistOut001RootEvidence({ report: rootReport(), options: { localAppData } });
+    assert.throws(() => readAndValidateOut001RootEvidence({ runId: rootRunId, commitSha: 'c'.repeat(40), manifest, options: { localAppData } }));
+  }));
+  test('launcher PASS needs exit 0 and all four terminal assertions', () => {
+    assert.equal(rootEvidenceIsPassing(rootReport(), 0), true);
+    assert.equal(rootEvidenceIsPassing(rootReport(), 1), false);
+    assert.equal(rootEvidenceIsPassing(rootReport({ cleanupProven: false }), 0), false);
+  });
+  test('FAILED is preserved as failure rather than PASS', () => {
+    assert.equal(rootEvidenceIsPassing(rootReport({ state: 'FAILED', testsPassed: false }), 0), false);
+  });
+  test('root evidence redacts password, private key and lease secret bytes', () => withTemp((localAppData) => {
+    const secrets = ['db-password-secret', 'private-key-secret', 'lease-secret-value'];
+    const saved = persistOut001RootEvidence({
+      report: rootReport({ evidence: [{ diagnostic: secrets.join('|') }] }), secrets, options: { localAppData },
+    });
+    const text = readFileSync(saved.paths.report, 'utf8');
+    for (const secret of secrets) assert.ok(!text.includes(secret));
+    assert.ok(text.includes('[REDACTED]'));
+  }));
+
+  function createReconciliationFixture(localAppData, runId) {
+    const evidenceRoot = resolve(localAppData, 'ModernERP', 'mysql-gate', 'evidence', runId);
+    const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
+    const rows = [
+      ['operation-RESET_SCHEMA_PRE_RUN', 'RESET_SCHEMA_PRE_RUN', '{"operation":"RESET_SCHEMA_PRE_RUN","dropped":0,"inventory":{"tables":0,"views":0,"triggers":0,"routines":0,"events":0}}\n'],
+      ['operation-BOOTSTRAP_CURRENT_SCHEMA', 'BOOTSTRAP_CURRENT_SCHEMA', '{"operation":"BOOTSTRAP_CURRENT_SCHEMA","bootstrapped":true}\n'],
+      ['suite-RUN_OUT001_HTTP_FIXTURES', 'RUN_OUT001_HTTP_FIXTURES', '    ok 1 - M1 lock\n    ok 2 - M1b request\n    ok 3 - M2 race\n    ok 4 - M3 state\n    ok 5 - M4 parity\n    ok 6 - M5 unique\n# tests 34\n# pass 34\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n'],
+      ['operation-CLEANUP_SCHEMA_POST_RUN', 'CLEANUP_SCHEMA_POST_RUN', '{"operation":"CLEANUP_SCHEMA_POST_RUN","dropped":331,"inventory":[]}\n'],
+      ['postflight-POSTFLIGHT', 'POSTFLIGHT', '{"operation":"POSTFLIGHT","inventory":{"tables":0,"views":0,"triggers":0,"routines":0,"events":0}}\n'],
+    ];
+    for (const [label, operation, stdout] of rows) {
+      const dir = join(evidenceRoot, 'suites', label); mkdirSync(dir, { recursive: true });
+      const stderr = ''; writeFileSync(join(dir, 'stdout.tap'), stdout); writeFileSync(join(dir, 'stderr.log'), stderr);
+      const result = { runId, operation, exitCode: 0, failure: null, streamErrors: [],
+        stdout: { bytes: Buffer.byteLength(stdout), sha256: digest(Buffer.from(stdout)) },
+        stderr: { bytes: 0, sha256: digest(Buffer.alloc(0)) } };
+      writeFileSync(join(dir, 'result.json'), JSON.stringify(result));
+    }
+    writeFileSync(join(evidenceRoot, 'launcher.stdout.log'), 'launcher');
+    writeFileSync(join(evidenceRoot, 'launcher-result.json'), '{}');
+    const childRoot = resolve(localAppData, 'ModernERP', 'mysql-gate', 'ack4', 'children', runId);
+    mkdirSync(join(childRoot, 'consumed'), { recursive: true }); mkdirSync(join(childRoot, 'descendants'), { recursive: true });
+    ['RESET_SCHEMA_PRE_RUN', 'BOOTSTRAP_CURRENT_SCHEMA', 'RUN_OUT001_HTTP_FIXTURES', 'CLEANUP_SCHEMA_POST_RUN'].forEach((operation, index) => {
+      writeFileSync(join(childRoot, 'consumed', `${index}.consumed.json`), JSON.stringify({ runId, commitSha, manifest, rootPid: 9000, childPid: 9100 + index, childStartedAt: `2026-11-09T00:00:0${index}.000Z`, operation }));
+    });
+    const descendants = [0, 1, 2].map((index) => JSON.stringify({ version: 1, runId, purpose: 'OUT001_HTTP_APP', pid: 9200 + index, processCreatedAt: `2026-11-09T00:01:0${index}.000Z`, registeredAt: '2026-11-09T00:02:00.000Z' })).join('\n');
+    writeFileSync(join(childRoot, 'descendants', `${runId}.jsonl`), `${descendants}\n`);
+    return evidenceRoot;
+  }
+  const reconciliationRunId = '123e4567-e89b-42d3-a456-426614174088';
+  test('offline reconciliation validates five evidence groups and process records', () => withTemp(async (localAppData) => {
+    createReconciliationFixture(localAppData, reconciliationRunId);
+    const report = await reconcileOut001RunEvidence({ runId: reconciliationRunId, commitSha, localAppData, write: false });
+    assert.equal(report.groups.length, 5); assert.equal(report.processes.leases.length, 4); assert.equal(report.processes.descendants.length, 3);
+  }));
+  test('offline reconciliation rejects a tampered stream', () => withTemp(async (localAppData) => {
+    const evidenceRoot = createReconciliationFixture(localAppData, reconciliationRunId);
+    writeFileSync(join(evidenceRoot, 'suites', 'operation-RESET_SCHEMA_PRE_RUN', 'stdout.tap'), 'tampered');
+    await assert.rejects(reconcileOut001RunEvidence({ runId: reconciliationRunId, commitSha, localAppData, write: false }), /EVIDENCE_INVALID/);
+  }));
+  test('reconciliation is explicitly not an original root report', () => withTemp(async (localAppData) => {
+    createReconciliationFixture(localAppData, reconciliationRunId);
+    const report = await reconcileOut001RunEvidence({ runId: reconciliationRunId, commitSha, localAppData, write: false });
+    assert.equal(report.status, 'RECONSTRUCTED_NOT_ORIGINAL'); assert.equal(report.originalRootReportPresent, false);
+  }));
+  test('reconciliation never claims historical process exit re-verification', () => withTemp(async (localAppData) => {
+    createReconciliationFixture(localAppData, reconciliationRunId);
+    const report = await reconcileOut001RunEvidence({ runId: reconciliationRunId, commitSha, localAppData, write: false });
+    assert.ok(report.processes.identities.every((item) => item.historicalExitStatus === 'REPORTED_NOT_REVERIFIED'));
+  }));
+  test('reconciliation import graph remains offline and contains no database adapter', () => {
+    const source = readFileSync(resolve('scripts/gates/reconcile-out001-run-evidence.mjs'), 'utf8');
+    assert.doesNotMatch(source, /from ['"].*(mysql2|server\/db|mysql-local-preflight)/);
+  });
 });
 
 function environment() {

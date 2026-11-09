@@ -2843,6 +2843,21 @@ M3 不确定 COMMIT 在真实 MySQL 下仍为 `NOT_PROVEN_ON_REAL_MYSQL`，不�
 `607/607 PASS`。**未**签发第二张 ACK-4、未再次运行数据库 Gate、未修改业务合同、Schema、Migration、
 数据库权限或版本号；未 Push / Merge / Tag / Release / Deploy。
 
+### 45.19 OUT-001 Root Evidence 持久化与历史 RunId 离线对账（2026-11-09）
+
+本节在 §45.18 的执行事实之上登记最终离线收尾；不改写 §45.18，也不把重建件冒充执行当时不存在的原始 Root JSON。Owner 已授权本轮代码、证据、测试、状态和本地 Git 收尾；未授权且本轮未发生任何 MySQL 连接、RESET / BOOTSTRAP / CLEANUP、ACK-4 签发或消费、数据库/Schema/Migration/权限变更、远端 Git 写入或发布动作。
+
+| 项目 | 本轮结论 |
+|---|---|
+| Root Evidence 合同 | 新增 `root-report.json` + `root-manifest.json`：绑定 UUIDv4 RunId、完整 Commit SHA、Manifest、Root 终态、测试/清理/进程退出布尔值、清理次数、子进程身份/退出码、Suite 与完整 evidence；报告按字节脱敏，临时文件原子 rename，既有目标拒绝覆盖，manifest 绑定报告文件名、字节数、SHA-256 与 evidence 数量。成功和已进入 Root 生命周期的失败路径均先持久化再输出；持久化失败不得 PASS。 |
+| Launcher 权威 | Launcher 不再信任 stdout 尾部 JSON；只接受经独立校验器复核 RunId、Commit SHA、Manifest、文件名、字节数、SHA-256、evidence 数量及必填字段后的 Root Artifact。只有 Node exit 0 且 Root=`FINISHED`、`testsPassed/cleanupProven/childrenExited=true` 才 exit 0；缺失、损坏、漂移或 launcher-result 持久化失败一律 `BLOCKED`。Gate 临时输出在删除前记录字节数与完整 SHA-256，`passed/failed` 字段合同继续保留。 |
+| 历史 RunId 对账 | 对 `0adfecb6-7db9-4015-9c41-cc36ad42ec48` 仅执行离线读取。五组 RESET / BOOTSTRAP / Suite / CLEANUP / Postflight 的 result、stdout、stderr 字节数与 SHA-256 全部自洽；exit 均为 0、无 stream error/failure；RESET dropped=0 且五类为零，BOOTSTRAP=true，TAP=34/34/0/0/0 且 M1/M1b/M2/M3/M4/M5 有实际 PASS 行，CLEANUP dropped=331，Postflight 五类为零。4 个 consumed child lease 与 3 个 descendant 的 RunId/PID/创建时间/operation 结构匹配。 |
+| Launcher 历史文件 | `launcher.stdout.log` 完整 SHA-256=`8580c507442214523f3e8910b1a4d4880d25ce13cab4ad6f4dd35beb27993a35`；历史 `launcher-result.json` 完整 SHA-256=`81c7b5c9d02ab7209f989a7bec76e4aa18c632dedc0cde1e1deb49e4a805e813`，均与既有记录匹配。 |
+| 重建件边界 | `%LOCALAPPDATA%\ModernERP\mysql-gate\evidence\0adfecb6-7db9-4015-9c41-cc36ad42ec48\root\root-reconciliation.json`，状态固定为 `RECONSTRUCTED_NOT_ORIGINAL`，`originalRootReportPresent=false`，文件 12380 bytes，SHA-256=`07577f303d85b2c86fc2cbf72fbb84ef194c35f5de581b0e714936771100e644`。它推断 Root 状态为 `FINISHED`，但历史进程退出只能登记 `REPORTED_NOT_REVERIFIED`：当前 PID 查询不得跨创建时间证明历史退出，避免 PID reuse 误判。该文件不能替代原始 Root report，也不能改写 Launcher exit 8。 |
+| 状态 | `GATE_EXECUTED=EXECUTED` 保持；完整技术 PASS 仍因执行时原始 Root JSON 缺失与 Launcher exit 8 而不登记；`GATE_ACCEPTED=NOT_ACCEPTED`；`AUD-OUT-001=TESTED / PENDING_OWNER_APPROVAL`；M3 真实不确定 COMMIT 继续为 `NOT_PROVEN_ON_REAL_MYSQL`。 |
+
+离线验证：focused `44/44 PASS`（其中新增 Root/对账行为用例 `17/17 PASS`）；FAST `624/624 PASS`；FULL `3415/3415 PASS`；Build PASS；全部修改的 Node 文件语法检查与 PowerShell AST 解析 PASS。文档 current/migration 与最终 `git diff --check` 结果登记于同日日志；本节不构成 Acceptance / Freeze。
+
 ### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
 
 以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：

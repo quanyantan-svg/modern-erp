@@ -53,6 +53,23 @@ $baselinePath = Join-Path $localDir 'target.json'
 $credentialPath = Join-Path $localDir 'credential.dat'
 $preflightHelper = Join-Path $repoRoot 'scripts\gates\mysql-local-preflight.mjs'
 $gateScript = Join-Path $repoRoot 'scripts\gates\mysql-out001-gate.mjs'
+$rootEvidenceVerifier = Join-Path $repoRoot 'scripts\gates\mysql-out001-root-evidence.mjs'
+$commitSha = (& git -C $repoRoot rev-parse HEAD).Trim()
+$manifestName = 'OUT_001_MYSQL_V1'
+
+function Write-LauncherResult([System.Collections.IDictionary]$Result) {
+  $rootDir = Join-Path $localDir "evidence\$RunId\root"
+  [System.IO.Directory]::CreateDirectory($rootDir) | Out-Null
+  $target = Join-Path $rootDir 'launcher-result.json'
+  if (Test-Path -LiteralPath $target) { throw 'OUT_001_LAUNCHER_RESULT_OVERWRITE_REFUSED' }
+  $temporary = Join-Path $rootDir ('.launcher-result.' + [guid]::NewGuid().ToString() + '.tmp')
+  try {
+    $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes(($Result | ConvertTo-Json -Depth 20) + "`n")
+    $stream = [System.IO.File]::Open($temporary, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+    try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
+    [System.IO.File]::Move($temporary, $target)
+  } finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
+}
 
 function Write-Step([string]$message) {
   Write-Host "[out001-mysql-gate] $message"
@@ -265,22 +282,47 @@ try {
 }
 $gateStdout = (Get-Content -Raw -Encoding UTF8 $gateOutFile) -replace "`0", ''
 $gateStderr = (Get-Content -Raw -Encoding UTF8 $gateErrFile) -replace "`0", ''
-Remove-Item $gateOutFile, $gateErrFile -ErrorAction SilentlyContinue
 
 # --- Root ACK-4 state -------------------------------------------------------
 Remove-Item Env:\ERP_MYSQL_TEST_ALLOW_RESET -ErrorAction SilentlyContinue
 Remove-Item Env:\ERP_MYSQL_TEST_DISPOSABLE_TARGET -ErrorAction SilentlyContinue
 Remove-Item Env:\ERP_MYSQL_TEST_DESTRUCTIVE_OPERATIONS -ErrorAction SilentlyContinue
 
-$rootState = 'UNKNOWN'
+$rootState = 'BLOCKED'
 $rootReport = $null
-$lastJson = $gateStdout -split "`r?`n" | Where-Object { $_.Trim().StartsWith('{') } | Select-Object -Last 1
-if ($lastJson) {
+$rootEvidenceValid = $false
+try {
+  $verifyOut = & node $rootEvidenceVerifier --run-id $RunId --commit-sha $commitSha --manifest $manifestName 2>&1
+  if ($LASTEXITCODE -ne 0) { throw ($verifyOut -join "`n") }
   try {
-    $rootReport = $lastJson | ConvertFrom-Json
+    $verified = ($verifyOut -join "`n") | ConvertFrom-Json
+    if ($verified.valid -ne $true) { throw 'root verifier did not return valid=true' }
+    $rootReport = $verified.report
     if ($rootReport.state) { $rootState = [string]$rootReport.state }
-  } catch { }
+    $rootEvidenceValid = $true
+  } catch { throw "root evidence JSON invalid: $($_.Exception.Message)" }
+} catch {
+  $rootState = 'BLOCKED'
+  $rootEvidenceDiagnostic = $_.Exception.Message
 }
+
+$launcherResult = [ordered]@{
+  version = 1; runId = $RunId; commitSha = $commitSha; manifest = $manifestName
+  gateExitCode = $gateExit; rootEvidenceValid = $rootEvidenceValid; rootState = $rootState
+  result = if ($gateExit -eq 0 -and $rootEvidenceValid -and $rootState -eq 'FINISHED' -and
+    $rootReport.testsPassed -eq $true -and $rootReport.cleanupProven -eq $true -and $rootReport.childrenExited -eq $true) { 'PASS' }
+    elseif ($rootState -eq 'BLOCKED') { 'BLOCKED' } else { 'FAIL' }
+  diagnostic = if ($rootEvidenceValid) { $null } else { $rootEvidenceDiagnostic }
+  gateStdoutBytes = (Get-Item -LiteralPath $gateOutFile).Length
+  gateStderrBytes = (Get-Item -LiteralPath $gateErrFile).Length
+  gateStdoutSha256 = (Get-FileHash -LiteralPath $gateOutFile -Algorithm SHA256).Hash.ToLowerInvariant()
+  gateStderrSha256 = (Get-FileHash -LiteralPath $gateErrFile -Algorithm SHA256).Hash.ToLowerInvariant()
+  createdAt = [DateTime]::UtcNow.ToString('o')
+}
+try { Write-LauncherResult $launcherResult } catch {
+  $rootEvidenceValid = $false; $rootState = 'BLOCKED'; $rootEvidenceDiagnostic = $_.Exception.Message
+}
+Remove-Item $gateOutFile, $gateErrFile -ErrorAction SilentlyContinue
 
 Clear-GateEnvironment
 $password = $null
@@ -308,11 +350,16 @@ if ($null -ne $rootReport -and $null -ne $rootReport.evidence) {
 }
 
 Write-Step ''
-if ($gateExit -eq 0 -and $rootState -eq 'FINISHED' -and $null -ne $rootReport -and
+if ($gateExit -eq 0 -and $rootEvidenceValid -and $rootState -eq 'FINISHED' -and $null -ne $rootReport -and
     $rootReport.testsPassed -eq $true -and $rootReport.cleanupProven -eq $true -and $rootReport.childrenExited -eq $true) {
   Write-Host '[out001-mysql-gate] RESULT = PASS' -ForegroundColor Green
   Write-Host '[out001-mysql-gate] ACK-4 STATE = FINISHED (cleanup independently post-flighted by the root)'
   exit 0
+}
+if (-not $rootEvidenceValid) {
+  Write-Host '[out001-mysql-gate] RESULT = BLOCKED' -ForegroundColor Red
+  Write-Host "[out001-mysql-gate] ROOT EVIDENCE = INVALID ($rootEvidenceDiagnostic)"
+  exit 8
 }
 if ($rootState -eq 'FAILED') {
   Write-Host '[out001-mysql-gate] RESULT = FAIL' -ForegroundColor Red

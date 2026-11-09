@@ -21,18 +21,19 @@ export function out001OperationContext(rootLease, operation, registeredChildren)
     operation,
     issueChild({ childPid, childStartedAt }) {
       const lease = issueChildLease(rootLease, { childPid, childStartedAt, operations: [operation] });
-      registeredChildren.push({ childPid, childStartedAt, operation, exited: false });
+      registeredChildren.push({ childPid, childStartedAt, operation, exited: false, exitCode: null });
       return lease;
     },
     issuePortableChild({ childPid, childStartedAt }) {
       const lease = issuePortableChildLease(rootLease, { childPid, childStartedAt, operation });
-      registeredChildren.push({ childPid, childStartedAt, operation, exited: false });
+      registeredChildren.push({ childPid, childStartedAt, operation, exited: false, exitCode: null });
       return lease;
     },
-    markChildExited(childPid, childStartedAt) {
+    markChildExited(childPid, childStartedAt, exitCode = null) {
       const child = registeredChildren.find((item) => item.childPid === childPid && item.childStartedAt === childStartedAt);
       if (!child) throw new Error('OUT_001_MYSQL_UNREGISTERED_CHILD_EXIT');
       child.exited = true;
+      child.exitCode = Number.isSafeInteger(exitCode) ? exitCode : null;
     },
   });
 }
@@ -117,9 +118,11 @@ export async function runOut001MySqlLifecycle({
   });
   const report = Object.freeze({
     runId: rootLease.runId,
+    commitSha: rootLease.commitSha,
     manifest: rootLease.manifest,
     state, testsPassed, cleanupProven, childrenExited,
     cleanupAttempts, childCount: registeredChildren.length,
+    children: registeredChildren.map((child) => Object.freeze({ ...child })),
     resetStarted, resetCompleted,
   });
   if (primaryError) {

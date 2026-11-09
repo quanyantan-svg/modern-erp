@@ -25,6 +25,7 @@ import {
 } from './mysql-out001-process-lifecycle.mjs';
 import { createOut001EvidenceWriter, out001SuitePassed } from './mysql-out001-evidence.mjs';
 import { runOut001MySqlLifecycle } from './mysql-out001-root-lifecycle.mjs';
+import { persistOut001RootEvidence } from './mysql-out001-root-evidence.mjs';
 import { initializeOut001DescendantRegistry } from './mysql-out001-descendant-registry.mjs';
 import { assertOut001MySqlStaticPreflight, OUT_001_MYSQL_SUITE_FILE } from './mysql-out001-static-preflight.mjs';
 
@@ -173,7 +174,7 @@ async function main() {
       error.stderrPath = entry.evidence.paths.stderr;
       throw error;
     }
-    entry.context.markChildExited(entry.child.pid, entry.childStartedAt);
+    entry.context.markChildExited(entry.child.pid, entry.childStartedAt, code);
     return readFileSync(entry.evidence.paths.stdout, 'utf8');
   };
 
@@ -254,7 +255,7 @@ async function main() {
         }
         const exited = await ensureOut001ChildExited(entry);
         if (!exited) { allExited = false; continue; }
-        entry.context.markChildExited(entry.child.pid, entry.childStartedAt);
+        entry.context.markChildExited(entry.child.pid, entry.childStartedAt, entry.child.exitCode);
       }
       return allExited;
     },
@@ -308,23 +309,28 @@ async function main() {
     },
   });
 
-  process.stdout.write(`${JSON.stringify({
+  const rootReport = {
     ...report,
     suites: [OUT_001_MYSQL_SUITE_FILE],
     evidence: evidenceEntries,
     executionStatus: 'EXECUTED_NOT_ACCEPTED',
-  })}\n`);
+  };
+  persistOut001RootEvidence({ report: rootReport, secrets: [...secretValues] });
+  process.stdout.write(`${JSON.stringify(rootReport)}\n`);
 }
 
 try {
   await main();
 } catch (error) {
   if (error?.out001Lifecycle) {
-    process.stdout.write(`${JSON.stringify({
+    const rootReport = {
       ...error.out001Lifecycle,
+      suites: [OUT_001_MYSQL_SUITE_FILE],
       evidence: evidenceEntries,
       executionStatus: 'EXECUTED_NOT_ACCEPTED',
-    })}\n`);
+    };
+    persistOut001RootEvidence({ report: rootReport, secrets: [process.env.ERP_DB_PASSWORD] });
+    process.stdout.write(`${JSON.stringify(rootReport)}\n`);
   }
   throw error;
 }
