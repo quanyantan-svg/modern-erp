@@ -3,6 +3,13 @@ param(
   [Parameter(Mandatory=$true)][string]$OutputFile
 )
 $ErrorActionPreference = 'Stop'
+try {
+    Add-Type -AssemblyName System.Security -ErrorAction Stop
+    $null = [System.Security.Cryptography.ProtectedData]
+}
+catch {
+    throw "ACK-4 issuer: DPAPI assembly load failed: $($_.Exception.Message)"
+}
 $approval = Get-Content -LiteralPath $ApprovalFile -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($approval.version -ne 1) { throw 'ACK-4 issuer: approval version must be 1' }
 if (-not ([guid]::TryParse([string]$approval.runId, [ref]([guid]::Empty)))) { throw 'ACK-4 issuer: runId must be a UUID' }
@@ -10,7 +17,7 @@ $issued = [DateTimeOffset]::Parse([string]$approval.issuedAt)
 $expires = [DateTimeOffset]::Parse([string]$approval.expiresAt)
 if ($expires -le $issued -or ($expires - $issued).TotalMinutes -gt 15) { throw 'ACK-4 issuer: consumption window must be positive and at most 15 minutes' }
 $plain = [Text.Encoding]::UTF8.GetBytes(($approval | ConvertTo-Json -Depth 20 -Compress))
-$cipher = [Security.Cryptography.ProtectedData]::Protect($plain, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
+$cipher = [System.Security.Cryptography.ProtectedData]::Protect($plain, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
 $directory = Split-Path -Parent ([IO.Path]::GetFullPath($OutputFile))
 [IO.Directory]::CreateDirectory($directory) | Out-Null
 [IO.File]::WriteAllBytes($OutputFile, $cipher)
