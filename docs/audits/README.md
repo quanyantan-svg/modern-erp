@@ -15,6 +15,7 @@
 | 审计基线 | 手册 | Domain | 审计版本 | 审计基准 SHA | 审计状态 | 详细台账 |
 |---|---|---|---|---|---|---|
 | B3101 / B3121 采购与委外代码审计基线（2026-11-07） | B3101 采购管理、B3121 委外管理 | Procurement & Outsourcing | `v0.2` | `9b9cb09799aa05ccac43d02ac1718083921c6d04` | `PRELIMINARY_STATIC_REVIEW` | [`b3101-b3121-code-audit-20261107.md`](./b3101-b3121-code-audit-20261107.md) |
+| B3121 委外核心执行工作面审计（2026-11-10） | B3121 委外管理 | Procurement & Outsourcing | `v1.0` | `bbacab0` | `AUDIT_COMPLETE / COVERAGE_REVIEWED`（有界范围） | [`b3121-outsourcing-core-workbench-audit-20261110.md`](./b3121-outsourcing-core-workbench-audit-20261110.md) |
 
 ## 登记条目
 

@@ -2109,3 +2109,81 @@ OUT-001 使用**独立**的 ACK-4 Manifest `OUT_001_MYSQL_V1`，操作范围固�
    `CLEANUP_SCHEMA_RECOVERY` 和独立只读 Postflight。仅在五类对象归零且新子进程退出
    得证后，才调用 `recoverAck4Quarantine` 清除旧 marker。恢复不运行业务套件、不重试旧 Gate、
    不使用旧 ACK-4，也不改变任何业务数据的接受结论。
+
+---
+
+### 26.35 委外核心执行工作面有界 Design（2026-11-10；`PENDING_REVIEW`）
+> **用途 / Owner / 状态 / 权威关系**：本节是 Requirement §31.15（`OUT-WB-REQ-01..08`）的有界技术候选，Owner 为 Procurement & Outsourcing Domain Owner；状态 `PENDING_REVIEW`。`solution.md` 仅导航；§26、M1-Core Active Design 及 §26.34 已获有界批准的 OUT-001 合同继续有效。本节未获 Implementation 批准。输入为 2026-11-10 委外审计 §2–§4、§31.13/§31.15 与用户的范围/岗位/字段/状态决策。
+
+#### 26.35.1 设计范围与单一 Owner
+
+| 职责 | 现有或拟使用的 canonical owner | 本轮变化 |
+|---|---|---|
+| 委外订单、用料、发退补、倒冲和受限查询 | `server/modules/outsourcing.js`；必要的投影查询可拆入同域只读模块，由该 owner 调用 | 保持唯一 Writer；增加任务读模型、状态门禁，现有 `ownedRouteTable` owner 唯一。 |
+| 加工费 PO | `outsourcing.js` 调用 canonical PO 草稿 Writer | 只补 UI/读模型；审批交给现有 PO 审批权限，不给委外业务员自动批准权。 |
+| 完工通知 | `server/modules/procurement-receiving.js` 与现有 `receipt_notices` | 在同一 Writer 中增加严格 `OUTSOURCE` 来源授权分支；不复制通知表或命令。 |
+| 委外待检/生效与成本证据 | `outsourcing.js` / `outsourcing-finance.js` 调用 Inventory/Valuation/Quality 现有门禁 | UI 发起已有动作；不移动到前端，也不开放延期 AP/GL。 |
+| IQC | `server/modules/authoritative-quality.js`、`quality-gates.js` | 补委外来源候选读模型与质量页入口/返回，不建委外私有 IQC。 |
+| 报表、Route | `procurement-reports.js`；`applicationRegistry.js` 与 RouteLocation | 复用已生效/待检区分；只新增同一路由内任务视图。 |
+
+变更前对各目标函数及直接调用方作 caller proof；已有业务 Writer 不搬家，route descriptor 只记录 method/path/owner/dispatch，不承载权限或事务逻辑。`src/pages/outsourcing.jsx` 保持唯一 active screen，可按任务分拆展示组件与 API 客户端函数；不要建第二个可执行委外页面。
+
+#### 26.35.2 路由、读模型与最小投影
+
+`applicationRegistry.js` 的 `outsourcing` route key 不变，允许 `OUTSOURCING_VIEW/MANAGE` 的既有访问，并为 `OUTSOURCING_RECEIVING_MANAGE` 和 `IQC_VIEW/MANAGE` 提供**受限任务视图**；服务端仍独立判权。RouteLocation 使用 `documentType` + `documentId` 区分 `OUTSOURCING_ORDER`、`RECEIPT_NOTICE`、`OUTSOURCING_RECEIPT`、`IQC_INSPECTION`；刷新与 Back/Forward 只从 URL 和对应服务端读模型恢复，不把敏感详情写入 URL 或浏览器存储。无权限的 deep link 返回 403 页面，不回退加载宽订单详情。
+
+| 读入口 | 权限与返回界限 | 来源 |
+|---|---|---|
+| 现有 `GET /api/procurement/outsourcing/orders`、`/:id`，增补同域 `GET /api/procurement/outsourcing/options?kind=&q=&businessDate=` | 仅现有委外业务读/管权限；选项分页/搜索，按资格、active、OUTSOURCE BOM 目的/版本/业务日期及来源状态过滤；委外业务详情可组合 PO/通知/材料/收货引用。 | 供应商、产品、BOM、计划交接、仓库及订单的现有权威表；保存时 Writer 重验。 |
+| 新 `GET /api/procurement/outsourcing/receiving-queue` 与 `GET /api/procurement/outsourcing/orders/:id/receiving-context` | 仅 `OUTSOURCING_RECEIVING_MANAGE`；白名单投影：订单号、供应商、成品、订单/可收数量、加工费 PO 编号/行、通知与收货编号/状态、收货必要目标仓/行来源。查询只包含真实 OUTSOURCE 来源，禁止 `SELECT *` 序列化，禁止成本/WIP 身份/材料行字段。 | 订单、已批准的 OUTSOURCE_PROCESSING PO、统一通知和委外收货；所有 join 用 source id/business type 双条件。 |
+| 新 `GET /api/iqc/source-candidates?sourceType=OUTSOURCING_RECEIPT` 与受限 `GET /api/procurement/outsourcing/receipts/:id/quality-context` | 仅 `IQC_VIEW/MANAGE`；只给委外待检收货的检验所需来源号、供应商、产品、数量、目标仓、状态、质量状态；不返回材料成本/WIP。质量页可在完成后回到该来源详情。 | `outsourcing_receipts/items`、`quality-gates` 的 canonical 来源/政策。 |
+
+`receiving-context` 和 `quality-context` 是独立投影，**不得**让受限岗位调用现有宽 `getOutsourcingOrder()` 或通用 `listReceiptNotices()`。同一用户兼具多岗位时按其当前实际权限展示相应任务；各 API 自身始终按所声明的最小返回合同判权和投影，不能靠客户端隐藏字段。列表必须有有界分页/搜索，不让收货员遍历其它业务类型通知。
+
+#### 26.35.3 任务流与现有 Writer 调用
+
+业务员工作面采用 `LIST → DETAIL → EDITOR/WORKFLOW`：订单来源/供应商/成品/BOM 选择 → `POST /api/procurement/outsourcing/orders` → `POST /orders/:id/material-list` 快照 → 按合法状态 `POST /orders/:id/transition` → `POST /orders/:id/processing-fee-purchase-orders` 建加工费 PO 草稿 → 交现有 PO 审批角色处理 → `POST /orders/:id/issues|supplements|returns`，必要时使用已验收有界 `POST /api/procurement/outsourcing/wip-transfers` → 已生效收货后按需 `POST /orders/:id/backflush` 复核。UI 按后端状态显示可执行动作和被阻塞原因，发料/退料编辑器提供物料行、仓库、LOT/SERIAL 与数量选择，保留输入以便修正；报表读现有 `/api/reports/outsourcing/execution`、`/material-position`，标记待检与已生效口径。
+
+`createOutsourcingOrder()` 与加工费 PO 创建时的委外供应商资格复核须在事务内采用来源业务日期及有效起止日；复用或抽取采购域现有 `assertSupplierQualification` 规则，避免第二份不一致资格原语。`snapshotMaterialList()` 在事务内重读订单，仅允许 `DRAFT` 首次创建，并重验**订单业务日期**适用的已批准 OUTSOURCE BOM、版本及来源仓；`CONFIRM_PLAN` 在同一事务中验证非空、完整、可证明的快照后才可推进。已确认计划或已下达订单不得补建/重建快照；不回写历史快照。PO 草稿仍只在 `RELEASED` 建立，批准仍由原 PO 审批流程完成。
+
+材料动作状态按事务内订单重读执行：发料、补料和新收货只允许 `RELEASED`；退料只允许 `RELEASED/COMPLETED`，在 `COMPLETED` 时仅从可证明的本订单未耗用 WIP 退回原合法企业仓。`returnMaterial()` 现无状态校验，必须补上；`CLOSED` 后退料、发补料、倒冲和 WIP 转移均拒绝。不得只靠页面隐藏动作。完工后工作面展示余料和“退料后关闭”的可操作指引。
+
+收货员工作面由受限 queue/context 进入：对已下达订单及已批准加工费 PO 调现有 `POST /api/receipt-notices`，请求固定 `businessType=OUTSOURCE` 和真实 `outsourcingOrderId/processingPoId`；确认调现有 `POST /api/receipt-notices/:id/confirm`；从已确认通知选择行和目标仓，调现有 `POST /api/procurement/outsourcing/receipts` 建 `PENDING_INSPECTION`，再由有权收货员按现有 `POST /receipts/:id/confirm` 生效。通知或待检单不得在 UI 中被描述为库存已入库。通知创建、PO 草稿、收货与生效继续使用各 Writer 已规定的 `Idempotency-Key`、来源/容量/身份校验；重放只返回原事实，不创建第二笔。
+
+IQC 人员从 canonical IQC 候选列表选择委外待检来源，调用现有 `POST /api/iqc`（仅 `outsourcing_receipt_id`，不传客户端伪造的供应商/数量/行）；`PATCH /api/iqc/:id` 与 `POST /api/iqc/:id/complete` 维持原 Owner。`quality.jsx` 根据真实 `source_type` 返回委外受限 `quality-context` 或既有采购入库详情，不能硬编码所有 IQC 返回采购页。免检仅使用 `quality-gates.js` 的已冻结政策；质检结果不能由委外工作面伪造。质量人员的受限来源页只读，不拥有收货生效动作。
+
+#### 26.35.4 OUTSOURCE 通知授权与职责分离
+
+`procurement-receiving.js::createReceiptNotice()` 先解析并校验 `businessType`，在 `OUTSOURCE` 分支允许 `RECEIPT_NOTICE_MANAGE` 或 `OUTSOURCING_RECEIVING_MANAGE`；标准采购分支继续**只**允许 `RECEIPT_NOTICE_MANAGE`。受限岗位的请求必须强制匹配 OUTSOURCE 订单、已批准且同供应商的加工费 PO、来源行与仓库，沿用当前事务内容量复核与通知幂等。`confirmReceiptNotice()` 事务内重读通知后按数据库 `business_type` 判权；受限岗位只可确认真实 OUTSOURCE 通知，不能用请求 body 改类型。`cancelReceiptNotice()` 不在本轮授予受限岗位，仍按原权限。通用通知列表/详情也不扩权，受限岗位只走 §26.35.2 的投影。
+
+角色种子**不新增通用权限**：委外业务员 `OUTSOURCING_MANAGE + OUTSOURCING_MATERIAL_EXECUTE`，收货员 `OUTSOURCING_RECEIVING_MANAGE`，IQC 人员 `IQC_MANAGE`，PO 审批走既有 PO 权限。`OUTSOURCING_MANAGE` 不回退赋予收货生效权；管理员亦受来源级延期政策约束。403 按现有授权拒绝审计边界处理，且不泄露被拒单据内容。
+
+#### 26.35.5 订单状态机、事务与并发
+
+`transitionOutsourcingOrder()` 接受精确动作 `CONFIRM_PLAN`、`RELEASE`、`COMPLETE`、`CLOSE`，分别对应 `DRAFT→PLAN_CONFIRMED→RELEASED→COMPLETED→CLOSED`；缺失/未知动作或旧客户端的 `NEXT` 固定 400 `OUTSOURCING_TRANSITION_ACTION_INVALID`，动作与当前状态不符固定 409 `OUTSOURCING_TRANSITION_STATE_CONFLICT`。这是 §31.15 明确要求的动作合同变化，前端同步改为精确动作；旧客户端不被静默推进。既有取消仍只允许 `DRAFT/PLAN_CONFIRMED`，在同一事务内重读状态。
+
+`CONFIRM_PLAN` 的事务门禁要求存在本订单非空、逐行关联已选 BOM/版本的用料快照，且来源仓、BOM 适用日期与总用量可证明；`RELEASE` 再检查该快照未被替换。缺快照或不可证明返回 409 `OUTSOURCING_MATERIAL_SNAPSHOT_REQUIRED`，不允许将订单先下达再补建。此行为收敛已批准 `MC-REQ-03`，不会对历史订单自动造快照；历史不合格订单保持 fail closed 并交独立治理。
+
+每次 transition 在订单级互斥/事务内读取权威订单和相关事实，进行条件更新（含旧状态/version 或等效受影响行数校验），写状态和成功 audit 于同一事务。`COMPLETE` 计算该订单 `EFFECTED` 收货明细可证明净量（减去确有已确认成品退货的历史事实），必须恰好达到订单量；不计待检、取消、来源不匹配单据，超量/缺失/历史不明固定 409、不可自动修正。`CLOSE` 还要求无 `PENDING_INSPECTION` 收货、无仍可转换的 DRAFT/CONFIRMED 完工通知剩余量；逐清单行重算 `issue + supplement + transfer in − return − backflush − transfer out` 的订单材料 WIP 净量，与 canonical WIP 身份余额/效果及物理位置可证明一致且均为零。负数、身份不明、计数与身份不一致、未关联历史行一律 409 fail closed；不得用现有 `rowToMaterialList()` 的 `Math.max(0, …)` 掩盖负数。延期 AP/GL、跨期成本和复杂差异不是 `CLOSE` 的前提，也不因关闭而获准写入。
+
+状态与收货/材料 Writer 共享现有 `server/db.js::transaction()` 串行化边界：SQLite `BEGIN IMMEDIATE`；MySQL 在业务查询前锁定 `mysql_transaction_gates` 单行直至 COMMIT/ROLLBACK。各 Writer 在该事务内重读同一订单的 `RELEASED` 状态，确保并发完成/关闭与新待检、通知确认、材料动作不能同时各自成功而留下关闭后的新义务；不能把事务前读取当作权威。实施时逐条复核实际调用链是否都进入该门禁，若发现绕行，先回到 Requirement/Design 明确锁协议。合法重试先读取真实状态；重复动作不能伪装新成功。
+
+#### 26.35.6 Schema、错误、审计、兼容与回退
+
+本节预计**不新增业务表、字段、权限种子或 migration**：订单、清单、通知、收货、IQC、WIP 身份效果和余额已在当前 SQLite/MySQL schema；读模型只查询现有权威表。如实现发现必须新增 schema/索引/业务状态，按 AGENTS.md §4.4 停止新增部分，返回 Requirement/Design 并另行取得批准。写入沿用事务内来源/身份复核；金额仍为安全整数分。GET 只读，不静默修复历史。
+
+400 用于动作/字段格式错误，403 用于岗位或来源权限拒绝，404 用于有权访问范围内不存在的源，409 用于状态、来源、质量、容量、身份或历史不可证明的业务冲突；错误含稳定 code，不返回敏感投影。业务拒绝时业务单据、库存、WIP、估值、AP/GL 逐字段零变化；成功 audit 与状态同事务，符合 `MC-REQ-11` 的业务拒绝另写恰好一条拒绝审计，400 不冒充业务拒绝，403 不带被拒单据身份。已存在的通知/收货/材料 Writer 审计与幂等语义不改变。
+
+兼容性：原 `outsourcing` route key、已有单据 ID、现有正式 Writer 和合法普通采购通知请求不变；`NEXT` 是唯一明确收紧的旧调用，旧请求收到 400 而不会误推进。回退时可撤掉新增只读投影和前端工作面，恢复旧 UI；订单状态安全门禁及来源授权不得因 UI 回退而放宽。对任何已写业务事实不作逆向脚本、历史改写或自动补偿。
+
+#### 26.35.7 验证矩阵与实施边界
+
+| 验证层 | 必须观察的事实 |
+|---|---|
+| 后端合同 | 委外收货员 OUTSOURCE 通知创建/确认成功；普通采购通知和宽订单详情 403、无敏感字段；业务员/IQC/收货生效分岗；通用通知管理员原路径不回归。 |
+| 状态/并发 | 数量不足、待检未生效、未结通知、WIP 非零/未知/负数、陈旧动作、重复动作及并发竞争都返回指定 400/409；失败方业务事实零变化、拒绝审计恰好一条；合法完工/关闭各恰好一次。 |
+| 来源与财务边界 | PO/通知/收货/IQC/库存/成本证据沿源可追；延期 AP/GL、成品退货、复杂差异仍 409；OUT-001 有界转移与普通采购通知回归。 |
+| 前端 | 单一路由按岗位显示任务；320/390/430/680 宽度操作、direct URL/刷新/Back/Forward、表单错误保留、质量返回源、状态/待检/已生效文案均实测。 |
+| Gate | 新行为 focused tests；`pnpm test`、`pnpm build`、`git diff --check`；库存/IQC/事务与 DB 风险追加 `pnpm test:heavy`；受保护 disposable MySQL 获逐次授权且环境具备时运行 `pnpm test:mysql` 与 `pnpm test:mysql:concurrency`。文档 current/migration 分开运行并如实登记 N7 历史问题。 |
+
+实施可按“受限读与导航 → 业务/收货/IQC 工作面 → 状态机安全门禁 → 跨域回归”拆成可回滚逻辑单元，但每单元都必须先有本节批准、按对应 Gate 验证，并由用户最终 Acceptance；拆分不是绕过状态机或库存高风险验证的理由。当前仅完成 DESIGN 文档，`PENDING_REVIEW`；依 AGENTS.md §4.3 **HARD STOP**，不得自动进入 IMPLEMENTATION。
