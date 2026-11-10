@@ -78,7 +78,7 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('purchase-instructions','采购指令','planning','FLOW_PRIMARY','LIST','primary','计划','planningDocuments',{any:['PURCHASE_INSTRUCTION_VIEW']}),
   route('purchase-requisitions','请购单','procurement-outsourcing','FLOW_PRIMARY','LIST','primary','采购与委外','planningDocuments',{any:['PURCHASE_REQUISITION_VIEW']}),
   route('sourcing-pricing','寻源与定价','procurement-outsourcing','FLOW_SUPPORTING','WORKFLOW','primary','采购与委外','sourcingPricing',{any:['SOURCING_VIEW','PRICING_VIEW','PROCUREMENT_CONFIG_VIEW']}),
-  route('outsourcing','委外加工','procurement-outsourcing','FLOW_PRIMARY','WORKFLOW','primary','采购与委外','outsourcing',{any:['OUTSOURCING_VIEW','OUTSOURCING_MANAGE']}),
+  route('outsourcing','委外加工','procurement-outsourcing','FLOW_PRIMARY','WORKFLOW','primary','采购与委外','outsourcing',{any:['OUTSOURCING_VIEW','OUTSOURCING_MANAGE','OUTSOURCING_RECEIVING_MANAGE','IQC_VIEW','IQC_MANAGE']}),
   route('product-costs','标准成本','accounting-analytics','ADVANCED_CONFIGURATION','CONFIG','contextual','会计与分析','costAccounting',{any:['COST_VIEW','COST_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
   route('cost-rates','成本费率','accounting-analytics','ADVANCED_CONFIGURATION','CONFIG','contextual','会计与分析','costAccounting',{any:['COST_VIEW','COST_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
   route('iqc','IQC 来料检验','manufacturing-quality','FLOW_INTERNAL_STEP','WORKFLOW','contextual','制造与质量','iqc',{any:['IQC_VIEW','IQC_MANAGE']},{parentRoute:'purchase-receipts'}),
@@ -225,6 +225,9 @@ const ROUTE_QUERY_KEYS = Object.freeze({
   iqc: ['documentType','sourcePage','sourceDocumentId'], oqc: ['documentType','sourcePage','sourceDocumentId'],
   'decision-reports': ['reportKey'],
   'planned-orders': [], 'planning-reservations': [], 'planning-configuration': [],
+  // 委外核心执行工作面用 documentType + documentId 区分订单、完工通知、
+  // 委外收货与检验单（Design §26.35.2）。
+  outsourcing: ['documentType'],
   'sales-prepayment-gates': ['salesOrderId'], 'sales-reservation-intents': ['salesOrderId'],
   'service-fulfillments': ['salesOrderId'], 'consignment-commercial': ['customerId'],
 });

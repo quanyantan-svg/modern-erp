@@ -302,6 +302,9 @@ const FULL = [
   'server/procurement-return-execution.test.js',
   'server/procurement-execution-suite.test.js',
   'server/out-final-acceptance.test.js',
+  // 委外核心执行工作面（Requirement §31.15；Design §26.35）：订单状态机安全门禁、
+  // 供应商资格按业务日期判定、受限读模型与职责分离、OUTSOURCE 通知来源级授权。
+  'server/outsourcing-workbench.test.js',
 
   // ----- V21 Inventory & Warehouse Domain Closure — Wave A foundation -----
   // Pure / contract tests for canonical position identity, owner validation,

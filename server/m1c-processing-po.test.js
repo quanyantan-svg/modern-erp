@@ -15,7 +15,7 @@ import { after, before, describe, test } from 'node:test';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createProcurementFixture } from './test-support/procurement-http-fixture.js';
+import { createProcurementFixture, seedApprovedOutsourceBom } from './test-support/procurement-http-fixture.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -64,13 +64,19 @@ describe('M1C processing PO canonical production path', () => {
   });
 
   const releaseOrder = async (quantity, token = fixture.tokens.admin) => {
+    const bomId = seedApprovedOutsourceBom(fixture, 'product-001', [{ productId: 'product-001', requiredQuantity: 0 }], `m1c-po-${Date.now()}-${Math.random()}`);
     const created = await fixture.request('POST', '/api/procurement/outsourcing/orders', token, {
-      supplierId: 'supplier-001', productId: 'product-001', orderQuantity: quantity, unit: 'EA', businessDate: isoDate(),
+      supplierId: 'supplier-001', productId: 'product-001', orderQuantity: quantity, unit: 'EA', businessDate: isoDate(), bomId,
     });
     assert.equal(created.status, 201, created.data.error);
     const id = created.data.id;
-    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/orders/${id}/transition`, token, { action: 'PLAN_CONFIRMED' })).status, 200);
-    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/orders/${id}/transition`, token, { action: 'RELEASED' })).status, 200);
+    // 用料快照必须在 DRAFT 阶段形成（Requirement §31.15；已批准 MC-REQ-03）。
+    const snapshot = await fixture.request('POST', `/api/procurement/outsourcing/orders/${id}/material-list`, token, {
+      items: [{ productId: 'product-001', sourceWarehouseId: 'warehouse-001' }],
+    });
+    assert.equal(snapshot.status, 200, snapshot.data.error);
+    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/orders/${id}/transition`, token, { action: 'CONFIRM_PLAN' })).status, 200);
+    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/orders/${id}/transition`, token, { action: 'RELEASE' })).status, 200);
     return id;
   };
 

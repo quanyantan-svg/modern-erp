@@ -119,16 +119,19 @@ describe('M1C-WP7A-R1 — G03 多物料行与 SERIAL 身份物理腿数', () => 
     });
     assert.equal(order.status, 201, order.data.error);
     const id = order.data.id;
-    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/orders/${id}/transition`, fixture.tokens.admin, { action: 'PLAN_CONFIRMED' })).status, 200);
-    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/orders/${id}/transition`, fixture.tokens.admin, { action: 'RELEASED' })).status, 200);
+    // 用料快照必须在 DRAFT 阶段形成（Requirement §31.15；已批准 MC-REQ-03）：
+    // 快照行取自已批准 OUTSOURCE BOM 的真实用料行。
+    const bomItems = fixture.db.prepare('SELECT product_id FROM bom_items WHERE bom_id=? ORDER BY line_no').all(bomId);
+    const snap = await fixture.request('POST', `/api/procurement/outsourcing/orders/${id}/material-list`, fixture.tokens.admin, {
+      items: bomItems.map((item) => ({ productId: item.product_id, sourceWarehouseId: SOURCE_WAREHOUSE })),
+    });
+    assert.equal(snap.status, 200, snap.data.error);
+    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/orders/${id}/transition`, fixture.tokens.admin, { action: 'CONFIRM_PLAN' })).status, 200);
+    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/orders/${id}/transition`, fixture.tokens.admin, { action: 'RELEASE' })).status, 200);
     return id;
   }
 
   async function snapshotMaterials(orderId, productIds) {
-    const snap = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/material-list`, fixture.tokens.admin, {
-      items: productIds.map((productId) => ({ productId, sourceWarehouseId: SOURCE_WAREHOUSE })),
-    });
-    assert.equal(snap.status, 200, snap.data.error);
     return Object.fromEntries(productIds.map((productId) => [
       productId,
       fixture.db.prepare('SELECT id FROM outsourcing_material_list WHERE order_id=? AND product_id=?').get(orderId, productId).id,

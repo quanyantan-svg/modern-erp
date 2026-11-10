@@ -25,7 +25,7 @@ import {
 import {
   cancelIqcInspection, cancelOqcInspection, completeIqcInspection, completeOqcInspection,
   createIqcInspection, createOqcInspection, getIqcInspection, getOqcInspection,
-  listIqcInspections, listOqcInspections, updateIqcInspection, updateOqcInspection,
+  listIqcInspections, listIqcSourceCandidates, listOqcInspections, updateIqcInspection, updateOqcInspection,
 } from './modules/authoritative-quality.js';
 import { assertQualityGate, deriveQualityState } from './modules/quality-gates.js';
 import {
@@ -361,6 +361,11 @@ import {
   createOutsourcingReceipt,
   getMaterialPosition,
   getOutsourcingOrder,
+  getOutsourcingOptions,
+  getOutsourcingReceiptQualityContext,
+  getOutsourcingReceivingContext,
+  getOutsourcingReceivingQueue,
+  resolveOutsourcingReceivingContext,
   issueMaterial,
   listOutsourcingOrders,
   returnMaterial,
@@ -1113,6 +1118,44 @@ ownedRouteTable.register({
   path: /^\/api\/procurement\/outsourcing\/orders\/([^/]+)\/material-position$/,
   handler: ({ db, res, actor, params }) => getMaterialPosition(db, res, actor, params[0]),
   owner: 'server/modules/outsourcing.js',
+});
+// 委外核心执行工作面的只读投影（Requirement §31.15 OUT-WB-REQ-01..05）。
+// 受限岗位的投影由各自 API 独立判权，客户端隐藏不构成授权。
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/procurement/outsourcing/options',
+  handler: ({ db, res, actor, url }) => getOutsourcingOptions(db, res, actor, url),
+  owner: 'server/modules/outsourcing.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/procurement/outsourcing/receiving-queue',
+  handler: ({ db, res, actor, url }) => getOutsourcingReceivingQueue(db, res, actor, url),
+  owner: 'server/modules/outsourcing.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/procurement\/outsourcing\/orders\/([^/]+)\/receiving-context$/,
+  handler: ({ db, res, actor, params }) => getOutsourcingReceivingContext(db, res, actor, params[0]),
+  owner: 'server/modules/outsourcing.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/procurement/outsourcing/receiving-context',
+  handler: ({ db, res, actor, url }) => resolveOutsourcingReceivingContext(db, res, actor, url),
+  owner: 'server/modules/outsourcing.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/procurement\/outsourcing\/receipts\/([^/]+)\/quality-context$/,
+  handler: ({ db, res, actor, params }) => getOutsourcingReceiptQualityContext(db, res, actor, params[0]),
+  owner: 'server/modules/outsourcing.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/iqc/source-candidates',
+  handler: ({ db, res, actor, url }) => listIqcSourceCandidates(db, res, actor, url),
+  owner: 'server/modules/authoritative-quality.js',
 });
 ownedRouteTable.register({
   method: 'GET',

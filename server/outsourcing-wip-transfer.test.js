@@ -47,12 +47,12 @@ describe('OUT-001 委外跨单 WIP 数量归属转移', () => {
       supplierId: 'supplier-001', productId: 'product-001', orderQuantity: orderQty, businessDate: isoDate(0), bomId,
     });
     assert.equal(order.status, 201, order.data.error);
-    await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'PLAN_CONFIRMED' });
-    await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'RELEASED' });
     const snapshot = await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/material-list`, fixture.tokens.admin, {
       items: [{ productId, requiredQuantity, unit: 'PCS', sourceWarehouseId: 'warehouse-001' }],
     });
     assert.equal(snapshot.status, 200, snapshot.data.error);
+    await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'CONFIRM_PLAN' });
+    await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'RELEASE' });
     const materialRow = fixture.db.prepare('SELECT * FROM outsourcing_material_list WHERE order_id=? AND product_id=?').get(order.data.id, productId);
     assert.ok(materialRow, '物料行快照缺失');
     return { orderId: order.data.id, materialRow };

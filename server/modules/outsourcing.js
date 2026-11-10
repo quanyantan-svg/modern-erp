@@ -7,6 +7,12 @@ import {
 import { executeOutsourcingBackflush, executeOutsourcingMove } from './outsourcing-inventory.js';
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 import { createPurchaseOrderDraftCanonical } from './procurement-orders.js';
+import { assertSupplierQualification } from './procurement-sourcing.js';
+import {
+  listOutsourcingOptions, listOutsourcingReceivingQueue, readOutsourcingReceiptQualityContext,
+  readOutsourcingReceivingContext, resolveOutsourcingOrderId,
+} from './outsourcing-read-models.js';
+import { deriveQualityState } from './quality-gates.js';
 
 const VIEW_PERMISSIONS = ['OUTSOURCING_VIEW', 'OUTSOURCING_MANAGE', 'OUTSOURCING_RELEASE'];
 const MATERIAL_PERMISSIONS = ['OUTSOURCING_MATERIAL_EXECUTE'];
@@ -16,6 +22,7 @@ function assertManagePermission(actor) { allow(actor, 'OUTSOURCING_MANAGE'); }
 function assertReleasePermission(actor) { allowAny(actor, ['OUTSOURCING_RELEASE', 'OUTSOURCING_MANAGE']); }
 function assertMaterialPermission(actor) { allowAny(actor, MATERIAL_PERMISSIONS); }
 function assertReceivingPermission(actor) { allow(actor, 'OUTSOURCING_RECEIVING_MANAGE'); }
+function assertQualityViewPermission(actor) { allowAny(actor, ['IQC_VIEW', 'IQC_MANAGE']); }
 
 function businessConflict(code, message) {
   return new HttpError(409, message, { code });
@@ -77,12 +84,15 @@ function auditRejectedBusinessRule(db, actor, entityType, entityId, action, erro
   auditBusinessRejection(db, actor, { entityType, entityId: entityId || null, action }, error);
 }
 
-const LIFECYCLE_NEXT = {
-  DRAFT: 'PLAN_CONFIRMED',
-  PLAN_CONFIRMED: 'RELEASED',
-  RELEASED: 'COMPLETED',
-  COMPLETED: 'CLOSED',
-};
+// 订单生命周期动作合同（Requirement §31.15 `OUT-WB-REQ-06/07`；Design §26.35.5）。
+// 动作与目标态一一对应：请求必须给出明确动作，动作必须与当前状态相符。
+// 旧客户端的 `NEXT` 不再被静默推进——它固定 400，不会推进任何状态。
+const TRANSITION_TARGETS = Object.freeze({
+  CONFIRM_PLAN: { from: 'DRAFT', to: 'PLAN_CONFIRMED' },
+  RELEASE: { from: 'PLAN_CONFIRMED', to: 'RELEASED' },
+  COMPLETE: { from: 'RELEASED', to: 'COMPLETED' },
+  CLOSE: { from: 'COMPLETED', to: 'CLOSED' },
+});
 
 function rowToOrder(row) {
   if (!row) return null;
@@ -90,7 +100,11 @@ function rowToOrder(row) {
     id: row.id,
     orderNo: row.order_no,
     supplierId: row.supplier_id,
+    supplierCode: row.supplier_code || null,
+    supplierName: row.supplier_name || null,
     productId: row.product_id,
+    productCode: row.product_code || null,
+    productName: row.product_name || null,
     orderQuantity: row.order_quantity,
     requiredQuantity: row.required_quantity,
     unit: row.unit,
@@ -124,23 +138,78 @@ function rowToMaterialList(row) {
 export function listOutsourcingOrders(db, res, actor, url) {
   assertViewPermission(actor);
   const status = url.searchParams.get('status');
+  const search = String(url.searchParams.get('q') || '').trim();
   const where = [];
   const params = [];
-  if (status) { where.push('status=?'); params.push(status); }
-  const orders = db.prepare(`SELECT * FROM outsourcing_orders ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY created_at DESC LIMIT 100`).all(...params).map(rowToOrder);
+  if (status) { where.push('o.status=?'); params.push(status); }
+  if (search) {
+    // 现场按单号、供应商或成品检索，不要求记忆原始数据库 ID。
+    const term = `%${search.replace(/[%_]/g, (character) => `\\${character}`)}%`;
+    where.push("(o.order_no LIKE ? ESCAPE '\\' OR s.code LIKE ? ESCAPE '\\' OR s.name LIKE ? ESCAPE '\\' OR p.code LIKE ? ESCAPE '\\' OR p.name LIKE ? ESCAPE '\\')");
+    params.push(term, term, term, term, term);
+  }
+  const orders = db.prepare(`SELECT o.*, s.code supplier_code, s.name supplier_name,
+      p.code product_code, p.name product_name
+    FROM outsourcing_orders o
+    LEFT JOIN suppliers s ON s.id=o.supplier_id
+    LEFT JOIN products p ON p.id=o.product_id
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ORDER BY o.created_at DESC LIMIT 100`).all(...params).map(rowToOrder);
   return send(res, 200, { outsourcingOrders: orders });
 }
 
 export function getOutsourcingOrder(db, res, actor, orderId) {
   assertViewPermission(actor);
-  const order = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(orderId);
+  const order = db.prepare(`SELECT o.*, s.code supplier_code, s.name supplier_name,
+      p.code product_code, p.name product_name
+    FROM outsourcing_orders o
+    LEFT JOIN suppliers s ON s.id=o.supplier_id
+    LEFT JOIN products p ON p.id=o.product_id
+    WHERE o.id=?`).get(orderId);
   if (!order) throw new HttpError(404, '委外订单不存在');
   const materials = db.prepare('SELECT * FROM outsourcing_material_list WHERE order_id=?').all(orderId).map(rowToMaterialList);
   const issues = db.prepare("SELECT * FROM outsourcing_issues WHERE order_id=?").all(orderId);
   const supplements = db.prepare("SELECT * FROM outsourcing_supplements WHERE order_id=?").all(orderId);
   const returns = db.prepare("SELECT * FROM outsourcing_returns WHERE order_id=?").all(orderId);
   const receipts = db.prepare("SELECT * FROM outsourcing_receipts WHERE order_id=?").all(orderId);
-  return send(res, 200, { outsourcingOrder: rowToOrder(order), materials, issues, supplements, returns, receipts });
+  // 委外业务详情组合加工费 PO 与完工通知引用（Design §26.35.2）。
+  // 这是委外业务岗位的宽投影：委外收货员没有该权限，只能走受限收货投影。
+  const processingPoRow = db.prepare(`SELECT id, order_no, status, total_cents, supplier_id
+    FROM purchase_orders WHERE business_type='OUTSOURCE_PROCESSING' AND source_outsourcing_order_id=?
+    ORDER BY created_at, id`).get(orderId);
+  let processingPo = null;
+  if (processingPoRow) {
+    const poItems = db.prepare(`SELECT id, product_id, quantity, unit_price_cents, amount_cents, line_no, document_uom_code
+      FROM purchase_order_items WHERE order_id=? ORDER BY line_no, id`).all(processingPoRow.id);
+    processingPo = {
+      id: processingPoRow.id,
+      poNo: processingPoRow.order_no,
+      status: processingPoRow.status,
+      totalCents: Number(processingPoRow.total_cents || 0),
+      items: poItems.map((item) => ({
+        id: item.id,
+        productId: item.product_id,
+        quantity: Number(item.quantity),
+        unitPriceCents: Number(item.unit_price_cents),
+        amountCents: Number(item.amount_cents),
+        unitCode: item.document_uom_code || null,
+        lineNo: item.line_no,
+      })),
+    };
+  }
+  const notices = db.prepare(`SELECT n.id, n.notice_no, n.status, n.warehouse_id, n.notice_date,
+      COALESCE(SUM(i.quantity),0) quantity
+    FROM receipt_notices n LEFT JOIN receipt_notice_items i ON i.notice_id=n.id
+    WHERE n.outsourcing_order_id=? AND n.business_type='OUTSOURCE'
+    GROUP BY n.id ORDER BY n.created_at, n.id`).all(orderId).map((notice) => ({
+    id: notice.id,
+    noticeNo: notice.notice_no,
+    status: notice.status,
+    warehouseId: notice.warehouse_id,
+    noticeDate: notice.notice_date,
+    quantity: Number(notice.quantity || 0),
+  }));
+  return send(res, 200, { outsourcingOrder: rowToOrder(order), materials, issues, supplements, returns, receipts, processingPo, notices });
 }
 
 /**
@@ -214,16 +283,14 @@ export async function createOutsourcingOrder(db, req, res, actor) {
   const hasHandoff = Boolean(body.planningHandoffId);
   const sourceType = hasHandoff ? 'PLANNING' : 'MANUAL';
   if (sourceType === 'MANUAL' && hasHandoff) throw new HttpError(400, 'MANUAL 订单不允许携带 planningHandoffId');
-  // Supplier must be qualified for outsourcing.
-  const supplier = db.prepare('SELECT id, qualification_status, qualification_valid_from, qualification_valid_to FROM suppliers WHERE id=? AND outsourcing_enabled=1').get(body.supplierId);
-  if (!supplier) throw new HttpError(409, '供应商未启用委外资质');
   const today = new Date().toISOString().slice(0, 10);
-  if (supplier.qualification_status !== 'QUALIFIED' || (supplier.qualification_valid_to && supplier.qualification_valid_to < today)) {
-    throw new HttpError(409, '委外供应商资质无效或已过期');
-  }
+  const businessDate = body.businessDate || today;
   const orderId = randomUUID(); const now = new Date().toISOString();
   const orderNo = 'OS-' + Date.now().toString().slice(-10);
   transaction(db, () => {
+    // 委外供应商资格按**订单业务日期**与有效起止日判断，不按系统当前日；
+    // 复用采购域唯一资格原语，避免第二份不一致规则（Design §26.35.3）。
+    assertSupplierQualification(db, body.supplierId, 'OUTSOURCE', businessDate);
     if (sourceType === 'PLANNING') {
       consumePlanningHandoff(db, {
         handoffId: body.planningHandoffId, actor,
@@ -253,20 +320,168 @@ export async function createOutsourcingOrder(db, req, res, actor) {
   return send(res, 201, { id: orderId, orderNo });
 }
 
+// 用料快照基数的可证明性。历史不可证明的快照返回 null，不得以 0 取得容量。
+function parseSnapshotBasis(material) {
+  try {
+    const snapshot = JSON.parse(material.bom_snapshot_json || '{}');
+    return snapshot && typeof snapshot === 'object' ? snapshot : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `CONFIRM_PLAN` 门禁：快照必须已在 DRAFT 阶段形成，且逐行可证明
+ * （Requirement §31.15 `OUT-WB-REQ-02/06`；已批准 `MC-REQ-03`）。
+ */
+function assertMaterialSnapshotProvable(db, order) {
+  const materials = db.prepare('SELECT * FROM outsourcing_material_list WHERE order_id=? ORDER BY id').all(order.id);
+  if (!materials.length) {
+    throw businessConflict('OUTSOURCING_MATERIAL_SNAPSHOT_REQUIRED', '委外订单必须先建立用料清单快照才能确认计划');
+  }
+  for (const material of materials) {
+    const snapshot = parseSnapshotBasis(material);
+    if (!snapshot
+      || !Number.isFinite(Number(snapshot.per_unit_quantity))
+      || !Number.isFinite(Number(snapshot.required_quantity))
+      || Math.abs(Number(snapshot.required_quantity) - Number(material.required_quantity)) > 1e-9
+      || !material.source_warehouse_id) {
+      throw businessConflict('OUTSOURCING_MATERIAL_SNAPSHOT_REQUIRED', '委外用料快照缺少可证明的 BOM 版本、来源仓或总量基数');
+    }
+    if (!db.prepare('SELECT 1 FROM warehouses WHERE id=? AND active=1').get(material.source_warehouse_id)) {
+      throw businessConflict('OUTSOURCING_MATERIAL_SNAPSHOT_REQUIRED', '委外用料快照的来源仓不存在或已停用');
+    }
+  }
+  return materials;
+}
+
+/**
+ * `RELEASE` 门禁：快照未被替换，且仍与订单绑定的已批准 OUTSOURCE BOM 一致。
+ * 快照只能在 DRAFT 阶段首次建立，因此此处不存在“已确认计划后补建快照”的路径。
+ */
+function assertMaterialSnapshotUnchanged(db, order) {
+  const materials = assertMaterialSnapshotProvable(db, order);
+  for (const material of materials) {
+    const snapshot = parseSnapshotBasis(material);
+    if (!snapshot.bomId || String(snapshot.bomId) !== String(order.bom_id)) {
+      throw businessConflict('OUTSOURCING_MATERIAL_SNAPSHOT_REPLACED', '委外用料快照与订单绑定的 BOM 不一致');
+    }
+  }
+}
+
+/**
+ * `COMPLETE` 门禁：已生效收货净量必须恰好达到订单数量。
+ * 待检、取消与来源不可证明的收货都不计入；确有已确认成品退货的按历史事实扣减。
+ */
+function assertCompletionQuantityReached(db, order) {
+  const receipts = db.prepare("SELECT * FROM outsourcing_receipts WHERE order_id=? AND business_status='EFFECTED' ORDER BY id").all(order.id);
+  let effectedQuantity = 0;
+  for (const receipt of receipts) {
+    const proven = db.prepare("SELECT 1 FROM inventory_transactions WHERE source_type='OUTSOURCING_RECEIPT' AND source_id=? LIMIT 1").get(receipt.id)
+      || db.prepare("SELECT 1 FROM inventory_valuation_movements WHERE source_type='OUTSOURCING_RECEIPT' AND source_id=? LIMIT 1").get(receipt.id)
+      || db.prepare('SELECT 1 FROM outsourcing_cost_evidences WHERE outsourcing_receipt_id=? LIMIT 1').get(receipt.id);
+    if (!proven) {
+      throw businessConflict('OUTSOURCING_COMPLETION_HISTORY_UNPROVEN', `已生效收货 ${receipt.receipt_no} 的库存与成本证据不可证明`);
+    }
+    effectedQuantity += Number(receipt.quantity || 0);
+  }
+  const returnedQuantity = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) q FROM outsourcing_finished_returns
+    WHERE business_status='CONFIRMED' AND outsourcing_receipt_id IN (SELECT id FROM outsourcing_receipts WHERE order_id=?)`).get(order.id).q);
+  const netQuantity = effectedQuantity - returnedQuantity;
+  const orderQuantity = Number(order.order_quantity);
+  if (Math.abs(netQuantity - orderQuantity) > 1e-9) {
+    throw businessConflict('OUTSOURCING_COMPLETION_QUANTITY_NOT_REACHED',
+      `已生效收货净量 ${netQuantity} 未达到订单数量 ${orderQuantity}`);
+  }
+}
+
+/**
+ * `CLOSE` 门禁：无待检收货、无仍可转换的完工通知剩余量、材料 WIP 净量为零，
+ * 且与 canonical WIP 身份余额逐项一致。延期的 AP/GL、跨期成本与复杂差异
+ * 不是关闭前提，也不得被伪造为已结清（Requirement §31.15 `OUT-WB-REQ-07`）。
+ */
+function assertCloseGates(db, order) {
+  const pendingReceipts = Number(db.prepare("SELECT COUNT(*) c FROM outsourcing_receipts WHERE order_id=? AND business_status='PENDING_INSPECTION'").get(order.id).c);
+  if (pendingReceipts > 0) {
+    throw businessConflict('OUTSOURCING_CLOSE_PENDING_RECEIPT', '委外订单仍有待检收货，不能关闭');
+  }
+  const notices = db.prepare("SELECT id, notice_no FROM receipt_notices WHERE outsourcing_order_id=? AND business_type='OUTSOURCE' AND status IN ('DRAFT','CONFIRMED')").all(order.id);
+  for (const notice of notices) {
+    const noticeQuantity = Number(db.prepare('SELECT COALESCE(SUM(quantity),0) q FROM receipt_notice_items WHERE notice_id=?').get(notice.id).q);
+    const receivedQuantity = Number(db.prepare(`SELECT COALESCE(SUM(ori.quantity),0) q FROM outsourcing_receipt_items ori
+      JOIN outsourcing_receipts orc ON orc.id=ori.receipt_id
+      JOIN receipt_notice_items rni ON rni.id=ori.source_notice_item_source_id
+      WHERE rni.notice_id=? AND orc.business_status<>'CANCELLED'`).get(notice.id).q);
+    if (noticeQuantity - receivedQuantity > 1e-9) {
+      throw businessConflict('OUTSOURCING_CLOSE_OPEN_NOTICE', `完工通知 ${notice.notice_no} 仍有未收货数量，不能关闭`);
+    }
+  }
+  const materials = db.prepare('SELECT * FROM outsourcing_material_list WHERE order_id=? ORDER BY id').all(order.id);
+  for (const material of materials) {
+    if (material.legacy_unverified_wip_quantity === null || material.legacy_unverified_wip_quantity === undefined) {
+      throw businessConflict('OUTSOURCING_CLOSE_WIP_UNPROVEN', '委外物料行的历史 WIP 不可证明，不能关闭');
+    }
+    const transfers = db.prepare(`SELECT event_type, COALESCE(SUM(ABS(signed_quantity)),0) q FROM outsourcing_wip_identity_effects
+      WHERE material_list_id=? AND event_type IN ('TRANSFER_IN','TRANSFER_OUT') GROUP BY event_type`).all(material.id);
+    const transferIn = Number(transfers.find((item) => item.event_type === 'TRANSFER_IN')?.q || 0);
+    const transferOut = Number(transfers.find((item) => item.event_type === 'TRANSFER_OUT')?.q || 0);
+    const netQuantity = Number(material.issued_quantity) + Number(material.supplemented_quantity) + transferIn
+      - Number(material.returned_quantity) - Number(material.backflushed_quantity) - transferOut;
+    if (netQuantity < -1e-9) {
+      throw businessConflict('OUTSOURCING_CLOSE_WIP_NEGATIVE', '委外物料行的 WIP 净量为负，事实不可证明，不能关闭');
+    }
+    if (Math.abs(netQuantity) > 1e-9) {
+      throw businessConflict('OUTSOURCING_CLOSE_WIP_REMAINING', '委外订单仍有未处理的材料 WIP 余量，不能关闭');
+    }
+    const balances = db.prepare('SELECT * FROM outsourcing_wip_identity_balances WHERE material_list_id=?').all(material.id);
+    for (const balance of balances) {
+      if (Math.abs(Number(balance.available_quantity)) > 1e-9) {
+        throw businessConflict('OUTSOURCING_CLOSE_WIP_IDENTITY_REMAINING', '委外物料行仍有可证明的 WIP 身份余额，不能关闭');
+      }
+      if (Math.abs(Number(balance.supplied_quantity) - Number(balance.consumed_quantity) - Number(balance.available_quantity)) > 1e-9) {
+        throw businessConflict('OUTSOURCING_CLOSE_WIP_UNPROVEN', '委外物料行的 WIP 身份账不可证明，不能关闭');
+      }
+    }
+  }
+}
+
 export async function transitionOutsourcingOrder(db, req, res, actor, orderId) {
   assertReleasePermission(actor);
-  const order = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(orderId);
-  if (!order) throw new HttpError(404, '委外订单不存在');
   const body = await readJson(req);
-  const action = String(body.action || '').toUpperCase();
-  const next = LIFECYCLE_NEXT[order.status];
-  if (!next) throw new HttpError(409, '当前状态不可推进');
+  assertAllowedFields(body, ['action']);
+  const action = String(body.action || '').trim().toUpperCase();
+  if (!action || !Object.prototype.hasOwnProperty.call(TRANSITION_TARGETS, action)) {
+    throw new HttpError(400, '必须提供明确动作：CONFIRM_PLAN / RELEASE / COMPLETE / CLOSE', { code: 'OUTSOURCING_TRANSITION_ACTION_INVALID' });
+  }
+  const target = TRANSITION_TARGETS[action];
   const now = new Date().toISOString();
-  transaction(db, () => {
-    db.prepare('UPDATE outsourcing_orders SET status=?,updated_at=? WHERE id=?').run(next, now, orderId);
-    audit(db, actor.id, action || next, 'OUTSOURCING_ORDER', orderId, next);
-  });
-  return send(res, 200, { ok: true, status: next });
+  try {
+    transaction(db, () => {
+      // 事务内权威重读：请求前的读取不是权威状态（Design §26.35.5）。
+      const order = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(orderId);
+      if (!order) throw new HttpError(404, '委外订单不存在');
+      if (order.status !== target.from) {
+        throw businessConflict('OUTSOURCING_TRANSITION_STATE_CONFLICT',
+          `动作 ${action} 只允许从 ${target.from} 执行，当前状态为 ${order.status}`);
+      }
+      if (action === 'CONFIRM_PLAN') assertMaterialSnapshotProvable(db, order);
+      else if (action === 'RELEASE') assertMaterialSnapshotUnchanged(db, order);
+      else if (action === 'COMPLETE') assertCompletionQuantityReached(db, order);
+      else assertCloseGates(db, order);
+      // 条件更新：受影响行数不为 1 表示并发已改变状态，必须失败而非静默成功。
+      const updated = db.prepare('UPDATE outsourcing_orders SET status=?,updated_at=? WHERE id=? AND status=?')
+        .run(target.to, now, orderId, target.from);
+      if (Number(updated.changes ?? updated.affectedRows) !== 1) {
+        throw businessConflict('OUTSOURCING_TRANSITION_STATE_CONFLICT', '委外订单状态已被并发改变，请重新读取后再操作');
+      }
+      audit(db, actor.id, action, 'OUTSOURCING_ORDER', orderId, `${target.from}→${target.to}`);
+    });
+  } catch (error) {
+    // 400/403/404 不是业务拒绝，不写 Domain 拒绝审计；409 写恰好一条。
+    auditRejectedBusinessRule(db, actor, 'OUTSOURCING_ORDER', orderId, `委外订单${action}`, error);
+    throw error;
+  }
+  return send(res, 200, { ok: true, status: target.to });
 }
 
 export async function cancelOutsourcingOrder(db, req, res, actor, orderId) {
@@ -339,10 +554,12 @@ export async function createOutsourcingProcessingPurchaseOrder(db, req, res, act
       }
       const supplier = db.prepare(`SELECT * FROM suppliers WHERE id=? AND active=1 AND outsourcing_enabled=1`).get(order.supplier_id);
       const today = new Date().toISOString().slice(0, 10);
-      if (!supplier || supplier.qualification_status !== 'QUALIFIED'
-        || (supplier.qualification_valid_from && supplier.qualification_valid_from > today)
-        || (supplier.qualification_valid_to && supplier.qualification_valid_to < today)) {
-        throw businessConflict('PROCESSING_PO_SUPPLIER_NOT_QUALIFIED', '委外供应商资质无效');
+      // 加工费 PO 的委外供应商资格同样按**订单业务日期**判定（Design §26.35.3）。
+      if (!supplier) throw businessConflict('PROCESSING_PO_SUPPLIER_NOT_QUALIFIED', '委外供应商资质无效');
+      try {
+        assertSupplierQualification(db, order.supplier_id, 'OUTSOURCE', order.business_date);
+      } catch (error) {
+        throw businessConflict('PROCESSING_PO_SUPPLIER_NOT_QUALIFIED', `委外供应商资质在订单业务日期 ${order.business_date} 无效`);
       }
       const product = db.prepare('SELECT * FROM products WHERE id=? AND active=1').get(order.product_id);
       if (!product) throw businessConflict('PROCESSING_PO_PRODUCT_INVALID', '委外成品不存在或已停用');
@@ -382,44 +599,50 @@ export async function createOutsourcingProcessingPurchaseOrder(db, req, res, act
 
 export async function snapshotMaterialList(db, req, res, actor, orderId) {
   assertManagePermission(actor);
-  const order = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(orderId);
-  if (!order) throw new HttpError(404, '委外订单不存在');
   const body = await readJson(req);
   assertAllowedFields(body, ['items']);
   const bindings = Array.isArray(body.items) ? body.items : [];
-  if (!order.bom_id) throw businessConflict('OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED', '委外订单未绑定已批准 OUTSOURCE BOM');
-  const bom = db.prepare(`SELECT * FROM boms WHERE id=? AND product_id=? AND status='ACTIVE'
-    AND approval_status='APPROVED' AND purpose='OUTSOURCE'
-    AND (effective_from IS NULL OR effective_from<=?) AND (effective_to IS NULL OR effective_to>=?)`).get(
-    order.bom_id, order.product_id, order.business_date, order.business_date,
-  );
-  if (!bom || (order.bom_version != null && Number(order.bom_version) !== Number(bom.version))) {
-    throw businessConflict('OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED', '委外 BOM 未批准、未生效、用途不符或版本不一致');
-  }
-  const bomItems = db.prepare('SELECT * FROM bom_items WHERE bom_id=? ORDER BY line_no,id').all(bom.id);
-  if (!bomItems.length) throw businessConflict('OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED', '委外 BOM 没有有效用料行');
-  const bindingByProduct = new Map(bindings.map((item) => [item.productId, item]));
-  for (const item of bomItems) {
-    if (Number(item.scrap_rate || 0) !== 0
-      || Number(item.conversion_numerator || 1) !== 1
-      || Number(item.conversion_denominator || 1) !== 1) {
-      throw businessConflict('OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED', '首期不支持 BOM 损耗或单位换算');
-    }
-    const product = db.prepare('SELECT base_uom_code,unit FROM products WHERE id=? AND active=1').get(item.product_id);
-    const unit = String(item.uom_code_snapshot || product?.base_uom_code || product?.unit || 'EA').toUpperCase();
-    const base = String(product?.base_uom_code || product?.unit || 'EA').toUpperCase();
-    if (!product || unit !== base) throw businessConflict('OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED', 'BOM 用料单位与产品基础单位不一致');
-    const binding = bindingByProduct.get(item.product_id);
-    if (!binding?.sourceWarehouseId) throw businessConflict('OUTSOURCING_WIP_SOURCE_WAREHOUSE_UNPROVEN', `物料 ${item.product_id} 缺少来源仓绑定`);
-    if (!db.prepare('SELECT 1 FROM warehouses WHERE id=? AND active=1').get(binding.sourceWarehouseId)) {
-      throw businessConflict('OUTSOURCING_WIP_WAREHOUSE_MISSING', `物料 ${item.product_id} 来源仓不存在或已停用`);
-    }
-  }
   const now = new Date().toISOString();
+  let snapshotCount = 0;
   try {
     transaction(db, () => {
+      // 事务内重读订单：状态、BOM 绑定与业务日期都以权威重读为准
+      // （Design §26.35.3；Requirement §31.15 `OUT-WB-REQ-02/06`）。
+      const order = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(orderId);
+      if (!order) throw new HttpError(404, '委外订单不存在');
+      if (order.status !== 'DRAFT') {
+        throw businessConflict('OUTSOURCING_MATERIAL_SNAPSHOT_STATE_INVALID', '只有草稿状态的委外订单可以建立用料快照');
+      }
       if (db.prepare('SELECT 1 FROM outsourcing_material_list WHERE order_id=? LIMIT 1').get(orderId)) {
         throw businessConflict('OUTSOURCING_MATERIAL_SNAPSHOT_IMMUTABLE', '委外用料快照已建立，不得随 BOM 变化重写');
+      }
+      if (!order.bom_id) throw businessConflict('OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED', '委外订单未绑定已批准 OUTSOURCE BOM');
+      const bom = db.prepare(`SELECT * FROM boms WHERE id=? AND product_id=? AND status='ACTIVE'
+        AND approval_status='APPROVED' AND purpose='OUTSOURCE'
+        AND (effective_from IS NULL OR effective_from<=?) AND (effective_to IS NULL OR effective_to>=?)`).get(
+        order.bom_id, order.product_id, order.business_date, order.business_date,
+      );
+      if (!bom || (order.bom_version != null && Number(order.bom_version) !== Number(bom.version))) {
+        throw businessConflict('OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED', '委外 BOM 未批准、未生效、用途不符或版本不一致');
+      }
+      const bomItems = db.prepare('SELECT * FROM bom_items WHERE bom_id=? ORDER BY line_no,id').all(bom.id);
+      if (!bomItems.length) throw businessConflict('OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED', '委外 BOM 没有有效用料行');
+      const bindingByProduct = new Map(bindings.map((item) => [item.productId, item]));
+      for (const item of bomItems) {
+        if (Number(item.scrap_rate || 0) !== 0
+          || Number(item.conversion_numerator || 1) !== 1
+          || Number(item.conversion_denominator || 1) !== 1) {
+          throw businessConflict('OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED', '首期不支持 BOM 损耗或单位换算');
+        }
+        const product = db.prepare('SELECT base_uom_code,unit FROM products WHERE id=? AND active=1').get(item.product_id);
+        const unit = String(item.uom_code_snapshot || product?.base_uom_code || product?.unit || 'EA').toUpperCase();
+        const base = String(product?.base_uom_code || product?.unit || 'EA').toUpperCase();
+        if (!product || unit !== base) throw businessConflict('OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED', 'BOM 用料单位与产品基础单位不一致');
+        const binding = bindingByProduct.get(item.product_id);
+        if (!binding?.sourceWarehouseId) throw businessConflict('OUTSOURCING_WIP_SOURCE_WAREHOUSE_UNPROVEN', `物料 ${item.product_id} 缺少来源仓绑定`);
+        if (!db.prepare('SELECT 1 FROM warehouses WHERE id=? AND active=1').get(binding.sourceWarehouseId)) {
+          throw businessConflict('OUTSOURCING_WIP_WAREHOUSE_MISSING', `物料 ${item.product_id} 来源仓不存在或已停用`);
+        }
       }
       const stmt = db.prepare(`INSERT INTO outsourcing_material_list(
         id,order_id,product_id,required_quantity,unit,bom_snapshot_json,source_warehouse_id,legacy_unverified_wip_quantity,identity_evidence_state,created_at,updated_at
@@ -433,13 +656,14 @@ export async function snapshotMaterialList(db, req, res, actor, orderId) {
           JSON.stringify({ bomId: bom.id, bomVersion: bom.version, bomItemId: item.id, per_unit_quantity: perUnitQuantity, required_quantity: requiredQuantity }),
           bindingByProduct.get(item.product_id).sourceWarehouseId, now, now);
       });
+      snapshotCount = bomItems.length;
       audit(db, actor.id, 'SNAPSHOT', 'OUTSOURCING_MATERIAL_LIST', orderId, `OUTSOURCE BOM ${bom.id} 快照 ${bomItems.length} 行`);
     });
   } catch (error) {
     auditRejectedBusinessRule(db, actor, 'OUTSOURCING_ORDER', orderId, '建立委外用料快照', error);
     throw error;
   }
-  return send(res, 200, { ok: true, count: bomItems.length });
+  return send(res, 200, { ok: true, count: snapshotCount });
 }
 
 // 委外材料动作的规范化 fingerprint：可选身份字段缺省与 null 等价，
@@ -556,6 +780,11 @@ export async function returnMaterial(db, req, res, actor, orderId) {
   try { transaction(db, () => {
     const order = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(orderId);
     if (!order) throw new HttpError(404, '委外订单不存在');
+    // 材料终态约束（Requirement §31.15 `OUT-WB-REQ-07`）：退料只允许已下达或已完工，
+    // 用于清零真实未耗用 WIP 以便关闭；关闭后一律拒绝。
+    if (!['RELEASED', 'COMPLETED'].includes(order.status)) {
+      throw businessConflict('OUTSOURCING_ORDER_STATE_INVALID', '只有已下达或已完工状态的委外订单可以退料');
+    }
     const material = db.prepare('SELECT * FROM outsourcing_material_list WHERE id=? AND order_id=?').get(body.materialListId, orderId);
     if (!material) throw new HttpError(404, '物料清单行不存在');
     assertWipHistoryProvable(material);
@@ -595,6 +824,10 @@ export async function backflushMaterial(db, req, res, actor, orderId) {
   try { transaction(db, () => {
     const order = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(orderId);
     if (!order) throw new HttpError(404, '委外订单不存在');
+    // 倒冲与退料同属材料终态约束：已关闭订单不得再改变材料事实。
+    if (!['RELEASED', 'COMPLETED'].includes(order.status)) {
+      throw businessConflict('OUTSOURCING_ORDER_STATE_INVALID', '只有已下达或已完工状态的委外订单可以执行倒冲复核');
+    }
     const lockedReceipt = db.prepare('SELECT * FROM outsourcing_receipts WHERE id=? AND order_id=?').get(body.receiptId, orderId);
     if (!lockedReceipt || lockedReceipt.business_status !== 'EFFECTED') throw businessConflict('OUTSOURCING_RECEIPT_NOT_EFFECTED', '仅已生效收货可执行倒冲复核');
     cumulativeFinished = Number(db.prepare("SELECT COALESCE(SUM(quantity),0) q FROM outsourcing_receipts WHERE order_id=? AND business_status='EFFECTED'").get(orderId).q);
@@ -735,6 +968,76 @@ export function getMaterialPosition(db, res, actor, orderId) {
   assertViewPermission(actor);
   const materials = db.prepare('SELECT * FROM outsourcing_material_list WHERE order_id=?').all(orderId).map(rowToMaterialList);
   return send(res, 200, { materials });
+}
+
+/**
+ * 委外业务侧的选项读模型（Requirement §31.15 `OUT-WB-REQ-02`）。
+ * 只读既有权威主数据；保存时 Writer 仍按业务日期、资格、BOM 版本与来源重新校验。
+ */
+export function getOutsourcingOptions(db, res, actor, url) {
+  assertViewPermission(actor);
+  const result = listOutsourcingOptions(db, {
+    kind: url.searchParams.get('kind'),
+    query: url.searchParams.get('q'),
+    businessDate: url.searchParams.get('businessDate'),
+    productId: url.searchParams.get('productId'),
+    limit: url.searchParams.get('limit'),
+  });
+  return send(res, 200, result);
+}
+
+/**
+ * 委外收货员任务队列（Requirement §31.15 `OUT-WB-REQ-04`）。
+ * 只有 `OUTSOURCING_RECEIVING_MANAGE` 可读；返回白名单投影，
+ * 不含材料成本、Supplier WIP 身份或订单的其他敏感字段。
+ */
+export function getOutsourcingReceivingQueue(db, res, actor, url) {
+  assertReceivingPermission(actor);
+  const result = listOutsourcingReceivingQueue(db, {
+    limit: url.searchParams.get('limit'),
+    offset: url.searchParams.get('offset'),
+  });
+  return send(res, 200, result);
+}
+
+/**
+ * 单个委外订单的收货上下文（同一受限岗位）。
+ * 与宽的 `getOutsourcingOrder()` 分离：受限岗位不得调用宽订单详情。
+ */
+export function getOutsourcingReceivingContext(db, res, actor, orderId) {
+  assertReceivingPermission(actor);
+  const context = readOutsourcingReceivingContext(db, orderId);
+  if (!context) throw new HttpError(404, '委外订单不存在');
+  return send(res, 200, { receivingContext: context });
+}
+
+/**
+ * 收货上下文的深链接入口：可按订单、完工通知或委外收货定位同一投影，
+ * 使 URL 成为业务身份的唯一来源（Design §26.35.2）。
+ */
+export function resolveOutsourcingReceivingContext(db, res, actor, url) {
+  assertReceivingPermission(actor);
+  const orderId = resolveOutsourcingOrderId(db, {
+    orderId: url.searchParams.get('orderId'),
+    noticeId: url.searchParams.get('noticeId'),
+    receiptId: url.searchParams.get('receiptId'),
+  });
+  if (!orderId) throw new HttpError(404, '委外收货上下文不存在');
+  const context = readOutsourcingReceivingContext(db, orderId);
+  if (!context) throw new HttpError(404, '委外订单不存在');
+  return send(res, 200, { receivingContext: context });
+}
+
+/**
+ * 委外收货的检验上下文（IQC 岗位只读，Requirement §31.15 `OUT-WB-REQ-05`）。
+ * 质量门禁状态由 canonical `deriveQualityState` 给出，委外工作面不得伪造结论。
+ */
+export function getOutsourcingReceiptQualityContext(db, res, actor, receiptId) {
+  assertQualityViewPermission(actor);
+  const context = readOutsourcingReceiptQualityContext(db, receiptId);
+  if (!context) throw new HttpError(404, '委外收货不存在');
+  const qualityState = deriveQualityState(db, 'IQC', receiptId, 'OUTSOURCING_RECEIPT');
+  return send(res, 200, { qualityContext: { ...context, qualityState } });
 }
 
 export {

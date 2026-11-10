@@ -12,7 +12,7 @@
 
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { createApprovedProcessingPo, createProcurementFixture } from './test-support/procurement-http-fixture.js';
+import { createApprovedProcessingPo, createProcurementFixture, seedApprovedOutsourceBom } from './test-support/procurement-http-fixture.js';
 
 describe('M1C-WP-1 — receipt notice sources, business-type scoped capacity and notice conversion', () => {
   let fixture;
@@ -89,12 +89,18 @@ describe('M1C-WP-1 — receipt notice sources, business-type scoped capacity and
   }
 
   async function createReleasedOutsourcingOrder(orderQuantity) {
+    const bomId = seedApprovedOutsourceBom(fixture, 'product-001', [{ productId: 'product-001', requiredQuantity: 0 }], `wp1-conv-${Date.now()}-${Math.random()}`);
     const order = await fixture.request('POST', '/api/procurement/outsourcing/orders', fixture.tokens.admin, {
-      supplierId: 'supplier-001', productId: 'product-001', orderQuantity, businessDate: isoDate(0),
+      supplierId: 'supplier-001', productId: 'product-001', orderQuantity, businessDate: isoDate(0), bomId,
     });
     assert.equal(order.status, 201, order.data.error);
-    await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'PLAN_CONFIRMED' });
-    await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'RELEASED' });
+    // 用料快照必须在 DRAFT 阶段形成（Requirement §31.15；已批准 MC-REQ-03）。
+    const snapshot = await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/material-list`, fixture.tokens.admin, {
+      items: [{ productId: 'product-001', sourceWarehouseId: 'warehouse-001' }],
+    });
+    assert.equal(snapshot.status, 200, snapshot.data.error);
+    await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'CONFIRM_PLAN' });
+    await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'RELEASE' });
     return order.data.id;
   }
 

@@ -194,9 +194,9 @@ export const M1_CORE_G07_FIXED_SCENARIOS = Object.freeze([
       step('stock', 'warehouse', 'POST', '/api/inventory-adjustments', { body: { warehouseId: 'warehouse-001', adjustmentDate: { $businessDate: 0 }, reason: 'G07 CR03 source inventory', items: [{ productId: { $ref: 'setup.material.id' }, quantityDelta: 10 }] } }),
       step('stockConfirm', 'warehouse', 'POST', '/api/inventory-adjustments/{setup.stock.id}/confirm'),
       step('order', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders', { body: { supplierId: 'supplier-001', productId: { $ref: 'setup.finished.id' }, orderQuantity: 10, unit: 'EA', businessDate: { $businessDate: 0 }, bomId: { $ref: 'setup.bom.id' } } }),
-      step('plan', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'PLAN_CONFIRMED' } }),
-      step('release', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'RELEASED' } }),
       step('snapshot', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/material-list', { body: { items: [{ productId: { $ref: 'setup.material.id' }, sourceWarehouseId: 'warehouse-001' }] } }),
+      step('plan', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'CONFIRM_PLAN' } }),
+      step('release', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'RELEASE' } }),
       step('orderGet', 'outsourcing', 'GET', '/api/procurement/outsourcing/orders/{setup.order.id}'),
       step('issue', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/issues', { body: { materialListId: { $ref: 'setup.orderGet.materials.0.id' }, quantity: 10, idempotencyKey: 'cr03-issue' } }),
       step('po', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/processing-fee-purchase-orders', { headers: { 'idempotency-key': 'cr03-po' }, body: { unitPriceCents: 500, orderDate: { $businessDate: 0 }, expectedDeliveryDate: { $businessDate: 30 }, paymentTerms: '30 days', supplierContactName: 'C', supplierContactPhone: '13800000000', supplierAddress: 'A' } }),
@@ -234,9 +234,9 @@ export const M1_CORE_G07_FIXED_SCENARIOS = Object.freeze([
       step('stock', 'warehouse', 'POST', '/api/inventory-adjustments', { body: { warehouseId: 'warehouse-001', adjustmentDate: { $businessDate: 0 }, reason: 'G07 CR04 source inventory', items: [{ productId: { $ref: 'setup.material.id' }, quantityDelta: 10 }] } }),
       step('stockConfirm', 'warehouse', 'POST', '/api/inventory-adjustments/{setup.stock.id}/confirm'),
       step('order', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders', { body: { supplierId: 'supplier-001', productId: { $ref: 'setup.finished.id' }, orderQuantity: 10, unit: 'EA', businessDate: { $businessDate: 0 }, bomId: { $ref: 'setup.bom.id' } } }),
-      step('plan', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'PLAN_CONFIRMED' } }),
-      step('release', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'RELEASED' } }),
       step('snapshot', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/material-list', { body: { items: [{ productId: { $ref: 'setup.material.id' }, sourceWarehouseId: 'warehouse-001' }] } }),
+      step('plan', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'CONFIRM_PLAN' } }),
+      step('release', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'RELEASE' } }),
       step('orderGet', 'outsourcing', 'GET', '/api/procurement/outsourcing/orders/{setup.order.id}'),
     ],
     raceRequests: [
@@ -256,9 +256,9 @@ export const M1_CORE_G07_FIXED_SCENARIOS = Object.freeze([
       step('stock', 'warehouse', 'POST', '/api/inventory-adjustments', { body: { warehouseId: 'warehouse-001', adjustmentDate: { $businessDate: 0 }, reason: 'G07 CR05 source inventory', items: [{ productId: { $ref: 'setup.material.id' }, quantityDelta: 10 }] } }),
       step('stockConfirm', 'warehouse', 'POST', '/api/inventory-adjustments/{setup.stock.id}/confirm'),
       step('order', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders', { body: { supplierId: 'supplier-001', productId: { $ref: 'setup.finished.id' }, orderQuantity: 10, unit: 'EA', businessDate: { $businessDate: 0 }, bomId: { $ref: 'setup.bom.id' } } }),
-      step('plan', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'PLAN_CONFIRMED' } }),
-      step('release', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'RELEASED' } }),
       step('snapshot', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/material-list', { body: { items: [{ productId: { $ref: 'setup.material.id' }, sourceWarehouseId: 'warehouse-001' }] } }),
+      step('plan', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'CONFIRM_PLAN' } }),
+      step('release', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'RELEASE' } }),
       step('orderGet', 'outsourcing', 'GET', '/api/procurement/outsourcing/orders/{setup.order.id}'),
     ],
     raceRequests: [
@@ -278,9 +278,9 @@ export const M1_CORE_G07_FIXED_SCENARIOS = Object.freeze([
       step('stock', 'warehouse', 'POST', '/api/inventory-adjustments', { body: { warehouseId: 'warehouse-001', adjustmentDate: { $businessDate: 0 }, reason: 'G07 CR06 source inventory', items: [{ productId: { $ref: 'setup.material.id' }, quantityDelta: 10 }] } }),
       step('stockConfirm', 'warehouse', 'POST', '/api/inventory-adjustments/{setup.stock.id}/confirm'),
       step('order', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders', { body: { supplierId: 'supplier-001', productId: { $ref: 'setup.finished.id' }, orderQuantity: 10, unit: 'EA', businessDate: { $businessDate: 0 }, bomId: { $ref: 'setup.bom.id' } } }),
-      step('plan', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'PLAN_CONFIRMED' } }),
-      step('release', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'RELEASED' } }),
       step('snapshot', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/material-list', { body: { items: [{ productId: { $ref: 'setup.material.id' }, sourceWarehouseId: 'warehouse-001' }] } }),
+      step('plan', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'CONFIRM_PLAN' } }),
+      step('release', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'RELEASE' } }),
       step('orderGet', 'outsourcing', 'GET', '/api/procurement/outsourcing/orders/{setup.order.id}'),
       step('issue', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/issues', { body: { materialListId: { $ref: 'setup.orderGet.materials.0.id' }, quantity: 10, idempotencyKey: 'cr06-issue' } }),
     ],
@@ -301,9 +301,9 @@ export const M1_CORE_G07_FIXED_SCENARIOS = Object.freeze([
       step('stock', 'warehouse', 'POST', '/api/inventory-adjustments', { body: { warehouseId: 'warehouse-001', adjustmentDate: { $businessDate: 0 }, reason: 'G07 CR07 source inventory', items: [{ productId: { $ref: 'setup.material.id' }, quantityDelta: 6 }] } }),
       step('stockConfirm', 'warehouse', 'POST', '/api/inventory-adjustments/{setup.stock.id}/confirm'),
       step('order', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders', { body: { supplierId: 'supplier-001', productId: { $ref: 'setup.finished.id' }, orderQuantity: 10, unit: 'EA', businessDate: { $businessDate: 0 }, bomId: { $ref: 'setup.bom.id' } } }),
-      step('plan', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'PLAN_CONFIRMED' } }),
-      step('release', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'RELEASED' } }),
       step('snapshot', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/material-list', { body: { items: [{ productId: { $ref: 'setup.material.id' }, sourceWarehouseId: 'warehouse-001' }] } }),
+      step('plan', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'CONFIRM_PLAN' } }),
+      step('release', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'RELEASE' } }),
       step('orderGet', 'outsourcing', 'GET', '/api/procurement/outsourcing/orders/{setup.order.id}'),
       step('issue', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/issues', { body: { materialListId: { $ref: 'setup.orderGet.materials.0.id' }, quantity: 6, idempotencyKey: 'cr07-issue' } }),
       step('po', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/processing-fee-purchase-orders', { headers: { 'idempotency-key': 'cr07-po' }, body: { unitPriceCents: 500, orderDate: { $businessDate: 0 }, expectedDeliveryDate: { $businessDate: 30 }, paymentTerms: '30 days', supplierContactName: 'C', supplierContactPhone: '13800000000', supplierAddress: 'A' } }),
@@ -342,9 +342,9 @@ export const M1_CORE_G07_FIXED_SCENARIOS = Object.freeze([
       technical('stockValuation', 'SOURCE_INVENTORY_SEED', { productId: { $ref: 'setup.material.id' }, warehouseId: 'warehouse-001', lotId: { $ref: 'setup.lot.id' }, quantity: 1, valueCents: 100, businessDate: { $businessDate: 0 }, sourceId: { $ref: 'setup.stockDocument.id' } }),
       step('bom', 'admin', 'POST', '/api/engineering/boms', { body: { productId: { $ref: 'setup.finished.id' }, version: 'CR08', purpose: 'OUTSOURCE', approvalStatus: 'APPROVED', effectiveFrom: { $businessDate: -1 }, items: [{ productId: { $ref: 'setup.material.id' }, quantity: 1 }] } }),
       step('order', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders', { body: { supplierId: 'supplier-001', productId: { $ref: 'setup.finished.id' }, orderQuantity: 1, unit: 'EA', businessDate: { $businessDate: 0 }, bomId: { $ref: 'setup.bom.id' } } }),
-      step('plan', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'PLAN_CONFIRMED' } }),
-      step('release', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'RELEASED' } }),
       step('snapshot', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/material-list', { body: { items: [{ productId: { $ref: 'setup.material.id' }, sourceWarehouseId: 'warehouse-001' }] } }),
+      step('plan', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'CONFIRM_PLAN' } }),
+      step('release', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'RELEASE' } }),
       step('orderGet', 'outsourcing', 'GET', '/api/procurement/outsourcing/orders/{setup.order.id}'),
       step('issue', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/issues', { body: { materialListId: { $ref: 'setup.orderGet.materials.0.id' }, quantity: 1, idempotencyKey: 'cr08-issue', lotId: { $ref: 'setup.lot.id' } } }),
       step('po', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/processing-fee-purchase-orders', { headers: { 'idempotency-key': 'cr08-po' }, body: { unitPriceCents: 500, orderDate: { $businessDate: 0 }, expectedDeliveryDate: { $businessDate: 30 }, paymentTerms: '30 days', supplierContactName: 'C', supplierContactPhone: '13800000000', supplierAddress: 'A' } }),
@@ -369,10 +369,13 @@ export const M1_CORE_G07_FIXED_SCENARIOS = Object.freeze([
     sharedResource: 'one RELEASED outsourcing order (lifetime-single processing-fee PO); two creates race',
     setup: [
       step('finished', 'admin', 'POST', '/api/products', { body: { code: 'cr09-finished', name: 'CR09 finished', unit: 'EA', baseUomCode: 'EA', priceCents: 100, inventoryClassification: 'FINISHED_GOOD', trackingPolicy: 'NONE' } }),
+      step('material', 'admin', 'POST', '/api/products', { body: { code: 'cr09-material', name: 'CR09 material', unit: 'EA', baseUomCode: 'EA', priceCents: 100, standardManufacturingCostCents: 100, inventoryClassification: 'RAW_MATERIAL', trackingPolicy: 'NONE' } }),
       step('qualify', 'admin', 'PATCH', '/api/suppliers/supplier-001/profile', { body: { outsourcingEnabled: true, category: 'OUTSOURCE', qualificationStatus: 'QUALIFIED', qualificationValidFrom: { $businessDate: -30 }, qualificationValidTo: { $businessDate: 365 }, supplierWipWarehouseId: 'warehouse-002' } }),
-      step('order', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders', { body: { supplierId: 'supplier-001', productId: { $ref: 'setup.finished.id' }, orderQuantity: 10, unit: 'EA', businessDate: { $businessDate: 0 } } }),
-      step('plan', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'PLAN_CONFIRMED' } }),
-      step('release', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'RELEASED' } }),
+      step('bom', 'admin', 'POST', '/api/engineering/boms', { body: { productId: { $ref: 'setup.finished.id' }, version: 'CR09', purpose: 'OUTSOURCE', approvalStatus: 'APPROVED', effectiveFrom: { $businessDate: -1 }, items: [{ productId: { $ref: 'setup.material.id' }, quantity: 1 }] } }),
+      step('order', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders', { body: { supplierId: 'supplier-001', productId: { $ref: 'setup.finished.id' }, orderQuantity: 10, unit: 'EA', businessDate: { $businessDate: 0 }, bomId: { $ref: 'setup.bom.id' } } }),
+      step('snapshot', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/material-list', { body: { items: [{ productId: { $ref: 'setup.material.id' }, sourceWarehouseId: 'warehouse-001' }] } }),
+      step('plan', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'CONFIRM_PLAN' } }),
+      step('release', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/transition', { body: { action: 'RELEASE' } }),
     ],
     raceRequests: [
       race('outsourcing', 'A', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/processing-fee-purchase-orders', { headers: { 'idempotency-key': 'cr09-po-a' }, body: { unitPriceCents: 500, orderDate: { $businessDate: 0 }, expectedDeliveryDate: { $businessDate: 30 }, paymentTerms: '30 days', supplierContactName: 'C', supplierContactPhone: '13800000000', supplierAddress: 'A' } }),
@@ -404,7 +407,14 @@ export function computeM1CoreG07FixtureDigest(scenarios = M1_CORE_G07_FIXED_SCEN
 // Independent frozen approved digest. This is NOT recomputed at runtime from
 // the same objects it validates — it is a fixed hex frozen by independent
 // review of these definitions, so any later drift is a tamper signal.
-export const M1_CORE_G07_FIXED_FIXTURE_DIGEST = '9816affb5a94108723929cf8844ea1a640a71a210c604cea6cdd73fdb0d71091';
+//
+// 变更记录（2026-11-10，Requirement §31.15 委外核心执行工作面）：委外订单
+// 流转动作由目标态名改为精确动作（`CONFIRM_PLAN` / `RELEASE`），且用料快照
+// 必须在 DRAFT 阶段形成才能确认计划。固定场景必须改为沿新合同的生产 HTTP
+// 链，否则门禁不再检验真实 API。固定场景因此变更，冻结摘要随之重新计算。
+// **该重新冻结待业务所有者显式确认**：在此之前，真实 MySQL Gate 的既有
+// 验收结论不因本次变更自动延续。
+export const M1_CORE_G07_FIXED_FIXTURE_DIGEST = '60f7888f1d52f6858d8eaca458ede077ab454445c51743b7004bd864767ac2fb';
 
 function lookup(context, reference) {
   const parts = String(reference).split('.');

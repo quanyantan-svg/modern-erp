@@ -48,26 +48,27 @@ describe('M1C WP2-WP5 outsourcing core', () => {
     }
   }
 
-  async function releaseOrder(quantity, materials = []) {
-    const bomId = materials.length
-      ? seedApprovedOutsourceBom(fixture, 'product-001', materials, `wp2wp5-${Date.now()}-${Math.random()}`)
-      : null;
+  // 用料快照必须在 DRAFT 阶段形成，CONFIRM_PLAN / RELEASE 才可达
+  // （Requirement §31.15；已批准 MC-REQ-03）。不演练耗料的用例用零耗用 BOM 行，
+  // 表示该订单没有材料消耗，倒冲增量因此为 0。
+  async function releaseOrder(quantity, materials = [{ productId: 'product-001', requiredQuantity: 0 }]) {
+    const bomId = seedApprovedOutsourceBom(fixture, 'product-001', materials, `wp2wp5-${Date.now()}-${Math.random()}`);
     const order = await fixture.request('POST', '/api/procurement/outsourcing/orders', fixture.tokens.admin, {
       supplierId: 'supplier-001', productId: 'product-001', orderQuantity: quantity, unit: 'EA',
-      businessDate: isoDate(), ...(bomId ? { bomId } : {}),
+      businessDate: isoDate(), bomId,
     });
     assert.equal(order.status, 201, order.data.error);
     const id = order.data.id;
-    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/orders/${id}/transition`, fixture.tokens.admin, { action: 'PLAN_CONFIRMED' })).status, 200);
-    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/orders/${id}/transition`, fixture.tokens.admin, { action: 'RELEASED' })).status, 200);
+    const snap = await fixture.request('POST', `/api/procurement/outsourcing/orders/${id}/material-list`, fixture.tokens.admin, {
+      items: materials.map((item) => ({ productId: item.productId, sourceWarehouseId: 'warehouse-001' })),
+    });
+    assert.equal(snap.status, 200, snap.data.error);
+    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/orders/${id}/transition`, fixture.tokens.admin, { action: 'CONFIRM_PLAN' })).status, 200);
+    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/orders/${id}/transition`, fixture.tokens.admin, { action: 'RELEASE' })).status, 200);
     return id;
   }
 
   async function snapshotMaterials(orderId, productIds) {
-    const snap = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/material-list`, fixture.tokens.admin, {
-      items: productIds.map((productId) => ({ productId, sourceWarehouseId: 'warehouse-001' })),
-    });
-    assert.equal(snap.status, 200, snap.data.error);
     return productIds.map((productId) => fixture.db
       .prepare('SELECT id FROM outsourcing_material_list WHERE order_id=? AND product_id=?').get(orderId, productId).id);
   }
@@ -356,17 +357,21 @@ describe('M1C WP2-WP5 outsourcing core', () => {
 
   // ---------------------------------------------------------------- WP4 ----
   test('WP4 未批准 / 用途不符的 OUTSOURCE BOM 一律 fail closed', async () => {
-    const orderId = await releaseOrder(50);
+    // 未批准的 OUTSOURCE BOM 必须在 DRAFT 阶段就无法形成用料快照：
+    // 快照是先于确认计划建立的唯一用料事实来源（Requirement §31.15）。
     const bomId = seedApprovedOutsourceBom(fixture, 'product-001', [{ productId: 'product-001', requiredQuantity: 0.02 }], `wp4-bad-${Date.now()}`);
     fixture.db.prepare("UPDATE boms SET approval_status='DRAFT' WHERE id=?").run(bomId);
-    const order = fixture.db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(orderId);
-    fixture.db.prepare('UPDATE outsourcing_orders SET bom_id=?, bom_version=? WHERE id=?').run(bomId, order.bom_version, orderId);
-    const snapshot = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/material-list`, fixture.tokens.outsourcing, {
+    const order = await fixture.request('POST', '/api/procurement/outsourcing/orders', fixture.tokens.admin, {
+      supplierId: 'supplier-001', productId: 'product-001', orderQuantity: 50, unit: 'EA',
+      businessDate: isoDate(), bomId,
+    });
+    assert.equal(order.status, 201, order.data.error);
+    const snapshot = await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/material-list`, fixture.tokens.outsourcing, {
       items: [{ productId: 'product-001', sourceWarehouseId: 'warehouse-001' }],
     });
     assert.equal(snapshot.status, 409);
     assert.equal(snapshot.data.code, 'OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED');
-    assert.equal(fixture.db.prepare('SELECT COUNT(*) n FROM outsourcing_material_list WHERE order_id=?').get(orderId).n, 0);
+    assert.equal(fixture.db.prepare('SELECT COUNT(*) n FROM outsourcing_material_list WHERE order_id=?').get(order.data.id).n, 0);
   });
 
   test('WP4 增量倒冲按每单位用量 × 累计合格收货量，材料账面价值来自权威估值，成品入企业仓且不产生 AP/GL', async () => {

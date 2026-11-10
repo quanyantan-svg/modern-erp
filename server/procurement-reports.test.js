@@ -90,12 +90,12 @@ describe('Procurement Wave I period/WIP/opening/analytics reports', () => {
       supplierId: 'supplier-001', productId: 'product-001', orderQuantity: 100, businessDate: isoDate(0), bomId,
     });
     assert.equal(order.status, 201);
-    await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'PLAN_CONFIRMED' });
-    await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'RELEASED' });
     const snapshot = await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/material-list`, fixture.tokens.admin, {
       items: [{ productId: 'product-001', sourceWarehouseId: 'warehouse-001' }],
     });
     assert.equal(snapshot.status, 200, snapshot.data.error);
+    await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'CONFIRM_PLAN' });
+    await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'RELEASE' });
     const matId = fixture.db.prepare('SELECT id FROM outsourcing_material_list WHERE order_id=?').get(order.data.id).id;
     const issued = await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/issues`, fixture.tokens.admin, {
       materialListId: matId, quantity: 5, issuedDate: isoDate(0), idempotencyKey: `prc-wavei-issue-${order.data.id}`,

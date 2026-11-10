@@ -3354,6 +3354,46 @@ Build PASS。真实 MySQL 8 Gate 的 PASS 继续锚定 §45.31 固定候选及�
 完整章节或路径引用而 FAIL。保留这些历史 SHA 及固定验收锚点，不改写历史；
 此项作为下一阶段独立文档追溯债务，不改变上述业务 Gate 原始结果。
 
+### 45.33 委外核心执行工作面 Implementation（2026-11-10）
+
+业务所有者在 AUDIT → COVERAGE/GAP → REQUIREMENT（§31.15 `PENDING_APPROVAL`）→
+DESIGN（§26.35 `PENDING_REVIEW`）之后，明确推进 `IMPLEMENTATION → ACCEPTANCE`。
+本节只登记本轮实现事实与证据，**不签发** Requirement 批准、Design 批准、Capability
+Closure、Domain Acceptance、Freeze、Release 或 Deploy。
+
+| 项 | 本轮结论与锚点 |
+|---|---|
+| 授权来源 | 用户 2026-11-10 明确指令推进 IMPLEMENTATION → ACCEPTANCE；实现严格按 §31.15 `OUT-WB-REQ-01..08` 与 §26.35 合同 |
+| 订单状态机 | `transitionOutsourcingOrder` 改精确动作 `CONFIRM_PLAN/RELEASE/COMPLETE/CLOSE`；缺失或未知动作固定 400 `OUTSOURCING_TRANSITION_ACTION_INVALID`（旧 `NEXT` 不再静默推进），动作与状态不符固定 409 `OUTSOURCING_TRANSITION_STATE_CONFLICT`；事务内权威重读订单并按旧状态条件更新，受影响行数不为 1 即失败 |
+| 完工/关闭事实门禁 | `COMPLETE` 要求已生效收货净量恰好达到订单数量（待检/取消/来源不明不计入，历史不可证明固定 409）；`CLOSE` 要求无待检收货、无仍可转换的未结完工通知、材料 WIP 净量逐行为零且与 canonical WIP 身份余额一致（负数/身份不明 fail closed） |
+| 材料终态与快照时序 | 退料与倒冲限 `RELEASED/COMPLETED`，`CLOSED` 后一律拒绝；用料快照只能在 `DRAFT` 首次建立，`CONFIRM_PLAN` 与 `RELEASE` 都要求快照可证明（收敛已批准 `MC-REQ-03`） |
+| 供应商资格 | 建单与加工费 PO 的委外供应商资格按**订单业务日期**与有效起止日判定，复用采购域唯一原语 `assertSupplierQualification`，不再按系统当前日 |
+| 受限读模型 | 新增 `server/modules/outsourcing-read-models.js`（只读投影，不新增业务表）：选项 `GET /api/procurement/outsourcing/options`；收货队列 `GET .../receiving-queue`；收货上下文 `GET .../receiving-context`（按订单/通知/收货反解）与 `GET .../orders/:id/receiving-context`；检验上下文 `GET .../receipts/:id/quality-context`；IQC 来源候选 `GET /api/iqc/source-candidates`。受限岗位只得到白名单投影，不含材料成本、Supplier WIP 身份与用料行 |
+| 来源级授权 | `createReceiptNotice`/`confirmReceiptNotice` 在 `OUTSOURCE` 来源允许 `OUTSOURCING_RECEIVING_MANAGE`，标准采购通知仍只认 `RECEIPT_NOTICE_MANAGE`；确认时按**数据库** `business_type` 判权；取消通知未扩权 |
+| 前端 | `src/pages/outsourcing.jsx` 重写为同一 Route 下的分岗工作面（业务员 / 收货员 / 质检），业务身份只来自 URL 的 `documentType` + `documentId`；`applicationRegistry` 委外 route 覆盖 `OUTSOURCING_RECEIVING_MANAGE` 与 `IQC_VIEW/IQC_MANAGE`，并登记 `documentType` 目标契约 |
+| 兼容性 | 唯一明确收紧的旧调用是流转动作名（`NEXT` 与旧目标态名固定 400）；既有单据 ID、正式 Writer、合法普通采购通知路径不变；**不新增业务表、字段、权限种子或 migration** |
+| 既有测试迁移 | 16 个既有测试文件与 G07 固定场景按新合同迁移（快照前置到 DRAFT、动作名精确化）；新增 `server/outsourcing-workbench.test.js`（16 项）并登记进 `scripts/testing/test-suites.js` |
+
+#### 45.33.1 本轮证据
+
+| Gate | 结果 |
+|---|---|
+| 委外 focused（新） | `server/outsourcing-workbench.test.js` **16/16 PASS** |
+| FAST | `pnpm test:fast` **631/631 PASS** |
+| FULL | `pnpm test` **3462/3462 PASS**（0 fail / 0 cancelled） |
+| HEAVY | `pnpm test:heavy` **67/67 PASS** |
+| Build | `pnpm build` PASS |
+| 浏览器实测 | `scripts/acceptance/m1c-wp6-outsourcing-responsive-uat.mjs` **32/32 PASS**：admin / 委外业务员 / 销售专员 / 委外收货员 / 委外质检员 × 320 / 390 / 430 / 680；实测建单 → 建立用料快照 → 确认计划 → 下达、完工通知创建与确认 → 待检收货录入、收货员创建普通采购通知 403、IQC 来源候选 → canonical 检验单、深链接与刷新恢复业务身份；四档宽度均无横向溢出 |
+
+#### 45.33.2 未解决矛盾与仍未关闭事项
+
+1. **冻结产物变更待重新冻结**：委外流转改精确动作、快照前置到 DRAFT 后，G07 固定场景必须沿新合同重写，冻结 Fixture digest 由 `9816affb…` 重算为 `60f7888f…`。该重新冻结**待业务所有者显式确认**；§45.31 的真实 MySQL Gate PASS 继续锚定其固定候选，**不因本次变更自动延续**。
+2. **真实 MySQL 未运行**：本轮未执行受保护 disposable MySQL Gate（需逐次授权）；本节的 SQLite 证据不构成 MySQL 语义证明。
+3. **合同状态未推进**：§31.15 仍 `PENDING_APPROVAL`、§26.35 仍 `PENDING_REVIEW`；`docs/status/CAPABILITY_MATRIX.md` 的 B3121 仍 `BLOCKED`。
+4. **延期边界不变**：跨期 WIP 成本携带、复杂倒冲差异生效、部分期初、委外来源账单正式 AP/GL 过账、委外成品退货仍按原合同与 Owner 决策延期；OUT-20 / OUT-22 / OUT-23 的手册 Gap 未关闭。
+5. **文档追溯债务**：N7 仍因既有提交 `a40e356`、`59eccd5`、`171ade5`、`4403a80` 的提交消息缺少完整章节或路径引用而 FAIL（与 §45.32 登记一致），不改写历史。
+6. **未发生事项**：未执行 Migration / DDL、未连接任何项目或生产数据库、未运行真实 MySQL Gate、未 Push / Merge / Tag / Release / Deploy，`package.json` version 仍为 `1.6.2`，release tag 未移动。
+
 ### 45.9 历史待验证清单（2026-11-08 时点；当前 OUT-001 结论见 §45.31）
 
 > 本节保留当时的风险清单与证据边界；OUT-001 对应的当前真实 MySQL 结果以 §45.31 为准。

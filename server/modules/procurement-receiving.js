@@ -22,6 +22,21 @@ function assertViewPermission(actor) { allowAny(actor, NOTICE_PERMISSIONS); }
 function assertManagePermission(actor) { allow(actor, 'RECEIPT_NOTICE_MANAGE'); }
 function assertPoViewPermission(actor) { allowAny(actor, PO_VIEW_PERMISSIONS); }
 
+/**
+ * 完工通知的来源级岗位授权（Requirement §31.15 `OUT-WB-REQ-04`；Design §26.35.4）。
+ *
+ * 标准采购通知仍然**只**认 `RECEIPT_NOTICE_MANAGE`。委外收货员只在
+ * `OUTSOURCE` 来源获得授权：它不能创建、查看或确认 `STANDARD_PURCHASE` 通知。
+ * 通用通知管理者的合法普通采购路径不受影响。
+ */
+function assertNoticeSourcePermission(actor, businessType) {
+  if (businessType === 'OUTSOURCE') {
+    allowAny(actor, ['RECEIPT_NOTICE_MANAGE', 'OUTSOURCING_RECEIVING_MANAGE']);
+    return;
+  }
+  allow(actor, 'RECEIPT_NOTICE_MANAGE');
+}
+
 function rowToNotice(row) {
   if (!row) return null;
   return {
@@ -212,13 +227,15 @@ function normalizeLineAllocations(item, index, headerPurchaseOrderId) {
  * unknown.
  */
 export async function createReceiptNotice(db, req, res, actor) {
-  assertManagePermission(actor);
   const body = await readJson(req);
   assertAllowedFields(body, ['businessType', 'purchaseOrderId', 'outsourcingOrderId', 'processingPoId', 'supplierId', 'warehouseId', 'noticeDate', 'remark', 'items', 'idempotencyKey']);
   const businessType = String(body.businessType || 'STANDARD_PURCHASE').toUpperCase();
   if (!['STANDARD_PURCHASE', 'OUTSOURCE'].includes(businessType)) {
     throw new HttpError(400, 'businessType 必须是 STANDARD_PURCHASE 或 OUTSOURCE');
   }
+  // 岗位授权按来源判定：委外收货员只在 OUTSOURCE 来源获授权，
+  // 标准采购通知仍只认通用通知管理权限。
+  assertNoticeSourcePermission(actor, businessType);
   if (!Array.isArray(body.items) || body.items.length === 0) {
     throw new HttpError(400, '通知单至少需要一行明细');
   }
@@ -472,7 +489,6 @@ export async function createReceiptNotice(db, req, res, actor) {
 }
 
 export async function confirmReceiptNotice(db, req, res, actor, noticeId) {
-  assertManagePermission(actor);
   const now = new Date().toISOString();
   const context = { entityType: 'RECEIPT_NOTICE', entityId: noticeId, action: '确认收料通知' };
   try {
@@ -480,6 +496,9 @@ export async function confirmReceiptNotice(db, req, res, actor, noticeId) {
       // The authoritative notice state is re-read inside the transaction.
       const notice = db.prepare('SELECT * FROM receipt_notices WHERE id=?').get(noticeId);
       if (!notice) throw new HttpError(404, '收货通知不存在');
+      // 授权按**数据库** business_type 判定：受限岗位只可确认真实 OUTSOURCE
+      // 通知，不能用请求 body 改类型（Design §26.35.4）。
+      assertNoticeSourcePermission(actor, notice.business_type);
       if (notice.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以确认');
       // Re-check the open-quantity cap at confirm time so a previously-
       // valid notice cannot become invalid just because another notice

@@ -3,6 +3,7 @@ import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, readJson, send } from '../lib/http.js';
 import { deriveQualityState, loadQualitySource, qualityConfig, sameSourceSnapshot } from './quality-gates.js';
 import { calculateSampleQuantity, freezeQualityPolicy, trackingSnapshot } from './traceability-quality.js';
+import { listOutsourcingInspectionCandidates } from './outsourcing-read-models.js';
 
 const RESULTS = ['PASS', 'FAIL'];
 const TYPES = ['NORMAL', 'SAMPLING', 'FULL'];
@@ -249,8 +250,27 @@ async function cancel(db, req, res, actor, inspectionId, kind) {
   return send(res, 200, { ok: true });
 }
 
-export const listIqcInspections = (db, res, actor, url) => list(db, res, actor, url, 'IQC');
-export const listOqcInspections = (db, res, actor, url) => list(db, res, actor, url, 'OQC');
+/**
+ * IQC 来源候选（Requirement §31.15 `OUT-WB-REQ-05`）。
+ *
+ * 候选集合来自 canonical `outsourcing_receipts` 来源家族，与
+ * `loadQualitySource` 的来源解析一致；不建委外私有 IQC，也不返回材料成本
+ * 或 WIP 身份。当前只支持 `OUTSOURCING_RECEIPT` 来源类型。
+ */
+export const listIqcSourceCandidates = (db, res, actor, url) => {
+  allowAny(actor, ['IQC_VIEW', 'IQC_MANAGE']);
+  const sourceType = String(url.searchParams.get('sourceType') || 'OUTSOURCING_RECEIPT').toUpperCase();
+  if (sourceType !== 'OUTSOURCING_RECEIPT') {
+    throw new HttpError(400, '当前只提供 OUTSOURCING_RECEIPT 来源候选');
+  }
+  const result = listOutsourcingInspectionCandidates(db, {
+    limit: url.searchParams.get('limit'),
+    offset: url.searchParams.get('offset'),
+  });
+  return send(res, 200, result);
+};
+
+export const listIqcInspections = (db, res, actor, url) => list(db, res, actor, url, 'IQC');export const listOqcInspections = (db, res, actor, url) => list(db, res, actor, url, 'OQC');
 export const getIqcInspection = (db, res, actor, id) => { allowAny(actor, ['IQC_VIEW', 'IQC_MANAGE']); return send(res, 200, { inspection: loadInspection(db, 'IQC', id) }); };
 export const getOqcInspection = (db, res, actor, id) => { allowAny(actor, ['OQC_VIEW', 'OQC_MANAGE']); return send(res, 200, { inspection: loadInspection(db, 'OQC', id) }); };
 export const createIqcInspection = (db, req, res, actor) => create(db, req, res, actor, 'IQC');

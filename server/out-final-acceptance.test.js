@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import {
   createApprovedProcessingPo, createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource,
+  seedApprovedOutsourceBom,
 } from './test-support/procurement-http-fixture.js';
 
 describe('OUT-05/17/18 final acceptance — Planning Handoff / Completion Receipt Notice / Quality source', () => {
@@ -23,8 +24,29 @@ describe('OUT-05/17/18 final acceptance — Planning Handoff / Completion Receip
     assert.equal(r.status, 200, r.data.error);
   }
 
-  function seedHandoff(id, productId = 'product-001', quantity = 100) {
-    const plannedOrderId = 'po-' + id;
+  /**
+   * 委外订单的 DRAFT → 已下达 标准路径。
+   *
+   * 用料快照必须在 DRAFT 阶段形成，`CONFIRM_PLAN` 与 `RELEASE` 才可达
+   * （Requirement §31.15；已批准 MC-REQ-03）。本文件用例不演练材料耗用，
+   * 因此使用零耗用 BOM 行表示该订单没有材料消耗，倒冲增量因此为 0。
+   */
+  let orderSequence = 0;
+  async function createReleasedOutsourcingOrder(body, key) {
+    orderSequence += 1;
+    const bomId = seedApprovedOutsourceBom(fixture, 'product-001', [{ productId: 'product-001', requiredQuantity: 0 }], `out-final-${key}-${orderSequence}`);
+    const order = await fixture.request('POST', '/api/procurement/outsourcing/orders', fixture.tokens.admin, { ...body, bomId });
+    assert.equal(order.status, 201);
+    const snapshot = await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/material-list`, fixture.tokens.admin, {
+      items: [{ productId: 'product-001', sourceWarehouseId: 'warehouse-001' }],
+    });
+    assert.equal(snapshot.status, 200, snapshot.data.error);
+    await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'CONFIRM_PLAN' });
+    await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'RELEASE' });
+    return order.data.id;
+  }
+
+  function seedHandoff(id, productId = 'product-001', quantity = 100) {    const plannedOrderId = 'po-' + id;
     fixture.db.prepare(`INSERT INTO planned_orders(id,order_no,source_type,mrp_run_id,mrp_result_id,product_id,quantity,need_date,planned_supply_date,supply_type,status,released_quantity,created_by,updated_by,created_at,updated_at)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       plannedOrderId, plannedOrderId, 'MANUAL', null, null, productId, quantity,
@@ -169,11 +191,8 @@ describe('OUT-05/17/18 final acceptance — Planning Handoff / Completion Receip
         body.planningHandoffId = 'handoff-out17-' + Date.now();
         seedManualHandoff(body.planningHandoffId, 'product-001', orderQty);
       }
-      const order = await fixture.request('POST', '/api/procurement/outsourcing/orders', fixture.tokens.admin, body);
-      assert.equal(order.status, 201);
-      await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'PLAN_CONFIRMED' });
-      await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'RELEASED' });
-      return order.data.id;
+      const orderId = await createReleasedOutsourcingOrder(body, `out17-${source}-${orderQty}`);
+      return orderId;
     }
 
     test('A. create OUTSOURCE Completion Receipt Notice', async () => {
@@ -327,14 +346,7 @@ describe('OUT-05/17/18 final acceptance — Planning Handoff / Completion Receip
   describe('OUT-18 Quality Integration', () => {
     async function createReleasedOutsourceOrder({ qty = 100 } = {}) {
       const body = { supplierId: 'supplier-001', productId: 'product-001', orderQuantity: qty, businessDate: isoDate(0) };
-      const order = await fixture.request('POST', '/api/procurement/outsourcing/orders', fixture.tokens.admin, body);
-      assert.equal(order.status, 201);
-      await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'PLAN_CONFIRMED' });
-      await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'RELEASED' });
-      await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/material-list`, fixture.tokens.admin, {
-        items: [{ productId: 'product-001', requiredQuantity: 5, unit: 'EA', bomSnapshot: {} }],
-      });
-      return order.data.id;
+      return createReleasedOutsourcingOrder(body, `out18-${qty}`);
     }
 
     async function createOutsourcingReceiptWithLine(orderId, qty) {

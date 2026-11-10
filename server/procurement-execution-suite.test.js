@@ -90,12 +90,12 @@ async function createOutsourcingOrderWithMaterial(fix, { orderQuantity, perUnitQ
   });
   assert.equal(order.status, 201);
   const orderId = order.data.id;
-  await fix.request('POST', `/api/procurement/outsourcing/orders/${orderId}/transition`, fix.tokens.admin, { action: 'PLAN_CONFIRMED' });
-  await fix.request('POST', `/api/procurement/outsourcing/orders/${orderId}/transition`, fix.tokens.admin, { action: 'RELEASED' });
   const snapshot = await fix.request('POST', `/api/procurement/outsourcing/orders/${orderId}/material-list`, fix.tokens.admin, {
     items: [{ productId: 'product-001', sourceWarehouseId: 'warehouse-001' }],
   });
   assert.equal(snapshot.status, 200, JSON.stringify(snapshot.data));
+  await fix.request('POST', `/api/procurement/outsourcing/orders/${orderId}/transition`, fix.tokens.admin, { action: 'CONFIRM_PLAN' });
+  await fix.request('POST', `/api/procurement/outsourcing/orders/${orderId}/transition`, fix.tokens.admin, { action: 'RELEASE' });
   const matId = fix.db.prepare('SELECT id FROM outsourcing_material_list WHERE order_id=?').get(orderId).id;
   const issued = await fix.request('POST', `/api/procurement/outsourcing/orders/${orderId}/issues`, fix.tokens.outsourcing, {
     materialListId: matId, quantity: issueQuantity, issuedDate: '2026-10-08', idempotencyKey: `issue-${key}`,

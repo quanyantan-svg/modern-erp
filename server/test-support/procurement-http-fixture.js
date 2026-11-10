@@ -179,3 +179,35 @@ export function seedApprovedOutsourceBom(fixture, productId, items, key = `${Dat
   items.forEach((item, index) => insert.run(`bomi-${key}-${index + 1}`, bomId, item.productId, item.requiredQuantity, index + 1));
   return bomId;
 }
+
+/**
+ * 委外用料快照的**唯一**建立入口（Requirement §31.15 / 已批准 `MC-REQ-03`）。
+ *
+ * 快照只能在 DRAFT 阶段首次形成：`CONFIRM_PLAN` 与 `RELEASE` 都要求快照已可证明，
+ * 已确认计划或已下达的订单补建快照一律被后端拒绝。因此测试必须先建快照再推进状态。
+ */
+export async function snapshotOutsourcingMaterials(fixture, orderId, materials, token = fixture.tokens.admin) {
+  const snapshot = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/material-list`, token, {
+    items: materials.map((item) => ({
+      productId: item.productId,
+      sourceWarehouseId: item.sourceWarehouseId || 'warehouse-001',
+    })),
+  });
+  assert.equal(snapshot.status, 200, snapshot.data.error);
+  return snapshot.data;
+}
+
+/**
+ * 委外订单的 DRAFT → 已下达 标准路径：先建用料快照，再确认计划、下达。
+ * 动作名是精确合同（`CONFIRM_PLAN` / `RELEASE`），不再使用旧的 `NEXT`。
+ */
+export async function releaseOutsourcingOrder(fixture, orderId, {
+  materials = [], token = fixture.tokens.admin,
+} = {}) {
+  if (materials.length) await snapshotOutsourcingMaterials(fixture, orderId, materials, token);
+  const confirm = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/transition`, token, { action: 'CONFIRM_PLAN' });
+  assert.equal(confirm.status, 200, confirm.data.error);
+  const release = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/transition`, token, { action: 'RELEASE' });
+  assert.equal(release.status, 200, release.data.error);
+  return orderId;
+}

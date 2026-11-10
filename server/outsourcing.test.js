@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource, seedApprovedOutsourceBom } from './test-support/procurement-http-fixture.js';
+import { createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource, releaseOutsourcingOrder, seedApprovedOutsourceBom } from './test-support/procurement-http-fixture.js';
 
 describe('Procurement Wave F-H outsourcing foundation, material execution, receiving', () => {
   let fixture;
@@ -28,12 +28,11 @@ describe('Procurement Wave F-H outsourcing foundation, material execution, recei
     }
   }
 
-  async function createReleasedOrder({ source = 'MANUAL', orderQty = 100, materials = [] } = {}) {
-    const bomId = materials.length ? seedApprovedOutsourceBom(fixture, 'product-001', materials, `outsourcing-${Date.now()}-${Math.random()}`) : null;
+  async function createReleasedOrder({ source = 'MANUAL', orderQty = 100, materials = [{ productId: 'product-001', requiredQuantity: 0.02 }] } = {}) {
+    const bomId = seedApprovedOutsourceBom(fixture, 'product-001', materials, `outsourcing-${Date.now()}-${Math.random()}`);
     const body = {
       supplierId: 'supplier-001', productId: 'product-001',
-      orderQuantity: orderQty, unit: 'EA', businessDate: isoDate(0),
-      ...(bomId ? { bomId } : {}),
+      orderQuantity: orderQty, unit: 'EA', businessDate: isoDate(0), bomId,
     };
     if (source === 'PLANNING') {
       // OUT-05: a real planning_outsource_handoffs row must exist before the
@@ -43,8 +42,8 @@ describe('Procurement Wave F-H outsourcing foundation, material execution, recei
     }
     const order = await fixture.request('POST', '/api/procurement/outsourcing/orders', fixture.tokens.admin, body);
     assert.equal(order.status, 201, order.data.error);
-    await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'PLAN_CONFIRMED' });
-    await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'RELEASED' });
+    // 用料快照必须先于确认计划形成（Requirement §31.15；已批准 MC-REQ-03）。
+    await releaseOutsourcingOrder(fixture, order.data.id, { materials });
     receiptSources.set(order.data.id, await prepareOutsourcingReceiptSource(fixture, order.data.id, orderQty, `outsourcing-${order.data.id}`));
     return order.data.id;
   }
@@ -106,14 +105,7 @@ describe('Procurement Wave F-H outsourcing foundation, material execution, recei
     await qualifyOutsourceSupplier();
     const bomMaterials = [{ productId: 'product-001', requiredQuantity: 0.02, unit: 'EA' }, { productId: 'product-002', requiredQuantity: 0.005, unit: 'EA' }];
     const orderId = await createReleasedOrder({ orderQty: 100, materials: bomMaterials });
-    // Snapshot material list with two distinct materials (different UOM-like).
-    const snap = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/material-list`, fixture.tokens.admin, {
-      items: [
-        { productId: 'product-001', sourceWarehouseId: 'warehouse-001' },
-        { productId: 'product-002', sourceWarehouseId: 'warehouse-001' },
-      ],
-    });
-    assert.equal(snap.status, 200, snap.data.error);
+    // 用料快照已在 DRAFT 阶段由 createReleasedOrder 建立（两个不同物料）。
     const materials = fixture.db.prepare('SELECT id, product_id FROM outsourcing_material_list WHERE order_id=? ORDER BY product_id').all(orderId);
     const mat1 = materials.find((m) => m.product_id === 'product-001');
     const mat2 = materials.find((m) => m.product_id === 'product-002');
@@ -146,13 +138,6 @@ describe('Procurement Wave F-H outsourcing foundation, material execution, recei
     await qualifyOutsourceSupplier();
     const bomMaterials = [{ productId: 'product-001', requiredQuantity: 0.02, unit: 'EA' }, { productId: 'product-002', requiredQuantity: 0.005, unit: 'EA' }];
     const orderId = await createReleasedOrder({ orderQty: 100, materials: bomMaterials });
-    const snap = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/material-list`, fixture.tokens.admin, {
-      items: [
-        { productId: 'product-001', sourceWarehouseId: 'warehouse-001' },
-        { productId: 'product-002', sourceWarehouseId: 'warehouse-001' },
-      ],
-    });
-    assert.equal(snap.status, 200);
     const mat1 = fixture.db.prepare('SELECT id FROM outsourcing_material_list WHERE order_id=? AND product_id=?').get(orderId, 'product-001').id;
     const mat2 = fixture.db.prepare('SELECT id FROM outsourcing_material_list WHERE order_id=? AND product_id=?').get(orderId, 'product-002').id;
     // Issue 60 PCS and 30 KG (sufficient net supplied)

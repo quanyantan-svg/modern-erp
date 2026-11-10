@@ -26,7 +26,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import {
-  createApprovedProcessingPo, createProcurementFixture, outsourcingReceiptBody,
+  createApprovedProcessingPo, createProcurementFixture, outsourcingReceiptBody, seedApprovedOutsourceBom,
 } from './test-support/procurement-http-fixture.js';
 import { confirmOutsourcingReceipt } from './modules/outsourcing-finance.js';
 
@@ -73,14 +73,20 @@ describe('M1C-WP2–WP6-R1 — outsourcing receipt effect idempotency and concur
   }
 
   async function releaseOrder(quantity) {
+    const bomId = seedApprovedOutsourceBom(fixture, 'product-001', [{ productId: 'product-001', requiredQuantity: 0 }], `wp2r1-idem-${Date.now()}-${Math.random()}`);
     const order = await fixture.request('POST', '/api/procurement/outsourcing/orders', fixture.tokens.admin, {
       supplierId: 'supplier-001', productId: 'product-001', orderQuantity: quantity, unit: 'EA',
-      businessDate: isoDate(0),
+      businessDate: isoDate(0), bomId,
     });
     assert.equal(order.status, 201, order.data.error);
     const orderId = order.data.id;
-    await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/transition`, fixture.tokens.admin, { action: 'PLAN_CONFIRMED' });
-    await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/transition`, fixture.tokens.admin, { action: 'RELEASED' });
+    // 用料快照必须在 DRAFT 阶段形成（Requirement §31.15；已批准 MC-REQ-03）。
+    const snapshot = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/material-list`, fixture.tokens.admin, {
+      items: [{ productId: 'product-001', sourceWarehouseId: 'warehouse-001' }],
+    });
+    assert.equal(snapshot.status, 200, snapshot.data.error);
+    await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/transition`, fixture.tokens.admin, { action: 'CONFIRM_PLAN' });
+    await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/transition`, fixture.tokens.admin, { action: 'RELEASE' });
     return orderId;
   }
 

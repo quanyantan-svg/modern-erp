@@ -125,13 +125,13 @@ describe('M1C-WP7A-R2 — G03 同外部幂等键异内容拒绝的审计', () =>
     });
     assert.equal(order.status, 201, order.data.error);
     orderId = order.data.id;
-    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/transition`, fixture.tokens.admin, { action: 'PLAN_CONFIRMED' })).status, 200);
-    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/transition`, fixture.tokens.admin, { action: 'RELEASED' })).status, 200);
-
     const snapshot = await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/material-list`, fixture.tokens.admin, {
       items: [{ productId: materialProductId, sourceWarehouseId: SOURCE_WAREHOUSE }],
     });
     assert.equal(snapshot.status, 200, snapshot.data.error);
+    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/transition`, fixture.tokens.admin, { action: 'CONFIRM_PLAN' })).status, 200);
+    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/transition`, fixture.tokens.admin, { action: 'RELEASE' })).status, 200);
+
     materialId = fixture.db.prepare('SELECT id FROM outsourcing_material_list WHERE order_id=?').get(orderId).id;
   });
 
