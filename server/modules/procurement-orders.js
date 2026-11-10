@@ -6,6 +6,7 @@ import {
 } from '../lib/http.js';
 import { roundRational } from './commercial-golive.js';
 import { resolvePurchaseLinePricing } from './procurement-pricing.js';
+import { assertSupplierQualification } from './procurement-sourcing.js';
 
 const VIEW_PERMISSIONS = ['PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_MANAGE'];
 const CHANGE_PERMISSIONS = ['PO_CHANGE_VIEW', 'PO_CHANGE_MANAGE'];
@@ -83,6 +84,34 @@ function resolveOrderLineCommercial(db, { businessType, supplierId, businessDate
   };
 }
 
+/**
+ * Purchase order document assignment (buyer / purchasing group).
+ *
+ * An explicitly named assignment is validated server side: the buyer must be
+ * active, the group must be active and the buyer must actually belong to that
+ * group. When no assignment is given the creator's own active membership is
+ * used. A creator without any membership simply has no recorded assignment —
+ * the assignment never silently claims a buyer who does not exist.
+ */
+function resolvePurchaseOrderAssignment(db, { actorId, buyerId, purchasingGroupId }) {
+  if (buyerId || purchasingGroupId) {
+    if (!buyerId || !purchasingGroupId) throw new HttpError(400, '采购员与采购组必须成对指定');
+    const buyer = db.prepare('SELECT id,active FROM buyers WHERE id=?').get(buyerId);
+    if (!buyer || !buyer.active) throw new HttpError(409, '采购员不存在或已停用', { code: 'PURCHASE_BUYER_INVALID' });
+    const group = db.prepare('SELECT id,active FROM purchasing_groups WHERE id=?').get(purchasingGroupId);
+    if (!group || !group.active) throw new HttpError(409, '采购组不存在或已停用', { code: 'PURCHASE_GROUP_INVALID' });
+    const membership = db.prepare('SELECT id FROM buyer_memberships WHERE buyer_id=? AND purchasing_group_id=?').get(buyerId, purchasingGroupId);
+    if (!membership) throw new HttpError(409, '采购员不属于该采购组', { code: 'PURCHASE_BUYER_MEMBERSHIP_INVALID' });
+    return { buyerId, purchasingGroupId };
+  }
+  const candidates = db.prepare(`SELECT b.id buyerId, m.purchasing_group_id groupId FROM buyers b
+    JOIN buyer_memberships m ON m.buyer_id=b.id
+    WHERE b.user_id=? AND b.active=1
+    ORDER BY CASE m.role WHEN 'LEAD' THEN 0 ELSE 1 END, m.id`).all(actorId);
+  if (!candidates.length) return { buyerId: null, purchasingGroupId: null };
+  return { buyerId: candidates[0].buyerId, purchasingGroupId: candidates[0].groupId };
+}
+
 export function createPurchaseOrderDraftCanonical(db, actor, command) {
   const businessType = normalizeBusinessType(command.businessType);
   const sourceOutsourcingOrderId = command.sourceOutsourcingOrderId || null;
@@ -99,24 +128,39 @@ export function createPurchaseOrderDraftCanonical(db, actor, command) {
   const orderId = command.id || randomUUID();
   const orderNo = command.orderNo || `PO-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0, 6).toUpperCase()}`;
   const now = command.now || new Date().toISOString();
+  // An ordinary purchase order needs an effective PURCHASE qualification of
+  // the supplier at the order business date. The outsourcing processing-fee
+  // order keeps its own OUTSOURCE qualification contract.
+  if (businessType === 'STANDARD_PURCHASE') {
+    try {
+      assertSupplierQualification(db, command.supplierId, 'PURCHASE', command.orderDate || now.slice(0, 10));
+    } catch (error) {
+      throw new HttpError(409, '供应商在订单业务日期不具备有效采购资质', { code: 'PURCHASE_SUPPLIER_NOT_QUALIFIED' });
+    }
+  }
   const pricedItems = command.items.map((item, index) => ({
     item,
     commercial: resolveOrderLineCommercial(db, {
       businessType, supplierId: command.supplierId, businessDate: command.orderDate, item, index,
     }),
   }));
+  const assignment = resolvePurchaseOrderAssignment(db, {
+    actorId: actor.id, buyerId: command.buyerId || null, purchasingGroupId: command.purchasingGroupId || null,
+  });
   const totalCents = pricedItems.reduce((sum, entry) => sum + entry.commercial.amountCents, 0);
   if (!Number.isSafeInteger(totalCents) || totalCents < 0) throw new HttpError(400, '采购订单总额必须为安全整数分');
   db.prepare(`INSERT INTO purchase_orders(
       id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at,
       order_date,expected_delivery_date,payment_terms,payment_terms_days,supplier_contact_name,supplier_contact_phone,supplier_address,
-      business_type,source_outsourcing_order_id,supplier_contact_snapshot,supplier_address_snapshot,payment_terms_snapshot,purchase_requisition_id)
-    VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      business_type,source_outsourcing_order_id,supplier_contact_snapshot,supplier_address_snapshot,payment_terms_snapshot,purchase_requisition_id,
+      buyer_id,purchasing_group_id)
+    VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     orderId, orderNo, command.supplierId, totalCents, command.remark || '', actor.id, now, now,
     command.orderDate || null, command.expectedDeliveryDate || null, command.paymentTerms || '', command.paymentTermsDays ?? null,
     command.supplierContactName || '', command.supplierContactPhone || '', command.supplierAddress || '',
     businessType, sourceOutsourcingOrderId, command.supplierContactSnapshot || '', command.supplierAddressSnapshot || '',
     command.paymentTermsSnapshot || '', command.purchaseRequisitionId || null,
+    assignment.buyerId, assignment.purchasingGroupId,
   );
   for (const [index, entry] of pricedItems.entries()) {
     insertPurchaseOrderItem(db, {

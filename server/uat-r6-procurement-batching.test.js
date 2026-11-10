@@ -72,6 +72,8 @@ before(async () => {
   db = createDatabase(join(tempDir, 'erp.db'));
   ensureSupplier('r6-supplier-a', 'SUP-HX', '深圳华芯电子科技有限公司');
   ensureSupplier('r6-supplier-b', 'SUP-MX', '苏州敏芯传感科技有限公司');
+  // 普通采购订单必须有有效采购资质（Active Design §26.3），夹具供应商必须表达该事实。
+  db.prepare("UPDATE suppliers SET qualification_status='QUALIFIED' WHERE id IN ('r6-supplier-a','r6-supplier-b')").run();
   ensureProduct('r6-pcb', 'RM-PCB-200', 'TC200控制主板', 12800);
   ensureProduct('r6-lcd', 'RM-LCD-240', '2.4寸LCD显示模组', 8600);
   ensureProduct('r6-sensor', 'RM-SENSOR-TH01', '数字温湿度传感器', 3500);

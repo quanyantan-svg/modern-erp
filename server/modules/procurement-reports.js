@@ -16,11 +16,12 @@ export function getPurchaseExecutionReport(db, res, actor, url) {
   const params = [];
   if (supplierId) { where.push('po.supplier_id=?'); params.push(supplierId); }
   const rows = db.prepare(`SELECT po.id, po.order_no, po.supplier_id, s.name supplier_name,
-    po.status, po.business_type,
+    po.status, po.business_type, po.expected_delivery_date,
     COALESCE((SELECT SUM(poi.quantity) FROM purchase_order_items poi WHERE poi.order_id=po.id),0) ordered,
     COALESCE((SELECT SUM(pri.quantity) FROM purchase_receipt_items pri JOIN purchase_receipts pr ON pr.id=pri.receipt_id WHERE pr.purchase_order_id=po.id AND pr.status='CONFIRMED'),0) received,
     COALESCE((SELECT SUM(prti.quantity) FROM purchase_return_items prti JOIN purchase_returns pr ON pr.id=prti.return_id JOIN purchase_receipt_items prei ON prei.id=prti.receipt_item_id JOIN purchase_receipts prh ON prh.id=prei.receipt_id WHERE prh.purchase_order_id=po.id AND pr.status='CONFIRMED'),0) returned,
-    COALESCE((SELECT SUM(sbi.net_cents) FROM supplier_bill_items sbi JOIN supplier_bills sb ON sb.id=sbi.bill_id WHERE sbi.purchase_order_item_id IN (SELECT id FROM purchase_order_items WHERE order_id=po.id) AND sb.status IN ('POSTED','WAITING_MATCH')),0) billed_cents
+    COALESCE((SELECT SUM(sbi.net_cents) FROM supplier_bill_items sbi JOIN supplier_bills sb ON sb.id=sbi.bill_id WHERE sbi.purchase_order_item_id IN (SELECT id FROM purchase_order_items WHERE order_id=po.id) AND sb.status IN ('POSTED','WAITING_MATCH')),0) billed_cents,
+    COALESCE((SELECT SUM(pri.quantity) FROM purchase_receipt_items pri JOIN purchase_receipts pr ON pr.id=pri.receipt_id WHERE pr.purchase_order_id=po.id AND pr.status='CONFIRMED' AND po.expected_delivery_date IS NOT NULL AND pr.receipt_date<=po.expected_delivery_date),0) on_time_received
     FROM purchase_orders po JOIN suppliers s ON s.id=po.supplier_id
     WHERE ${where.join(' AND ')}
     ORDER BY po.created_at DESC LIMIT 100`).all(...params)
@@ -36,7 +37,12 @@ export function getPurchaseExecutionReport(db, res, actor, url) {
       returned: Number(row.returned),
       remaining: Math.max(0, Number(row.ordered) - Number(row.received) + Number(row.returned)),
       billedCents: Number(row.billed_cents),
-      onTimeRate: Number(row.ordered) > 0 ? Number(row.received) / Number(row.ordered) : 0,
+      expectedDeliveryDate: row.expected_delivery_date,
+      onTimeReceived: Number(row.on_time_received),
+      // 采购到货及时率：在承诺交期当天或之前已确认收货的数量占订单数量的比例。
+      // 完成比是另一件事，单独以 fulfilmentRate 暴露，不得混用（见 §31.17）。
+      onTimeRate: Number(row.ordered) > 0 ? Number(row.on_time_received) / Number(row.ordered) : 0,
+      fulfilmentRate: Number(row.ordered) > 0 ? Number(row.received) / Number(row.ordered) : 0,
     }));
   return send(res, 200, { report: rows });
 }

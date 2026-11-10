@@ -421,8 +421,38 @@ describe('Procurement commercial evidence: pricing primitive and PO change', () 
   });
 
   // ------------------------------------------------------------------
-  // D. canonical PO execution
+  // E. 采购到货及时率口径
   // ------------------------------------------------------------------
+  describe('E. 采购到货及时率口径', () => {
+    test('E1. 及时率按承诺交期计算，完成比单独暴露且不得混用', async () => {
+      const created = await createOrder([{ productId: EA_PRODUCT, quantity: 10 }]);
+      assert.equal(created.status, 201, created.data.error);
+      const orderId = created.data.id;
+      fixture.db.prepare('UPDATE purchase_orders SET expected_delivery_date=? WHERE id=?').run(isoDate(0), orderId);
+      const itemId = fixture.db.prepare('SELECT id FROM purchase_order_items WHERE order_id=?').get(orderId).id;
+      const now = new Date().toISOString();
+      // 交期内确认收货 4 件，交期后确认收货 2 件。
+      for (const [receiptId, quantity, receiptDate] of [
+        ['receipt-commercial-ontime', 4, isoDate(0)],
+        ['receipt-commercial-late', 2, isoDate(5)],
+      ]) {
+        fixture.db.prepare(`INSERT INTO purchase_receipts(id,receipt_no,purchase_order_id,supplier_id,warehouse_id,handler_id,status,total_cents,receipt_date,creator_id,created_at,updated_at,billing_mode)
+          VALUES(?,?,?,'supplier-001','warehouse-001','user-admin','CONFIRMED',0,?,'user-admin',?,?,'SEPARATE')`).run(receiptId, `PR-${receiptId}`, orderId, receiptDate, now, now);
+        fixture.db.prepare(`INSERT INTO purchase_receipt_items(id,receipt_id,purchase_order_item_id,product_id,quantity,unit_price_cents,amount_cents,line_no)
+          VALUES(?,?,?,?,?,600,?,1)`).run(`${receiptId}-item`, receiptId, itemId, EA_PRODUCT, quantity, quantity * 600);
+      }
+      const report = await fixture.request('GET', '/api/reports/procurement/execution', fixture.tokens.admin);
+      assert.equal(report.status, 200, JSON.stringify(report.data));
+      const row = report.data.report.find((item) => item.orderId === orderId);
+      assert.ok(row, '报表必须给出该采购订单');
+      assert.equal(row.ordered, 10);
+      assert.equal(row.received, 6);
+      assert.equal(row.onTimeReceived, 4, '及时收货数量只统计承诺交期当天或之前的确认收货');
+      assert.equal(row.onTimeRate, 0.4, '及时率 = 及时收货数量 / 订单数量');
+      assert.equal(row.fulfilmentRate, 0.6, '完成比是另一件事，必须单独暴露');
+      assert.notEqual(row.onTimeRate, row.fulfilmentRate, '及时率与完成比不得是同一个口径');
+    });
+  });
   describe('D. 采购订单执行余量口径', () => {
     test('D1. 加工费采购订单不形成普通采购供给', async () => {
       const orderId = await approvedOrder([{ productId: EA_PRODUCT, quantity: 8 }]);

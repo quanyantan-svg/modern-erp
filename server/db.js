@@ -2015,7 +2015,11 @@ function seedDemoData(db) {
     );
   }
 
-  const insertSupplier = db.prepare('INSERT OR IGNORE INTO suppliers(id, code, name, contact, phone, address, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)');
+  // Demo suppliers are purchase-qualified: an ordinary purchase order is
+  // blocked for a supplier without an effective purchase qualification
+  // (Design §26.3), so the demo data must express that business fact.
+  const insertSupplier = db.prepare(`INSERT OR IGNORE INTO suppliers(id, code, name, contact, phone, address, active, created_at, updated_at, qualification_status)
+    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 'QUALIFIED')`);
   for (const s of [
     ['supplier-001', 'S001', '深圳华强电子市场', '刘经理', '13500135001', '广东省深圳市福田区华强北路', now, now],
     ['supplier-002', 'S002', '东莞原料供应商', '陈总', '13600136002', '广东省东莞市厚街镇', now, now],

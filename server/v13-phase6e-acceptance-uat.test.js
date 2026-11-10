@@ -58,7 +58,7 @@ describe('V1.3 Phase 6E commercial go-live end-to-end UAT', () => {
     }
     const now = new Date().toISOString();
     db.prepare("INSERT INTO customers(id,code,name,contact,phone,address,active,created_at,updated_at) VALUES('uat-c','CUAT','UAT Customer','Alice','13000000000','SZ',1,?,?)").run(now, now);
-    db.prepare("INSERT INTO suppliers(id,code,name,contact,phone,address,active,created_at,updated_at) VALUES('uat-s','SUAT','UAT Supplier','Bob','13100000000','DG',1,?,?)").run(now, now);
+    db.prepare("INSERT INTO suppliers(id,code,name,contact,phone,address,active,created_at,updated_at,qualification_status) VALUES('uat-s','SUAT','UAT Supplier','Bob','13100000000','DG',1,?,?,'QUALIFIED')").run(now, now);
     db.prepare("INSERT INTO warehouses(id,code,name,address,manager,active,created_at,updated_at) VALUES('uat-w','WUAT','UAT Warehouse','','',1,?,?)").run(now, now);
     db.prepare("INSERT INTO products(id,code,name,category,unit,price_cents,stock_quantity,active,created_at,updated_at,base_uom_code,tracking_policy,valuation_method,inventory_classification,valuation_activated_at) VALUES('uat-p','UP','Product','FINISHED_GOOD','EA',50000,0,1,?,?,'EA','NONE','MOVING_AVERAGE','FINISHED_GOODS_INVENTORY',?)").run(now, now, now);
     for (const [name, role] of [['admin', 'role-admin'], ['sales', 'role-sales'], ['reviewer', 'role-reviewer'], ['warehouse', 'role-warehouse'], ['accounting', 'role-accounting']]) {

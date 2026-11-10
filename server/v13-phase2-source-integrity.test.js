@@ -41,7 +41,7 @@ describe('V1.3 Phase 2 authoritative source integrity', () => {
     temp = createTempDb({ label: 'v13-phase2', production: true }); db = temp.db;
     const now = new Date().toISOString();
     db.prepare("INSERT INTO customers(id,code,name,contact,phone,address,active,created_at,updated_at) VALUES('cus','CUS','Customer','Alice','130','Address',1,?,?),('cus2','CUS2','Other','','','',1,?,?)").run(now, now, now, now);
-    db.prepare("INSERT INTO suppliers(id,code,name,contact,phone,address,active,created_at,updated_at) VALUES('sup','SUP','Supplier','Bob','131','Address',1,?,?),('sup2','SUP2','Other','','','',1,?,?)").run(now, now, now, now);
+    db.prepare("INSERT INTO suppliers(id,code,name,contact,phone,address,active,created_at,updated_at,qualification_status) VALUES('sup','SUP','Supplier','Bob','131','Address',1,?,?,'QUALIFIED'),('sup2','SUP2','Other','','','',1,?,?,'QUALIFIED')").run(now, now, now, now);
     db.prepare("INSERT INTO warehouses(id,code,name,address,manager,active,created_at,updated_at) VALUES('wh','WH','Warehouse','','',1,?,?)").run(now, now);
     db.prepare("INSERT INTO products(id,code,name,category,unit,price_cents,stock_quantity,active,created_at,updated_at) VALUES('p1','P1','Product','','EA',20000,0,1,?,?),('p2','P2','Other','','EA',100,0,1,?,?)").run(now, now, now, now);
     db.prepare("INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES('inv','wh','p1',1000,?)").run(now);

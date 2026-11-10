@@ -2316,3 +2316,42 @@ route key 不新增重复 screen；使用 `documentId` 与可选 `changeId` 恢�
 Implementation 建议拆为四个可独立验证的逻辑单元：I1 Pricing canonicalization 与 caller 收敛；I2 PO Change schema/事务/工作面；I3 canonical execution 与 Planning/Receiving consumer 迁移；I4 完整域矩阵补缺和 Domain Acceptance 候选。每个单元都必须严格使用本节批准后的合同；若 I4 发现新的业务规则、Schema、库存/会计语义或手册冲突，立即回到 Requirement/Design，不得顺手实现。
 
 本节已由业务所有者批准并完成 Implementation（状态 `IMPLEMENTED`）。AGENTS.md §4.3 的 HARD STOP 已在批准时刻解除；本节当前**不再**授权真实环境 migration 执行、数据库写入、MySQL Gate、Git push/merge/tag、发布或部署——这些仍需逐次明确批准。域级 Acceptance 候选见 `docs/status/PROJECT_STATUS.md` §46。
+---
+
+### 26.37 域级交付整改的补充设计（2026-11-10；`APPROVED` → `IMPLEMENTED`）
+
+> **用途 / Owner / 状态 / 权威关系**：本节是 §31.17 受托裁定的技术落地，Owner 为 Procurement & Outsourcing Domain Owner，状态为 `IMPLEMENTED`（已按批准合同实施并通过本地 Gate，**尚未通过域级 Acceptance**），`solution.md` 只承担导航。本节不取代 §26.1～§26.36 的任何正文；§26.34.6 的 VMI 最小 Schema/Migration 候选由本节在实现层确认并推进。
+
+#### 26.37.1 VMI：协议绑定、幂等与容量
+
+- **Schema（增量）**：`vmi_receipts.agreement_id TEXT`（可空，历史行保留 NULL）+ 索引 `idx_vmi_receipts_agreement`；`vmi_agreements` 增绑定索引 `idx_vmi_agreements_binding`。不新增资格字段、不新增结算字段、不激活 `vmi_ownership_transfers`。
+- **协议唯一性**：写入前在事务内检测 `(supplier_id, warehouse_id, product_id, active=1)` 的有效期区间重叠，重叠即 409 `VMI_AGREEMENT_OVERLAP`（普通组合 UNIQUE 判定不了区间重叠）。
+- **绑定解析**：`resolveEffectiveVmiAgreement()` 按业务日期取有效协议集合，0 个 / 多于 1 个 / 指定 ID 不在其中，一律 409（`VMI_AGREEMENT_NOT_FOUND` / `VMI_AGREEMENT_AMBIGUOUS` / `VMI_AGREEMENT_NOT_EFFECTIVE`）。收货创建写入 `agreement_id`；确认与消耗在同一事务内重读并重验绑定。
+- **幂等**：收货创建与消耗复用通用 `idempotency_records`（`operation_type` 分别为 `VMI_RECEIPT_CREATE` / `VMI_CONSUMPTION_CREATE`，`document_id` 为 supplier+warehouse+product 或收货 ID），载荷指纹取请求规范化结果。同键同载荷精确重放（`replayed: true`），异载荷 409。内部库存腿仍用稳定来源键 `VMI_RECEIPT:<receiptId>` / `VMI_CONSUMPTION:<consumptionId>`，不因重试产生双入/双扣。
+- **容量双不变量**：消耗事务内同时校验「本收货剩余 = `receipt.quantity − 已确认消耗`」与「canonical SUPPLIER 位置足额」；任一不成立即 409，库存与事实零变化。缺少可归属的退回/调整事实时不按 FIFO/比例回填。
+- **汇总口径**：输出 `received` / `consumed` / `grossRemaining` / `canonicalSupplierOwnedQuantity` / `reconciliationDifference` / `reconciliationStatus`；删除 `pendingSettlement` 与 `transferred` 的对外暴露。
+
+#### 26.37.2 采购侧门槛与快照
+
+- **供应商资质门禁**：canonical 采购订单写入器（`createPurchaseOrderDraftCanonical()`）在写入前校验供应商在**订单业务日期**具备有效采购资质，不合格即 409 `PURCHASE_SUPPLIER_NOT_QUALIFIED`（`STANDARD_PURCHASE` 专用；加工费采购订单沿用委外侧 OUTSOURCE 资质合同）。
+- **收货类型门禁**：采购收货创建与确认都必须断言来源订单 `business_type='STANDARD_PURCHASE'`，否则 409 `PURCHASE_RECEIPT_REQUIRES_STANDARD_PURCHASE`。
+- **赠品语义**：赠品行在取价原语中**直接走零价分支**，不查询价格表；因此存在有效价格条目时赠品仍为零价、零金额并冻结赠品证据，普通行依旧必须有有效价格。
+- **采购员/采购组落位**：写入器解析落位——显式指定时校验采购员有效、采购组有效、采购员属于该组；未指定时取创建人自己的有效成员关系；两者都不可证时留空。
+- **BOM 选择**：委外建单与用料快照都通过 `resolveEffectiveBomForCaller(productId, 'OUTSOURCE', businessDate)` 判定 canonical 合格性，并要求订单绑定的 BOM 本身满足同口径（已批准、已生效、用途相符、同产品、版本一致）。校验失败分别 409 `OUTSOURCING_BASIS_INVALID` / `OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED`。
+
+#### 26.37.3 退货申请闭环
+
+- **Schema（增量）**：`purchase_return_requests` 增 `source_type` / `source_id` / `request_type` / `reason_code` / `reason_text` / `replenishment_method` / `business_date` / `posted_return_id`；新增 `purchase_return_request_items(request_id, receipt_item_id, product_id, quantity_num, quantity_den, unit_price_cents, amount_cents, line_no)`；`purchase_returns.return_request_id` 回链。
+- **写入器归属**：采购退货**草稿**写入收敛到 `procurement-returns.js::createPurchaseReturnDraftCanonical()`，直接退货与退货申请转换共用同一写入器；四分支财务执行与确认路径不改写。
+- **状态词表**：沿用既有表 CHECK 的 `DRAFT` / `CONVERTED` / `REJECTED`（分别对应 Design §26.14 的 `DRAFT` / `POSTED` / `CANCELLED`）；已转换的申请不可再取消，重复转换返回原退货单且不重复生成。
+- **来源约束**：明细必须绑定该入库单下**已确认**的入库行；未入库货物没有来源行，因此申请与转换都不可能制造 inventory return。
+
+#### 26.37.4 报表口径
+
+采购执行报表同时输出 `onTimeRate`（及时率 = 承诺交期当天或之前已确认收货数量 ÷ 订单数量）、`onTimeReceived`、`expectedDeliveryDate` 与 `fulfilmentRate`（完成比 = 已确认收货数量 ÷ 订单数量）。两个口径是不同字段、不可互相冒充。
+
+#### 26.37.5 迁移、兼容与回滚
+
+- 全部增量迁移只新增列/表/索引，不重建历史表、不回填历史事实：历史 VMI 收货保持 `agreement_id IS NULL` 并在读时 fail closed；历史退货申请保持 `DRAFT` 且无明细。
+- 回滚只允许撤回新写入口与新 UI consumer 并让新 mutation fail closed；已写证据不回滚、不反向覆盖业务事实。
+- G07 固定场景因新增供应商资质步骤而变更，冻结摘要随之重新计算并写回三处断言；**该重新冻结待业务所有者显式确认**。

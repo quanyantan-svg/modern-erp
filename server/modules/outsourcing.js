@@ -8,6 +8,7 @@ import { executeOutsourcingBackflush, executeOutsourcingMove } from './outsourci
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 import { createPurchaseOrderDraftCanonical } from './procurement-orders.js';
 import { assertSupplierQualification } from './procurement-sourcing.js';
+import { resolveEffectiveBomForCaller } from './engineering-bom.js';
 import {
   listOutsourcingOptions, listOutsourcingReceivingQueue, readOutsourcingReceiptQualityContext,
   readOutsourcingReceivingContext, resolveOutsourcingOrderId,
@@ -276,6 +277,27 @@ function consumePlanningHandoff(db, { handoffId, actor, supplierId, bodyOrderId,
  *   source_type='MANUAL':   planning_handoff_id MUST be NULL; client supplies
  *                           all canonical order fields.
  */
+/**
+ * The canonical engineering resolver owns the "which BOM is effective" rule.
+ *
+ * An outsourcing order names the BOM it consumes; the server proves that this
+ * BOM satisfies the same canonical criteria the resolver applies (approved,
+ * effective at the business date, `purpose=OUTSOURCE`, same product). An
+ * implicit "first ACTIVE row" pick is exactly what the requirement forbids
+ * (Requirement §31.3.3 OUT-08), so a bound BOM that is not canonical
+ * eligible fails closed instead of being silently replaced.
+ */
+function resolveOutsourcingBasisBom(db, productId, businessDate, boundBomId) {
+  const effective = resolveEffectiveBomForCaller(db, productId, 'OUTSOURCE', businessDate);
+  if (!effective || String(effective.purpose || '').toUpperCase() !== 'OUTSOURCE') return null;
+  if (!boundBomId) return null;
+  const bound = db.prepare(`SELECT * FROM boms WHERE id=? AND product_id=? AND purpose='OUTSOURCE'
+    AND status='ACTIVE' AND approval_status='APPROVED'
+    AND (effective_from IS NULL OR effective_from<=?) AND (effective_to IS NULL OR effective_to>=?)`)
+    .get(boundBomId, productId, businessDate, businessDate);
+  return bound || null;
+}
+
 export async function createOutsourcingOrder(db, req, res, actor) {
   assertManagePermission(actor);
   const body = await readJson(req);
@@ -285,6 +307,15 @@ export async function createOutsourcingOrder(db, req, res, actor) {
   if (sourceType === 'MANUAL' && hasHandoff) throw new HttpError(400, 'MANUAL 订单不允许携带 planningHandoffId');
   const today = new Date().toISOString().slice(0, 10);
   const businessDate = body.businessDate || today;
+  // The BOM binding is validated when the order is created, not only when the
+  // material snapshot is taken: an order must never be able to carry an
+  // unapproved or wrongly-purposed BOM.
+  if (body.bomId) {
+    const basisBom = resolveOutsourcingBasisBom(db, body.productId, businessDate, body.bomId);
+    if (!basisBom || (body.bomVersion != null && Number(body.bomVersion) !== Number(basisBom.version))) {
+      throw businessConflict('OUTSOURCING_BASIS_INVALID', '委外订单必须绑定当前业务日期有效的 OUTSOURCE BOM');
+    }
+  }
   const orderId = randomUUID(); const now = new Date().toISOString();
   const orderNo = 'OS-' + Date.now().toString().slice(-10);
   transaction(db, () => {
@@ -617,11 +648,7 @@ export async function snapshotMaterialList(db, req, res, actor, orderId) {
         throw businessConflict('OUTSOURCING_MATERIAL_SNAPSHOT_IMMUTABLE', '委外用料快照已建立，不得随 BOM 变化重写');
       }
       if (!order.bom_id) throw businessConflict('OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED', '委外订单未绑定已批准 OUTSOURCE BOM');
-      const bom = db.prepare(`SELECT * FROM boms WHERE id=? AND product_id=? AND status='ACTIVE'
-        AND approval_status='APPROVED' AND purpose='OUTSOURCE'
-        AND (effective_from IS NULL OR effective_from<=?) AND (effective_to IS NULL OR effective_to>=?)`).get(
-        order.bom_id, order.product_id, order.business_date, order.business_date,
-      );
+      const bom = resolveOutsourcingBasisBom(db, order.product_id, order.business_date, order.bom_id);
       if (!bom || (order.bom_version != null && Number(order.bom_version) !== Number(bom.version))) {
         throw businessConflict('OUTSOURCING_BACKFLUSH_BASIS_UNSUPPORTED', '委外 BOM 未批准、未生效、用途不符或版本不一致');
       }

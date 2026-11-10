@@ -255,7 +255,7 @@ describe('Procurement Wave H/I closure: outsourcing receipt, processing fee bill
 
   test('PRC-26 Procurement Scan: bounded wedge resolves PO + product → draft line', async () => {
     const po = await fixture.request('POST', '/api/purchase-orders', fixture.tokens.admin, {
-      supplierId: 'supplier-001', orderDate: '2026-10-08', expectedDeliveryDate: '2026-10-09',
+      supplierId: 'supplier-001', orderDate: isoDate(0), expectedDeliveryDate: isoDate(7),
       supplierContactName: '采购联系人', supplierContactPhone: '13800000000', supplierAddress: '测试地址', paymentTerms: '30 天',
       items: [{ productId: 'product-001', quantity: 5, unitPriceCents: 1000 }],
     });

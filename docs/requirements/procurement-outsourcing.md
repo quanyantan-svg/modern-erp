@@ -1116,3 +1116,37 @@ M1-Core §7.5 对 `M1C-G03/G06` 的首期合同保留**数量归属守恒**、�
 6. Implementation Agent 的 PASS 只形成验收候选；最终 Domain Acceptance、Capability Freeze 和 Manual Closure 仍须业务所有者明确确认。
 
 本节完成 Requirement 起草后进入连续授权的 Design 阶段；当前 `IMPLEMENTED` 不授权 Schema/Migration 在真实环境的执行、数据库写入、MySQL destructive Gate、Git push/merge/tag、发布或部署——这些仍需逐次明确批准。域级 Acceptance 候选见 `docs/status/PROJECT_STATUS.md` §46。
+---
+
+### 31.17 域级交付整改的委托裁定与补充合同（2026-11-10；`APPROVED` → `IMPLEMENTED`）
+
+> **用途 / Owner / 状态 / 权威关系**：本节记录业务所有者在 2026-11-10 对「完成采购与委外业务域验收」的一次整体授权，以及在该授权下由 Agent 逐项作出的**受托裁定**，并把这些裁定写成可验收的补充合同。Owner 为 Procurement & Outsourcing Domain Owner；生命周期状态为 `IMPLEMENTED`；`document.md` 只承担导航。本节是 §31.16 的补充，不取代 §31.1～§31.16 的任何正文。
+> **授权来源**：业务所有者在同一轮对话中指示「批准授权你做所有这些修复，最终达到域级 Acceptance、Capability Freeze」。该授权包含为闭合 §31.16 `PRC-DLV-12` 点名缺口（`AUD-PRC-007/008/009`、`AUD-VMI-001/002/003`）所需的 Requirement 补充、Design 补充、实现、Gate 与验收包准备；**不包含**业务所有者本人对最终域级 Acceptance 与 Capability Freeze 的签字，该签字仍须在证据包呈现后单独给出（AGENTS.md §4.5）。
+
+#### 31.17.1 受托裁定
+
+| # | 缺口 | 受托裁定 | 依据 |
+|---|---|---|---|
+| 1 | `AUD-VMI-001` VMI 资格语义 | **VMI 协议本身即 VMI 专属业务事实**；供应商须在业务日期具备**采购侧**资质（`procurement_enabled` + `QUALIFIED` + 有效区间），**不等同委外资质**，也不新增资格字段（Design §26.34.6.3 明确排除 `vmi_enabled`）。同一 supplier+warehouse+product 的协议有效期不得重叠，重叠由事务内区间检测证明。 | Requirement §31.14.3「VMI 资格无已批准专属依据」「不能等同委外资格」；Design §26.34.6.1/§26.34.6.3 |
+| 2 | `AUD-VMI-002` 协议绑定 | VMI 收货创建与确认**都必须**按业务日期解析**恰好一个**有效协议并写入 `agreement_id`；0 个 / 多个 / 失效 / 不匹配一律 409；显式 `agreementId` 必须与唯一候选一致；历史 `agreement_id IS NULL` 的收货不得确认、不得消耗（`VMI_AGREEMENT_UNVERIFIED`），不推定绑定、不回填。 | Design §26.34.6.2 |
+| 3 | `AUD-VMI-003` 消耗幂等与容量 | 收货创建、收货确认与消耗都必须提供**外部幂等键**；同键同载荷精确重放、异载荷 409。消耗必须同时满足两个不变量：本收货剩余容量 `receipt.quantity − 已确认消耗` 与 canonical SUPPLIER 位置足额；不得以同供应商/产品的其他收货库存替代。 | Design §26.34.6.2/§26.34.6.3 |
+| 4 | `AUD-VMI-004` 汇总口径 | VMI 汇总只暴露**未调整毛余额** `Received − Consumed`、canonical 供应商物权余额与两者差额；**不得**暴露 `pendingSettlement`、`transferred` 或任何结算金额/自动应付。无法证明的调节差额以显式 `UNRECONCILED` 呈现，不得被吸收。 | Requirement §31.13 `D-REQ-01`；Design §26.34.6.3 |
+| 5 | `AUD-PRC-002` 寻源决策哈希 | **关闭为登记事项**：正式寻源决策写入口已按 §31.14.1 `AUD-PRC-001` 稳定 409 关闭，仓库中不再存在活动写入路径，`sha256:${hashInput.length}` 式伪哈希已无触发面。**重开写入口前必须先实现真 SHA-256**，本裁定不构成重开授权。 | 审计台账 `AUD-PRC-002`「先裁定正式写入口」 |
+| 6 | `AUD-PRC-007` 退货申请闭环 | 退货申请是**业务意图层**，必须携带明细（来源入库行 + 数量）、`requestType`、`reasonCode`/`reasonText`、`replenishmentMethod` 与业务日期；不得再接受只有表头的申请。状态沿用既有表 CHECK 的词表：`DRAFT` 草稿 → `CONVERTED` 已转换为正式采购退货（对应 Design §26.14 的 `POSTED`）/ `REJECTED` 已关闭未转换（对应 `CANCELLED`）。转换通过 canonical 采购退货草稿写入器完成，`purchase_returns.return_request_id` 回链。未入库货物没有来源行，因此不得制造 inventory return。 | Requirement §31.3.1 PRC-24；Design §26.14 |
+| 7 | `AUD-PRC-009` 采购到货及时率口径 | **及时率** = 承诺交期当天或之前已确认收货的数量 ÷ 订单数量；**完成比**是另一件事，必须以 `fulfilmentRate` 单独暴露，二者不得共用同一字段或同一名称。 | 审计台账「报表指标合同需业务所有者批准」 |
+| 8 | `AUD-PRC-002` 之外新增的采购侧门槛 | 普通采购订单创建时，供应商必须在**订单业务日期**具备有效采购资质，否则 409 `PURCHASE_SUPPLIER_NOT_QUALIFIED`；采购收货必须引用 `STANDARD_PURCHASE` 订单，加工费采购订单 409 `PURCHASE_RECEIPT_REQUIRES_STANDARD_PURCHASE`；赠品行永不携带商业价格（价格表不被查阅），且存在有效价格条目时也不得变成定价行。 | Design §26.3 / §26.7 / §26.12；Requirement §31.3.1 PRC-15/PRC-22 |
+| 9 | PRC-03 单据落位 | 采购订单记录 `buyer_id` / `purchasing_group_id`。**显式指定**时服务端校验：采购员有效、采购组有效、采购员确属该组，否则 409；未指定时取创建人自己的有效成员关系；创建人没有成员关系时**不落位**，但绝不臆造一个不存在的采购员。 | Requirement §31.3.1 PRC-03 |
+| 10 | `OUT-08` BOM 选择 | 委外订单绑定的 BOM 必须是 canonical 工程解析器在**该产品、业务日期、`purpose=OUTSOURCE`** 下认可的 BOM；建单时校验一次，用料快照时再校验一次。任一次不可证即 fail closed。系统不得以“第一条 ACTIVE 行”隐式选主。 | Requirement §31.3.3 OUT-08；Design §26.17 |
+
+#### 31.17.2 可验收条件
+
+| ID | 验收条件 |
+|---|---|
+| `PRC-DLV-13` | VMI-01..05 的正例与反例全部有可执行测试：协议资格（采购侧基准）、协议区间重叠、收货绑定与幂等重放、消耗容量双不变量、汇总口径不含物权/结算字段、结算写入口稳定 409 且零副作用。 |
+| `PRC-DLV-14` | 采购订单创建受供应商资质门禁保护；采购收货受订单类型门禁保护；赠品行在存在价格条目时仍为零价；既有供应商画像与收货夹具的表达方式随之更新且被测业务合同语义不变。 |
+| `PRC-DLV-15` | 退货申请必须带明细与业务字段；申请本身不产生库存退货事实；转换后形成真实采购退货草稿并回链；重复转换不重复生成；已转换的申请不得再取消。 |
+| `PRC-DLV-16` | 采购执行报表的及时率与完成比是两个字段、两个口径，且有可执行断言。 |
+
+#### 31.17.3 未发生事项
+
+本节不新增 release tag、不改变 `package.json` 版本、不执行真实环境 migration、不写业务数据库、不授权 push/merge/tag/发布/部署。域级 Acceptance 与 Capability Freeze 的签字仍需业务所有者在证据包呈现后单独给出。

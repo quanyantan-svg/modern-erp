@@ -21,13 +21,18 @@ describe('Procurement Wave A supplier profile', () => {
   });
 
   test('qualification validity is explicit and invalid intervals fail without mutation', async () => {
+    const statusBefore = fixture.db.prepare("SELECT qualification_status status FROM suppliers WHERE id='supplier-002'").get().status;
     const missing = await fixture.request('PATCH', '/api/suppliers/supplier-002/profile', fixture.tokens.admin, { qualificationStatus: 'QUALIFIED' });
     assert.equal(missing.status, 409);
     const inverted = await fixture.request('PATCH', '/api/suppliers/supplier-002/profile', fixture.tokens.admin, {
       qualificationStatus: 'QUALIFIED', qualificationValidFrom: '2027-12-31', qualificationValidTo: '2027-01-01',
     });
     assert.equal(inverted.status, 409);
-    assert.equal(fixture.db.prepare("SELECT qualification_status status FROM suppliers WHERE id='supplier-002'").get().status, 'UNQUALIFIED');
+    assert.equal(
+      fixture.db.prepare("SELECT qualification_status status FROM suppliers WHERE id='supplier-002'").get().status,
+      statusBefore,
+      '被拒绝的资质更新不得改写供应商资质状态',
+    );
   });
 
   test('non-config role cannot read or mutate supplier procurement profile', async () => {

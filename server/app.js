@@ -342,9 +342,12 @@ import {
 } from './modules/procurement-receiving.js';
 import { convertReceiptNoticeToReceipts } from './modules/procurement-notice-conversion.js';
 import {
+  createPurchaseReturnDraftCanonical,
   createReturnRequest,
   listReturnRequests,
   planPurchaseReturnBranches,
+  cancelReturnRequest,
+  postReturnRequest,
 } from './modules/procurement-returns.js';
 import {
   confirmVmiReceipt,
@@ -999,6 +1002,18 @@ ownedRouteTable.register({
   method: 'POST',
   path: '/api/procurement/return-requests',
   handler: ({ db, req, res, actor }) => createReturnRequest(db, req, res, actor),
+  owner: 'server/modules/procurement-returns.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/return-requests\/([^/]+)\/post$/,
+  handler: ({ db, req, res, actor, params }) => postReturnRequest(db, req, res, actor, params[0]),
+  owner: 'server/modules/procurement-returns.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/return-requests\/([^/]+)\/cancel$/,
+  handler: ({ db, req, res, actor, params }) => cancelReturnRequest(db, req, res, actor, params[0]),
   owner: 'server/modules/procurement-returns.js',
 });
 ownedRouteTable.register({
@@ -6026,23 +6041,13 @@ async function createPurchaseReturn(db, req, res, actor) {
   const { receiptId, supplierId, warehouseId, remark, items } = body;
   const returnDate = normalizeDocumentDate(body?.returnDate || new Date().toISOString().slice(0, 10), '退货日期');
   if (!receiptId) throw new HttpError(400, '正常采购退货必须选择已确认采购入库单');
-  const source = db.prepare('SELECT * FROM purchase_receipts WHERE id=?').get(receiptId);
-  if (!source) throw new HttpError(400, '采购入库单不存在');
-  if (source.status !== 'CONFIRMED') throw new HttpError(409, '只有已确认采购入库单可以退货');
-  if (supplierId !== undefined && supplierId !== source.supplier_id) throw new HttpError(400, '供应商与采购入库单不一致');
-  if (warehouseId !== undefined && warehouseId !== source.warehouse_id) throw new HttpError(400, '仓库与采购入库单不一致');
-  const input = normalizeSourcedLogisticsItems(db, items, { sourceTable: 'purchase_receipt_items', sourceHeaderColumn: 'receipt_id', sourceHeaderId: receiptId, sourceIdCamel: 'receiptItemId', sourceIdSnake: 'receipt_item_id' });
-  assertRemainingQuantity(db, input, { itemTable: 'purchase_return_items', sourceColumn: 'receipt_item_id', headerTable: 'purchase_returns', headerForeignKey: 'return_id' }, '退货');
-  const returnId = id();
-  const now = new Date().toISOString();
-  const returnNo = 'PRET' + Date.now().toString().slice(-10);
-  transaction(db, () => {
-    db.prepare('INSERT INTO purchase_returns(id,return_no,receipt_id,supplier_id,warehouse_id,status,total_cents,return_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(returnId, returnNo, receiptId, source.supplier_id, source.warehouse_id, input.totalCents, returnDate, optionalText(remark, 500), actor.id, now, now);
-    replaceLogisticsItems(db, 'purchase_return_items', 'return_id', returnId, input.items, 'receipt_item_id');
-    configureTrackedDocumentLines(db, { sourceType: 'PURCHASE_RETURN', sourceId: returnId, itemTable: 'purchase_return_items', foreignKey: 'return_id', rawItems: items });
-    audit(db, actor.id, 'CREATE', 'PURCHASE_RETURN', returnId, '创建采购退货单 ' + returnNo);
+  // 采购退货草稿由 canonical writer 唯一持有：退货申请转换与直接退货共用同
+  // 一份写入逻辑（Active Design §26.14）。
+  const created = createPurchaseReturnDraftCanonical(db, actor, {
+    receiptId, supplierId, warehouseId,
+    remark: optionalText(remark, 500), items, returnDate,
   });
-  return send(res, 201, { id: returnId, returnNo });
+  return send(res, 201, { id: created.id, returnNo: created.returnNo });
 }
 
 function getPurchaseReturn(db, res, actor, returnId) {

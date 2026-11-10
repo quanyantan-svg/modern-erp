@@ -143,6 +143,13 @@ export function createPurchaseReceiptCore(db, actor, {
   const source = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(purchaseOrderId);
   if (!source) throw new HttpError(400, '采购订单不存在');
   if (source.status !== 'APPROVED') throw new HttpError(409, '只有已审批采购订单可以收货');
+  // A processing-fee purchase order is a commercial document for the
+  // outsourcing processing fee; its material inbound runs through the
+  // outsourcing receipt path and must never be received as an ordinary
+  // purchase receipt (Design §26.12).
+  if ((source.business_type || 'STANDARD_PURCHASE') !== 'STANDARD_PURCHASE') {
+    throw new HttpError(409, '加工费采购订单不可作为普通采购收货来源', { code: 'PURCHASE_RECEIPT_REQUIRES_STANDARD_PURCHASE' });
+  }
   if (supplierId !== undefined && supplierId !== source.supplier_id) throw new HttpError(400, '供应商与采购订单不一致');
   requireActiveReference(db, 'warehouses', warehouseId, '仓库');
 
@@ -225,6 +232,9 @@ export function confirmPurchaseReceiptCore(db, actor, receiptId, { idempotencyKe
   if (!locked.purchase_order_id) throw new HttpError(409, '旧版无来源采购入库不可确认，请使用库存调整单');
   const po = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(locked.purchase_order_id);
   if (!po || po.status !== 'APPROVED') throw new HttpError(409, '来源采购订单不存在或未审批');
+  if ((po.business_type || 'STANDARD_PURCHASE') !== 'STANDARD_PURCHASE') {
+    throw new HttpError(409, '加工费采购订单不可作为普通采购收货来源', { code: 'PURCHASE_RECEIPT_REQUIRES_STANDARD_PURCHASE' });
+  }
   if (locked.supplier_id !== po.supplier_id) throw new HttpError(409, '入库供应商与来源采购订单不一致');
   assertQualityGate(db, 'IQC', receiptId);
   assertFinancialPeriodsOpen(db, locked.receipt_date);

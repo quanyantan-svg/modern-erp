@@ -685,7 +685,7 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
     assert.deepEqual(active.setup.at(-1).body, { result: 'PASS', inspection_quantity: 10, passed_quantity: 10, failed_quantity: 0 });
     // 2026-11-10：委外流转改为精确动作、用料快照前置到 DRAFT 阶段后，固定场景必须沿新合同重写，
     // 冻结摘要随之重新计算；该重新冻结待业务所有者显式确认。
-    assert.equal(M1_CORE_G07_FIXED_FIXTURE_DIGEST, 'f552553813dc3abaaa52252221294aefda9a611247e41233ab8da9e62f20c2f3');
+    assert.equal(M1_CORE_G07_FIXED_FIXTURE_DIGEST, 'aa024bd56ae4eccd53242171f46bbd741bd1586f986d7d3ce92a8f5a53b8019f');
     assert.equal(computeM1CoreG07FixtureDigest(), M1_CORE_G07_FIXED_FIXTURE_DIGEST);
   });
 

@@ -357,15 +357,27 @@ describe('M1C WP2-WP5 outsourcing core', () => {
 
   // ---------------------------------------------------------------- WP4 ----
   test('WP4 未批准 / 用途不符的 OUTSOURCE BOM 一律 fail closed', async () => {
-    // 未批准的 OUTSOURCE BOM 必须在 DRAFT 阶段就无法形成用料快照：
-    // 快照是先于确认计划建立的唯一用料事实来源（Requirement §31.15）。
-    const bomId = seedApprovedOutsourceBom(fixture, 'product-001', [{ productId: 'product-001', requiredQuantity: 0.02 }], `wp4-bad-${Date.now()}`);
-    fixture.db.prepare("UPDATE boms SET approval_status='DRAFT' WHERE id=?").run(bomId);
+    // 未批准的 OUTSOURCE BOM 在**建单**时即被拒绝：委外订单必须消费已批准、
+    // 已生效、用途相符的 BOM（Requirement §31.3.3 OUT-08）。
+    const badBomId = seedApprovedOutsourceBom(fixture, 'product-001', [{ productId: 'product-001', requiredQuantity: 0.02 }], `wp4-bad-${Date.now()}`);
+    fixture.db.prepare("UPDATE boms SET approval_status='DRAFT' WHERE id=?").run(badBomId);
+    const rejected = await fixture.request('POST', '/api/procurement/outsourcing/orders', fixture.tokens.admin, {
+      supplierId: 'supplier-001', productId: 'product-001', orderQuantity: 50, unit: 'EA',
+      businessDate: isoDate(), bomId: badBomId,
+    });
+    assert.equal(rejected.status, 409, JSON.stringify(rejected.data));
+    assert.equal(rejected.data.code, 'OUTSOURCING_BASIS_INVALID');
+    assert.equal(fixture.db.prepare('SELECT COUNT(*) n FROM outsourcing_orders WHERE bom_id=?').get(badBomId).n, 0);
+
+    // 快照是先于确认计划建立的唯一用料事实来源（Requirement §31.15）：即使订单
+    // 建单时 BOM 有效，之后被撤销批准也必须 fail closed，且不得留下用料事实。
+    const bomId = seedApprovedOutsourceBom(fixture, 'product-001', [{ productId: 'product-001', requiredQuantity: 0.02 }], `wp4-revoked-${Date.now()}`);
     const order = await fixture.request('POST', '/api/procurement/outsourcing/orders', fixture.tokens.admin, {
       supplierId: 'supplier-001', productId: 'product-001', orderQuantity: 50, unit: 'EA',
       businessDate: isoDate(), bomId,
     });
     assert.equal(order.status, 201, order.data.error);
+    fixture.db.prepare("UPDATE boms SET approval_status='DRAFT' WHERE id=?").run(bomId);
     const snapshot = await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/material-list`, fixture.tokens.outsourcing, {
       items: [{ productId: 'product-001', sourceWarehouseId: 'warehouse-001' }],
     });

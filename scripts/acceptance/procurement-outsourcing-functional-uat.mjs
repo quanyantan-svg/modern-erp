@@ -14,19 +14,35 @@ const results = [];
 const today = new Date().toISOString().slice(0, 10);
 let baseUrl;
 
-async function browserApi(page, method, path, body, token) {
-  return page.evaluate(async ({ method, path, body, token }) => {
+async function browserApi(page, method, path, body, token, extraHeaders) {
+  return page.evaluate(async ({ method, path, body, token, extraHeaders }) => {
     const activeToken = token || localStorage.getItem('modern_erp_token');
     const response = await fetch(path, {
       method,
       headers: {
         ...(activeToken ? { authorization: `Bearer ${activeToken}` } : {}),
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...(extraHeaders || {}),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     return { status: response.status, data: await response.json().catch(() => ({})) };
-  }, { method, path, body, token });
+  }, { method, path, body, token, extraHeaders });
+}
+
+// 委外用料必须有已批准、已生效、用途相符的 BOM（Requirement §31.3.3 OUT-08），
+// 发料还必须有权威估值余额，因此这里一次性建立该业务事实。
+function seedOutsourceBom(bomId, productId, materialProductId, materialQuantity) {
+  const now = new Date().toISOString();
+  db.prepare(`INSERT OR REPLACE INTO boms(id,product_id,version,status,remark,creator_id,created_at,updated_at,purpose,effective_from,approval_status,approved_by,approved_at)
+    VALUES(?,?,'1','ACTIVE','','user-admin',?,?,'OUTSOURCE',?,'APPROVED','user-admin',?)`)
+    .run(bomId, productId, now, now, today, now);
+  db.prepare(`INSERT OR REPLACE INTO bom_items(id,bom_id,product_id,quantity,scrap_rate,line_no) VALUES(?,?,?,?,0,1)`)
+    .run(`${bomId}-item`, bomId, materialProductId, materialQuantity);
+  db.prepare(`INSERT OR IGNORE INTO inventory_valuation_balances(balance_key,valuation_method,product_id,warehouse_id,lot_id,serial_id,quantity,value_cents,updated_at)
+    VALUES(?, 'MOVING_AVERAGE', ?, 'warehouse-001', NULL, NULL, 1000, 1000000, ?)`)
+    .run(`NONE:warehouse-001:${materialProductId}`, materialProductId, now);
+  return bomId;
 }
 
 async function loginToken(page, username, password) {
@@ -55,6 +71,13 @@ function expect(response, status, detail) {
 }
 
 async function createApprovedPo(page, reviewerToken, quantity = 10) {
+  // 权威采购价格：普通采购订单没有有效价格时 fail closed（Active Design §26.36.3）。
+  for (const [productId, unitPriceCents] of [['product-001', 1000], ['product-002', 600]]) {
+    await browserApi(page, 'POST', '/api/procurement/price-list', {
+      supplierId: 'supplier-001', productId, sourceType: 'PURCHASE',
+      pricingUomCode: 'EA', unitPriceCents, effectiveFrom: today,
+    });
+  }
   const created = await browserApi(page, 'POST', '/api/purchase-orders', {
     supplierId: 'supplier-001', orderDate: today, expectedDeliveryDate: today,
     supplierContactName: 'UAT 联系人', supplierContactPhone: '13800000000',
@@ -87,6 +110,12 @@ async function main() {
     const warehouseToken = await loginToken(page, 'warehouse', 'warehouse123');
 
     await run('UAT-01', 'Supplier qualification edit/save', 'Suppliers route; PATCH profile; GET persisted profile', async () => {
+      // 委外 WIP 仓库是发料/补料/退料的前置业务事实（OUT-04）。
+      await browserApi(page, 'PATCH', '/api/suppliers/supplier-001/profile', {
+        outsourcingEnabled: true, category: 'OUTSOURCE', qualificationStatus: 'QUALIFIED',
+        qualificationValidFrom: today, qualificationValidTo: '2099-12-31',
+        supplierWipWarehouseId: 'warehouse-002',
+      });
       await page.goto(`${baseUrl}#suppliers`, { waitUntil: 'networkidle' });
       expect(await browserApi(page, 'PATCH', '/api/suppliers/supplier-001/profile', {
         procurementEnabled: true, outsourcingEnabled: true, category: 'OUTSOURCE', qualificationStatus: 'QUALIFIED',
@@ -164,7 +193,7 @@ async function main() {
       const change = expect(await browserApi(page, 'POST', '/api/procurement/purchase-order-changes', {
         orderId: state.poId, action: 'ADD', payload: { productId: 'product-002', quantity: 3, unitPriceCents: 600, lineNo: 2 },
       }), 201, 'create PO change');
-      expect(await browserApi(page, 'POST', `/api/procurement/purchase-order-changes/${change.id}/approve`), 200, 'approve change');
+      expect(await browserApi(page, 'POST', `/api/procurement/purchase-order-changes/${change.id}/approve`, undefined, reviewerToken), 200, 'approve change');
       expect(await browserApi(page, 'POST', `/api/procurement/purchase-order-changes/${change.id}/apply`), 200, 'apply change');
       const execution = expect(await browserApi(page, 'GET', `/api/purchase-orders/${state.poId}/execution`), 200, 'query changed PO');
       if (execution.execution.items.length !== 2) throw new Error('PO change not reflected');
@@ -173,20 +202,25 @@ async function main() {
 
     await run('UAT-08', 'Receipt Notice create from PO', 'Create and confirm notice from approved PO', async () => {
       const item = db.prepare('SELECT id FROM purchase_order_items WHERE order_id=? AND product_id=?').get(state.poId, 'product-001');
+      expect(await browserApi(page, 'POST', `/api/purchase-orders/${state.poId}/delivery-schedules`, {
+        orderItemId: item.id, plannedQuantity: 10, plannedDate: today,
+      }), 201, 'create delivery schedule');
       const notice = expect(await browserApi(page, 'POST', '/api/receipt-notices', {
         purchaseOrderId: state.poId, warehouseId: 'warehouse-001', noticeDate: today,
         items: [{ purchaseOrderItemId: item.id, productId: 'product-001', quantity: 10 }],
       }), 201, 'create receipt notice');
       expect(await browserApi(page, 'POST', `/api/receipt-notices/${notice.id}/confirm`), 200, 'confirm receipt notice');
+      state.noticeId = notice.id;
       return `notice ${notice.id} CONFIRMED`;
     });
 
-    await run('UAT-09', 'IQC valid pass flow', 'Create receipt draft; create and PASS IQC', async () => {
-      const item = db.prepare('SELECT id FROM purchase_order_items WHERE order_id=? AND product_id=?').get(state.poId, 'product-001');
-      const receipt = expect(await browserApi(page, 'POST', '/api/purchase-receipts', {
-        purchaseOrderId: state.poId, supplierId: 'supplier-001', warehouseId: 'warehouse-001', receiptDate: today,
-        items: [{ purchaseOrderItemId: item.id, productId: 'product-001', quantity: 10, unitPriceCents: 1000 }],
-      }, warehouseToken), 201, 'create purchase receipt');
+    await run('UAT-09', 'IQC valid pass flow', 'Convert the confirmed notice into a receipt draft; create and PASS IQC', async () => {
+      const source = db.prepare(`SELECT s.id FROM receipt_notice_item_sources s
+        JOIN receipt_notice_items i ON i.id=s.notice_item_id WHERE i.notice_id=? ORDER BY s.id LIMIT 1`).get(state.noticeId);
+      const converted = expect(await browserApi(page, 'POST', `/api/receipt-notices/${state.noticeId}/convert`, {
+        items: [{ sourceId: source.id, quantity: 10 }],
+      }, undefined, { 'idempotency-key': `uat-convert-${state.noticeId}` }), 201, 'convert notice into receipt');
+      const receipt = { id: converted.receipts[0].id };
       state.receiptId = receipt.id;
       state.receiptItemId = db.prepare('SELECT id FROM purchase_receipt_items WHERE receipt_id=?').get(receipt.id).id;
       const iqc = expect(await browserApi(page, 'POST', '/api/iqc', { purchase_receipt_id: receipt.id }, warehouseToken), 201, 'create IQC');
@@ -214,12 +248,12 @@ async function main() {
 
     await run('UAT-12', 'Return Request → Purchase Return', 'Create return request; create and confirm purchase return', async () => {
       const request = expect(await browserApi(page, 'POST', '/api/procurement/return-requests', {
-        receiptId: state.receiptId, requestDate: today, remark: 'UAT return request',
+        receiptId: state.receiptId, requestType: 'COMMERCIAL', reasonCode: 'UAT_RETURN',
+        replenishmentMethod: 'REORDER', requestDate: today, remark: 'UAT return request',
+        items: [{ receiptItemId: state.receiptItemId, quantity: 2 }],
       }), 201, 'create return request');
-      const ret = expect(await browserApi(page, 'POST', '/api/purchase-returns', {
-        receiptId: state.receiptId, supplierId: 'supplier-001', warehouseId: 'warehouse-001',
-        items: [{ receiptItemId: state.receiptItemId, productId: 'product-001', quantity: 2, unitPriceCents: 1000 }],
-      }, warehouseToken), 201, 'create purchase return');
+      const posted = expect(await browserApi(page, 'POST', `/api/procurement/return-requests/${request.id}/post`, {}), 201, 'post return request');
+      const ret = { id: posted.postedReturnId };
       expect(await browserApi(page, 'POST', `/api/purchase-returns/${ret.id}`, { action: 'confirm' }, warehouseToken), 200, 'confirm purchase return');
       return `request ${request.id}; return ${ret.id} CONFIRMED`;
     });
@@ -234,12 +268,17 @@ async function main() {
       return `agreement ${agreement.id} persisted`;
     });
 
-    await run('UAT-14', 'VMI owner-dimensional action fail-closed', 'Attempt VMI receipt; require explicit owner-dimension failure', async () => {
-      const response = await browserApi(page, 'POST', '/api/procurement/vmi/receipts', {
+    await run('UAT-14', 'VMI receiving fail-closed on idempotency and agreement binding', 'Attempt VMI receipt without an idempotency key, then with a key; require the current fail-closed boundaries', async () => {
+      const withoutKey = await browserApi(page, 'POST', '/api/procurement/vmi/receipts', {
         supplierId: 'supplier-001', warehouseId: 'warehouse-001', productId: 'product-001', quantity: 50, receivedDate: today,
       });
-      if (response.status !== 409 || !String(response.data.error).includes('INVENTORY_OWNER_DIMENSION_UNAVAILABLE')) throw new Error(`unexpected ${response.status} ${JSON.stringify(response.data)}`);
-      return 'HTTP 409 INVENTORY_OWNER_DIMENSION_UNAVAILABLE (expected fail-closed)';
+      if (withoutKey.status !== 400 || withoutKey.data.code !== 'IDEMPOTENCY_KEY_REQUIRED') throw new Error(`unexpected ${withoutKey.status} ${JSON.stringify(withoutKey.data)}`);
+      const withKey = await browserApi(page, 'POST', '/api/procurement/vmi/receipts', {
+        supplierId: 'supplier-001', warehouseId: 'warehouse-001', productId: 'product-001', quantity: 50, receivedDate: today,
+        idempotencyKey: `uat-14-${Date.now()}`,
+      });
+      expect(withKey, 201, 'create VMI receipt');
+      return `HTTP 400 IDEMPOTENCY_KEY_REQUIRED then HTTP 201 with a bound agreement (${withKey.data.id})`;
     });
 
     await run('UAT-15', 'Planning handoff → Outsourcing Order', 'Seed planning handoff; consume via create order; verify authoritative consumption + CONSUMED status', async () => {
@@ -266,58 +305,71 @@ async function main() {
       return `handoff ${handoffId} CONSUMED → ${order.id}`;
     });
 
-    await run('UAT-16', 'Manual Outsourcing Order', 'Create manual outsourcing order', async () => {
+    await run('UAT-16', 'Manual Outsourcing Order', 'Create manual outsourcing order bound to an approved OUTSOURCE BOM', async () => {
+      const bomId = seedOutsourceBom('uat-out-bom-001', 'product-001', 'product-002', 1);
       const order = expect(await browserApi(page, 'POST', '/api/procurement/outsourcing/orders', {
-        supplierId: 'supplier-001', productId: 'product-001', orderQuantity: 20, businessDate: today,
+        supplierId: 'supplier-001', productId: 'product-001', orderQuantity: 20, businessDate: today, bomId,
       }), 201, 'create manual outsourcing order');
       state.outOrderId = order.id;
-      return `manual order ${order.id}`;
+      return `manual order ${order.id}; bom ${bomId}`;
     });
 
-    await run('UAT-17', 'Plan Confirm / Release', 'Transition manual order DRAFT→PLAN_CONFIRMED→RELEASED', async () => {
-      expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/orders/${state.outOrderId}/transition`, { action: 'PLAN_CONFIRMED' }), 200, 'plan confirm');
-      expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/orders/${state.outOrderId}/transition`, { action: 'RELEASED' }), 200, 'release');
+    await run('UAT-17', 'Plan Confirm / Release', 'Snapshot materials, then transition DRAFT→PLAN_CONFIRMED→RELEASED', async () => {
+      expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/orders/${state.outOrderId}/material-list`, {
+        items: [{ productId: 'product-002', sourceWarehouseId: 'warehouse-001' }],
+      }), 200, 'snapshot material list');
+      state.materialId = db.prepare('SELECT id FROM outsourcing_material_list WHERE order_id=? ORDER BY id LIMIT 1').get(state.outOrderId).id;
+      expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/orders/${state.outOrderId}/transition`, { action: 'CONFIRM_PLAN' }), 200, 'plan confirm');
+      expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/orders/${state.outOrderId}/transition`, { action: 'RELEASE' }), 200, 'release');
       const order = expect(await browserApi(page, 'GET', `/api/procurement/outsourcing/orders/${state.outOrderId}`), 200, 'reload order');
       if (order.outsourcingOrder.status !== 'RELEASED') throw new Error('order not released');
       return 'PLAN_CONFIRMED → RELEASED';
     });
 
-    await run('UAT-18', 'Material Issue', 'Snapshot material list; issue to supplier-WIP warehouse', async () => {
-      expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/orders/${state.outOrderId}/material-list`, {
-        items: [{ productId: 'product-001', requiredQuantity: 5, unit: 'PCS', bomSnapshot: { source: 'UAT' } }],
-      }), 200, 'snapshot material list');
-      state.materialId = db.prepare('SELECT id FROM outsourcing_material_list WHERE order_id=?').get(state.outOrderId).id;
+    await run('UAT-18', 'Material Issue', 'Issue the snapshotted material to the supplier-WIP warehouse', async () => {
       const issue = expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/orders/${state.outOrderId}/issues`, {
-        materialListId: state.materialId, quantity: 10, fromWarehouseId: 'warehouse-001', toWarehouseId: 'warehouse-002', issuedDate: today,
+        materialListId: state.materialId, quantity: 20, issuedDate: today,
         idempotencyKey: `uat-issue-${state.outOrderId}`,
       }), 201, 'issue material');
-      return `issue ${issue.id}; qty=10`;
+      return `issue ${issue.id}; qty=20`;
     });
 
     await run('UAT-19', 'Supplement', 'Create material supplement', async () => {
       const supplement = expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/orders/${state.outOrderId}/supplements`, {
         materialListId: state.materialId, quantity: 2, reason: 'UAT supplement', supplementDate: today,
+        idempotencyKey: `uat-supplement-${state.outOrderId}`,
       }), 201, 'supplement material');
       return `supplement ${supplement.id}; qty=2`;
     });
 
     await run('UAT-20', 'Material Return', 'Return material from supplier-WIP', async () => {
       const returned = expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/orders/${state.outOrderId}/returns`, {
-        materialListId: state.materialId, quantity: 1, fromWarehouseId: 'warehouse-002', toWarehouseId: 'warehouse-001', returnDate: today,
+        materialListId: state.materialId, quantity: 1, returnDate: today,
+        idempotencyKey: `uat-return-${state.outOrderId}`,
       }), 201, 'return material');
       return `material return ${returned.id}; qty=1`;
     });
 
     await run('UAT-21', 'Completion Receipt Notice', 'OUTSOURCE Completion Receipt Notice create with quantity + open-qty cap', async () => {
+      const processingPo = expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/orders/${state.outOrderId}/processing-fee-purchase-orders`, {
+        unitPriceCents: 1000, orderDate: today, expectedDeliveryDate: today, paymentTerms: '30 天',
+        supplierContactName: 'UAT 联系人', supplierContactPhone: '13800000000', supplierAddress: 'UAT 地址',
+      }, undefined, { 'idempotency-key': `uat-processing-po-${state.outOrderId}` }), 201, 'create processing fee PO');
+      expect(await browserApi(page, 'POST', `/api/purchase-orders/${processingPo.id}/submit`), 200, 'submit processing fee PO');
+      expect(await browserApi(page, 'POST', `/api/purchase-orders/${processingPo.id}/approve`, undefined, reviewerToken), 200, 'approve processing fee PO');
+      state.processingPoId = processingPo.id;
       const response = await browserApi(page, 'POST', '/api/receipt-notices', {
         businessType: 'OUTSOURCE',
         outsourcingOrderId: state.outOrderId,
+        processingPoId: processingPo.id,
         warehouseId: 'warehouse-001', noticeDate: today,
-        items: [{ productId: 'product-001', quantity: 5 }],
+        items: [{ productId: 'product-001', quantity: 20 }],
       });
       if (response.status !== 201) throw new Error(`no executable outsourcing completion-notice contract: HTTP ${response.status} ${JSON.stringify(response.data)}`);
-      state.noticeId = response.data.id;
-      return `completion notice ${state.noticeId} (OUTSOURCE businessType)`;
+      state.outNoticeId = response.data.id;
+      // 委外完工通知必须确认后才形成可收货的完工事实（OUT-17）。
+      expect(await browserApi(page, 'POST', `/api/receipt-notices/${state.outNoticeId}/confirm`), 200, 'confirm completion notice');
+      return `completion notice ${state.outNoticeId} CONFIRMED (OUTSOURCE businessType)`;
     });
 
     await run('UAT-22', 'Outsourcing Inspection', 'IQC create with OUTSOURCING_RECEIPT source contract', async () => {
@@ -327,18 +379,22 @@ async function main() {
       // proves we have closed. Use admin token since IQC_MANAGE is the
       // canonical quality capability and IQC contract test is not gated
       // on warehouse role.
+      const processingPoItemId = db.prepare('SELECT id FROM purchase_order_items WHERE order_id=? ORDER BY line_no LIMIT 1').get(state.processingPoId).id;
+      const outNoticeItemId = db.prepare('SELECT id FROM receipt_notice_items WHERE notice_id=? ORDER BY id LIMIT 1').get(state.outNoticeId).id;
       const recv = expect(await browserApi(page, 'POST', '/api/procurement/outsourcing/receipts', {
         orderId: state.outOrderId, quantity: 5, receivedDate: today, processingFeeCents: 5000,
-      }), 201, 'create outsourcing receipt for IQC');
-      // IQC over OUTSOURCING_RECEIPT requires an inspection-able item
-      // (mirrors canonical purchase-receipt IQC path).
-      db.prepare(`INSERT INTO outsourcing_receipt_items(id,receipt_id,product_id,quantity,unit_price_cents,line_no) VALUES(?,?,?,?,?,?)`)
-        .run(`ori-${recv.id}`, recv.id, 'product-001', 5, 1000, 1);
+        processingPoId: state.processingPoId, sourceNoticeId: state.outNoticeId, warehouseId: 'warehouse-001',
+        items: [{ productId: 'product-001', quantity: 5, unitPriceCents: 1000, processingPoItemId, sourceNoticeItemId: outNoticeItemId }],
+      }, undefined, { 'idempotency-key': `uat-out-receipt-iqc-${state.outOrderId}` }), 201, 'create outsourcing receipt for IQC');
       const response = await browserApi(page, 'POST', '/api/iqc', {
         outsourcing_receipt_id: recv.id,
       });
       if (response.status !== 201) throw new Error(`no executable OUTSOURCING_RECEIPT inspection contract: HTTP ${response.status} ${JSON.stringify(response.data)}`);
       state.iqcId = response.data.id;
+      // 完成的合格检验是委外收货生效的证据前提（OUT-19 / OUT-18）。
+      expect(await browserApi(page, 'POST', `/api/iqc/${state.iqcId}/complete`, {
+        result: 'PASS', inspection_quantity: 5, passed_quantity: 5, failed_quantity: 0,
+      }), 200, 'complete outsourcing IQC');
       // Verify the source-type discriminator persisted.
       const row = db.prepare('SELECT source_type, outsourcing_receipt_id FROM iqc_inspections WHERE id=?').get(state.iqcId);
       if (!row || row.source_type !== 'OUTSOURCING_RECEIPT' || row.outsourcing_receipt_id !== recv.id) {
@@ -348,60 +404,76 @@ async function main() {
     });
 
     await run('UAT-23', 'Outsourcing Receipt → Backflush', 'Create/confirm receipt; verify backflush and cost evidence', async () => {
+      const processingPoItemId = db.prepare('SELECT id FROM purchase_order_items WHERE order_id=? ORDER BY line_no LIMIT 1').get(state.processingPoId).id;
+      const outNoticeItemId = db.prepare('SELECT id FROM receipt_notice_items WHERE notice_id=? ORDER BY id LIMIT 1').get(state.outNoticeId).id;
       const receipt = expect(await browserApi(page, 'POST', '/api/procurement/outsourcing/receipts', {
-        orderId: state.outOrderId, quantity: 20, receivedDate: today, processingFeeCents: 20000,
-      }), 201, 'create outsourcing receipt');
+        orderId: state.outOrderId, quantity: 15, receivedDate: today, processingFeeCents: 15000,
+        processingPoId: state.processingPoId, sourceNoticeId: state.outNoticeId, warehouseId: 'warehouse-001',
+        items: [{ productId: 'product-001', quantity: 15, unitPriceCents: 1000, processingPoItemId, sourceNoticeItemId: outNoticeItemId }],
+      }, undefined, { 'idempotency-key': `uat-out-receipt-${state.outOrderId}` }), 201, 'create outsourcing receipt');
       state.outReceiptId = receipt.id;
-      expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/receipts/${receipt.id}/confirm`), 200, 'confirm outsourcing receipt');
+      expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/receipts/${receipt.id}/confirm`, {}, undefined, { 'idempotency-key': `uat-out-receipt-confirm-${receipt.id}` }), 200, 'confirm outsourcing receipt');
       const evidence = db.prepare('SELECT * FROM outsourcing_cost_evidences WHERE outsourcing_receipt_id=?').get(receipt.id);
       if (!evidence) throw new Error('cost evidence missing after receipt confirm');
       return `receipt ${receipt.id}; backflush evidence=${evidence.material_consumed_value_cents}`;
     });
 
-    await run('UAT-24', 'Processing Fee Supplier Bill', 'Create/post processing-fee bill; verify canonical AP and FINAL evidence', async () => {
-      state.outReceiptItemId = `uat-ori-${Date.now()}`;
-      db.prepare(`INSERT INTO outsourcing_receipt_items(id,receipt_id,product_id,quantity,unit_price_cents,line_no)
-        VALUES(?,?,?,20,1000,1)`).run(state.outReceiptItemId, state.outReceiptId, 'product-001');
+    await run('UAT-24', 'Processing Fee Supplier Bill', 'Create the draft bill and assert the approved fail-closed posting boundary (OUT-20)', async () => {
+      const receiptItemId = db.prepare('SELECT id FROM outsourcing_receipt_items WHERE receipt_id=? ORDER BY id LIMIT 1').get(state.outReceiptId).id;
       const bill = expect(await browserApi(page, 'POST', '/api/procurement/outsourcing/processing-fee-bills', {
         supplierId: 'supplier-001', supplierInvoiceNo: `UAT-${Date.now()}`, billDate: today,
         idempotencyKey: `uat-bill-${state.outReceiptId}`,
-        lines: [{ outsourcingReceiptItemId: state.outReceiptItemId, quantity: 20, unitPriceCents: 1000 }],
+        lines: [{ outsourcingReceiptItemId: receiptItemId, quantity: 15, unitPriceCents: 1000 }],
       }), 201, 'create processing fee bill');
       state.processingBillId = bill.id;
-      expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/processing-fee-bills/${bill.id}/post`), 200, 'post processing fee bill');
-      const ap = db.prepare("SELECT amount_cents FROM account_payables WHERE source_type='SUPPLIER_BILL' AND source_id=?").get(bill.id);
+      const posted = await browserApi(page, 'POST', `/api/procurement/outsourcing/processing-fee-bills/${bill.id}/post`);
+      if (posted.status !== 409 || posted.data.code !== 'OUTSOURCING_GL_POLICY_NOT_APPROVED') {
+        throw new Error(`unexpected ${posted.status} ${JSON.stringify(posted.data)}`);
+      }
+      const ap = db.prepare("SELECT COUNT(*) n FROM account_payables WHERE source_type='SUPPLIER_BILL' AND source_id=?").get(bill.id).n;
       const evidence = db.prepare('SELECT * FROM outsourcing_cost_evidences WHERE outsourcing_receipt_id=?').get(state.outReceiptId);
-      if (!ap || evidence.basis_status !== 'FINAL' || evidence.processing_fee_actual_cents !== 20000) throw new Error(`AP/evidence mismatch ${JSON.stringify({ ap, evidence })}`);
-      return `bill ${bill.id} POSTED; AP=20000; actual fee=20000 FINAL`;
+      if (ap !== 0) throw new Error('被拒绝的加工费过账不得产生应付事实');
+      if (!evidence || evidence.basis_status === 'FINAL') throw new Error(`cost evidence must stay provisional: ${JSON.stringify(evidence)}`);
+      return `bill ${bill.id} DRAFT; post HTTP 409 OUTSOURCING_GL_POLICY_NOT_APPROVED; AP=0; evidence provisional`;
     });
 
-    await run('UAT-25', 'Finished Outsourcing Return', 'Return billed finished qty; verify commercial credit handoff', async () => {
-      const returned = expect(await browserApi(page, 'POST', '/api/procurement/outsourcing/finished-returns', {
+    await run('UAT-25', 'Finished Outsourcing Return', 'Assert the approved fail-closed boundary: no credit is handed over', async () => {
+      const response = await browserApi(page, 'POST', '/api/procurement/outsourcing/finished-returns', {
         outsourcingReceiptId: state.outReceiptId, quantity: 2, returnDate: today,
-      }), 201, 'create finished return');
-      if (returned.commercialState !== 'BILLED_CREDIT_POSTED' || returned.commercialCreditCents !== 2000) throw new Error(`commercial handoff mismatch ${JSON.stringify(returned)}`);
-      return `return ${returned.id}; canonical credit=2000`;
+      });
+      if (response.status !== 409 || response.data.code !== 'OUTSOURCING_FINISHED_RETURN_NOT_APPROVED') {
+        throw new Error(`unexpected ${response.status} ${JSON.stringify(response.data)}`);
+      }
+      const credits = db.prepare("SELECT COUNT(*) n FROM financial_credit_adjustments WHERE source_type='OUTSOURCING_FINISHED_RETURN'").get().n;
+      if (credits !== 0) throw new Error('被拒绝的成品退货不得产生信用证据');
+      return 'HTTP 409 OUTSOURCING_FINISHED_RETURN_NOT_APPROVED; 零信用证据';
     });
 
-    await run('UAT-26', 'Difference Allocation', 'Preview then apply supplement allocation', async () => {
+    await run('UAT-26', 'Difference Allocation', 'Preview the difference and assert the approved fail-closed apply boundary', async () => {
       const preview = expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/orders/${state.outOrderId}/difference-preview`), 200, 'preview difference');
-      const applied = expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/orders/${state.outOrderId}/difference-apply`, {
-        materialListId: preview.preview[0].materialListId, supplementQuantity: 1, returnQuantity: 0, periodKey: today.slice(0, 7),
-      }), 200, 'apply difference');
-      return `preview rows=${preview.preview.length}; applied=${applied.ok}`;
+      const row = (preview.preview || [])[0];
+      const applied = await browserApi(page, 'POST', `/api/procurement/outsourcing/orders/${state.outOrderId}/difference-apply`, {
+        materialListId: row?.materialListId ?? state.materialId, supplementQuantity: 1, returnQuantity: 0, periodKey: today.slice(0, 7),
+      });
+      if (applied.status !== 409 || applied.data.code !== 'OUTSOURCING_DIFFERENCE_APPROVAL_PENDING') {
+        throw new Error(`unexpected ${applied.status} ${JSON.stringify(applied.data)}`);
+      }
+      return `preview rows=${(preview.preview || []).length}; apply HTTP 409 OUTSOURCING_DIFFERENCE_APPROVAL_PENDING`;
     });
 
     await run('UAT-27', 'WIP Transfer', 'Create compatible target order/material; transfer remaining supplier WIP', async () => {
+      const targetBomId = seedOutsourceBom('uat-out-bom-002', 'product-001', 'product-002', 1);
       const target = expect(await browserApi(page, 'POST', '/api/procurement/outsourcing/orders', {
-        supplierId: 'supplier-001', productId: 'product-001', orderQuantity: 20, businessDate: today,
+        supplierId: 'supplier-001', productId: 'product-001', orderQuantity: 20, businessDate: today, bomId: targetBomId,
       }), 201, 'create target order');
-      expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/orders/${target.id}/transition`, { action: 'PLAN_CONFIRMED' }), 200, 'target plan confirm');
-      expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/orders/${target.id}/transition`, { action: 'RELEASED' }), 200, 'target release');
       expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/orders/${target.id}/material-list`, {
-        items: [{ productId: 'product-001', requiredQuantity: 5, unit: 'PCS' }],
+        items: [{ productId: 'product-002', sourceWarehouseId: 'warehouse-001' }],
       }), 200, 'target material list');
+      expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/orders/${target.id}/transition`, { action: 'CONFIRM_PLAN' }), 200, 'target plan confirm');
+      expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/orders/${target.id}/transition`, { action: 'RELEASE' }), 200, 'target release');
       const transfer = expect(await browserApi(page, 'POST', '/api/procurement/outsourcing/wip-transfers', {
         sourceOrderId: state.outOrderId, targetOrderId: target.id, materialListId: state.materialId, quantity: 1, transferDate: today,
+        idempotencyKey: `uat-wip-transfer-${state.outOrderId}`,
       }), 201, 'transfer WIP');
       return `WIP transfer ${transfer.id}; qty=1`;
     });
@@ -412,6 +484,27 @@ async function main() {
       const positions = expect(await browserApi(page, 'GET', `/api/reports/outsourcing/material-position?orderId=${state.outOrderId}`), 200, 'material report');
       if (!execution.report.some((row) => row.orderId === state.outOrderId) || positions.report.length === 0) throw new Error('report rows missing');
       return `execution rows=${execution.report.length}; material rows=${positions.report.length}`;
+    });
+
+    await run('UAT-29', '采购订单工作面四档宽度闭环', 'Open the purchase order surface at 320 / 390 / 430 / 680 CSS px; require no horizontal page overflow and a rendered surface', async () => {
+      const observed = [];
+      for (const width of [320, 390, 430, 680]) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto(`${baseUrl}#purchase-orders`, { waitUntil: 'networkidle' });
+        const evidence = await page.evaluate(() => ({
+          documentWidth: document.documentElement.scrollWidth,
+          viewportWidth: window.innerWidth,
+          title: document.querySelector('h1,h2')?.textContent?.trim() || '',
+          bodyText: document.body.innerText || '',
+        }));
+        if (evidence.documentWidth > evidence.viewportWidth + 1) {
+          throw new Error(`${width}px 出现整页横向滚动：document ${evidence.documentWidth} > viewport ${evidence.viewportWidth}`);
+        }
+        if (!evidence.bodyText.includes('采购订单')) throw new Error(`${width}px 未渲染采购订单工作面`);
+        observed.push(`${width}px`);
+      }
+      await page.setViewportSize({ width: 390, height: 900 });
+      return `widths ${observed.join(', ')}: 无整页横向滚动且工作面已渲染`;
     });
 
     console.log('=== Procurement & Outsourcing Functional Browser UAT ===');

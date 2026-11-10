@@ -121,8 +121,8 @@ function ensureProduct(code, priceCents) {
 function ensureActiveSupplier() {
   const id = 'supplier-r4-001';
   if (db.prepare('SELECT id FROM suppliers WHERE id=?').get(id)) return id;
-  db.prepare(`INSERT INTO suppliers(id, code, name, active, payment_terms_days, contact, phone, address, created_at, updated_at)
-              VALUES(?, 'R4-SUP-001', 'R4 测试供应商', 1, 30, '采购联系人', '13800000000', '深圳市福田区', datetime('now'), datetime('now'))`)
+  db.prepare(`INSERT INTO suppliers(id, code, name, active, payment_terms_days, contact, phone, address, created_at, updated_at, qualification_status)
+              VALUES(?, 'R4-SUP-001', 'R4 测试供应商', 1, 30, '采购联系人', '13800000000', '深圳市福田区', datetime('now'), datetime('now'), 'QUALIFIED')`)
     .run(id);
   return id;
 }

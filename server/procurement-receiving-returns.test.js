@@ -109,12 +109,40 @@ describe('Procurement Wave D receiving notice and return branch plan', () => {
       VALUES('rcpt-rt','PR-RT','${orderId}','supplier-001','warehouse-001','user-admin','CONFIRMED',3000,?,'user-admin',?,?,'SEPARATE')`).run(isoDate(0), now, now);
     fixture.db.prepare(`INSERT INTO purchase_receipt_items(id,receipt_id,purchase_order_item_id,product_id,quantity,unit_price_cents,amount_cents,line_no)
       VALUES('rcpt-rt-i','rcpt-rt','${fixture.db.prepare('SELECT id FROM purchase_order_items WHERE order_id=?').get(orderId).id}','product-001',3,1000,3000,1)`).run();
-    const request = await fixture.request('POST', '/api/procurement/return-requests', fixture.tokens.admin, {
+    // 退货申请是业务意图层：必须说清退什么、为什么退、退多少与如何补料，
+    // 并且不得在未入库货物上成立（Active Design §26.14 / PRC-24）。
+    const withoutItems = await fixture.request('POST', '/api/procurement/return-requests', fixture.tokens.admin, {
       receiptId: 'rcpt-rt', requestDate: isoDate(0), remark: '外包装破损',
+    });
+    assert.equal(withoutItems.status, 400, JSON.stringify(withoutItems.data));
+    const request = await fixture.request('POST', '/api/procurement/return-requests', fixture.tokens.admin, {
+      receiptId: 'rcpt-rt', requestType: 'QUALITY', reasonCode: 'DAMAGED_PACKAGING',
+      reasonText: '外包装破损', replenishmentMethod: 'REORDER', requestDate: isoDate(0), remark: '外包装破损',
+      items: [{ receiptItemId: 'rcpt-rt-i', quantity: 2 }],
     });
     assert.equal(request.status, 201, request.data.error);
     assert.equal(request.data.requestNo.startsWith('RT'), true);
     const list = await fixture.request('GET', '/api/procurement/return-requests', fixture.tokens.admin);
-    assert.equal(list.data.returnRequests.length >= 1, true);
+    const listed = list.data.returnRequests.find((row) => row.id === request.data.id);
+    assert.ok(listed, '退货申请必须可列出');
+    assert.equal(listed.requestType, 'QUALITY');
+    assert.equal(listed.replenishmentMethod, 'REORDER');
+    assert.equal(listed.items.length, 1);
+    assert.equal(listed.items[0].quantity, 2);
+    assert.equal(listed.items[0].receiptItemId, 'rcpt-rt-i');
+    // 申请本身不产生库存退货事实：转换后才形成真实的采购退货草稿。
+    assert.equal(fixture.db.prepare('SELECT COUNT(*) n FROM purchase_returns WHERE receipt_id=?').get('rcpt-rt').n, 0);
+    const posted = await fixture.request('POST', `/api/procurement/return-requests/${request.data.id}/post`, fixture.tokens.admin, {});
+    assert.equal(posted.status, 201, JSON.stringify(posted.data));
+    const linked = fixture.db.prepare('SELECT * FROM purchase_returns WHERE id=?').get(posted.data.postedReturnId);
+    assert.ok(linked, '转换必须形成真实采购退货草稿');
+    assert.equal(linked.return_request_id, request.data.id, '采购退货必须回链退货申请');
+    assert.equal(linked.status, 'DRAFT');
+    const replay = await fixture.request('POST', `/api/procurement/return-requests/${request.data.id}/post`, fixture.tokens.admin, {});
+    assert.equal(replay.status, 200);
+    assert.equal(replay.data.replayed, true);
+    assert.equal(fixture.db.prepare('SELECT COUNT(*) n FROM purchase_returns WHERE receipt_id=?').get('rcpt-rt').n, 1, '重复转换不得重复生成退货单');
+    const cancelled = await fixture.request('POST', `/api/procurement/return-requests/${request.data.id}/cancel`, fixture.tokens.admin, {});
+    assert.equal(cancelled.status, 409, '已转换的退货申请不得再取消');
   });
 });

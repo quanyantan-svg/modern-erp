@@ -136,6 +136,7 @@ export const M1_CORE_G07_FIXED_SCENARIOS = Object.freeze([
     setup: [
       step('product', 'admin', 'POST', '/api/products', { body: { code: 'cr01-material', name: 'CR01 material', unit: 'EA', baseUomCode: 'EA', priceCents: 100 } }),
       step('supplier', 'creator', 'POST', '/api/suppliers', { body: { code: 'cr01-supplier', name: 'CR01 supplier' } }),
+      step('supplierProfile', 'admin', 'PATCH', '/api/suppliers/{setup.supplier.id}/profile', { body: { procurementEnabled: true, qualificationStatus: 'QUALIFIED', qualificationValidFrom: { $businessDate: -30 }, qualificationValidTo: { $businessDate: 365 } } }),
       ...NEW_STANDARD_PO('setup.product.id', 'setup.supplier.id', 10),
     ],
     raceRequests: [
@@ -162,6 +163,7 @@ export const M1_CORE_G07_FIXED_SCENARIOS = Object.freeze([
     setup: [
       step('product', 'admin', 'POST', '/api/products', { body: { code: 'cr02-material', name: 'CR02 material', unit: 'EA', baseUomCode: 'EA', priceCents: 100 } }),
       step('supplier', 'creator', 'POST', '/api/suppliers', { body: { code: 'cr02-supplier', name: 'CR02 supplier' } }),
+      step('supplierProfile', 'admin', 'PATCH', '/api/suppliers/{setup.supplier.id}/profile', { body: { procurementEnabled: true, qualificationStatus: 'QUALIFIED', qualificationValidFrom: { $businessDate: -30 }, qualificationValidTo: { $businessDate: 365 } } }),
       ...NEW_STANDARD_PO('setup.product.id', 'setup.supplier.id', 10),
       step('notice', 'admin', 'POST', '/api/receipt-notices', {
         body: {
@@ -427,7 +429,7 @@ export function computeM1CoreG07FixtureDigest(scenarios = M1_CORE_G07_FIXED_SCEN
 // 有效的采购价格条目，再创建采购订单。固定场景因此变更，冻结摘要随之重新
 // 计算。**该重新冻结同样待业务所有者显式确认**：在此之前，真实 MySQL Gate
 // 的既有验收结论不因本次变更自动延续。
-export const M1_CORE_G07_FIXED_FIXTURE_DIGEST = 'f552553813dc3abaaa52252221294aefda9a611247e41233ab8da9e62f20c2f3';
+export const M1_CORE_G07_FIXED_FIXTURE_DIGEST = 'aa024bd56ae4eccd53242171f46bbd741bd1586f986d7d3ce92a8f5a53b8019f';
 
 function lookup(context, reference) {
   const parts = String(reference).split('.');

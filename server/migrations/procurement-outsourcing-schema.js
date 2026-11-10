@@ -422,6 +422,8 @@ export function migrateProcurementOutsourcingSchema(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_purchase_return_requests_receipt ON purchase_return_requests(receipt_id);
 
+
+
     CREATE TABLE IF NOT EXISTS vmi_agreements (
       id TEXT PRIMARY KEY,
       supplier_id TEXT NOT NULL,
@@ -443,6 +445,10 @@ export function migrateProcurementOutsourcingSchema(db) {
       CHECK(max_stock >= min_stock)
     );
     CREATE INDEX IF NOT EXISTS idx_vmi_agreements_effective ON vmi_agreements(supplier_id, product_id);
+    -- VMI Agreement 是 VMI 业务事实本身：同一 supplier+warehouse+product 在
+    -- 任一业务日期至多存在一个有效协议；区间重叠只能靠事务内检测证明，
+    -- 普通组合 UNIQUE 判定不了重叠。
+    CREATE INDEX IF NOT EXISTS idx_vmi_agreements_binding ON vmi_agreements(supplier_id, warehouse_id, product_id, effective_from);
 
     CREATE TABLE IF NOT EXISTS vmi_receipts (
       id TEXT PRIMARY KEY,
@@ -838,6 +844,42 @@ export function migrateProcurementOutsourcingSchema(db) {
       CHECK(available_quantity = supplied_quantity - consumed_quantity)
     );
   `);
+
+  // 每一张 VMI 收货都必须能证明它绑定了哪一份有效协议。历史行保持 NULL，
+  // 由后续 Confirm / Consumption 读时 fail closed，不推定绑定、不回填。
+  safeAddColumn(db, 'vmi_receipts', 'agreement_id', 'agreement_id TEXT');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_vmi_receipts_agreement ON vmi_receipts(agreement_id)');
+
+    // 退货申请是业务意图层：它必须能说清“退什么、为什么退、退多少”，并且在
+    // 未入库货物上根本不存在来源行（Design §26.14 PRC-24）。
+    safeAddColumn(db, 'purchase_return_requests', 'source_type', "source_type TEXT NOT NULL DEFAULT 'PURCHASE_RECEIPT'");
+    safeAddColumn(db, 'purchase_return_requests', 'source_id', 'source_id TEXT');
+    safeAddColumn(db, 'purchase_return_requests', 'request_type', "request_type TEXT NOT NULL DEFAULT 'COMMERCIAL'");
+    safeAddColumn(db, 'purchase_return_requests', 'reason_code', 'reason_code TEXT');
+    safeAddColumn(db, 'purchase_return_requests', 'reason_text', 'reason_text TEXT');
+    safeAddColumn(db, 'purchase_return_requests', 'replenishment_method', 'replenishment_method TEXT');
+    safeAddColumn(db, 'purchase_return_requests', 'business_date', 'business_date TEXT');
+    safeAddColumn(db, 'purchase_return_requests', 'posted_return_id', 'posted_return_id TEXT');
+    db.exec(`CREATE TABLE IF NOT EXISTS purchase_return_request_items (
+      id TEXT PRIMARY KEY,
+      request_id TEXT NOT NULL,
+      receipt_item_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      quantity_num INTEGER NOT NULL,
+      quantity_den INTEGER NOT NULL DEFAULT 1,
+      unit_price_cents INTEGER NOT NULL DEFAULT 0,
+      amount_cents INTEGER NOT NULL DEFAULT 0,
+      line_no INTEGER NOT NULL,
+      FOREIGN KEY (request_id) REFERENCES purchase_return_requests(id),
+      FOREIGN KEY (receipt_item_id) REFERENCES purchase_receipt_items(id),
+      FOREIGN KEY (product_id) REFERENCES products(id),
+      CHECK(quantity_num > 0),
+      CHECK(quantity_den > 0),
+      UNIQUE(request_id, line_no)
+    )`);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_purchase_return_request_items_request ON purchase_return_request_items(request_id, line_no)');
+    // 正式转换后的采购退货单必须能回链它的业务意图来源。
+    safeAddColumn(db, 'purchase_returns', 'return_request_id', 'return_request_id TEXT');
 
   safeAddColumn(db, 'purchase_order_changes', 'scope', "scope TEXT NOT NULL DEFAULT 'LINE'");
   safeAddColumn(db, 'purchase_order_changes', 'order_version_before', 'order_version_before INTEGER');

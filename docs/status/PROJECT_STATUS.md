@@ -3502,6 +3502,81 @@ OUTSOURCING_WORKBENCH_ACCEPTANCE_PASS_FROZEN
 3. 执行浏览器闭环 UAT（定价维护 / 取价预览 / PO Change 申请-审批-应用 / 执行余量，四档宽度）。
 4. 按 §31.16.3 逐项复核 PRC / VMI / OUT 能力矩阵，形成**域级 Acceptance 候选**交业务所有者签收；域级 Acceptance、Capability Freeze 与 Manual Closure 仍是独立决定，不由本节登记代替。
 
+
+## 47. 域级交付整改第二轮：受托裁定闭合、逐项复核与验收候选（2026-11-10）
+
+### 47.1 授权与本轮边界
+
+- **授权来源**：业务所有者指示「批准授权你做所有这些修复，最终达到域级 Acceptance、Capability Freeze」。本轮据此完成 §31.17 的受托裁定、§31.16 `PRC-DLV-12` 要求的 54 项逐项复核、浏览器闭环重建与验收候选准备。
+- **仍须业务所有者本人完成的**：域级 Acceptance 与 Capability Freeze 的**签字**（AGENTS.md §4.5：实现方自报 PASS 不替代业务所有者确认）；受保护 disposable MySQL Gate 的 ACK-4 审批清单与 RunId（launcher 明文「不能签发批准或自行发明夹具」）。
+- **本轮未执行**：真实环境 migration、业务数据库写入、真实 MySQL Gate、push / merge / tag / 发布 / 部署。
+
+### 47.2 受托裁定与实现（§31.17 / §26.37）
+
+| 裁定 | 落地 | 证据 |
+|---|---|---|
+| VMI 资格基准 = 采购侧资质 + 协议唯一性（不新增资格字段） | `procurement-vmi.js::createVmiAgreement` | `procurement-vmi.test.js` · VMI-01 |
+| VMI 收货绑定唯一有效协议 + 外部幂等键 | `agreement_id` 增量列 + `idempotency_records` | 同上 · VMI-02 |
+| VMI 消耗双不变量 + 外部幂等键 | 本收货剩余 × canonical SUPPLIER 位置 | 同上 · VMI-03 |
+| VMI 汇总只暴露毛余额 + 对账差额 | 移除 `pendingSettlement`/`transferred` | 同上 · VMI-04 |
+| `AUD-PRC-002` 关闭为登记事项 | 写入口已按 §31.14.1 关闭，无活动写入路径 | `docs/audits/b3121-domain-acceptance-audit-20261110.md` §5 |
+| 退货申请闭环（明细 + 业务字段 + 正式转换 + 回链） | `purchase_return_request_items` + `purchase_returns.return_request_id` | `procurement-receiving-returns.test.js` |
+| 采购到货及时率口径（及时率 ≠ 完成比） | `onTimeRate` / `onTimeReceived` / `fulfilmentRate` | `procurement-commercial-evidence.test.js` · E1 |
+| 普通采购订单受供应商资质门禁 | `PURCHASE_SUPPLIER_NOT_QUALIFIED` | `procurement-commercial-evidence.test.js` · B2 |
+| 采购收货受订单类型门禁 | `PURCHASE_RECEIPT_REQUIRES_STANDARD_PURCHASE` | `procurement-commercial-evidence.test.js` + 既有回归 |
+| 赠品永不携带商业价格 | 取价原语的零价赠品分支 | 同上 · A4 / B4 |
+| 采购员 / 采购组单据落位 | `buyer_id` / `purchasing_group_id` + 服务端校验 | 矩阵复核 |
+| 委外 BOM 用 canonical 解析器判定 | 建单与用料快照两次校验 | `m1c-wp2-wp5-outsourcing.test.js` · WP4 |
+| 多个计价单位同时有效时的唯一确定 | 优先取与单据单位一致的价格条目 | `procurement-commercial-evidence.test.js` · A1–A3 |
+
+### 47.3 54 项逐项复核结果
+
+复核证据见 [`docs/audits/b3121-domain-acceptance-audit-20261110.md`](../audits/b3121-domain-acceptance-audit-20261110.md)（54 项逐行映射 + 14 条 Issue 处置 + 11 项待裁定事项）：
+
+| 分组 | COVERED | PARTIAL | 已批准延期 |
+|---|---|---|---|
+| PRC-01..26 | 14 | 11 | 1（PRC-06 寻源决策写入口） |
+| VMI-01..05 | 4 | 0 | 1（VMI-05 结算与物权释放） |
+| OUT-01..23 | 16 | 5 | 2（OUT-20 正式过账、OUT-22 成品退货） |
+
+**17 项 `PARTIAL` 是登记在案的真实残余**，不得被文件存在或子包 PASS 冒充为已覆盖；它们是 Capability Freeze 的残余项，需要业务所有者逐项裁定（实现 or 明确延期）。
+
+### 47.4 §35.8 G-1..G-5 的当前处置
+
+| Gap | 处置 | 证据 |
+|---|---|---|
+| G-1 委外收货无生产写入路径（只写表头） | **已闭合**（§26.35）：委外收货必须携带明细，缺失即 409 `OUTSOURCING_RECEIPT_ITEMS_REQUIRED` | 浏览器 UAT-22 / UAT-23 |
+| G-2 加工费账单的 AP/GL 与财务期间 | **按已批准延期保留**（§31.13 `MC-REQ-15` / `C-P01..C-P04`）：正式过账 409 `OUTSOURCING_GL_POLICY_NOT_APPROVED`，零应付、零凭证、成本证据保持暂估 | 浏览器 UAT-24（新增断言）+ `m1c-outsourcing-gl-policy-guard.test.js` · R1-A |
+| G-3 Receipt Notice → Receipt 转换未接线 | **已闭合**（M1-Core）：转换走生产 HTTP 链 | 浏览器 UAT-09（通知转收货草稿） |
+| G-4 委外发料/退料与真实库存移动 | **已闭合**（§26.35）：发料/补料/退料走 canonical 库存写者与身份证据 | 浏览器 UAT-18 / UAT-19 / UAT-20 |
+| G-5 UAT-14 旧 Test Oracle 与 V21 合同冲突 | **已闭合**：浏览器 UAT 按当前合同重建，UAT-14 改为断言当前 fail-closed 边界（幂等键 + 协议绑定） | 浏览器 UAT 全量 29/29 |
+
+### 47.5 本轮 Gate 结果
+
+| Gate | 结果 |
+|---|---|
+| `pnpm test`（FULL） | **3489/3489 PASS**，0 FAIL，426 suites |
+| `pnpm test:heavy` | **67/67 PASS** |
+| `pnpm build` | PASS |
+| `git diff --check` | PASS |
+| 新增 focused `server/procurement-commercial-evidence.test.js` | 24/24 PASS（取价原语、PO 创建证据、PO Change、canonical execution、及时率口径） |
+| `server/procurement-vmi.test.js`（重写） | 5/5 PASS |
+| 浏览器功能 UAT `scripts/acceptance/procurement-outsourcing-functional-uat.mjs` | **29/29 PASS**（含采购订单工作面 320/390/430/680 四档宽度闭环） |
+| 浏览器响应式 UAT `scripts/acceptance/m1c-wp6-outsourcing-responsive-uat.mjs` | **32/32 PASS** |
+| 真实 MySQL Gate（M1C-G07） | **未运行** —— launcher 要求独立批准的 ACK-4 清单与 RunId，Agent 不得签发 |
+
+### 47.6 文档一致性
+
+current 模式 N1、N3、N4、N5、N6、N8、N9 PASS，N2 `RETIRED`，N7 因既存历史提交（`a40e356`、`59eccd5`、`171ade5`、`4403a80`）的追溯债务仍为 FAIL；migration 模式 C1～C6 全 PASS。
+
+### 47.7 未解决矛盾与下一阶段
+
+1. **真实 MySQL Gate 未运行**：必须在受保护 disposable MySQL 上复跑 M1C-G07（schema parity + CR-01..09）与采购/委外并发 Gate；这需要业务所有者签发 ACK-4 清单与 RunId。
+2. **17 项 `PARTIAL` 能力**待逐项裁定（实现 or 明确登记为已批准延期边界），其中 PRC-17 预付款、PRC-26 扫码闭环、PRC-01 未接线的八个参数开关、PRC-12 split/merge 规划事实、PRC-14 商业快照完整字段、OUT-02/OUT-03 委外货源与加工价来源、OUT-20 `C-P01..C-P04`、OUT-23 期初 WIP 与期间关闭最关键。
+3. **OUT-22 成品退货缺正式延期决策 ID**（当前只有 §31.15.1 的范围排除）。
+4. **G07 固定场景冻结摘要重新冻结**（新增供应商资质步骤）待业务所有者显式确认。
+5. 域级 Acceptance 与 Capability Freeze 的签字在上述事项闭合后单独给出；本节只登记证据与残余，不代替签字。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。

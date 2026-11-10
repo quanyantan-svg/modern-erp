@@ -206,20 +206,16 @@ export function resolvePurchaseLinePricing(db, input) {
     : (product.base_uom_code || null);
   const date = input.businessDate || new Date().toISOString().slice(0, 10);
   const giftLine = Boolean(input.giftLine);
-  const rows = input.explicitPriceEntryId
-    ? db.prepare(`SELECT * FROM purchase_price_list_entries WHERE id=? AND supplier_id=? AND product_id=? AND source_type=? AND status='ACTIVE'
-        AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)`).all(input.explicitPriceEntryId, supplierId, productId, sourceType, date, date)
-    : db.prepare(`SELECT * FROM purchase_price_list_entries WHERE supplier_id=? AND product_id=? AND source_type=? AND status='ACTIVE'
-        AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?) ORDER BY version DESC, id`).all(supplierId, productId, sourceType, date, date);
-  if (!rows.length) {
-    // A gift line is a legitimate zero-price commercial line: it never needs a
-    // price entry. Every ordinary line must resolve an effective price.
-    if (!giftLine) throw new HttpError(409, '未找到有效价格条目', { code: 'PURCHASE_PRICE_NOT_CONFIGURED' });
-    const giftDocument = quantitySnapshot(db, productId, {
-      uomCode: documentUomCode,
-      quantityNumerator: input.documentQuantity?.num ?? input.quantityNumerator,
-      quantityDenominator: input.documentQuantity?.den ?? input.quantityDenominator ?? 1,
-    }, date);
+  const giftDocument = giftLine ? quantitySnapshot(db, productId, {
+    uomCode: documentUomCode,
+    quantityNumerator: input.documentQuantity?.num ?? input.quantityNumerator,
+    quantityDenominator: input.documentQuantity?.den ?? input.quantityDenominator ?? 1,
+  }, date) : null;
+  if (giftLine) {
+    // A gift line is a legitimate zero-price commercial line. It never carries
+    // a commercial price, so the ordinary price list is not consulted at all:
+    // an available price entry must not turn a gift into a priced line
+    // (Requirement §31.3.1 PRC-15).
     return {
       contractVersion: 'PURCHASE_PRICE_V1', supplierId, productId, sourceType,
       businessDate: date, documentUomCode, pricingUomCode: null,
@@ -229,8 +225,21 @@ export function resolvePurchaseLinePricing(db, input) {
       appliedDiscount: null, giftLine: true, roundingContract: 'HALF_UP_CENT_V1',
     };
   }
-  const latestVersion = Number(rows[0].version);
-  const latest = rows.filter((row) => Number(row.version) === latestVersion);
+  const rows = input.explicitPriceEntryId
+    ? db.prepare(`SELECT * FROM purchase_price_list_entries WHERE id=? AND supplier_id=? AND product_id=? AND source_type=? AND status='ACTIVE'
+        AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)`).all(input.explicitPriceEntryId, supplierId, productId, sourceType, date, date)
+    : db.prepare(`SELECT * FROM purchase_price_list_entries WHERE supplier_id=? AND product_id=? AND source_type=? AND status='ACTIVE'
+        AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?) ORDER BY version DESC, id`).all(supplierId, productId, sourceType, date, date);
+  if (!rows.length) {
+    throw new HttpError(409, '未找到有效价格条目', { code: 'PURCHASE_PRICE_NOT_CONFIGURED' });
+  }
+  // 多个计价单位同时有效时，优先取与单据单位一致的那一条：买方按什么单位下
+  // 单，就用那个单位的价格条目换算。只有一条有效价格时按它的计价单位换算。
+  // 仍无法唯一确定时 fail closed，绝不隐式选主（§31.17 裁定 11）。
+  const documentMatches = rows.filter((row) => row.pricing_uom_code === documentUomCode);
+  const pool = documentMatches.length ? documentMatches : rows;
+  const latestVersion = Math.max(...pool.map((row) => Number(row.version)));
+  const latest = pool.filter((row) => Number(row.version) === latestVersion);
   if (latest.length !== 1) {
     const units = [...new Set(latest.map((row) => row.pricing_uom_code))].join(' / ');
     throw new HttpError(409, `存在多个同版本有效采购价格（计价单位 ${units}），无法确定唯一计价单位`, { code: 'PURCHASE_PRICE_AMBIGUOUS' });
@@ -250,10 +259,10 @@ export function resolvePurchaseLinePricing(db, input) {
     '计价数量',
   );
   const discount = db.prepare(`SELECT * FROM pricing_discount_schemes WHERE supplier_id=? AND product_id=? AND source_type=? AND status='ACTIVE' AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?) ORDER BY version DESC LIMIT 1`).get(supplierId, productId, priceRow.source_type, date, date);
-  const netCents = giftLine ? 0 : roundRational(BigInt(priceRow.unit_price_cents) * BigInt(pricingQuantity.num), BigInt(pricingQuantity.den));
+  const netCents = roundRational(BigInt(priceRow.unit_price_cents) * BigInt(pricingQuantity.num), BigInt(pricingQuantity.den));
   let discountCents = 0;
   let appliedDiscount = null;
-  if (discount && !giftLine) {
+  if (discount) {
     if (discount.basis === 'PERCENT') {
       discountCents = roundRational(BigInt(netCents) * BigInt(discount.value_numerator), BigInt(discount.denominator));
     } else if (discount.basis === 'FLAT') {
