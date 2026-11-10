@@ -2112,8 +2112,9 @@ OUT-001 使用**独立**的 ACK-4 Manifest `OUT_001_MYSQL_V1`，操作范围固�
 
 ---
 
-### 26.35 委外核心执行工作面有界 Design（2026-11-10；`PENDING_REVIEW`）
-> **用途 / Owner / 状态 / 权威关系**：本节是 Requirement §31.15（`OUT-WB-REQ-01..08`）的有界技术候选，Owner 为 Procurement & Outsourcing Domain Owner；状态 `PENDING_REVIEW`。`solution.md` 仅导航；§26、M1-Core Active Design 及 §26.34 已获有界批准的 OUT-001 合同继续有效。本节未获 Implementation 批准。输入为 2026-11-10 委外审计 §2–§4、§31.13/§31.15 与用户的范围/岗位/字段/状态决策。
+### 26.35 委外核心执行工作面有界 Design（2026-11-10；`FROZEN`）
+> **用途 / Owner / 状态 / 权威关系**：本节是 Requirement §31.15（`OUT-WB-REQ-01..08`）的有界技术合同，Owner 为 Procurement & Outsourcing Domain Owner；状态 `FROZEN`。`solution.md` 仅导航；§26、M1-Core Active Design 及 §26.34 已获有界批准的 OUT-001 合同继续有效。输入为 2026-11-10 委外审计 §2–§4、§31.13/§31.15 与用户的范围/岗位/字段/状态决策。
+> **批准与冻结记录（2026-11-10）**：业务所有者在本次对话中先明确要求「解决这些矛盾，最终目标是要登记委外这个模块的 acceptance 验收」，并在实现与验收完成后进一步确认「委外这一阶段已经完成验收」，要求继续登记最后的合同批准、冻结产物与委外工作面 Acceptance。据此批准并冻结本节有界技术合同，签发 `OUTSOURCING_WORKBENCH_ACCEPTANCE_PASS_FROZEN`。该来源为**对话中的 Owner 决策记录**；**不存在**虚构的手写签名、电子签章或外部审批单。本冻结只覆盖 §31.15 对应工作面，不构成 B3121 Capability Freeze、Domain Acceptance、Manual Closure、Release Readiness、Release 或 Deploy。
 
 #### 26.35.1 设计范围与单一 Owner
 

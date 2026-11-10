@@ -3394,6 +3394,26 @@ Closure、Domain Acceptance、Freeze、Release 或 Deploy。
 5. **文档追溯债务**：N7 仍因既有提交 `a40e356`、`59eccd5`、`171ade5`、`4403a80` 的提交消息缺少完整章节或路径引用而 FAIL（与 §45.32 登记一致），不改写历史。
 6. **未发生事项**：未执行 Migration / DDL、未连接任何项目或生产数据库、未运行真实 MySQL Gate、未 Push / Merge / Tag / Release / Deploy，`package.json` version 仍为 `1.6.2`，release tag 未移动。
 
+### 45.34 委外核心执行工作面有界 Acceptance 与冻结（2026-11-10）
+
+业务所有者在本轮明确确认委外阶段已经完成验收，并要求续办最后的合同批准、冻结产物与委外工作面 Acceptance 登记。Requirement §31.15 与 Design §26.35 因此由待审状态推进为 `FROZEN`，正式签发：
+
+```text
+OUTSOURCING_WORKBENCH_ACCEPTANCE_PASS_FROZEN
+```
+
+| 项 | 当前结论 |
+|---|---|
+| 有界范围 | 仅 §31.15 `OUT-WB-REQ-01..08` / §26.35 的委外核心执行工作面 |
+| 实现锚点 | `df43d2a9b75bb88edf886f06d50445fba6da25ea`；G07 RESET 生命周期修复 `719767f39ebb256e91cc9c1d9eefb81bfc0a5965` |
+| 验收证据 | focused **16/16**、FAST **631/631**、FULL **3462/3462**、HEAVY **67/67**、Build PASS、浏览器 UAT **32/32** |
+| 冻结产物 | 新 Fixture digest `60f7888f1d52f6858d8eaca458ede077ab454445c51743b7004bd864767ac2fb` 获 Owner 确认并冻结 |
+| 证据限制 | 当前 HEAD 未重跑受保护真实 MySQL Gate；§45.31 的 34/34 PASS 只属于其固定候选与旧 Fixture，不向本工作面或新 digest 自动延续；N7 历史追溯债务仍开放 |
+| 完整状态 | B3121 保持 `BLOCKED`；OUT-20/22/23 与跨期成本、复杂差异、部分期初、正式 AP/GL、成品退货等延期边界未关闭 |
+| 未授予 | B3121 Capability Freeze、Domain Acceptance、Manual Closure、Release Readiness、数据库写入、Push / Merge / Tag / Release / Deploy |
+
+正式证据见 [`outsourcing-workbench-acceptance-20261110.md`](../acceptance/outsourcing-workbench-acceptance-20261110.md)。本节是唯一项目状态登记；验收证据不另行充当第二份当前状态表。
+
 ### 45.9 历史待验证清单（2026-11-08 时点；当前 OUT-001 结论见 §45.31）
 
 > 本节保留当时的风险清单与证据边界；OUT-001 对应的当前真实 MySQL 结果以 §45.31 为准。

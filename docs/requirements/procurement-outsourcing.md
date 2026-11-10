@@ -1035,8 +1035,9 @@ M1-Core §7.5 对 `M1C-G03/G06` 的首期合同保留**数量归属守恒**、�
 
 ---
 
-### 31.15 委外核心执行工作面有界 Requirement（2026-11-10；`PENDING_APPROVAL`）
-> **用途 / Owner / 状态 / 权威关系**：本节只补充已批准 §31.13 的委外核心执行工作面和订单状态安全门禁，Owner 为 Procurement & Outsourcing Domain Owner，生命周期状态为 `PENDING_APPROVAL`。`document.md` 是全局导航，§31.13 仍是已批准首期业务合同；本节尚非获批 Active 增补。输入证据为 `docs/audits/b3121-outsourcing-core-workbench-audit-20261110.md` §2–§4、B3121 §22.21/§31.3.3 和用户本轮范围、岗位、字段及状态判定。用户已授权连续编写 Requirement 与 Design，但未授权 Implementation。
+### 31.15 委外核心执行工作面有界 Requirement（2026-11-10；`FROZEN`）
+> **用途 / Owner / 状态 / 权威关系**：本节只补充已批准 §31.13 的委外核心执行工作面和订单状态安全门禁，Owner 为 Procurement & Outsourcing Domain Owner，生命周期状态为 `FROZEN`。`document.md` 是全局导航，§31.13 仍是已批准首期业务合同。输入证据为 `docs/audits/b3121-outsourcing-core-workbench-audit-20261110.md` §2–§4、B3121 §22.21/§31.3.3 和用户本轮范围、岗位、字段及状态判定。
+> **批准与冻结记录（2026-11-10）**：业务所有者在本次对话中先明确要求「解决这些矛盾，最终目标是要登记委外这个模块的 acceptance 验收」，并在实现与验收完成后进一步确认「委外这一阶段已经完成验收」，要求继续登记最后的合同批准、冻结产物与委外工作面 Acceptance。据此批准并冻结本节 `OUT-WB-REQ-01..08`，签发 `OUTSOURCING_WORKBENCH_ACCEPTANCE_PASS_FROZEN`。该来源为**对话中的 Owner 决策记录**；**不存在**虚构的手写签名、电子签章或外部审批单。本冻结只覆盖委外核心执行工作面，不扩展到 §31.13 之外的能力，也不构成 B3121 Capability Freeze、Domain Acceptance、Manual Closure、Release Readiness、Release 或 Deploy。
 
 #### 31.15.1 范围、角色与继承边界
 
@@ -1067,4 +1068,4 @@ M1-Core §7.5 对 `M1C-G03/G06` 的首期合同保留**数量归属守恒**、�
 
 本节候选验收应以生产 HTTP 的分岗正反例、真实来源/状态/数量断言、SQLite/MySQL 双路径、并发失败方零副作用、focused + full + heavy 适用 Gate、浏览器 direct URL/刷新/Back/Forward 和四档宽度验证。必须证明收货员无法使用普通采购通知与宽订单详情，质检/收货生效仍分岗，订单无法提前完工/关闭；延期接口继续 409 且零业务副作用。测试通过、实现代理自报 PASS 均不替代用户最终 Acceptance。
 
-本节当前仅为 `PENDING_APPROVAL`：尚未实施、未验收、未冻结；§31.13 的既有批准与验收事实不被撤销，`docs/status/CAPABILITY_MATRIX.md` 的 B3121 `BLOCKED` 不变。下一阶段仅可在本连续授权内编写对应 Design；Design 完成后依 AGENTS.md §4.3 **HARD STOP**，等待明确 Implementation 批准。
+本节当前状态为 `FROZEN`，且**已实施并通过有界验收**：实现证据、验收边界与未重跑真实 MySQL 的限制见 [`docs/acceptance/outsourcing-workbench-acceptance-20261110.md`](../acceptance/outsourcing-workbench-acceptance-20261110.md) 与 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §45.34。验收范围**仅**限本节 `OUT-WB-REQ-01..08` 的委外核心执行工作面；§31.13 的既有批准与验收事实不被撤销，`docs/status/CAPABILITY_MATRIX.md` 的 B3121 `BLOCKED` 不变。本节的有界工作面冻结**不等于** B3121 Capability Freeze、Domain Acceptance、Manual Closure、Release Readiness、Release 或 Deploy。

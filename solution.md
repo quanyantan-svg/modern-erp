@@ -21,7 +21,7 @@
 | Master & Engineering | [`docs/design/master-engineering.md`](docs/design/master-engineering.md) | §23 |
 | Manufacturing & Quality | [`docs/design/manufacturing-quality.md`](docs/design/manufacturing-quality.md) | §24 |
 | Planning | [`docs/design/planning.md`](docs/design/planning.md) | §25 |
-| Procurement & Outsourcing | [`docs/design/procurement-outsourcing.md`](docs/design/procurement-outsourcing.md) | §26；§26.34 = Package A1 有界 Design（待业务所有者审阅）；§26.35 = 委外核心执行工作面有界候选 Design（待业务所有者审阅） |
+| Procurement & Outsourcing | [`docs/design/procurement-outsourcing.md`](docs/design/procurement-outsourcing.md) | §26；§26.34 = Package A1 有界 Design（待业务所有者审阅）；§26.35 = 委外核心执行工作面有界 Design（已验收冻结） |
 | Procurement & Outsourcing（M1-Core 首期） | [`docs/design/procurement-outsourcing-m1-core.md`](docs/design/procurement-outsourcing-m1-core.md) | §31.13 对应有界后继设计；`M1_CORE_DESIGN_PASS` |
 | Inventory & Warehouse | [`docs/design/inventory-warehouse.md`](docs/design/inventory-warehouse.md) | §27 |
 | Finance Operations | [`docs/design/finance-operations.md`](docs/design/finance-operations.md) | §28.0–§28.29 |
