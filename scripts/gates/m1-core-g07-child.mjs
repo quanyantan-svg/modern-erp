@@ -63,8 +63,17 @@ async function databaseOperation(operation) {
   }
   const db = verified.db;
   try {
-    const result = disposable.resetAuthorizedDisposableMySqlSchema(db, config);
-    const inventory = db.prepare('SHOW FULL TABLES').all();
+    // The shared disposable-target primitive forbids a RESET lease from taking
+    // the DROP path: RESET is EMPTY_ONLY and proves that all five object
+    // classes are empty. Only the CLEANUP lease may drop. The M1-Core child
+    // must therefore pass the same `requireEmpty` flag the OUT-001 child
+    // passes; without it the tightened primitive refuses every RESET.
+    const result = disposable.resetAuthorizedDisposableMySqlSchema(
+      db, config, process.env, { requireEmpty: operation === 'RESET_SCHEMA_PRE_RUN' },
+    );
+    const inventory = operation === 'RESET_SCHEMA_PRE_RUN'
+      ? result.inventory
+      : db.prepare('SHOW FULL TABLES').all();
     process.stdout.write(`${JSON.stringify({ operation, dropped: result.dropped, inventory })}\n`);
   } finally { db.close(); }
 }
