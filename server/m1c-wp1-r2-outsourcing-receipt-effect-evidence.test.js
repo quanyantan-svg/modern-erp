@@ -19,12 +19,15 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import {
-  createApprovedProcessingPo, createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource, seedApprovedOutsourceBom,
+  createApprovedProcessingPo, createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource, seedApprovedOutsourceBom, seedPurchasePrice,
 } from './test-support/procurement-http-fixture.js';
 
 describe('M1C-WP1-R2 — outsourcing historical receipt effect evidence fails closed', () => {
   let fixture;
-  before(async () => { fixture = await createProcurementFixture('modern-erp-m1c-wp1-r2-'); });
+  before(async () => {
+    fixture = await createProcurementFixture('modern-erp-m1c-wp1-r2-');
+    await seedPurchasePrice(fixture, [{ supplierId: 'supplier-001', productId: 'product-001', unitPriceCents: 1000 }]);
+  });
   after(async () => { await fixture.close(); });
 
   function isoDate(offsetDays = 0) {

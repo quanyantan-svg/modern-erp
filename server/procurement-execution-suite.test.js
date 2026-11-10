@@ -10,7 +10,7 @@ import { createServer } from 'node:http';
 import { createApp } from './app.js';
 import { createDatabase } from './db.js';
 import {
-  outsourcingReceiptBody, prepareOutsourcingReceiptSource, seedApprovedOutsourceBom,
+  insertPurchasePrice, outsourcingReceiptBody, prepareOutsourcingReceiptSource, seedApprovedOutsourceBom,
 } from './test-support/procurement-http-fixture.js';
 
 async function makeFixture() {
@@ -51,6 +51,7 @@ async function makeFixture() {
 }
 
 async function createApprovedPO(fix, { quantity = 10, unitPriceCents = 1000 } = {}) {
+  insertPurchasePrice(fix.db, { supplierId: 'supplier-001', productId: 'product-001', unitPriceCents });
   const po = await fix.request('POST', '/api/purchase-orders', fix.tokens.admin, {
     supplierId: 'supplier-001', orderDate: '2026-10-08', expectedDeliveryDate: '2026-10-09',
     supplierContactName: '联系人', supplierContactPhone: '13800000000', supplierAddress: '地址', paymentTerms: '30 天',

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import { createProcurementFixture } from './test-support/procurement-http-fixture.js';
 import { allocateProportional, assertSupplierQualification } from './modules/procurement-sourcing.js';
+import { resolvePurchaseLinePricing } from './modules/procurement-pricing.js';
 
 describe('Procurement Wave B sourcing and pricing', () => {
   let fixture;
@@ -188,6 +189,29 @@ describe('Procurement Wave B sourcing and pricing', () => {
       basis: 'PERCENT', value: { num: 10, den: 100 }, effectiveFrom: isoDate(-7),
     });
     assert.equal(discount.status, 201, discount.data.error);
+    const resolved = resolvePurchaseLinePricing(fixture.db, {
+      supplierId: 'supplier-001', productId: 'product-001', sourceType: 'PURCHASE',
+      documentUomCode: 'EA', documentQuantity: { num: 24, den: 1 },
+      businessDate: isoDate(0), explicitPriceEntryId: entry.data.id,
+    });
+    assert.deepEqual(resolved.baseQuantity, { num: 24, den: 1 });
+    assert.deepEqual(resolved.pricingQuantity, { num: 2, den: 1 });
+    assert.equal(resolved.netCents, 2400);
+    assert.equal(resolved.discountCents, 240);
+    assert.equal(resolved.grossCents, 2160);
+    const po = await fixture.request('POST', '/api/purchase-orders', fixture.tokens.admin, {
+      supplierId: 'supplier-001', orderDate: isoDate(0), expectedDeliveryDate: isoDate(7),
+      items: [{ productId: 'product-001', quantity: 24, unitPriceCents: 1200, uomCode: 'EA' }],
+    });
+    assert.equal(po.status, 201, po.data.error);
+    const pricedLine = fixture.db.prepare(`SELECT amount_cents,pricing_uom_code,pricing_quantity_num,pricing_quantity_den,
+      price_entry_id,price_version,pricing_evidence_json FROM purchase_order_items WHERE order_id=?`).get(po.data.id);
+    assert.equal(pricedLine.amount_cents, 2160);
+    assert.equal(pricedLine.pricing_uom_code, 'BOX');
+    assert.equal(pricedLine.pricing_quantity_num, 2);
+    assert.equal(pricedLine.pricing_quantity_den, 1);
+    assert.equal(pricedLine.price_entry_id, entry.data.id);
+    assert.equal(JSON.parse(pricedLine.pricing_evidence_json).roundingContract, 'HALF_UP_CENT_V1');
     const list = await fixture.request('GET', '/api/procurement/price-list?productId=product-001&date=' + isoDate(0), fixture.tokens.admin);
     assert.equal(list.status, 200);
     assert.equal(list.data.priceList[0].unitPriceCents, 1200);

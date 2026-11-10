@@ -30,7 +30,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import {
-  createApprovedProcessingPo, createProcurementFixture, outsourcingReceiptBody, seedApprovedOutsourceBom,
+  createApprovedProcessingPo, createProcurementFixture, outsourcingReceiptBody, seedApprovedOutsourceBom, seedPurchasePrice,
 } from './test-support/procurement-http-fixture.js';
 
 describe('M1C-WP2–WP6-R1 — outsourcing notice line capacity and processing fee amount', () => {
@@ -131,6 +131,7 @@ describe('M1C-WP2–WP6-R1 — outsourcing notice line capacity and processing f
 
   before(async () => {
     fixture = await createProcurementFixture('modern-erp-m1c-wp2-wp6-r1-capacity-');
+    await seedPurchasePrice(fixture, [{ supplierId: 'supplier-001', productId: 'product-001', unitPriceCents: 1000 }]);
     await qualifyOutsourceSupplier();
   });
   after(async () => { await fixture.close(); });

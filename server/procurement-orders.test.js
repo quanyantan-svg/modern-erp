@@ -4,7 +4,16 @@ import { createProcurementFixture } from './test-support/procurement-http-fixtur
 
 describe('Procurement Wave C PR/PO governance and execution view', () => {
   let fixture;
-  before(async () => { fixture = await createProcurementFixture('modern-erp-prc-wavec-'); });
+  before(async () => {
+    fixture = await createProcurementFixture('modern-erp-prc-wavec-');
+    for (const [productId, unitPriceCents] of [['product-001', 1000], ['product-002', 600], ['product-003', 800]]) {
+      const price = await fixture.request('POST', '/api/procurement/price-list', fixture.tokens.admin, {
+        supplierId: 'supplier-001', productId, sourceType: 'PURCHASE', pricingUomCode: 'EA',
+        unitPriceCents, effectiveFrom: '2026-01-01',
+      });
+      assert.equal(price.status, 201, price.data.error);
+    }
+  });
   after(async () => fixture.close());
 
   function isoDate(offsetDays = 0) {
@@ -44,8 +53,12 @@ describe('Procurement Wave C PR/PO governance and execution view', () => {
   });
 
   test('delivery schedule and canonical PO execution view are consistent', async () => {
-    const orderId = await createApprovedOrder([{ productId: 'product-002', quantity: 20, unitPriceCents: 500 }]);
+    const orderId = await createApprovedOrder([{ productId: 'product-002', quantity: 20 }]);
     const itemId = fixture.db.prepare('SELECT id FROM purchase_order_items WHERE order_id=?').get(orderId).id;
+    const pricedLine = fixture.db.prepare('SELECT unit_price_cents,amount_cents,price_entry_id FROM purchase_order_items WHERE id=?').get(itemId);
+    assert.equal(pricedLine.unit_price_cents, 600, '单价来自权威价格条目，而不是请求端');
+    assert.equal(pricedLine.amount_cents, 12000);
+    assert.ok(pricedLine.price_entry_id, '价格证据必须冻结价格条目');
     const schedule = await fixture.request('POST', `/api/purchase-orders/${orderId}/delivery-schedules`, fixture.tokens.admin, {
       orderItemId: itemId, plannedQuantity: 10, plannedDate: isoDate(7), upperTolerancePct: 5, lowerTolerancePct: 0,
     });
@@ -61,10 +74,11 @@ describe('Procurement Wave C PR/PO governance and execution view', () => {
   test('PO Change ADD / MODIFY / CANCEL lifecycle guards executed quantity', async () => {
     const orderId = await createApprovedOrder([{ productId: 'product-001', quantity: 10, unitPriceCents: 1000 }]);
     const add = await fixture.request('POST', '/api/procurement/purchase-order-changes', fixture.tokens.admin, {
-      orderId, action: 'ADD', payload: { productId: 'product-002', quantity: 3, unitPriceCents: 600, lineNo: 2 },
+      orderId, action: 'ADD', idempotencyKey: `add-${orderId}`, payload: { productId: 'product-002', quantity: 3, unitPriceCents: 600, lineNo: 2 },
     });
     assert.equal(add.status, 201, add.data.error);
-    assert.equal((await fixture.request('POST', `/api/procurement/purchase-order-changes/${add.data.id}/approve`, fixture.tokens.admin)).status, 200);
+    assert.equal((await fixture.request('POST', `/api/procurement/purchase-order-changes/${add.data.id}/approve`, fixture.tokens.admin)).status, 409);
+    assert.equal((await fixture.request('POST', `/api/procurement/purchase-order-changes/${add.data.id}/approve`, fixture.tokens.reviewer)).status, 200);
     assert.equal((await fixture.request('POST', `/api/procurement/purchase-order-changes/${add.data.id}/apply`, fixture.tokens.admin)).status, 200);
     const items = fixture.db.prepare('SELECT COUNT(*) n FROM purchase_order_items WHERE order_id=?').get(orderId).n;
     assert.equal(items, 2);
@@ -81,7 +95,7 @@ describe('Procurement Wave C PR/PO governance and execution view', () => {
       orderId, action: 'MODIFY', payload: { orderItemId: itemId, quantity: 3, unitPriceCents: 1000 },
     });
     assert.equal(belowExec.status, 201, belowExec.data.error);
-    assert.equal((await fixture.request('POST', `/api/procurement/purchase-order-changes/${belowExec.data.id}/approve`, fixture.tokens.admin)).status, 200);
+    assert.equal((await fixture.request('POST', `/api/procurement/purchase-order-changes/${belowExec.data.id}/approve`, fixture.tokens.reviewer)).status, 200);
     const belowApply = await fixture.request('POST', `/api/procurement/purchase-order-changes/${belowExec.data.id}/apply`, fixture.tokens.admin);
     assert.equal(belowApply.status, 409, JSON.stringify(belowApply.data));
   });

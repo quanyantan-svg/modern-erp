@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { id, transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, readJson, requiredText, send } from '../lib/http.js';
+import { getPurchaseOrderExecution, listStandardPurchaseSupplyByProduct } from './procurement-orders.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const STRATEGIES = new Set(['AUTO', 'MAKE', 'BUY', 'OUTSOURCE']);
@@ -512,7 +513,12 @@ function physicalSupplyQuantity(db, sourceType, sourceId, productId, warehouseId
     const row = db.prepare('SELECT quantity,released_quantity FROM planned_orders WHERE id=? AND product_id=?').get(sourceId, productId);
     return Math.max(0, Number(row?.quantity || 0) - Number(row?.released_quantity || 0));
   }
-  if (sourceType === 'PURCHASE_ORDER') return Number(db.prepare(`SELECT COALESCE(SUM(i.quantity),0) quantity FROM purchase_order_items i JOIN purchase_orders h ON h.id=i.order_id WHERE h.id=? AND i.product_id=? AND h.status='APPROVED'`).get(sourceId, productId).quantity);
+  if (sourceType === 'PURCHASE_ORDER') {
+    const execution = getPurchaseOrderExecution(db, sourceId);
+    if (execution.businessType !== 'STANDARD_PURCHASE') return 0;
+    return execution.items.filter((item) => item.productId === productId)
+      .reduce((total, item) => total + Number(item.remaining || 0), 0);
+  }
   if (sourceType === 'PRODUCTION_ORDER') return Number(db.prepare(`SELECT CASE WHEN status IN ('RELEASED','IN_PROGRESS') THEN quantity ELSE 0 END quantity FROM production_orders WHERE id=? AND product_id=?`).get(sourceId, productId)?.quantity || 0);
   if (sourceType === 'EXPECTED') return Number.POSITIVE_INFINITY;
   return 0;
@@ -567,7 +573,7 @@ export function createPlanningReservationCanonical(db, actor, args) {
         throw new HttpError(409, '计划供给来源产品或状态无效', { code: 'PLANNING_RESERVATION_SOURCE_INVALID' });
       }
     } else if (supplyType === 'PURCHASE_ORDER') {
-      sourceRow = db.prepare("SELECT id,status FROM purchase_orders WHERE id=? AND status='APPROVED'").get(supplyId);
+      sourceRow = db.prepare("SELECT id,status,business_type FROM purchase_orders WHERE id=? AND status='APPROVED' AND (business_type IS NULL OR business_type='STANDARD_PURCHASE')").get(supplyId);
       if (!sourceRow) throw new HttpError(409, '采购供给来源不存在或未批准', { code: 'PLANNING_RESERVATION_SOURCE_INVALID' });
     } else if (supplyType === 'PRODUCTION_ORDER') {
       sourceRow = db.prepare("SELECT id,status,product_id FROM production_orders WHERE id=? AND status IN ('RELEASED','IN_PROGRESS')").get(supplyId);
@@ -684,14 +690,12 @@ export function buildPlanningBalanceReadModel(db, { from, to, productId = null }
       WHERE soi.product_id=? AND so.status='APPROVED' AND COALESCE(so.requested_delivery_date,so.order_date,substr(so.created_at,1,10)) BETWEEN ? AND ?`).get(product.id, start, end).quantity);
     const delivered = Number(db.prepare(`SELECT COALESCE(SUM(sdi.quantity),0) quantity FROM sales_delivery_items sdi JOIN sales_deliveries sd ON sd.id=sdi.delivery_id
       WHERE sdi.product_id=? AND sd.status='CONFIRMED'`).get(product.id).quantity);
-    const purchase = Number(db.prepare(`SELECT COALESCE(SUM(i.quantity),0) quantity FROM purchase_order_items i JOIN purchase_orders h ON h.id=i.order_id
-      WHERE i.product_id=? AND h.status='APPROVED' AND COALESCE(h.expected_delivery_date,h.order_date,substr(h.created_at,1,10))<=?`).get(product.id, end).quantity);
-    const purchased = Number(db.prepare(`SELECT COALESCE(SUM(i.quantity),0) quantity FROM purchase_receipt_items i JOIN purchase_receipts h ON h.id=i.receipt_id
-      WHERE i.product_id=? AND h.status='CONFIRMED'`).get(product.id).quantity);
+    const purchase = listStandardPurchaseSupplyByProduct(db, product.id, { expectedThrough: end })
+      .reduce((total, item) => total + Number(item.remaining || 0), 0);
     const production = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) quantity FROM production_orders WHERE product_id=? AND status IN ('RELEASED','IN_PROGRESS')`).get(product.id).quantity);
     const produced = Number(db.prepare(`SELECT COALESCE(SUM(r.quantity),0) quantity FROM production_receipts r JOIN production_orders o ON o.id=r.production_order_id WHERE o.product_id=? AND r.status='CONFIRMED'`).get(product.id).quantity);
     const planned = Number(db.prepare(`SELECT COALESCE(SUM(quantity-released_quantity),0) quantity FROM planned_orders WHERE product_id=? AND status='CONFIRMED'`).get(product.id).quantity);
-    const firmSupply = Math.max(0, purchase - purchased) + Math.max(0, production - produced);
+    const firmSupply = purchase + Math.max(0, production - produced);
     const demand = Math.max(0, sales - delivered);
     const projected = onHand + firmSupply + planned - demand;
     const safety = Number(product.safety_stock || 0);

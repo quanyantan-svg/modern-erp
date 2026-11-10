@@ -592,6 +592,20 @@ describe('M11 purchase open supply derivation', () => {
     assert.ok(row);
     assert.equal(Number(row.open_purchase_supply), 3, 'PO return must not recreate PO supply');
   });
+
+  test('23b. OUTSOURCE_PROCESSING purchase order is not BUY supply', async () => {
+    const productId = ensureProduct('PO-OUTSOURCE', '委外加工费采购');
+    const { orderId } = seedPurchaseOrder({ productId, quantity: 9 });
+    database.prepare("UPDATE purchase_orders SET business_type='OUTSOURCE_PROCESSING' WHERE id=?").run(orderId);
+    seedSalesOrder({ productId, quantity: 9 });
+    const run = await createMrpRun({ name: 'processing fee excluded' });
+    await executeRun(run.id);
+    const detail = await request(`/api/planning/mrp/runs/${run.id}`);
+    const row = detail.data.run.results.find((result) => result.product_id === productId);
+    assert.ok(row);
+    assert.equal(Number(row.open_purchase_supply), 0);
+    assert.equal(Number(row.net_requirement), 9);
+  });
 });
 
 // =====================================================================

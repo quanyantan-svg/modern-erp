@@ -21,9 +21,9 @@
 
 import { HttpError } from '../lib/http.js';
 import { auditBusinessRejection } from '../lib/audit.js';
-import { confirmedQuantity } from './logistics-core.js';
 import { deriveQualityState } from './quality-gates.js';
 import { scheduleConsumedQuantity } from './procurement-schedule-ledger.js';
+import { getPurchaseOrderLineExecution } from './procurement-orders.js';
 
 export { auditBusinessRejection };
 
@@ -35,12 +35,6 @@ export const NOTICE_ERROR_CODES = Object.freeze({
 });
 
 const EPSILON = 1e-9;
-const RECEIPT_QUANTITY_CONFIG = Object.freeze({
-  itemTable: 'purchase_receipt_items',
-  sourceColumn: 'purchase_order_item_id',
-  headerTable: 'purchase_receipts',
-  headerForeignKey: 'receipt_id',
-});
 
 export function noticeBusinessError(code, message) {
   return new HttpError(409, message, { code });
@@ -119,22 +113,30 @@ export function resolveDeliveryScheduleCapacity(db, deliveryScheduleId) {
  * Purchase order line capacity.
  *
  * The bound is "采购订单行数量 − 已收货量 − 已分配量":
- *   已收货量   = the CONFIRMED receipt lines of the order line
+ *   已收货量   = the CONFIRMED receipt quantity of the order line, read from
+ *                the canonical purchase order execution model
  *   已分配量   = the notice allocations of the order line that are not
  *                received yet. A notice allocation reserves the order line
  *                from the moment the notice is created until the receipt it
  *                is converted into is CONFIRMED, so it is never counted
  *                twice with its own receipt line.
  *
+ * The ordered and received quantities come from the canonical purchase order
+ * execution service, so Receiving, MRP, the planner workbench and the
+ * purchase order change apply all read one quantity口径 (Active Design
+ * §26.36.5). The notice allocation ledger stays here because it is a
+ * receiving fact, not a purchase order quantity.
+ *
  * A draft receipt of the DIRECT purchase order path does not reserve the
  * order line: that path keeps its established behaviour, and the quantity is
  * still capped when the receipt is confirmed.
  */
 export function resolvePurchaseOrderLineCapacity(db, purchaseOrderItemId) {
-  const line = db.prepare('SELECT * FROM purchase_order_items WHERE id=?').get(purchaseOrderItemId);
-  if (!line) return null;
-  const orderedQuantity = Number(line.quantity || 0);
-  const confirmedReceivedQuantity = confirmedQuantity(db, RECEIPT_QUANTITY_CONFIG, purchaseOrderItemId);
+  const lines = getPurchaseOrderLineExecution(db, { orderItemId: purchaseOrderItemId, includeClosed: true });
+  if (!lines.length) return null;
+  const line = lines[0];
+  const orderedQuantity = line.ordered;
+  const confirmedReceivedQuantity = line.received;
   const reserved = db.prepare(`SELECT COALESCE(SUM(s.allocated_quantity - COALESCE(c.confirmed_quantity, 0)),0) q
     FROM receipt_notice_item_sources s
     JOIN receipt_notice_items i ON i.id = s.notice_item_id

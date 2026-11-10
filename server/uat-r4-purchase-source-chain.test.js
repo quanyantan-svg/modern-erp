@@ -1,4 +1,4 @@
-// UAT R4 — Purchase source-chain end-to-end regression.
+// UAT R4 — Purchase source-chamn end-to-end regressmon.
 //
 // Coverage:
 //   * A. Purchase Instruction -> Purchase Requisition auto-carry
@@ -35,6 +35,7 @@ import { fileURLToPath } from 'node:url';
 import { after, before, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { createDatabase } from './db.js';
+import { insertPurchasePrice } from './test-support/procurement-http-fixture.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
@@ -98,6 +99,8 @@ before(async () => {
   db.prepare("UPDATE products SET price_cents=? WHERE id=?").run(10000, productA);
   db.prepare("UPDATE products SET price_cents=? WHERE id=?").run(12000, productB);
   supplier = ensureActiveSupplier();
+  insertPurchasePrice(db, { supplierId: supplier, productId: productA, unitPriceCents: 10000 });
+  insertPurchasePrice(db, { supplierId: supplier, productId: productB, unitPriceCents: 12000 });
 });
 
 after(async () => {
@@ -725,7 +728,8 @@ describe('E/F/G/H/I/J/K/L. Source-derived Purchase Order editor + edit + submit 
         supplierContactPhone: '13800000000',
         supplierAddress: '深圳市福田区',
         remark: 'manual edit',
-        items: [{ productId: productA, quantity: 2, unitPriceCents: 12000 }], // edit price
+        // 采购订单单价现在来自权威价格条目，编辑器不再自行定价；这里编辑的是备注与商业条件。
+        items: [{ productId: productA, quantity: 2, unitPriceCents: 10000 }],
       },
     });
     assert.equal(put.status, 200, JSON.stringify(put.body));

@@ -3427,6 +3427,81 @@ OUTSOURCING_WORKBENCH_ACCEPTANCE_PASS_FROZEN
 5. `transfer_no` 的 **UNIQUE 冲突**在 MySQL 下映射为 `OUTSOURCING_WIP_TRANSFER_NO_CONFLICT`（而非 500）。
 6. MySQL 与 SQLite 的 **Schema parity**（本次未新增 DDL，故只验证既有表的列 / 约束 / 索引一致性）。
 
+## 46. 采购与委外完整 Active Contract 域级交付实施（2026-11-10）
+
+### 46.1 授权、范围与状态
+
+- **授权来源**：业务所有者在 2026-11-10 的同一轮对话中先连续授权 Requirement → Design，随后明确批准 `docs/requirements/procurement-outsourcing.md` §31.16 与 `docs/design/procurement-outsourcing.md` §26.36，并授权进入 Implementation。范围为 §26.36 的 I1～I4。
+- **状态**：§31.16 与 §26.36 生命周期状态由 `PENDING_APPROVAL` / `PENDING_REVIEW` 转为 `IMPLEMENTED`——**已按批准合同实施并通过本地 Gate，尚未通过域级 Acceptance**。
+- **未获授权、因而未执行**：真实环境 migration 执行、数据库写入、真实 MySQL Gate、Git push / merge / tag、发布与部署。本节登记不构成这些动作的批准。
+
+### 46.2 实施单元与实际修改
+
+| 单元 | 内容 | 主要文件 |
+|---|---|---|
+| I1 取价原语与 PO 创建收敛 | 唯一取价原语 `resolvePurchaseLinePricing()`；金额按**计价单位数量**计算并冻结价格条目/版本、业务日期、document/base/pricing UOM 有理换算、折扣与 `HALF_UP_CENT_V1` 证据；删除无生产调用的第二套公式 `resolvePrice()` | `server/modules/procurement-pricing.js`、`server/modules/procurement-orders.js`、`server/app.js`、`server/modules/planning-documents.js` |
+| I2 PO Change 正式命令 | 变更头/行、服务端 before/requested 快照、SOD、版本 CAS、幂等指纹、ADD/MODIFY/CANCEL 单事务应用、after 快照、不可变行版本、业务拒绝审计 | `server/modules/procurement-orders.js`、`server/migrations/procurement-outsourcing-schema.js` |
+| I3 canonical execution 收敛 | 逐行 canonical 执行读模型被 MRP、工作台、Planning 预留与收货共同消费；加工费 PO 不进入 BUY supply；采购退货不自动重开原订单供给 | `server/modules/procurement-orders.js`、`server/modules/planning.js`、`server/modules/planning-domain.js`、`server/modules/procurement-notice-capacity.js` |
+| I4 前端工作面与域内补缺 | 寻源与定价页新增价格/折扣创建与版本调整与**服务端取价预览**；采购订单详情新增「执行余量」与「订单变更」章节（LIST → DETAIL → EDITOR/WORKFLOW，申请/审批/应用分权） | `src/pages/sourcing-pricing.jsx`、`src/pages/master-data.jsx` |
+
+新增只读端点 `POST /api/procurement/pricing/preview`（owner `server/modules/procurement-pricing.js`），供浏览器展示权威取价证据，浏览器不再自行计算金额或余量。
+
+### 46.3 三项 `SEMANTIC_MISMATCH` 的闭合口径
+
+1. **AUD-PRC-004 / PRC-07·08（定价与 UOM）**：价格条目单价恒为“每个 `pricing_uom_code` 的安全整数分单价”。订单输入的 document UOM 数量先经 canonical 有理换算得到 pricing UOM 数量再计算金额；`24 EA = 2 BOX` 在 `1 BOX = 12 EA` 下得到 `2 × 1200 = 2400 分`，并冻结完整证据链。
+2. **AUD-PRC-005 / PRC-18（PO Change）**：PO Change 是正式业务单据，保留 `ADD / MODIFY / CANCEL`。创建时服务端读取真实表头/明细/执行摘要形成不可变 before/requested；**应用时在事务内重新读取订单、产品、有效价格与换算并冻结证据，客户端金额不再是权威**；历史无价格证据的正式商业变更 fail closed（`PO_CHANGE_PRICE_EVIDENCE_MISSING`）。
+3. **AUD-PRC-006 / PRC-19（唯一余量口径）**：canonical 逐行执行读模型是唯一供给口径，MRP、工作台、预留、收货与变更共用；`OUTSOURCE_PROCESSING` 永不形成 BUY supply；采购退货只作披露，不自动重开原订单供给。
+
+### 46.4 Schema / Migration
+
+- `purchase_orders` 增 `version`；`purchase_order_items` 增 `version`、`execution_status`、价格证据列（`pricing_uom_code`、`pricing_quantity_num/den`、`price_entry_id`、`price_version`、`pricing_evidence_json`）。
+- 新增 `po_change_items`（逐行 ADD/MODIFY/CANCEL，含 before/after 快照）与 `purchase_order_item_versions`（不可变行版本，唯一键 `order_item_id, version`）。
+- `purchase_order_changes` 增 `scope`、`order_version_before`、`idempotency_key`、`request_fingerprint`、`snapshot_before_json`、`snapshot_after_json`、`applied_by`、`updated_at`，并建 `UNIQUE(created_by, idempotency_key)`。
+- 迁移只提供默认值（`version=1`、`execution_status='OPEN'`），**不为历史 PO / PO Change 伪造价格来源或 before/after**；历史缺证据行保留 NULL 并由新 mutation fail closed。
+
+### 46.5 既有合同与冻结证据的合同性调整（逐项登记）
+
+本轮把“普通采购订单必须有有效供应商价格”变成 fail-closed 合同，因此**若干既有测试的夹具形状必须随之调整**。调整只改变测试如何表达业务事实，不改变被测业务合同的语义：
+
+| 位置 | 调整 | 理由 |
+|---|---|---|
+| `server/buyers.test.js` | 用 0 分价格条目表达“零价草稿” | 保留“DRAFT 允许零单价、提交前必须填写大于 0 的单价”这一既有门禁语义 |
+| `server/v13-phase1-contract.test.js` | 零价场景改由价格条目表达；并把“PR 估价传播到 PO”改为“PO 单价来自权威价格条目” | §31.16 PRC-DLV-02 规定请购估价不再传播为采购单价 |
+| `server/business-integrity-stabilization.test.js` | 来源采购订单行数量由 100 调整为 200 | 收货容量与 MRP 供给现在共用同一“已收货”口径；历史只挂表头的收货行按产品级确定性分配到订单行后，该行已被收货 100，测试需要可收货余量 |
+| `server/m1c-wp1-procurement-notice-conversion.test.js` | 两张采购订单使用同一有效价格 | 单价来自价格条目，通知分配合同与价格无关 |
+| `server/uat-r4-purchase-source-chain.test.js` | 编辑草稿不再自行改价 | 采购订单编辑器不再拥有定价权 |
+| `server/test-support/m1-core-g07-fixtures.js` | 固定场景新增“建立有效采购价格条目”步骤 | G07 固定场景必须沿生产 HTTP 链先建立价格事实 |
+
+### 46.6 测试与 Gate（本地，2026-11-10）
+
+| Gate | 结果 |
+|---|---|
+| 新增 focused `server/procurement-commercial-evidence.test.js` | 23/23 PASS（取价原语 4、PO 创建证据 5、PO Change 11、canonical execution 3） |
+| `pnpm test`（FULL） | **3487/3487 PASS**，0 FAIL，0 skipped，426 suites |
+| `pnpm build` | PASS |
+| `git diff --check` | PASS |
+| `pnpm test:heavy` | 见本节末尾追加登记 |
+| 文档一致性 `current` / `migration` 双模式 | 见 §46.8 |
+
+### 46.7 未解决矛盾与限制
+
+1. **真实 MySQL Gate 未在本轮重跑**：本轮只完成 SQLite 路径实证。§26.36.7 的 MySQL 8 与 SQLite 的 CHECK / UNIQUE / FK / 索引等价、以及 PO Change 与收货 / 预留的 MySQL 并发行为，**必须在受保护 disposable MySQL Gate 中复跑后才能进入域级 Acceptance**。既有 M1C-G07 / OUT-001 的历史验收结论不向本轮新摘要自动延续。
+2. **G07 固定场景冻结摘要重新冻结待确认**：`server/test-support/m1-core-g07-fixtures.js` 的固定场景因新增价格步骤而变更，冻结摘要随之重新计算并写回三处断言。该重新冻结**待业务所有者显式确认**；在此之前真实 MySQL Gate 的既有验收结论不因本次变更自动延续。
+3. **浏览器闭环未在本轮执行**：`src/pages/sourcing-pricing.jsx` 与 `src/pages/master-data.jsx` 的新增工作面只完成构建级验证；320 / 390 / 430 / 680 四档宽度与真实岗位闭环仍需在浏览器 Gate 中取证。
+4. **既有“收货容量与 MRP 供给各用一套 SQL”的历史口径差异已被合并**：历史只挂表头、不挂订单行的收货行现在按产品级确定性分配到订单行，因此这类历史单据的收货容量与 MRP 供给都会随之变化。这是收敛的**预期后果**，但真实数据规模下的影响面未在真实 MySQL 上取证。
+5. **N7 历史追溯债务**：文档一致性检查的 N7 仍带既有历史提交债务，本轮未把 N7 写成 PASS，也未弱化检查器。
+
+### 46.8 文档一致性检查登记
+
+见 `log/2026-11-10.md` 同日记录：current 模式 N1、N3～N6、N8、N9 结果，N2 保持 `RETIRED`，N7 如实登记；migration 模式 C1～C6 结果。
+
+### 46.9 下一阶段
+
+1. 取得授权后在受保护 disposable MySQL 上复跑 M1C-G07（schema parity + CR-01..CR-09）与采购/委外并发 Gate，补齐 §46.7.1。
+2. 业务所有者确认 G07 固定场景的重新冻结（§46.7.2）。
+3. 执行浏览器闭环 UAT（定价维护 / 取价预览 / PO Change 申请-审批-应用 / 执行余量，四档宽度）。
+4. 按 §31.16.3 逐项复核 PRC / VMI / OUT 能力矩阵，形成**域级 Acceptance 候选**交业务所有者签收；域级 Acceptance、Capability Freeze 与 Manual Closure 仍是独立决定，不由本节登记代替。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。

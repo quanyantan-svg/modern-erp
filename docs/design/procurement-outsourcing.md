@@ -2188,3 +2188,131 @@ IQC 人员从 canonical IQC 候选列表选择委外待检来源，调用现有 
 | Gate | 新行为 focused tests；`pnpm test`、`pnpm build`、`git diff --check`；库存/IQC/事务与 DB 风险追加 `pnpm test:heavy`；受保护 disposable MySQL 获逐次授权且环境具备时运行 `pnpm test:mysql` 与 `pnpm test:mysql:concurrency`。文档 current/migration 分开运行并如实登记 N7 历史问题。 |
 
 实施可按“受限读与导航 → 业务/收货/IQC 工作面 → 状态机安全门禁 → 跨域回归”拆成可回滚逻辑单元，但每单元都必须先有本节批准、按对应 Gate 验证，并由用户最终 Acceptance；拆分不是绕过状态机或库存高风险验证的理由。当前仅完成 DESIGN 文档，`PENDING_REVIEW`；依 AGENTS.md §4.3 **HARD STOP**，不得自动进入 IMPLEMENTATION。
+
+---
+
+### 26.36 完整 Active Contract 域级交付整改 Design（2026-11-10；`APPROVED` → `IMPLEMENTED`）
+
+> **用途 / Owner / 状态 / 权威关系**：本节实现 §31.16 `PRC-DLV-01..12` 的技术设计，Owner 为 Procurement & Outsourcing Domain Owner，状态为 `IMPLEMENTED`（已按批准合同实施，**尚未通过域级 Acceptance**），`solution.md` 只承担导航。本节在 AUD-PRC-004/005/006 的范围内修订 §26.5、§26.10、§26.11 的冲突语义；其它 §26 Active Design、M1-Core Active Design 和 §26.35 冻结工作面保持有效。
+> **授权来源**：业务所有者于 2026-11-10 授权自行判断解决三项主要阻塞、以完整 Active Contract 达到域级交付，并连续授权 Requirement → Design；随后在同一轮对话中明确批准本节 Design 与 §31.16 Requirement，并授权进入 Implementation。该 Implementation 授权不等于 Migration 在真实环境执行、数据库写入、MySQL destructive Gate 或外部 Git 写入授权。
+> **实施与偏差记录（2026-11-10）**：I1～I4 已实现，证据见 `docs/status/PROJECT_STATUS.md` §46 与 `log/2026-11-10.md`。与本节文字的两处已批准范围内的实现取舍：(1) §26.36.5 要求 Receiving 消费 canonical execution，这使收货容量与 MRP 共用同一“已收货”口径——历史**只挂表头、不挂订单行**的收货行按产品级确定性分配到订单行，该分配同样作用于 MRP 供给与收货容量，两处不再各用一套 SQL；(2) §26.36.4 的 PO Change 批准权限映射到既有 `PURCHASE_ORDERS_APPROVE` 审批角色（业务所有者审阅过的既有角色），未新增权限码。两者均未改变 Requirement 的可观察行为边界。
+
+#### 26.36.1 模块责任与 canonical owner
+
+| Owner | 责任 |
+|---|---|
+| `server/modules/procurement-pricing.js` | 唯一采购取价原语 `resolvePurchaseLinePricing()`；解析业务日期、document/pricing/base UOM、有理数量、价格版本、折扣与 `HALF_UP_CENT_V1` 证据。旧 `resolvePrice()` 仅在所有生产 caller 迁移后删除，不保留第二套金额公式。 |
+| `server/modules/procurement-orders.js` | 唯一 PO draft writer、PO Change command/lifecycle/apply、canonical line execution read model；负责金额/总额一致性、版本、幂等、事务、审计。 |
+| `server/modules/planning-domain.js` | Planning 的唯一 PO supply adapter；只调用采购域导出的 canonical execution service，不再拼装 PO 数量 SQL。 |
+| `server/modules/planning.js` | MRP 保留需求/BOM/制造净算 owner；采购供给通过 Planning adapter 注入，不直接查询 `purchase_orders/items/receipts/returns`。 |
+| `server/modules/procurement-receiving.js` | 收货容量校验消费 canonical line remaining；仍持有通知/收货 writer，不复制执行公式。 |
+| `src/pages/sourcing-pricing.jsx` / `src/pages/master-data.jsx` | 分别承载定价维护与 PO 详情内的变更/执行工作流；不在浏览器重算权威金额或余量。 |
+
+`server/app.js` 只保留 route facts 与 thin dispatch。现有手工 PO、采购指令/请购转换、批量转换和委外加工费 PO 的直接调用点必须逐一列出并迁移到 `createPurchaseOrderDraftCanonical()`；生产代码不得再直接 `INSERT purchase_orders/purchase_order_items`。加工费 PO 明确使用调用方冻结的商业金额且不形成 BUY supply；普通采购 PO 必须走采购价格解析。测试 fixture 可直接造数，但不得被生产 caller 复用。
+
+#### 26.36.2 Pricing UOM 数据流与金额算法
+
+新接口：
+
+```text
+resolvePurchaseLinePricing(db, {
+  supplierId, productId, sourceType, businessDate,
+  documentUomCode, documentQuantity: { num, den },
+  explicitPriceEntryId?, giftLine?
+}) -> immutable pricing evidence
+```
+
+调用 `commercial-golive.js::quantitySnapshot()` 取得 document → base 的精确比例，并从同一 `product_uom_conversions` 权威来源取得 pricing → base 的有效比例。若 document quantity 为 `Qd`，document-to-base 为 `Nd/Dd`，pricing-to-base 为 `Np/Dp`：
+
+```text
+pricingQuantity = Qd × Nd/Dd × Dp/Np
+grossCents      = roundRational(unitPriceCents × pricingQuantity.num,
+                                pricingQuantity.den)  // HALF_UP_CENT_V1
+```
+
+全程使用 `BigInt` 分子/分母并在每个数据库边界验证安全整数；只在最终分金额调用现有 `roundRational()`，不得先转 `Number`。PERCENT 折扣对 `grossCents` 做有理数 HALF_UP；FLAT 表示每 pricing UOM 的固定分金额，先乘 pricing quantity 再 HALF_UP。最终 `amountCents = max(0, grossCents - discountCents)`；赠品固定零价、零金额并记录 gift evidence，普通行不得借零价绕过有效价格。
+
+证据至少冻结：contract version、price entry/version、business date、document/base/pricing UOM 与三组有理数量/比例、catalog unit price、discount id/version/basis/value、gross/discount/final cents、rounding contract。PO writer 只接受 resolver 返回的内部对象，不接受客户端构造 evidence。读取历史只验证而不重新取价。
+
+#### 26.36.3 PO 创建调用流与兼容
+
+普通采购创建路径统一为：HTTP/转换 caller 规范化来源与 document quantity → `createPurchaseOrderDraftCanonical()` 事务内重读供应商/产品/来源 → 每行调用 §26.36.2 → 汇总安全整数总额 → 原子写表头、明细、价格证据、来源关系与 audit。客户端旧 `unitPriceCents/price` 字段在普通采购生产 API 中不再是权威；迁移期若同时传入，只能与 resolver 结果完全一致，否则 409 `PURCHASE_PRICE_EVIDENCE_MISMATCH`。无有效价格/换算返回 409，零业务写入。
+
+加工费 PO 仍由 §26.35 的委外来源锁定路径创建，`business_type=OUTSOURCE_PROCESSING`，其价格来源按已批准委外合同冻结；不得被普通 PURCHASE price list 静默替换。历史 DRAFT/APPROVED PO 不回填价格证据；无证据的历史 PO 可读取和履行既有数量，但进入新增商业变更时 fail closed，交显式历史治理，不由 GET 修复。
+
+#### 26.36.4 PO Change 模型、状态与应用事务
+
+沿用现有 `purchase_order_changes` 主键和公开 API，增量迁移使其成为正式命令头；新增 `po_change_items` 承载逐行 ADD/MODIFY/CANCEL。为兼容既有列，`payload_json/original_json/requested_json/applied_json` 只保留读取映射，新的权威字段为：
+
+- `purchase_order_changes` 新增 `scope`、`order_version_before`、`idempotency_key`、`request_fingerprint`、`snapshot_before_json`、`snapshot_after_json`、`applied_by`、`updated_at`；`UNIQUE(created_by,idempotency_key)`；
+- `po_change_items(id, change_id, order_item_id NULL, line_no, action, requested_json, snapshot_before_json, snapshot_after_json)`；
+- `purchase_orders` 新增 `version INTEGER NOT NULL DEFAULT 1`；
+- `purchase_order_items` 新增 `version`、`execution_status('OPEN'|'CANCELLED')` 及价格证据列；
+- `purchase_order_item_versions` 追加保存每次批准/变更后的不可变行快照，唯一键 `(order_item_id, version)`。
+
+当前 `purchase_order_items` 是**当前有效执行投影**，允许在成功 APPLY 时受版本条件保护地更新；`purchase_order_item_versions`、change before/after 以及既有 receipt/bill/AP 快照是不可变历史。此设计明确取代 §26.10 中“历史 PO line 不可写回”对当前投影的歧义：不可写回的是已冻结版本和下游历史，不是禁止正式变更更新当前有效投影。
+
+状态为 `DRAFT → APPROVED → APPLIED`，或 `DRAFT → REJECTED/CANCELLED`；申请者与批准者必须分离。创建事务读取当前表头/全部目标行/执行摘要，生成 server-side before/requested 和 fingerprint。批准重读版本。应用事务按 `purchase_order_changes → purchase_orders → purchase_order_items` 固定顺序锁定，重读通知、收货、预留和交货计划，验证版本与执行下界后：
+
+- `ADD`：经 canonical pricing 创建完整新行、初始版本和来源快照；
+- `MODIFY`：重新解析数量/价格，条件更新当前投影的 quantity、UOM/price evidence、unit/amount、version；
+- 行级 `CANCEL`：保留已执行事实，把当前行标为 `CANCELLED`，其未执行余量归零；有不可证明承诺时拒绝；
+- 表头 `CANCEL`：仅当所有行无收货、有效通知、有效预留及不可逆事实时，原子取消全部开放行和表头；
+- 最后从当前有效行重新汇总 `purchase_orders.total_cents`，写 after/version/audit 并提交。
+
+相同 idempotency key + fingerprint 返回原结果；异 fingerprint 409 `PO_CHANGE_IDEMPOTENCY_CONFLICT`。APPLIED 重复请求返回原 applied snapshot，不二次执行。陈旧版本、金额不一致、执行下界、职责分离、状态或来源冲突使用稳定 409 code；失败业务事实零变化，业务拒绝审计按既有合同记录。
+
+#### 26.36.5 Canonical PO execution 与跨域调用
+
+将 `getPurchaseOrderExecution()` 拆为可在已有事务中调用的纯 service：
+
+```text
+getPurchaseOrderLineExecution(db, { orderId?, orderItemId?, productId?,
+                                    supplierId?, includeClosed=false })
+```
+
+逐行返回 order/business type/status、item version/status、ordered、cancelled open quantity、有效 notified、confirmed received、confirmed returned（披露项）、active reserved、open remaining 和 execution state。普通采购：
+
+```text
+executableOrdered = execution_status == OPEN ? ordered : confirmedReceived
+openRemaining     = max(0, executableOrdered - confirmedReceived)
+```
+
+采购退货只作为履约/质量/财务披露，不自动增加原 PO 的 future supply；获批准的 replacement/replenishment 必须形成独立来源事实后才作为新 supply。通知量约束可收货容量，但不额外增加 supply。`OUTSOURCE_PROCESSING` 始终返回 `eligibleForBuySupply=false`。
+
+MRP、Workbench、Reservation、Receiving 分别通过一个 Planning/Procurement adapter 消费相同结果：MRP 按产品聚合 `openRemaining`；Workbench 追加交期窗口；采购来源预留在具体行上锁定并扣除 active reserved；Receiving 校验目标行剩余容量。删除 `planning.js::openPurchaseSupply()`、`planning-domain.js::physicalSupplyQuantity(PURCHASE_ORDER)` 与 `buildPlanningBalanceReadModel()` 中的独立 PO SQL，`listOpenRemainingBySupplierProduct()` 改为 service wrapper。不得改变销售需求、BOM 展开、制造供给或 Planning 状态机。
+
+#### 26.36.6 RBAC、SOD、错误与审计
+
+- 价格维护沿用 `PROCUREMENT_CONFIG_MANAGE`，查看沿用 view 权限；PO 创建/查看沿用现有采购订单权限。
+- PO Change 查看用 `PO_CHANGE_VIEW|MANAGE`，创建/应用用 `PO_CHANGE_MANAGE`；批准必须增加独立 `PO_CHANGE_APPROVE` 或映射到经审阅的既有审批角色，不能由申请者自批。权限种子变化须在 Implementation 前按本节批准范围明确迁移。
+- Planning consumer 不获得采购写权限；内部 service 不跳过调用侧的 route authorization。
+- 400 用于格式，403 用于权限，404 用于有权范围内不存在，409 用于业务/版本/容量/幂等冲突；错误 code 稳定且不泄露越权数据。
+- 成功的价格版本、PO Change 创建/批准/应用及取消均写关键 audit；拒绝遵循现有“业务零副作用 + 拒绝审计”合同。GET/CHECK 不修复历史。
+
+#### 26.36.7 Schema、Migration 与 SQLite/MySQL parity
+
+实现需要一个**增量、可重复、双后端** migration，创建 §26.36.4 的表/列/索引/约束。迁移只为新记录提供默认 `version=1`、`execution_status='OPEN'`；不得为历史 PO Change 伪造 before/after 或价格来源。历史行缺证据时保留 NULL 并由新 mutation fail closed。MySQL 8 与 SQLite 均验证 CHECK/UNIQUE/FK/索引等价；MySQL JSON 仍按仓库兼容策略存储，不引入后端专属业务语义。
+
+部署顺序为 additive schema → 双读兼容代码 → caller 切换与新写证据 → 验证零旧 caller → 移除旧公式/旧生产直写。回滚只允许撤回新 UI/route consumer 并让新 mutation fail closed；已写 versions/change evidence 不删除、不反向覆盖业务事实。若迁移 dry-run 或历史扫描发现当前投影与行金额/总额不一致，只报告并阻断受影响 mutation，不自动修正。
+
+#### 26.36.8 前端工作面
+
+`sourcing-pricing` 保持 canonical route，新增价格/折扣创建、版本调整、有效期与 UOM 换算预览；预览调用只读 resolver endpoint，提交 PO 后显示冻结证据。`purchase-orders` 详情新增“执行余量”和“订单变更”章节，采用 LIST → DETAIL → EDITOR/WORKFLOW；申请、审批、应用按权限分离，明确展示 before/requested/after、冲突原因和执行下界。不得在 UI 本地决定金额、余量或权限。
+
+route key 不新增重复 screen；使用 `documentId` 与可选 `changeId` 恢复 direct URL/刷新/Back/Forward。320/390/430/680 下表格改为记录/详情布局，状态、金额、余量和 primary action 优先；四宽度均需浏览器实测。普通用户看不到审批动作不等于授权，服务端仍 fail closed。
+
+#### 26.36.9 测试、验收与实施拆分
+
+| Gate | 必须覆盖 |
+|---|---|
+| Pricing focused | 1 BOX=12 EA、2 BOX、12.00/BOX 得 24.00；EA 输入换算 BOX；分数比例；半分边界；PERCENT/FLAT；赠品；无价格/换算；历史价格不重算；所有生产 PO caller 均经过 resolver。 |
+| PO Change focused | 真实 before；ADD/MODIFY/行取消/整单取消；金额与总额；执行下界；申请/审批 SOD；版本冲突；相同重放/异 payload；失败零副作用与审计；历史证据缺失 fail closed。 |
+| Execution/Planning focused | 标准/加工费 PO、部分/完全收货、退货不重开、行取消、通知、预留、日期窗口；MRP/Workbench/Reservation/Receiving 对同一行余量一致。 |
+| Concurrency/DB | PO Change vs 收货/通知/预留、双 apply、双 reservation、收货 vs MRP snapshot；SQLite/MySQL 一方成功另一方合规拒绝，无重复/部分事实；migration parity/legacy reopen。 |
+| UI/Domain | 定价与 PO Change 真实岗位闭环、权限正反例、direct URL/刷新/Back/Forward、四宽度；PRC/VMI/OUT 全矩阵逐项复核；延期接口保持既有拒绝。 |
+| Regression | focused 后运行 `pnpm test`、`pnpm test:heavy`、`pnpm build`、`git diff --check`；受保护 disposable 环境获独立授权后运行 MySQL integration/concurrency；文档 current/migration 分开登记。 |
+
+Implementation 建议拆为四个可独立验证的逻辑单元：I1 Pricing canonicalization 与 caller 收敛；I2 PO Change schema/事务/工作面；I3 canonical execution 与 Planning/Receiving consumer 迁移；I4 完整域矩阵补缺和 Domain Acceptance 候选。每个单元都必须严格使用本节批准后的合同；若 I4 发现新的业务规则、Schema、库存/会计语义或手册冲突，立即回到 Requirement/Design，不得顺手实现。
+
+本节已由业务所有者批准并完成 Implementation（状态 `IMPLEMENTED`）。AGENTS.md §4.3 的 HARD STOP 已在批准时刻解除；本节当前**不再**授权真实环境 migration 执行、数据库写入、MySQL Gate、Git push/merge/tag、发布或部署——这些仍需逐次明确批准。域级 Acceptance 候选见 `docs/status/PROJECT_STATUS.md` §46。

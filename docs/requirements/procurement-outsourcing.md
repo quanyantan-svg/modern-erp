@@ -1069,3 +1069,50 @@ M1-Core §7.5 对 `M1C-G03/G06` 的首期合同保留**数量归属守恒**、�
 本节候选验收应以生产 HTTP 的分岗正反例、真实来源/状态/数量断言、SQLite/MySQL 双路径、并发失败方零副作用、focused + full + heavy 适用 Gate、浏览器 direct URL/刷新/Back/Forward 和四档宽度验证。必须证明收货员无法使用普通采购通知与宽订单详情，质检/收货生效仍分岗，订单无法提前完工/关闭；延期接口继续 409 且零业务副作用。测试通过、实现代理自报 PASS 均不替代用户最终 Acceptance。
 
 本节当前状态为 `FROZEN`，且**已实施并通过有界验收**：实现证据、验收边界与未重跑真实 MySQL 的限制见 [`docs/acceptance/outsourcing-workbench-acceptance-20261110.md`](../acceptance/outsourcing-workbench-acceptance-20261110.md) 与 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §45.34。验收范围**仅**限本节 `OUT-WB-REQ-01..08` 的委外核心执行工作面；§31.13 的既有批准与验收事实不被撤销，`docs/status/CAPABILITY_MATRIX.md` 的 B3121 `BLOCKED` 不变。本节的有界工作面冻结**不等于** B3121 Capability Freeze、Domain Acceptance、Manual Closure、Release Readiness、Release 或 Deploy。
+
+---
+
+### 31.16 完整 Active Contract 域级交付整改 Requirement（2026-11-10；`APPROVED` → `IMPLEMENTED`）
+
+> **用途 / Owner / 状态 / 权威关系**：本节把 2026-11-10 对当前 HEAD 的复核结论转化为 Procurement & Outsourcing 完整 Active Contract 的域级交付整改要求。Owner 为 Procurement & Outsourcing Domain Owner；生命周期状态为 `IMPLEMENTED`（已按批准合同实施，**尚未通过域级 Acceptance**）；`document.md` 仅承担导航，本节是 §31 的当前候选增补。它不取代 §31.1～§31.15 的已批准或已冻结正文，只收敛其中与 AUD-PRC-004/005/006 及域级验收有关的冲突。
+> **授权来源与范围选择**：业务所有者在本次对话中确认三项 `SEMANTIC_MISMATCH`，授权自行判断解决，并明确要求域级交付采用**完整 Active Contract**。因此不采用 `SCP-01..15` 的范围裁剪建议：PRC-18 保留 `ADD / MODIFY / CANCEL`，PRC-08 与 PRC-19 保持核心正确性要求；既有明确批准的延期、fail-closed 和有界冻结仍属于 Active Contract，不被本节伪造为已经实施。
+> **批准与实施记录（2026-11-10）**：业务所有者在本轮对话中明确批准本节 Requirement 与对应 Design §26.36，并授权进入 Implementation。实施按 §26.36 的 I1～I4 拆分完成，证据见 `docs/status/PROJECT_STATUS.md` §46 与 `log/2026-11-10.md`。`IMPLEMENTED` 只表示合同已按批准设计实现并通过本地 Gate，**不表示域级 Acceptance、Capability Freeze、Manual Closure、Release 或 Deploy**；真实 MySQL Gate 尚未在本轮重跑，该限制随域级验收候选一并登记。
+
+#### 31.16.1 当前缺口与目标状态
+
+| ID | 当前 Coverage | 交付目标 |
+|---|---|---|
+| `AUD-PRC-004` / PRC-07/08 | `SEMANTIC_MISMATCH` | 采购价格按**计价单位数量**计算，完整接入采购订单商业快照；金额、折扣和舍入可重演。 |
+| `AUD-PRC-005` / PRC-18 | `SEMANTIC_MISMATCH` | 正式 PO Change 保存真实变更前后快照，安全应用 ADD/MODIFY/CANCEL，数量、单价、行金额与表头总额原子一致。 |
+| `AUD-PRC-006` / PRC-19 | `SEMANTIC_MISMATCH` | MRP、计划工作台、采购来源预留和收货共用唯一 canonical PO open remaining；加工费 PO 不进入 BUY supply。 |
+| Procurement & Outsourcing Domain | `PARTIAL` | 对 §31 当前 Active Contract 逐项取证；所有未延期能力闭环，延期能力保持已批准 fail-closed；完成域级 Acceptance 候选，不以子包 PASS 冒充 Domain PASS。 |
+
+#### 31.16.2 可验收业务要求
+
+| ID | Requirement / 可观察验收条件 |
+|---|---|
+| `PRC-DLV-01` | 价格条目中的 `unit_price_cents` 始终表示“每一个 `pricing_uom_code` 的安全整数分单价”。订单输入的 document UOM 数量必须经现有 canonical UOM 有理数换算为 pricing UOM 数量后再计算金额；禁止用 base UOM 数量直接乘 pricing UOM 单价。金额使用统一 `HALF_UP_CENT_V1`，分数换算不得先转浮点。 |
+| `PRC-DLV-02` | 普通采购订单的所有生产创建路径（手工、请购/采购指令转换、批量转换及其它已登记 canonical caller）必须调用同一采购价格解析原语，冻结价格条目/版本、业务日期、document/base/pricing UOM 换算、折扣及舍入证据。无有效价格或换算时 fail closed；合法赠品为零价；不得由请求端仅传 `unitPriceCents` 绕过。已批准历史 PO 不因价格版本变化被重算。 |
+| `PRC-DLV-03` | 折扣只在明确的计价金额基数上计算；百分比和固定额都必须产出可重演证据。行金额、折扣后金额和订单总额都为安全整数分；总额等于有效行金额之和。必须覆盖 Pricing UOM = Document UOM、Pricing UOM ≠ Document UOM、分数换算、边界舍入、折扣和价格历史。 |
+| `PRC-DLV-04` | PO Change 是正式业务单据，保留 `ADD / MODIFY / CANCEL`。创建时由服务端读取真实 PO 表头、明细、执行量、版本与商业快照，形成不可变 before/requested；不得把请求 payload 复制成 original。批准者不得与申请者相同，权限必须后端 fail closed。 |
+| `PRC-DLV-05` | 应用 PO Change 必须在单事务中锁定并重读订单、目标行、交货计划、通知/收货执行量和当前版本；陈旧版本、重复应用、状态变化或来源不符均稳定拒绝。成功时原子形成 after/applied 快照、版本和审计；相同业务幂等键与相同指令精确重放，异指令冲突。 |
+| `PRC-DLV-06` | `MODIFY` 原子更新当前有效数量、计价证据、单价、行金额及表头总额；新数量不得低于已确认收货或其它已冻结执行承诺。`ADD` 创建完整来源/UOM/价格快照并重新计算总额。历史 receipt/bill/AP 不回写、不追溯重算。 |
+| `PRC-DLV-07` | `CANCEL` 必须显式区分整单与行级目标。整单取消只允许所有行均无已确认收货、有效通知、有效预留或其它不可逆下游事实；行级取消只关闭未执行余量并保留已执行事实。部分执行或历史不可证明时 fail closed，不得用整单状态更新掩盖行级义务。 |
+| `PRC-DLV-08` | canonical PO execution 以订单行作为最小身份，输出 ordered、cancelled、notified、received、returned、reserved、open remaining 与状态。普通采购的 `open remaining` 不因采购退货自动重新打开；只有独立、可追溯且获批准的补货义务才能形成新 supply。结果不得为负。 |
+| `PRC-DLV-09` | 只有 `STANDARD_PURCHASE` 可形成 BUY supply；`OUTSOURCE_PROCESSING` 仅是加工费商业单据，不得进入普通采购 MRP、计划工作台或采购来源预留容量。MRP、工作台、预留、收货和执行 API 必须消费同一 canonical service，不得保留第二套数量 SQL 口径。 |
+| `PRC-DLV-10` | Planning 跨域变更只允许替换 PO supply adapter，不改变已冻结需求、BOM 展开、制造供给和计划状态机语义。迁移后相同 PO 在 MRP、工作台、预留和收货的可执行余量一致；并发预留/收货/变更只能有符合版本与容量的一方成功。 |
+| `PRC-DLV-11` | 前端必须提供可完成的定价维护/取价证据、PO Change 列表/申请/审批/应用和执行余量详情；Route 仍以 `applicationRegistry.js` 为唯一来源，direct URL、刷新、Back/Forward 和权限曝光一致。320/390/430/680 CSS px 核心任务不得依赖整页横向滚动。 |
+| `PRC-DLV-12` | 域级交付必须逐项复核 PRC-01..26、VMI-01..05、OUT-01..23。已批准延期能力以“稳定服务端拒绝、零业务副作用、边界可见且有回归证据”验收，不得伪称已实现；未延期能力必须有真实 UI/API/来源/状态/RBAC/事务/审计/SQLite/MySQL 证据。AUD-PRC-007/008/009、AUD-VMI-001/002/003 及 B3121 未闭合项必须按 Active Contract 关闭或证明其已批准延期边界。 |
+
+#### 31.16.3 域级 Acceptance Gate
+
+域级 Acceptance 候选至少同时满足：
+
+1. `PRC-DLV-01..12` 全部有生产调用链与正反例证据；三项 P0 不再是 `SEMANTIC_MISMATCH`。
+2. PRC/VMI/OUT capability matrix 逐项定位 Requirement、Design、实现、测试和明确延期，不凭文件存在宣称 `COVERED`。
+3. focused、`pnpm test`、`pnpm build`、`git diff --check` 全部通过；高风险库存/计划/金额/数据库路径追加 HEAVY 与受保护 disposable MySQL integration/concurrency Gate。
+4. 采购与委外的浏览器闭环在四档宽度由真实岗位完成；权限、职责分离、重复提交、并发、回退和失败零副作用均被验证。
+5. 文档 current/migration 两种一致性检查分别执行并如实登记；既有 N7 历史债务不得冒充本轮 PASS，也不得通过弱化检查器关闭。
+6. Implementation Agent 的 PASS 只形成验收候选；最终 Domain Acceptance、Capability Freeze 和 Manual Closure 仍须业务所有者明确确认。
+
+本节完成 Requirement 起草后进入连续授权的 Design 阶段；当前 `IMPLEMENTED` 不授权 Schema/Migration 在真实环境的执行、数据库写入、MySQL destructive Gate、Git push/merge/tag、发布或部署——这些仍需逐次明确批准。域级 Acceptance 候选见 `docs/status/PROJECT_STATUS.md` §46。

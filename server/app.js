@@ -318,12 +318,14 @@ import {
   createPriceListEntry,
   listDiscounts,
   listPriceList,
+  previewPurchaseLinePricing,
   upsertDiscount,
 } from './modules/procurement-pricing.js';
 import {
   applyPurchaseOrderChange,
   approvePurchaseOrderChange,
   createPurchaseOrderDraftCanonical,
+  replacePurchaseOrderItemsCanonical,
   updateOutsourcingProcessingPurchaseOrderCommercialFields,
   createDeliverySchedule,
   createPurchaseOrderChange,
@@ -889,6 +891,12 @@ ownedRouteTable.register({
   method: 'POST',
   path: /^\/api\/procurement\/price-list\/([^/]+)\/adjust$/,
   handler: ({ db, req, res, actor, params }) => adjustPriceList(db, req, res, actor, params[0]),
+  owner: 'server/modules/procurement-pricing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/pricing/preview',
+  handler: ({ db, req, res, actor }) => previewPurchaseLinePricing(db, req, res, actor),
   owner: 'server/modules/procurement-pricing.js',
 });
 ownedRouteTable.register({
@@ -3646,7 +3654,7 @@ async function updatePurchaseOrder(db, req, res, actor, orderId) {
     || body.sourceOutsourcingOrderId !== undefined || body.source_outsourcing_order_id !== undefined) {
     throw new HttpError(400, '采购订单业务类型及来源不可由客户端修改', { code: 'PURCHASE_ORDER_SOURCE_IMMUTABLE' });
   }
-  const input = purchaseOrderInput(db, body); const now = new Date().toISOString();
+  const input = purchaseOrderInput(db, body, { pricingMode: processing ? 'PROCESSING' : 'STANDARD' }); const now = new Date().toISOString();
   if (processing) {
     transaction(db, () => {
       updateOutsourcingProcessingPurchaseOrderCommercialFields(db, { orderId, actor, input, now });
@@ -3669,22 +3677,17 @@ async function updatePurchaseOrder(db, req, res, actor, orderId) {
     });
   }
   transaction(db, () => {
+    const rewritten = replacePurchaseOrderItemsCanonical(db, {
+      orderId, items: input.items, businessType: 'STANDARD_PURCHASE',
+      supplierId: input.supplierId, businessDate: input.orderDate,
+    });
     db.prepare(`UPDATE purchase_orders SET supplier_id=?,total_cents=?,remark=?,status='DRAFT',rejection_reason='',updated_at=?,
         order_date=?,expected_delivery_date=?,payment_terms=?,payment_terms_days=?,supplier_contact_name=?,supplier_contact_phone=?,supplier_address=?
       WHERE id=?`).run(
-      input.supplierId, input.totalCents, input.remark, now,
+      input.supplierId, rewritten.totalCents, input.remark, now,
       input.orderDate, input.expectedDeliveryDate, input.paymentTerms, input.paymentTermsDays,
       input.supplierContactName, input.supplierContactPhone, input.supplierAddress, orderId,
     );
-    db.prepare('DELETE FROM purchase_order_items WHERE order_id=?').run(orderId);
-    if (hasSourcedLines) {
-      const statement = db.prepare(`INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,purchase_requisition_item_id,is_gift_line,
-        document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-      for (const item of input.items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo,
-        item.purchaseRequisitionItemId, item.isGiftLine, item.documentUomCode, item.documentQuantityNumerator, item.documentQuantityDenominator,
-        item.conversionNumerator, item.conversionDenominator, item.baseQuantityNumerator, item.baseQuantityDenominator);
-    } else savePurchaseOrderItems(db, orderId, input.items);
     audit(db, actor.id, 'UPDATE', 'PURCHASE_ORDER', orderId, `修改采购订单 ${current.order_no}`);
   });
   return send(res, 200, { ok: true });
@@ -3804,7 +3807,7 @@ function getPurchaseOrderWorkflow(db, res, actor, orderId) {
   return send(res, 200, { root: { ...order, type: 'PURCHASE_ORDER' }, upstream: [], downstream: receipts });
 }
 
-function purchaseOrderInput(db, body) {
+function purchaseOrderInput(db, body, { pricingMode = 'STANDARD' } = {}) {
   const supplierId = requiredText(body.supplierId, '供应商', 100);
   const supplier = db.prepare('SELECT id, contact, phone, address, email, payment_terms_days FROM suppliers WHERE id=? AND active=1').get(supplierId);
   if (!supplier) throw new HttpError(400, '供应商不存在或已停用');
@@ -3833,39 +3836,33 @@ function purchaseOrderInput(db, body) {
     const quantity = snapshot.base.num / snapshot.base.den;
     const isGiftLine = item.isGiftLine === true || item.isGiftLine === 1 || item.is_gift_line === true || item.is_gift_line === 1;
     const hasExplicitPrice = item.unitPriceCents !== undefined && item.unitPriceCents !== null && item.unitPriceCents !== '';
-    const unitPriceCents = hasExplicitPrice ? Number(item.unitPriceCents) : (isGiftLine ? 0 : Number(product.price_cents || 0));
-    // V1.3 Phase 1: a DRAFT may temporarily carry 0 unit price (a
-    // generated PO from a PR without an estimate is the canonical
-    // example). The submit gate enforces unit price > 0 — see
-    // changePurchaseOrderState. Non-integer cents are rejected here
-    // because the input value must round-trip as integer cents.
-    if (!Number.isFinite(unitPriceCents) || unitPriceCents < 0) {
-      throw new HttpError(400, `第 ${index + 1} 行单价不正确`);
+    const assertedUnitPriceCents = hasExplicitPrice ? Number(item.unitPriceCents) : null;
+    if (assertedUnitPriceCents !== null && (!Number.isSafeInteger(assertedUnitPriceCents) || assertedUnitPriceCents < 0)) {
+      throw new HttpError(400, `第 ${index + 1} 行单价必须为非负整数（分）`);
     }
-    if (!Number.isSafeInteger(unitPriceCents)) {
-      throw new HttpError(400, `第 ${index + 1} 行单价必须为整数（分）`);
-    }
-    if (isGiftLine && unitPriceCents !== 0) throw new HttpError(400, `第 ${index + 1} 行赠品单价必须为 0`);
-    const amountCents = roundRational(BigInt(snapshot.doc.num) * BigInt(unitPriceCents), snapshot.doc.den);
-    return { id: id(), productId: product.id, quantity, unitPriceCents, amountCents, isGiftLine: isGiftLine ? 1 : 0, lineNo: index + 1,
-      documentUomCode: snapshot.conversion.uomCode, documentQuantityNumerator: snapshot.doc.num, documentQuantityDenominator: snapshot.doc.den,
+    const line = {
+      id: id(), productId: product.id, quantity, isGiftLine: isGiftLine ? 1 : 0, lineNo: index + 1,
+      documentUomCode: snapshot.conversion.uomCode,
+      documentQuantityNumerator: snapshot.doc.num, documentQuantityDenominator: snapshot.doc.den,
       conversionNumerator: snapshot.conversion.numerator, conversionDenominator: snapshot.conversion.denominator,
-      baseQuantityNumerator: snapshot.base.num, baseQuantityDenominator: snapshot.base.den };
+      baseQuantityNumerator: snapshot.base.num, baseQuantityDenominator: snapshot.base.den,
+      priceEntryId: item.priceEntryId || null, assertedUnitPriceCents,
+    };
+    if (isGiftLine && assertedUnitPriceCents !== null && assertedUnitPriceCents !== 0) {
+      throw new HttpError(400, `第 ${index + 1} 行赠品单价必须为 0`);
+    }
+    if (pricingMode !== 'PROCESSING') return line;
+    // The processing-fee purchase order keeps the negotiated commercial amount
+    // frozen by the outsourcing contract; it never reads the ordinary
+    // purchase price list (Active Design §26.36.3).
+    const unitPriceCents = assertedUnitPriceCents ?? 0;
+    return { ...line, unitPriceCents, amountCents: roundRational(BigInt(snapshot.doc.num) * BigInt(unitPriceCents), snapshot.doc.den) };
   });
   return {
     supplierId, remark: optionalText(body.remark, 500), items,
-    totalCents: items.reduce((sum, item) => sum + item.amountCents, 0),
+    totalCents: items.reduce((sum, item) => sum + (item.amountCents ?? 0), 0),
     orderDate, expectedDeliveryDate, paymentTerms, paymentTermsDays: termsDays, supplierContactName, supplierContactPhone, supplierAddress,
   };
-}
-
-function savePurchaseOrderItems(db, orderId, items) {
-  const statement = db.prepare(`INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,is_gift_line,
-    document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-  for (const item of items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo,
-    item.isGiftLine, item.documentUomCode, item.documentQuantityNumerator, item.documentQuantityDenominator, item.conversionNumerator, item.conversionDenominator,
-    item.baseQuantityNumerator, item.baseQuantityDenominator);
 }
 
 // ============ Inventory ============

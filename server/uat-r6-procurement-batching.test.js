@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { createDatabase } from './db.js';
+import { insertPurchasePrice } from './test-support/procurement-http-fixture.js';
 
 let server;
 let baseUrl;
@@ -74,6 +75,9 @@ before(async () => {
   ensureProduct('r6-pcb', 'RM-PCB-200', 'TC200控制主板', 12800);
   ensureProduct('r6-lcd', 'RM-LCD-240', '2.4寸LCD显示模组', 8600);
   ensureProduct('r6-sensor', 'RM-SENSOR-TH01', '数字温湿度传感器', 3500);
+  insertPurchasePrice(db, { supplierId: 'r6-supplier-a', productId: 'r6-pcb', unitPriceCents: 12800 });
+  insertPurchasePrice(db, { supplierId: 'r6-supplier-a', productId: 'r6-lcd', unitPriceCents: 8600 });
+  insertPurchasePrice(db, { supplierId: 'r6-supplier-b', productId: 'r6-sensor', unitPriceCents: 3500 });
   server = createServer(createApp(db, { distDir: resolve('dist') }));
   await new Promise((done) => server.listen(0, '127.0.0.1', done));
   baseUrl = `http://127.0.0.1:${server.address().port}`;

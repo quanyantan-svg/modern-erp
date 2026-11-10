@@ -1484,6 +1484,18 @@ function OrderDocumentDetail({
           </div>
         </BusinessContentSection>
 
+        {!isSales && <PurchaseExecutionSection id={id}/>}
+
+        {!isSales && (
+          <PurchaseChangeSection
+            id={id}
+            order={order}
+            user={user}
+            notify={notify}
+            onChanged={reload}
+          />
+        )}
+
         <BusinessAuditSection title="操作记录">
           <div className="order-audit-list">
             {(order.history || []).map((item, index) => (
@@ -2302,6 +2314,287 @@ function PurchaseOrderEditor({ order, onClose, onSaved, notify }) {
       <div className="order-total"><span>订单合计</span><strong>{money(totalCents)}</strong></div><FormActions onClose={onClose} saveText="保存草稿"/>
     </form>}
   </Modal>;
+}
+
+const PO_CHANGE_ACTION_LABEL = { ADD: '新增行', MODIFY: '修改行', CANCEL: '取消' };
+const PO_CHANGE_STATUS_LABEL = { DRAFT: '待审批', APPROVED: '已批准', APPLIED: '已应用', REJECTED: '已驳回', CANCELLED: '已取消' };
+
+function PurchaseExecutionSection({ id }) {
+  const [execution, setExecution] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    api(`/api/purchase-orders/${id}/execution`)
+      .then((result) => { if (active) { setExecution(result.execution); setError(''); } })
+      .catch((requestError) => { if (active) setError(requestError.message); });
+    return () => { active = false; };
+  }, [id]);
+
+  if (error) {
+    return <InlineAlert tone="danger" title="执行余量加载失败">{error}</InlineAlert>;
+  }
+  if (!execution) return null;
+
+  return (
+    <BusinessContentSection
+      title="执行余量"
+      description="采购供给、通知、收货、预留与订单变更共用同一余量口径"
+    >
+      <CompactRecordList className="order-line-records">
+        {(execution.items || []).map((line) => (
+          <CompactRecord
+            key={line.orderItemId}
+            title={`第 ${line.lineNo} 行 · ${line.productId}`}
+            subtitle={line.executionStatus}
+            metadata={[
+              { label: '订单数量', value: quantity(line.ordered) },
+              { label: '已通知', value: quantity(line.notified) },
+              { label: '已收货', value: quantity(line.received) },
+              { label: '已退货', value: quantity(line.returned) },
+            ]}
+            metrics={[
+              { label: '已预留', value: quantity(line.reserved) },
+              { label: '可执行余量', value: quantity(line.remaining) },
+            ]}
+          />
+        ))}
+      </CompactRecordList>
+      <div className="order-detail-total">
+        <span>可执行余量合计</span>
+        <strong>{quantity(execution.aggregate.remaining)}</strong>
+      </div>
+      {execution.businessType !== 'STANDARD_PURCHASE' && (
+        <InlineAlert tone="info" title="加工费采购订单">
+          加工费采购订单不形成普通采购供给，不进入 MRP、采购来源预留与工作台。
+        </InlineAlert>
+      )}
+    </BusinessContentSection>
+  );
+}
+
+function PurchaseChangeEditor({ order, products, value, notify, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    action: value.action,
+    scope: value.scope || 'LINE',
+    orderItemId: value.orderItemId || '',
+    productId: value.productId || '',
+    quantity: value.quantity ?? '',
+    documentUomCode: value.documentUomCode || '',
+    remark: '',
+  });
+
+  const target = (order.items || []).find((item) => item.id === form.orderItemId);
+
+  async function submit(event) {
+    event.preventDefault();
+    const payload = { };
+    if (form.action === 'ADD') {
+      payload.productId = form.productId;
+      payload.quantity = Number(form.quantity);
+      if (form.documentUomCode) payload.documentUomCode = form.documentUomCode;
+    } else if (form.action === 'MODIFY') {
+      payload.orderItemId = form.orderItemId;
+      payload.quantity = Number(form.quantity);
+      if (form.documentUomCode) payload.documentUomCode = form.documentUomCode;
+    } else {
+      payload.orderItemId = form.orderItemId || undefined;
+    }
+    try {
+      await api('/api/procurement/purchase-order-changes', {
+        method: 'POST',
+        body: { orderId: order.id, action: form.action, scope: form.scope, payload },
+      });
+      notify('采购订单变更申请已提交，等待审批');
+      onSaved();
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+  }
+
+  return (
+    <Modal title={`申请采购订单变更 · ${PO_CHANGE_ACTION_LABEL[form.action]}`} onClose={onClose}>
+      <form className="form-grid" onSubmit={submit}>
+        {form.action === 'ADD' && (
+          <>
+            <label>货品
+              <select required value={form.productId} onChange={(event) => setForm({ ...form, productId: event.target.value })}>
+                <option value="">请选择货品</option>
+                {products.map((item) => <option key={item.id} value={item.id}>{item.code} · {item.name}</option>)}
+              </select>
+            </label>
+            <label>数量
+              <input type="number" min="0.000001" step="any" required value={form.quantity}
+                onChange={(event) => setForm({ ...form, quantity: event.target.value })}/>
+            </label>
+            <label className="full">单据单位（留空使用货品默认单位）
+              <input value={form.documentUomCode} placeholder="例如 EA / BOX"
+                onChange={(event) => setForm({ ...form, documentUomCode: event.target.value })}/>
+            </label>
+          </>
+        )}
+        {form.action === 'MODIFY' && (
+          <>
+            <label className="full">目标行
+              <select required value={form.orderItemId} onChange={(event) => setForm({ ...form, orderItemId: event.target.value })}>
+                <option value="">请选择订单行</option>
+                {(order.items || []).map((item) => (
+                  <option key={item.id} value={item.id}>第 {item.lineNo} 行 · {item.productName}</option>
+                ))}
+              </select>
+            </label>
+            <label>新数量
+              <input type="number" min="0.000001" step="any" required value={form.quantity}
+                onChange={(event) => setForm({ ...form, quantity: event.target.value })}/>
+            </label>
+            <label>单据单位（留空沿用原行）
+              <input value={form.documentUomCode} placeholder={target?.documentUomCode || '例如 EA'}
+                onChange={(event) => setForm({ ...form, documentUomCode: event.target.value })}/>
+            </label>
+          </>
+        )}
+        {form.action === 'CANCEL' && (
+          <>
+            <label className="full">取消范围
+              <select value={form.scope} onChange={(event) => setForm({ ...form, scope: event.target.value })}>
+                <option value="LINE">行级取消</option>
+                <option value="HEADER">整单取消</option>
+              </select>
+            </label>
+            {form.scope === 'LINE' && (
+              <label className="full">目标行
+                <select required value={form.orderItemId} onChange={(event) => setForm({ ...form, orderItemId: event.target.value })}>
+                  <option value="">请选择订单行</option>
+                  {(order.items || []).map((item) => (
+                    <option key={item.id} value={item.id}>第 {item.lineNo} 行 · {item.productName}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </>
+        )}
+        <InlineAlert tone="info" title="金额由服务端决定">
+          变更应用时由服务端按订单业务日期重新读取有效价格、单位换算与折扣，客户端不提交金额。
+        </InlineAlert>
+        <FormActions onClose={onClose} saveText="提交申请"/>
+      </form>
+    </Modal>
+  );
+}
+
+function PurchaseChangeSection({ id, order, user, notify, onChanged }) {
+  const [changes, setChanges] = useState([]);
+  const [error, setError] = useState('');
+  const [editor, setEditor] = useState(null);
+  const [products, setProducts] = useState([]);
+  const [busyId, setBusyId] = useState('');
+
+  const canView = can(user, 'PO_CHANGE_VIEW') || can(user, 'PO_CHANGE_MANAGE');
+  const canManage = can(user, 'PO_CHANGE_MANAGE');
+  const canApprove = can(user, 'PURCHASE_ORDERS_APPROVE');
+
+  const load = () => api(`/api/purchase-orders/${id}/changes`)
+    .then((result) => { setChanges(result.changes || []); setError(''); })
+    .catch((requestError) => setError(requestError.message));
+
+  useEffect(() => {
+    if (!canView) return;
+    let active = true;
+    api(`/api/purchase-orders/${id}/changes`)
+      .then((result) => { if (active) setChanges(result.changes || []); })
+      .catch((requestError) => { if (active) setError(requestError.message); });
+    return () => { active = false; };
+  }, [id, canView]);
+
+  useEffect(() => {
+    if (!editor || products.length) return;
+    api('/api/products').then((result) => setProducts(result.products || [])).catch(() => setProducts([]));
+  }, [editor, products.length]);
+
+  async function run(change, action) {
+    setBusyId(change.id);
+    try {
+      await api(`/api/procurement/purchase-order-changes/${change.id}/${action}`, { method: 'POST' });
+      notify(action === 'approve' ? '采购订单变更已批准' : '采购订单变更已应用');
+      await load();
+      onChanged?.();
+    } catch (requestError) {
+      notify(requestError.message, 'error');
+    } finally {
+      setBusyId('');
+    }
+  }
+
+  if (!canView) return null;
+
+  return (
+    <BusinessContentSection
+      title="订单变更"
+      description="申请、审批与应用分离；应用时由服务端重算价格与金额"
+      action={canManage && order.status === 'APPROVED' ? (
+        <BusinessAction onClick={() => setEditor({ action: 'ADD' })}>申请变更</BusinessAction>
+      ) : null}
+    >
+      {error && <InlineAlert tone="danger" title="变更记录加载失败">{error}</InlineAlert>}
+      <CompactRecordList className="order-line-records">
+        {changes.map((change) => (
+          <CompactRecord
+            key={change.id}
+            title={`${PO_CHANGE_ACTION_LABEL[change.action] || change.action} · ${PO_CHANGE_STATUS_LABEL[change.status] || change.status}`}
+            subtitle={change.scope === 'HEADER' ? '整单范围' : '行级范围'}
+            status={<StatusChip status={change.status}>{PO_CHANGE_STATUS_LABEL[change.status] || change.status}</StatusChip>}
+            metadata={[
+              { label: '申请人', value: change.createdBy || '—' },
+              { label: '申请时间', value: dateTime(change.createdAt) },
+              { label: '订单版本', value: change.orderVersionBefore ?? '—' },
+            ]}
+            metrics={(change.items || []).map((item) => ({
+              label: `第 ${item.lineNo} 行`,
+              value: item.snapshotAfter?.execution
+                ? `余量 ${quantity(item.snapshotAfter.execution.aggregate?.remaining ?? 0)}`
+                : item.snapshotBefore
+                  ? `改前数量 ${quantity(item.snapshotBefore.quantity)}`
+                  : '新增行',
+            }))}
+            action={(change.status === 'DRAFT' && canApprove && change.createdBy !== user?.id) || (change.status === 'APPROVED' && canManage) ? (
+              <div className="order-change-actions">
+                {change.status === 'DRAFT' && canApprove && change.createdBy !== user?.id && (
+                  <BusinessAction disabled={busyId === change.id} onClick={() => run(change, 'approve')}>批准</BusinessAction>
+                )}
+                {change.status === 'APPROVED' && canManage && (
+                  <BusinessAction disabled={busyId === change.id} onClick={() => run(change, 'apply')}>应用</BusinessAction>
+                )}
+              </div>
+            ) : null}
+          >
+            {change.snapshotBefore && (
+              <dl className="order-summary-list">
+                <div className="order-summary-row">
+                  <dt>改前数量</dt>
+                  <dd>{quantity(change.snapshotBefore.quantity)}</dd>
+                </div>
+                <div className="order-summary-row">
+                  <dt>改前单价</dt>
+                  <dd>{money(change.snapshotBefore.unit_price_cents)}</dd>
+                </div>
+              </dl>
+            )}
+          </CompactRecord>
+        ))}
+      </CompactRecordList>
+      {!changes.length && <Empty title="暂无变更记录" text="订单变更需要申请、审批与应用三个独立步骤。"/>}
+      {editor && (
+        <PurchaseChangeEditor
+          order={order}
+          products={products}
+          value={editor}
+          notify={notify}
+          onClose={() => setEditor(null)}
+          onSaved={() => { setEditor(null); void load(); }}
+        />
+      )}
+    </BusinessContentSection>
+  );
 }
 
 function PurchaseOrderDetail({

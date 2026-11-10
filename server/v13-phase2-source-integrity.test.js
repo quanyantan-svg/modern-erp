@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { hashPassword } from './db.js';
 import { createTempDb } from './test-utils/temp-db.js';
+import { insertPurchasePrice } from './test-support/procurement-http-fixture.js';
 
 describe('V1.3 Phase 2 authoritative source integrity', () => {
   let temp; let db; let server; let baseUrl;
@@ -48,6 +49,7 @@ describe('V1.3 Phase 2 authoritative source integrity', () => {
       const hash = hashPassword(`${name}-phase2-1234`);
       db.prepare('INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at) VALUES(?,?,?,?,?,?,1,?)').run(`user-${name}`, name, name, hash.hash, hash.salt, role, now);
     }
+    insertPurchasePrice(db, { supplierId: 'sup', productId: 'p1', unitPriceCents: 20000 });
     server = createServer(createApp(db, { distDir: resolve('dist') }));
     await new Promise((done) => server.listen(0, '127.0.0.1', done)); baseUrl = `http://127.0.0.1:${server.address().port}`;
     for (const name of ['sales','reviewer','warehouse','admin']) {

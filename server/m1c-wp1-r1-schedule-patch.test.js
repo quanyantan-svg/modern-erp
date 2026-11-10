@@ -15,11 +15,14 @@
 
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { createProcurementFixture } from './test-support/procurement-http-fixture.js';
+import { createProcurementFixture, seedPurchasePrice } from './test-support/procurement-http-fixture.js';
 
 describe('M1C-WP1-R1 — delivery schedule ledger and purchase receipt draft PATCH consistency', () => {
   let fixture;
-  before(async () => { fixture = await createProcurementFixture('modern-erp-m1c-wp1-r1-'); });
+  before(async () => {
+    fixture = await createProcurementFixture('modern-erp-m1c-wp1-r1-');
+    await seedPurchasePrice(fixture, [{ supplierId: 'supplier-001', productId: 'product-001', unitPriceCents: 1000 }]);
+  });
   after(async () => { await fixture.close(); });
 
   function isoDate(offsetDays = 0) {

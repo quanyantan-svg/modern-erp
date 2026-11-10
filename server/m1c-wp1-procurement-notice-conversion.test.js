@@ -12,11 +12,14 @@
 
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { createApprovedProcessingPo, createProcurementFixture, seedApprovedOutsourceBom } from './test-support/procurement-http-fixture.js';
+import { createApprovedProcessingPo, createProcurementFixture, seedApprovedOutsourceBom, seedPurchasePrice } from './test-support/procurement-http-fixture.js';
 
 describe('M1C-WP-1 — receipt notice sources, business-type scoped capacity and notice conversion', () => {
   let fixture;
-  before(async () => { fixture = await createProcurementFixture('modern-erp-m1c-wp1-'); });
+  before(async () => {
+    fixture = await createProcurementFixture('modern-erp-m1c-wp1-');
+    await seedPurchasePrice(fixture, [{ supplierId: 'supplier-001', productId: 'product-001', unitPriceCents: 1000 }]);
+  });
   after(async () => { await fixture.close(); });
 
   function isoDate(offsetDays = 0) {
@@ -133,7 +136,8 @@ describe('M1C-WP-1 — receipt notice sources, business-type scoped capacity and
 
     test('A2 one notice may allocate several purchase order lines of several purchase orders', async () => {
       const first = await createApprovedOrder([{ productId: 'product-001', quantity: 10, unitPriceCents: 1000 }]);
-      const second = await createApprovedOrder([{ productId: 'product-001', quantity: 10, unitPriceCents: 1200 }]);
+      // 单价来自权威价格条目，两张采购订单使用同一有效价格。
+      const second = await createApprovedOrder([{ productId: 'product-001', quantity: 10, unitPriceCents: 1000 }]);
       await createSchedule(first.orderId, first.itemIds[0], 10);
       await createSchedule(second.orderId, second.itemIds[0], 10);
 
@@ -548,7 +552,8 @@ describe('M1C-WP-1 — receipt notice sources, business-type scoped capacity and
 
     test('C7 a multi purchase order notice converts into one receipt per purchase order with a per line trace', async () => {
       const first = await createApprovedOrder([{ productId: 'product-001', quantity: 10, unitPriceCents: 1000 }]);
-      const second = await createApprovedOrder([{ productId: 'product-001', quantity: 10, unitPriceCents: 1200 }]);
+      // 单价来自权威价格条目，两张采购订单使用同一有效价格。
+      const second = await createApprovedOrder([{ productId: 'product-001', quantity: 10, unitPriceCents: 1000 }]);
       await createSchedule(first.orderId, first.itemIds[0], 10);
       await createSchedule(second.orderId, second.itemIds[0], 10);
       const notice = await fixture.request('POST', '/api/receipt-notices', fixture.tokens.admin, {

@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { createProcurementFixture } from './test-support/procurement-http-fixture.js';
+import { createProcurementFixture, seedPurchasePrice } from './test-support/procurement-http-fixture.js';
 
 describe('Procurement Wave D receiving notice and return branch plan', () => {
   let fixture;
-  before(async () => { fixture = await createProcurementFixture('modern-erp-prc-waved-'); });
+  before(async () => {
+    fixture = await createProcurementFixture('modern-erp-prc-waved-');
+    await seedPurchasePrice(fixture, [{ supplierId: 'supplier-001', productId: 'product-001', unitPriceCents: 1000 }]);
+  });
   after(async () => fixture.close());
 
   function isoDate(offsetDays = 0) {

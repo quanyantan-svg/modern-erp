@@ -4,7 +4,7 @@ import { audit } from '../lib/audit.js';
 import {
   HttpError, allow, allowAny, assertAllowedFields, readJson, requiredText, send,
 } from '../lib/http.js';
-import { quantitySnapshot, rational } from './commercial-golive.js';
+import { quantitySnapshot, roundRational } from './commercial-golive.js';
 
 const VIEW_PERMISSIONS = ['PROCUREMENT_CONFIG_VIEW', 'PROCUREMENT_CONFIG_MANAGE'];
 const SOURCES = new Set(['PURCHASE', 'OUTSOURCE']);
@@ -183,29 +183,119 @@ export async function upsertDiscount(db, req, res, actor) {
   return send(res, 201, { id: discountId });
 }
 
-export function resolvePrice(db, supplierId, productId, sourceType, uomCode, businessDate, quantityNumerator, quantityDenominator = 1) {
-  const date = businessDate || new Date().toISOString().slice(0, 10);
-  const priceRow = db.prepare(`SELECT * FROM purchase_price_list_entries WHERE supplier_id=? AND product_id=? AND source_type=? AND pricing_uom_code=? AND status='ACTIVE' AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?) ORDER BY version DESC LIMIT 1`).get(supplierId, productId, normalizeSourceType(sourceType), uomCode, date, date);
-  if (!priceRow) throw new HttpError(409, '未找到有效价格条目');
-  const snapshot = quantitySnapshot(db, productId, { uomCode, quantityNumerator, quantityDenominator }, date);
+function safeRational(num, den, label) {
+  let numerator = BigInt(num); let denominator = BigInt(den);
+  if (denominator <= 0n) throw new HttpError(409, `${label}分母必须大于 0`);
+  const gcd = (left, right) => { let a = left < 0n ? -left : left; let b = right; while (b) [a, b] = [b, a % b]; return a || 1n; };
+  const factor = gcd(numerator, denominator); numerator /= factor; denominator /= factor;
+  const n = Number(numerator); const d = Number(denominator);
+  if (!Number.isSafeInteger(n) || !Number.isSafeInteger(d)) throw new HttpError(409, `${label}超出安全整数范围`);
+  return { num: n, den: d };
+}
+
+export function resolvePurchaseLinePricing(db, input) {
+  const supplierId = requiredText(input.supplierId, '供应商', 100);
+  const productId = requiredText(input.productId, '产品', 100);
+  const sourceType = normalizeSourceType(input.sourceType);
+  const product = db.prepare('SELECT id,base_uom_code FROM products WHERE id=?').get(productId);
+  if (!product) throw new HttpError(409, '产品不存在', { code: 'PURCHASE_PRODUCT_INVALID' });
+  // A missing document unit falls back to the product's base unit; the
+  // conversion snapshot below is what proves the ratio is real.
+  const documentUomCode = input.documentUomCode
+    ? String(input.documentUomCode).trim()
+    : (product.base_uom_code || null);
+  const date = input.businessDate || new Date().toISOString().slice(0, 10);
+  const giftLine = Boolean(input.giftLine);
+  const rows = input.explicitPriceEntryId
+    ? db.prepare(`SELECT * FROM purchase_price_list_entries WHERE id=? AND supplier_id=? AND product_id=? AND source_type=? AND status='ACTIVE'
+        AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)`).all(input.explicitPriceEntryId, supplierId, productId, sourceType, date, date)
+    : db.prepare(`SELECT * FROM purchase_price_list_entries WHERE supplier_id=? AND product_id=? AND source_type=? AND status='ACTIVE'
+        AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?) ORDER BY version DESC, id`).all(supplierId, productId, sourceType, date, date);
+  if (!rows.length) {
+    // A gift line is a legitimate zero-price commercial line: it never needs a
+    // price entry. Every ordinary line must resolve an effective price.
+    if (!giftLine) throw new HttpError(409, '未找到有效价格条目', { code: 'PURCHASE_PRICE_NOT_CONFIGURED' });
+    const giftDocument = quantitySnapshot(db, productId, {
+      uomCode: documentUomCode,
+      quantityNumerator: input.documentQuantity?.num ?? input.quantityNumerator,
+      quantityDenominator: input.documentQuantity?.den ?? input.quantityDenominator ?? 1,
+    }, date);
+    return {
+      contractVersion: 'PURCHASE_PRICE_V1', supplierId, productId, sourceType,
+      businessDate: date, documentUomCode, pricingUomCode: null,
+      priceEntryId: null, priceVersion: null, unitPriceCents: 0,
+      documentQuantity: giftDocument.doc, baseQuantity: giftDocument.base, pricingQuantity: null,
+      conversion: giftDocument.conversion, netCents: 0, discountCents: 0, grossCents: 0,
+      appliedDiscount: null, giftLine: true, roundingContract: 'HALF_UP_CENT_V1',
+    };
+  }
+  const latestVersion = Number(rows[0].version);
+  const latest = rows.filter((row) => Number(row.version) === latestVersion);
+  if (latest.length !== 1) {
+    const units = [...new Set(latest.map((row) => row.pricing_uom_code))].join(' / ');
+    throw new HttpError(409, `存在多个同版本有效采购价格（计价单位 ${units}），无法确定唯一计价单位`, { code: 'PURCHASE_PRICE_AMBIGUOUS' });
+  }
+  const priceRow = latest[0];
+  const document = quantitySnapshot(db, productId, {
+    uomCode: documentUomCode,
+    quantityNumerator: input.documentQuantity?.num ?? input.quantityNumerator,
+    quantityDenominator: input.documentQuantity?.den ?? input.quantityDenominator ?? 1,
+  }, date);
+  const pricingUnit = quantitySnapshot(db, productId, {
+    uomCode: priceRow.pricing_uom_code, quantityNumerator: 1, quantityDenominator: 1,
+  }, date);
+  const pricingQuantity = safeRational(
+    BigInt(document.base.num) * BigInt(pricingUnit.base.den),
+    BigInt(document.base.den) * BigInt(pricingUnit.base.num),
+    '计价数量',
+  );
   const discount = db.prepare(`SELECT * FROM pricing_discount_schemes WHERE supplier_id=? AND product_id=? AND source_type=? AND status='ACTIVE' AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?) ORDER BY version DESC LIMIT 1`).get(supplierId, productId, priceRow.source_type, date, date);
-  let netCents = Number(BigInt(priceRow.unit_price_cents) * BigInt(snapshot.base.num) / BigInt(snapshot.base.den));
+  const netCents = giftLine ? 0 : roundRational(BigInt(priceRow.unit_price_cents) * BigInt(pricingQuantity.num), BigInt(pricingQuantity.den));
   let discountCents = 0;
   let appliedDiscount = null;
-  if (discount) {
+  if (discount && !giftLine) {
     if (discount.basis === 'PERCENT') {
-      discountCents = Math.floor(netCents * Number(discount.value_numerator) / Number(discount.denominator));
+      discountCents = roundRational(BigInt(netCents) * BigInt(discount.value_numerator), BigInt(discount.denominator));
     } else if (discount.basis === 'FLAT') {
-      const perUnit = Math.floor(Number(discount.value_numerator) / Number(discount.denominator));
-      discountCents = perUnit * Number(snapshot.base.num) / Number(snapshot.base.den);
+      discountCents = roundRational(
+        BigInt(discount.value_numerator) * BigInt(pricingQuantity.num),
+        BigInt(discount.denominator) * BigInt(pricingQuantity.den),
+      );
     }
+    discountCents = Math.min(netCents, discountCents);
     appliedDiscount = { id: discount.id, basis: discount.basis, version: discount.version };
   }
   return {
-    supplierId, productId, sourceType: priceRow.source_type, uomCode, priceEntryId: priceRow.id, priceVersion: priceRow.version,
+    contractVersion: 'PURCHASE_PRICE_V1', supplierId, productId, sourceType: priceRow.source_type,
+    businessDate: date, documentUomCode, pricingUomCode: priceRow.pricing_uom_code,
+    priceEntryId: priceRow.id, priceVersion: priceRow.version,
     unitPriceCents: priceRow.unit_price_cents,
-    baseQuantity: { num: snapshot.base.num, den: snapshot.base.den },
-    netCents, discountCents, grossCents: netCents - discountCents,
-    appliedDiscount,
+    documentQuantity: document.doc, baseQuantity: document.base, pricingQuantity,
+    conversion: document.conversion, netCents, discountCents, grossCents: netCents - discountCents,
+    appliedDiscount, giftLine, roundingContract: 'HALF_UP_CENT_V1',
   };
+}
+
+/**
+ * Read-only pricing preview. It resolves the same evidence the purchase order
+ * writer freezes, so the UI never recomputes an authoritative amount.
+ */
+export async function previewPurchaseLinePricing(db, req, res, actor) {
+  assertViewPermission(actor);
+  const body = await readJson(req);
+  assertAllowedFields(body, ['supplierId', 'productId', 'sourceType', 'documentUomCode', 'documentQuantity', 'businessDate', 'priceEntryId', 'giftLine']);
+  const pricing = resolvePurchaseLinePricing(db, {
+    supplierId: body.supplierId,
+    productId: body.productId,
+    sourceType: body.sourceType || 'PURCHASE',
+    documentUomCode: body.documentUomCode,
+    documentQuantity: {
+      num: body.documentQuantity?.num ?? body.documentQuantity ?? 1,
+      den: body.documentQuantity?.den ?? 1,
+    },
+    businessDate: body.businessDate,
+    explicitPriceEntryId: body.priceEntryId || undefined,
+    giftLine: Boolean(body.giftLine),
+  });
+  return send(res, 200, { pricing });
 }

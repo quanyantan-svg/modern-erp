@@ -27,6 +27,7 @@ import { audit } from '../lib/audit.js';
 import { allow, allowAny, HttpError, readJson, requiredText, send } from '../lib/http.js';
 import { lifecycleArchiveFilter } from './lifecycle-engine.js';
 import { resolveEffectiveBomForCaller } from './engineering-bom.js';
+import { listStandardPurchaseSupplyByProduct } from './procurement-orders.js';
 import {
   allocateForecastConsumption, loadSchemeSnapshot, materializePlannedOrders,
   releaseWeakReservationsForScheme,
@@ -270,27 +271,8 @@ function productOnHand(db, productId) {
 }
 
 function openPurchaseSupply(db, productId) {
-  // APPROVED purchase orders - CONFIRMED purchase receipts linked to
-  // those orders (product-level aggregation). Receipts without a
-  // purchase_order_id do not contribute to "open" supply because the
-  // inventory is already on hand.
-  const ordered = db.prepare(`
-    SELECT COALESCE(SUM(poi.quantity), 0) total
-      FROM purchase_order_items poi
-      JOIN purchase_orders po ON po.id = poi.order_id
-     WHERE poi.product_id = ? AND po.status = 'APPROVED'
-  `).get(productId);
-  const received = db.prepare(`
-    SELECT COALESCE(SUM(pri.quantity), 0) total
-      FROM purchase_receipt_items pri
-      JOIN purchase_receipts pr ON pr.id = pri.receipt_id
-      JOIN purchase_orders po ON po.id = pr.purchase_order_id
-     WHERE pri.product_id = ?
-       AND pr.status = 'CONFIRMED'
-       AND po.status = 'APPROVED'
-       AND pr.purchase_order_id IS NOT NULL
-  `).get(productId);
-  return Math.max(0, Number(ordered?.total || 0) - Number(received?.total || 0));
+  return listStandardPurchaseSupplyByProduct(db, productId)
+    .reduce((total, item) => total + Number(item.remaining || 0), 0);
 }
 
 function openProductionSupply(db, productId) {

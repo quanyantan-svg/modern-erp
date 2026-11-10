@@ -22,6 +22,7 @@ import { join, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { createDatabase, id } from './db.js';
+import { insertPurchasePrice } from './test-support/procurement-http-fixture.js';
 
 let baseUrl;
 let database;
@@ -413,6 +414,7 @@ describe('D. Purchase Requisition', () => {
     const warehouseId = 'wh-' + id().slice(0, 8);
     database.prepare("INSERT INTO warehouses(id,code,name,active,created_at,updated_at) VALUES(?,?,?,1,datetime('now'),datetime('now'))")
       .run(warehouseId, 'WH-M12-' + warehouseId.slice(3, 7), 'M12 请购仓');
+    insertPurchasePrice(database, { supplierId: 'supplier-001', productId: reqProdId, unitPriceCents: 1000 });
     seedInventory(warehouseId, reqProdId, 0);
     database.prepare(`
       INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,remark,creator_id,submitted_at,reviewed_at,created_at,updated_at)

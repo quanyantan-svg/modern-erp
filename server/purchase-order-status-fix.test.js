@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { after, before, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { createDatabase, hashPassword } from './db.js';
+import { insertPurchasePrice } from './test-support/procurement-http-fixture.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
@@ -75,6 +76,7 @@ describe('Purchase order status serialization fix', () => {
   before(async () => {
     tmp = mkdtempSync(join(tmpdir(), 'modern-erp-po-status-'));
     db = createDatabase(join(tmp, 'erp.db'));
+    insertPurchasePrice(db, { supplierId: 'supplier-001', productId: 'product-001', unitPriceCents: 100000 });
     ({ server, baseUrl } = await startApi(db));
     salesToken = await login(baseUrl, 'sales', 'sales123');
     reviewerToken = await login(baseUrl, 'reviewer', 'review123');

@@ -118,6 +118,52 @@ async function createMySqlProcurementFixture(prefix) {
   return { db, baseUrl, request, tokens, close };
 }
 
+/**
+ * Give a supplier/product pair an effective purchase price.
+ *
+ * An ordinary purchase order fails closed without an effective supplier price
+ * (Active Design §26.36.3 / §31.16 PRC-DLV-02): the purchase price list IS
+ * the commercial estimate source, so a test that creates a standard purchase
+ * order must first express that business fact.
+ */
+export async function seedPurchasePrice(fixture, entries, token = fixture.tokens.admin) {
+  for (const entry of entries) {
+    const result = await fixture.request('POST', '/api/procurement/price-list', token, {
+      supplierId: entry.supplierId,
+      productId: entry.productId,
+      sourceType: entry.sourceType || 'PURCHASE',
+      pricingUomCode: entry.pricingUomCode || 'EA',
+      unitPriceCents: entry.unitPriceCents,
+      effectiveFrom: entry.effectiveFrom || '2020-01-01',
+    });
+    assert.equal(result.status, 201, result.data.error);
+  }
+}
+
+/**
+ * Insert one effective purchase price directly, for suites that own their own
+ * HTTP server instead of the shared procurement fixture.
+ *
+ * The version and effective-window behaviour mirrors the production price
+ * list writer: a new entry closes the previous open entry of the same
+ * supplier / product / source / pricing unit and takes the next version, so
+ * calling this twice behaves like a price adjustment.
+ */
+export function insertPurchasePrice(db, {
+  id = `price-${Math.random().toString(36).slice(2)}`, supplierId, productId,
+  pricingUomCode = 'EA', unitPriceCents, effectiveFrom = '2020-01-01',
+}) {
+  const version = Number(db.prepare(`SELECT COALESCE(MAX(version),0)+1 n FROM purchase_price_list_entries
+    WHERE supplier_id=? AND product_id=? AND source_type='PURCHASE' AND pricing_uom_code=?`)
+    .get(supplierId, productId, pricingUomCode).n);
+  db.prepare(`UPDATE purchase_price_list_entries SET effective_to=? WHERE supplier_id=? AND product_id=?
+      AND source_type='PURCHASE' AND pricing_uom_code=? AND effective_to IS NULL`)
+    .run(effectiveFrom, supplierId, productId, pricingUomCode);
+  db.prepare(`INSERT INTO purchase_price_list_entries(id,supplier_id,product_id,source_type,pricing_uom_code,unit_price_cents,status,effective_from,effective_to,version,created_by,created_at)
+    VALUES(?,?,?,'PURCHASE',?,?,'ACTIVE',?,NULL,?,'user-admin',?)`)
+    .run(id, supplierId, productId, pricingUomCode, unitPriceCents, effectiveFrom, version, new Date().toISOString());
+}
+
 // M1C-PO-P02：同一委外订单终身最多一张加工费 PO，因此测试夹具按订单缓存
 // 已创建的加工费 PO，重复调用返回同一张，而不是重新创建。
 const processingPoCache = new WeakMap();

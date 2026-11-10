@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource, seedApprovedOutsourceBom } from './test-support/procurement-http-fixture.js';
+import { createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource, seedApprovedOutsourceBom, seedPurchasePrice } from './test-support/procurement-http-fixture.js';
 
 describe('Procurement Wave H/I closure: outsourcing receipt, processing fee bill, finished return, difference, WIP transfer, scan', () => {
   let fixture;
   const receiptSources = new Map();
-  before(async () => { fixture = await createProcurementFixture('modern-erp-prc-waveh-'); });
+  before(async () => {
+    fixture = await createProcurementFixture('modern-erp-prc-waveh-');
+    await seedPurchasePrice(fixture, [{ supplierId: 'supplier-001', productId: 'product-001', unitPriceCents: 1000 }]);
+  });
   after(async () => fixture.close());
 
   function isoDate(offsetDays = 0) {

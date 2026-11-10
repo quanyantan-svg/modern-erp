@@ -870,6 +870,17 @@ export async function cancelPurchaseRequisition(db, res, actor, id) {
   return send(res, 200, { ok: true, status: 'CANCELLED' });
 }
 
+function toExactRational(value, label) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) throw new HttpError(400, `${label}必须大于 0`);
+  if (Number.isSafeInteger(number)) return { num: number, den: 1 };
+  for (let den = 2; den <= 1000000; den += 1) {
+    const num = Math.round(number * den);
+    if (Math.abs(number - num / den) < 1e-9) return { num, den };
+  }
+  throw new HttpError(400, `${label}无法精确表示`);
+}
+
 function validateBatchAssignment(db, entry, index) {
   const requisitionItemId = requiredText(
     entry.purchaseRequisitionItemId ?? entry.purchase_requisition_item_id,
@@ -880,7 +891,7 @@ function validateBatchAssignment(db, entry, index) {
   const quantity = readPositiveQuantity(entry.quantity, `第${index + 1}行转换数量`);
   const source = db.prepare(`
     SELECT i.*, r.id requisitionId, r.requisition_no requisitionNo, r.status requisitionStatus,
-           r.required_date requiredDate, p.code productCode, p.name productName
+           r.required_date requiredDate, p.code productCode, p.name productName, p.base_uom_code baseUomCode
       FROM purchase_requisition_items i
       JOIN purchase_requisitions r ON r.id=i.requisition_id
       JOIN products p ON p.id=i.product_id
@@ -899,13 +910,15 @@ function validateBatchAssignment(db, entry, index) {
   if (quantity > remainingQuantity + 1e-9) {
     throw new HttpError(409, `${source.productCode} 剩余可转换 ${remainingQuantity}，本次 ${quantity} 超出`);
   }
-  const unitPriceCents = entry.unitPriceCents === undefined && entry.unit_price_cents === undefined
-    ? Number(source.unit_price_cents || 0)
-    : Number(entry.unitPriceCents ?? entry.unit_price_cents);
-  if (!Number.isSafeInteger(unitPriceCents) || unitPriceCents < 0) throw new HttpError(400, `${source.productCode} 单价必须为非负整数分`);
-  const amountCents = quantity * unitPriceCents;
-  if (!Number.isSafeInteger(amountCents)) throw new HttpError(400, `${source.productCode} 金额无法精确到分`);
-  return { requisitionItemId, supplierId, supplier, source, quantity, unitPriceCents, amountCents };
+  // The requisition carries no unit of its own, so its quantity is expressed
+  // in the product's base unit. The purchase order line therefore keeps the
+  // same quantity, and the purchase price is resolved from the effective
+  // supplier price — the requisition estimate is not a commercial price.
+  return {
+    requisitionItemId, supplierId, supplier, source, quantity,
+    quantityRational: toExactRational(quantity, `第${index + 1}行转换数量`),
+    documentUomCode: source.baseUomCode || null,
+  };
 }
 
 function createPurchaseOrderGroups(db, actor, rawItems, defaults = {}) {
@@ -941,12 +954,11 @@ function createPurchaseOrderGroups(db, actor, rawItems, defaults = {}) {
     const supplier = group[0].supplier;
     const poId = genId();
     const orderNo = makeCode(db, 'purchase_orders', 'PO');
-    const totalCents = group.reduce((sum, entry) => sum + entry.amountCents, 0);
     const requisitionNos = [...new Set(group.map((entry) => entry.source.requisitionNo))];
     const requisitionIds = [...new Set(group.map((entry) => entry.source.requisitionId))];
     const headerRequisitionId = requisitionIds.length === 1 ? requisitionIds[0] : null;
-    createPurchaseOrderDraftCanonical(db, actor, {
-      id: poId, orderNo, now, supplierId, totalCents, businessType: 'STANDARD_PURCHASE',
+    const written = createPurchaseOrderDraftCanonical(db, actor, {
+      id: poId, orderNo, now, supplierId, businessType: 'STANDARD_PURCHASE',
       remark: `批量转换请购单 ${requisitionNos.join('、')}`,
       orderDate, expectedDeliveryDate, paymentTerms,
       supplierContactName: supplier.contact || '', supplierContactPhone: supplier.phone || '', supplierAddress: supplier.address || '',
@@ -954,11 +966,17 @@ function createPurchaseOrderGroups(db, actor, rawItems, defaults = {}) {
       auditDetail: `按供应商批量生成 ${orderNo}; 来源 ${requisitionNos.join(',')}`,
       items: group.map((entry, lineIndex) => ({
         id: genId(), productId: entry.source.product_id, quantity: entry.quantity,
-        unitPriceCents: entry.unitPriceCents, amountCents: entry.amountCents, lineNo: lineIndex + 1,
+        documentUomCode: entry.documentUomCode,
+        documentQuantityNumerator: entry.quantityRational.num,
+        documentQuantityDenominator: entry.quantityRational.den,
+        conversionNumerator: 1, conversionDenominator: 1,
+        baseQuantityNumerator: entry.quantityRational.num,
+        baseQuantityDenominator: entry.quantityRational.den,
+        isGiftLine: 0, lineNo: lineIndex + 1,
         purchaseRequisitionItemId: entry.requisitionItemId,
       })),
     });
-    created.push({ id: poId, orderNo, supplierId, itemCount: group.length, totalCents });
+    created.push({ id: poId, orderNo, supplierId, itemCount: group.length, totalCents: written.totalCents });
   }
   const affectedRequisitions = [...new Set(assignments.map((entry) => entry.source.requisitionId))];
   for (const requisitionId of affectedRequisitions) {

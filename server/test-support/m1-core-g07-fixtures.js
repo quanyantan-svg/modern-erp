@@ -107,6 +107,12 @@ function fixedScenario(id, { subjects, sharedResource, setup, raceRequests, tech
 
 // Shared step fragments so each chain is one contiguous, reviewable DAG.
 const NEW_STANDARD_PO = (productRef, supplierRef, itemQty) => [
+  step('price', 'admin', 'POST', '/api/procurement/price-list', {
+    body: {
+      supplierId: { $ref: supplierRef }, productId: { $ref: productRef }, sourceType: 'PURCHASE',
+      pricingUomCode: 'EA', unitPriceCents: 100, effectiveFrom: { $businessDate: 0 },
+    },
+  }),
   step('po', 'creator', 'POST', '/api/purchase-orders', {
     body: {
       supplierId: { $ref: supplierRef },
@@ -414,7 +420,14 @@ export function computeM1CoreG07FixtureDigest(scenarios = M1_CORE_G07_FIXED_SCEN
 // 链，否则门禁不再检验真实 API。固定场景因此变更，冻结摘要随之重新计算。
 // **该重新冻结待业务所有者显式确认**：在此之前，真实 MySQL Gate 的既有
 // 验收结论不因本次变更自动延续。
-export const M1_CORE_G07_FIXED_FIXTURE_DIGEST = '60f7888f1d52f6858d8eaca458ede077ab454445c51743b7004bd864767ac2fb';
+//
+// 变更记录（2026-11-10，Requirement §31.16 完整 Active Contract 域级交付整改）：
+// 普通采购订单的创建路径现在必须在写单据事务内解析有效供应商价格并冻结价格
+// 证据（Active Design §26.36.3），因此固定场景必须先沿生产 HTTP 链建立一条
+// 有效的采购价格条目，再创建采购订单。固定场景因此变更，冻结摘要随之重新
+// 计算。**该重新冻结同样待业务所有者显式确认**：在此之前，真实 MySQL Gate
+// 的既有验收结论不因本次变更自动延续。
+export const M1_CORE_G07_FIXED_FIXTURE_DIGEST = 'f552553813dc3abaaa52252221294aefda9a611247e41233ab8da9e62f20c2f3';
 
 function lookup(context, reference) {
   const parts = String(reference).split('.');

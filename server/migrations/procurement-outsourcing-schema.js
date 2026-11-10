@@ -280,7 +280,16 @@ export function migrateProcurementOutsourcingSchema(db) {
   safeAddColumn(db, 'purchase_orders', 'supplier_address_snapshot', 'supplier_address_snapshot TEXT');
   safeAddColumn(db, 'purchase_orders', 'payment_terms_snapshot', 'payment_terms_snapshot TEXT');
   safeAddColumn(db, 'purchase_orders', 'prepayment_required', 'prepayment_required INTEGER NOT NULL DEFAULT 0');
+  safeAddColumn(db, 'purchase_orders', 'version', 'version INTEGER NOT NULL DEFAULT 1');
   safeAddColumn(db, 'purchase_order_items', 'is_gift_line', 'is_gift_line INTEGER NOT NULL DEFAULT 0');
+  safeAddColumn(db, 'purchase_order_items', 'version', 'version INTEGER NOT NULL DEFAULT 1');
+  safeAddColumn(db, 'purchase_order_items', 'execution_status', "execution_status TEXT NOT NULL DEFAULT 'OPEN'");
+  safeAddColumn(db, 'purchase_order_items', 'pricing_uom_code', 'pricing_uom_code TEXT');
+  safeAddColumn(db, 'purchase_order_items', 'pricing_quantity_num', 'pricing_quantity_num INTEGER');
+  safeAddColumn(db, 'purchase_order_items', 'pricing_quantity_den', 'pricing_quantity_den INTEGER');
+  safeAddColumn(db, 'purchase_order_items', 'price_entry_id', 'price_entry_id TEXT');
+  safeAddColumn(db, 'purchase_order_items', 'price_version', 'price_version INTEGER');
+  safeAddColumn(db, 'purchase_order_items', 'pricing_evidence_json', 'pricing_evidence_json TEXT');
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS receipt_notices (
@@ -358,6 +367,39 @@ export function migrateProcurementOutsourcingSchema(db) {
       CHECK(status IN ('DRAFT','APPROVED','APPLIED','REJECTED'))
     );
     CREATE INDEX IF NOT EXISTS idx_po_changes_order ON purchase_order_changes(order_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS po_change_items (
+      id TEXT PRIMARY KEY,
+      change_id TEXT NOT NULL,
+      order_item_id TEXT,
+      line_no INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      requested_json TEXT NOT NULL,
+      snapshot_before_json TEXT,
+      snapshot_after_json TEXT,
+      FOREIGN KEY (change_id) REFERENCES purchase_order_changes(id),
+      FOREIGN KEY (order_item_id) REFERENCES purchase_order_items(id),
+      CHECK(action IN ('ADD','MODIFY','CANCEL')),
+      UNIQUE(change_id, line_no)
+    );
+    CREATE INDEX IF NOT EXISTS idx_po_change_items_change ON po_change_items(change_id, line_no);
+
+    CREATE TABLE IF NOT EXISTS purchase_order_item_versions (
+      id TEXT PRIMARY KEY,
+      order_item_id TEXT NOT NULL,
+      order_id TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      snapshot_json TEXT NOT NULL,
+      source_change_id TEXT,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (order_item_id) REFERENCES purchase_order_items(id),
+      FOREIGN KEY (order_id) REFERENCES purchase_orders(id),
+      FOREIGN KEY (source_change_id) REFERENCES purchase_order_changes(id),
+      FOREIGN KEY (created_by) REFERENCES users(id),
+      UNIQUE(order_item_id, version)
+    );
+    CREATE INDEX IF NOT EXISTS idx_purchase_order_item_versions_order ON purchase_order_item_versions(order_id, order_item_id, version);
 
     CREATE TABLE IF NOT EXISTS purchase_return_requests (
       id TEXT PRIMARY KEY,
@@ -796,6 +838,16 @@ export function migrateProcurementOutsourcingSchema(db) {
       CHECK(available_quantity = supplied_quantity - consumed_quantity)
     );
   `);
+
+  safeAddColumn(db, 'purchase_order_changes', 'scope', "scope TEXT NOT NULL DEFAULT 'LINE'");
+  safeAddColumn(db, 'purchase_order_changes', 'order_version_before', 'order_version_before INTEGER');
+  safeAddColumn(db, 'purchase_order_changes', 'idempotency_key', 'idempotency_key TEXT');
+  safeAddColumn(db, 'purchase_order_changes', 'request_fingerprint', 'request_fingerprint TEXT');
+  safeAddColumn(db, 'purchase_order_changes', 'snapshot_before_json', 'snapshot_before_json TEXT');
+  safeAddColumn(db, 'purchase_order_changes', 'snapshot_after_json', 'snapshot_after_json TEXT');
+  safeAddColumn(db, 'purchase_order_changes', 'applied_by', 'applied_by TEXT');
+  safeAddColumn(db, 'purchase_order_changes', 'updated_at', 'updated_at TEXT');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_po_change_idempotency ON purchase_order_changes(created_by, idempotency_key)');
 
   // M1C-WP-0 is schema-only: these additive columns never infer or backfill
   // historical business facts. NULL remains the fail-closed legacy state.

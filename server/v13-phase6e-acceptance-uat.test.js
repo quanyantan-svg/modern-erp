@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { hashPassword } from './db.js';
 import { createTempDb } from './test-utils/temp-db.js';
+import { insertPurchasePrice } from './test-support/procurement-http-fixture.js';
 
 // Phase 6E Acceptance UAT — Real disposable-DB end-to-end integration.
 //
@@ -64,6 +65,7 @@ describe('V1.3 Phase 6E commercial go-live end-to-end UAT', () => {
       const hash = hashPassword(`${name}-uat-1234`);
       db.prepare('INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at) VALUES(?,?,?,?,?,?,1,?)').run(`user-${name}`, name, name, hash.hash, hash.salt, role, now);
     }
+    insertPurchasePrice(db, { supplierId: 'uat-s', productId: 'uat-p', unitPriceCents: 500 });
     // The canonical Sales writer resolves commercial facts server-side. This
     // legacy cross-domain UAT therefore carries real Wave 1/2 authorities.
     db.prepare("INSERT OR IGNORE INTO uoms(code,name,active,created_at,updated_at) VALUES('EA','EA',1,?,?)").run(now, now);

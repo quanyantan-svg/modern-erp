@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { hashPassword } from './db.js';
 import { createTempDb } from './test-utils/temp-db.js';
+import { insertPurchasePrice } from './test-support/procurement-http-fixture.js';
 import { centsToYuanInput, yuanToCents } from '../src/lib/money.js';
 
 describe('V1.3 Phase 1 process-integrity contract', () => {
@@ -140,6 +141,8 @@ describe('V1.3 Phase 1 process-integrity contract', () => {
   });
 
   test('PO rejects zero price and preserves supplier commercial snapshot', async () => {
+    // 权威价格来自价格条目：先用 0 分价格条目表达“零价草稿”，再把权威价格调整为有效值。
+    insertPurchasePrice(db, { supplierId: 'sup', productId: 'p1', unitPriceCents: 0 });
     const body = {
       supplierId: 'sup', orderDate: '2026-09-22', expectedDeliveryDate: '2026-10-12', paymentTerms: '货到 30 天',
       items: [{ productId: 'p1', quantity: 1, unitPriceCents: 0 }],
@@ -147,6 +150,7 @@ describe('V1.3 Phase 1 process-integrity contract', () => {
     const create = await request('/api/purchase-orders', 'sales', 'POST', body);
     assert.equal(create.status, 201, create.data.error);
     assert.equal((await request(`/api/purchase-orders/${create.data.id}/submit`, 'sales', 'POST', {})).status, 400);
+    insertPurchasePrice(db, { supplierId: 'sup', productId: 'p1', unitPriceCents: 200000 });
     body.items[0].unitPriceCents = 200000;
     assert.equal((await request(`/api/purchase-orders/${create.data.id}`, 'sales', 'PUT', body)).status, 200);
     assert.equal((await request(`/api/purchase-orders/${create.data.id}/submit`, 'sales', 'POST', {})).status, 200);
@@ -158,8 +162,9 @@ describe('V1.3 Phase 1 process-integrity contract', () => {
     assert.equal(detail.data.order.totalCents, 200000);
   });
 
-  test('PR estimate propagates to PO; absent estimate leaves a blocked zero-price draft', async () => {
-    const make = async (unitPriceCents, editedUnitPriceCents = null) => {
+  test('PO price comes from the authoritative price list; a zero-price draft stays blocked at submit', async () => {
+    // 采购订单单价现在来自权威价格条目：请购单估价不再传播到采购订单。
+    const make = async (unitPriceCents, editedUnitPriceCents = null, priceCents = unitPriceCents) => {
       const pr = await request('/api/purchase-requisitions', 'sales', 'POST', {
         requestDate: '2026-09-22', requiredDate: '2026-10-15',
         items: [{ productId: 'p1', quantity: 1, preferredSupplierId: 'sup', unitPriceCents }],
@@ -178,13 +183,14 @@ describe('V1.3 Phase 1 process-integrity contract', () => {
         assert.equal((await request(`/api/purchase-requisitions/${pr.data.id}`, 'sales', 'PATCH', { items: [] })).status, 409);
       }
       assert.equal((await request(`/api/purchase-requisitions/${pr.data.id}/approve`, 'reviewer', 'POST', {})).status, 200);
+      insertPurchasePrice(db, { supplierId: 'sup', productId: 'p1', unitPriceCents: priceCents });
       const po = await request(`/api/purchase-requisitions/${pr.data.id}/generate-purchase-order`, 'sales', 'POST', { supplierId: 'sup', paymentTerms: '月结' });
       assert.equal(po.status, 201, po.data.error);
       return po.data.id;
     };
-    const priced = await make(200000, 123456);
+    const priced = await make(200000, 123456, 123456);
     assert.equal(db.prepare('SELECT unit_price_cents FROM purchase_order_items WHERE order_id=?').get(priced).unit_price_cents, 123456);
-    const unpriced = await make(0);
+    const unpriced = await make(0, null, 0);
     assert.equal(db.prepare('SELECT unit_price_cents FROM purchase_order_items WHERE order_id=?').get(unpriced).unit_price_cents, 0);
     assert.equal((await request(`/api/purchase-orders/${unpriced}/submit`, 'sales', 'POST', {})).status, 400);
   });

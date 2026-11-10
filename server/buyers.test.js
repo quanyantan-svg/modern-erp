@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { createProcurementFixture } from './test-support/procurement-http-fixture.js';
+import { createProcurementFixture, seedPurchasePrice } from './test-support/procurement-http-fixture.js';
 
 describe('Procurement Wave A buyers, purchasing groups and gift PO', () => {
   let fixture;
-  before(async () => { fixture = await createProcurementFixture('modern-erp-prc-buyers-'); });
+  before(async () => {
+    fixture = await createProcurementFixture('modern-erp-prc-buyers-');
+    // 普通采购行必须有有效价格；这里用一条 0 分价格条目保留“DRAFT 允许零单价、
+    // 提交前必须填写大于 0 的单价”这一既有商务门禁语义。
+    await seedPurchasePrice(fixture, [{ supplierId: 'supplier-001', productId: 'product-001', unitPriceCents: 0 }]);
+  });
   after(async () => fixture.close());
 
   test('buyer/group membership is permission guarded and auditable', async () => {
