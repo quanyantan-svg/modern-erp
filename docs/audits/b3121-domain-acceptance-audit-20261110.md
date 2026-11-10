@@ -6,17 +6,17 @@
 
 ## 1. 复核结论摘要
 
-| 分组 | COVERED | PARTIAL | SEMANTIC_MISMATCH | MISSING | 已批准延期（OUT_OF_SCOPE） |
+| 分组 | COVERED | PARTIAL | SEMANTIC_MISMATCH | MISSING | 已批准延期 / 移出范围（OUT_OF_SCOPE） |
 |---|---|---|---|---|---|
-| PRC-01..26（26 项） | 19 | 7 | 0 | 0 | 2（PRC-06 寻源决策写入口、PRC-26 扫码闭环） |
+| PRC-01..26（26 项） | 20 | 4 | 0 | 1 | 2（PRC-06 寻源决策写入口、PRC-26 扫码闭环） |
 | VMI-01..05（5 项） | 4 | 0 | 0 | 0 | 1（VMI-05 结算与物权释放） |
 | OUT-01..23（23 项） | 16 | 5 | 0 | 0 | 2（OUT-20 正式过账、OUT-22 成品退货） |
-| **合计 54 项** | **39** | **7** | **0** | **0** | **（已含在上述分组内）** |
+| **合计 54 项** | **40** | **9** | **0** | **1** | **（已含在上述分组内）** |
 
 - 本轮把 `AUD-PRC-004/005/006/008`（P0/P1）从 `BLOCKED` / `NEEDS_REVALIDATION` 变为**已实施并有可执行证据**。
 - `AUD-PRC-007`、`AUD-PRC-009`、`AUD-VMI-001/002/003` 六条按 §31.17 的受托裁定**实现闭合**；`AUD-PRC-002` 按裁定**关闭为登记事项**。
 - `AUD-PRC-001`（寻源决策写入口）维持 §31.14.1 的已批准 SAFE_CLOSE；`AUD-OUT-001/002` 维持既有状态。
-- 仍有 7 项为 `PARTIAL`：它们的缺口是**真实且已登记**的，不得被文件存在或子包 PASS 冒充为已覆盖；它们是 Capability Freeze 的残余项。
+- 仍有 **9 项为 `PARTIAL`**（PRC-02、PRC-04、PRC-12、PRC-16、OUT-02、OUT-03、OUT-20、OUT-21、OUT-23）与 **1 项 `MISSING`**（PRC-17 预付款整条能力）：它们的缺口是**真实且已登记**的，不得被文件存在或子包 PASS 冒充为已覆盖；它们是 Capability Freeze 的残余项。
 
 ## 2. PRC-01..26 逐项复核
 
@@ -25,8 +25,8 @@
 | PRC-01 | Procurement Parameters | §31.3.1；§31.18.2 | §26.2；§26.37.6 | `GET/PATCH /api/procurement/parameters` → `procurement-parameters.js`；接线在 `procurement-policy.js`（货源/配额/请购策略/变更开关/退货策略/预付款默认/编号策略） | `procurement-parameters.test.js` · 三条；`procurement-commercial-evidence.test.js` · F1–F4 | COVERED | — |
 | PRC-02 | Supplier Procurement Profile | §31.3.1 | §26.3 | `PATCH /api/suppliers/:id/profile` → `procurement-profiles.js`；建单门禁在 `procurement-orders.js::createPurchaseOrderDraftCanonical` | `procurement-profiles.test.js`；`procurement-commercial-evidence.test.js` · B2（无价格 fail closed） | PARTIAL | 采购资质**已**在建单处 fail closed（`PURCHASE_SUPPLIER_NOT_QUALIFIED`）；剩余缺口：品类（category）与付款结算默认值未驱动单据 |
 | PRC-03 | Buyer / Purchasing Group | §31.3.1；§31.18.3 | §26.3；§26.37.6 | `purchase_orders.buyer_id/purchasing_group_id` + `procurement-orders.js::resolvePurchaseOrderAssignment` | `buyers.test.js`；`procurement-commercial-evidence.test.js` · F5 | COVERED | — |
-| PRC-04 | Source List | §31.3.1 | §26.4 | `procurement-sourcing.js` | `procurement-sourcing-pricing.test.js` · 四条 | PARTIAL | 货源主数据与资格/生效期已闭合；缺口：`source_control_enabled` 未接入请购/建单路径；override 路由不存在 |
-| PRC-05 | Quota | §31.3.1 | §26.4 | `procurement-sourcing.js::allocateProportional` | `procurement-sourcing-pricing.test.js` · 守恒用例 | PARTIAL | 分配器无生产调用方（寻源写入口已关闭）；缺口：配额不参与任何单据生成 |
+| PRC-04 | Source List | §31.3.1；§31.18.2 | §26.4；§26.37.6 | `procurement-sourcing.js` + `procurement-policy.js::assertPurchaseSourceControl` | `procurement-sourcing-pricing.test.js` · 四条；`procurement-commercial-evidence.test.js` · F1 | PARTIAL | 货源主数据、资格/生效期与“启用货源控制时不得静默使用无货源供应商”已闭合；剩余缺口：手工 override（权限+原因+审计）路由不存在 |
+| PRC-05 | Quota | §31.3.1；§31.18.2 | §26.4；§26.37.6 | `procurement-sourcing.js::allocateProportional` + `procurement-policy.js::assertPurchaseQuotaControl`（请购转采购订单的分配路径） | `procurement-sourcing-pricing.test.js` · 守恒用例 | COVERED | — |
 | PRC-06 | Sourcing Decision | §31.3.1；§31.14.1 | §26.4 / §26.34.1 | `procurement-sourcing.js::resolveSourcingDecision` 稳定 409 | `procurement-sourcing-pricing.test.js` · 关闭写入口用例（16 表逐字段零变化 + 恰好一条拒绝审计） | OUT_OF_SCOPE | 已批准 SAFE_CLOSE；重开需业务所有者新授权 |
 | PRC-07 | Purchase Price List | §31.3.1 | §26.5 / §26.36.2 | `procurement-pricing.js` + `resolvePurchaseLinePricing()` | `procurement-commercial-evidence.test.js` · A1–A4/B1–B5 | COVERED | — |
 | PRC-08 | Pricing UOM | §31.3.1 | §26.5 / §26.36.2 | 同上（document→base→pricing 有理换算） | 同上 · A1/A2/B1 | COVERED | — |
