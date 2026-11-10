@@ -3864,3 +3864,76 @@ M0 验收后，**后续业务包的启动仍需各自的显式授权**；W11-A �
 - Document Conversion
 - Numbering
 - Organization Scope
+
+## 49. Accounting & Analytics 会计与分析域：域级审计、Requirement 与 Design 建立（2026-11-10）
+
+### 49.1 授权与本轮边界
+
+- **授权来源**：业务所有者 2026-11-10 指令——与采购委外域并行推进 Accounting & Analytics 域收尾，
+  最终目标为该域**整域 Acceptance**；并明确裁定：
+  - **AA-W1..AA-W7 七个范围包全部纳入**本域 Domain Closure Requirement；
+  - **AA-31 汇兑损益 / 多币种 `OUT_OF_SCOPE`**（当前系统仅做单币种人民币 CNY）；
+  - **一次性授权 Requirement + Design 连续执行**。
+- **本轮边界**：AUDIT / COVERAGE → REQUIREMENT → DESIGN 三个阶段；Implementation **未授权**。
+  按 AGENTS.md §4.3，Design 完成后 **HARD STOP**。
+
+### 49.2 域级审计基线（§49.1 之前的 AUDIT 阶段）
+
+- 台账：[`docs/audits/accounting-analytics-capability-audit-20261110.md`](../audits/accounting-analytics-capability-audit-20261110.md)
+  （`v0.1`，基准 SHA `eee92c2`），登记于 [`docs/audits/README.md`](../audits/README.md)。
+- 覆盖 B3106 / B3107 / B3114 / B3115 / B3116 / B3117 共 **44 项 Capability**（AA-01..AA-44）。
+- 审计结论：**4 `COVERED` / 21 `PARTIAL` / 18 `MISSING` / 1 `OUT_OF_SCOPE`**。
+- 领域级结构缺口 7 条（ACC-X-01..07）：本域**尚无 Domain Closure Requirement / Design**、
+  固定资产 route `enabled:false` 用户不可达、launcher 仅 7 项、会计科目只读、
+  `voucher_templates` 有表无写入口无消费方、无会计分析工作台、多币种空白。
+- 审计结论**不构成** Capability Freeze / Domain Acceptance / Release Readiness。
+
+### 49.3 Requirement（§35）
+
+- 正文：[`docs/requirements/accounting-analytics.md`](../requirements/accounting-analytics.md) `§35`
+  Accounting & Analytics Domain Closure Requirement，状态 `APPROVED`。
+- 结构：§35.1 范围与 ownership、§35.2 Manual Evidence Baseline、§35.3 Capability Audit Matrix（44 项
+  当前判定 → 目标判定）、§35.4 目标 Closure 要求（AA-W1..AA-W7 的可验收条款）、§35.5 Permission / RBAC / SOD、
+  §35.6 Compatibility / 不变性约束、§35.7 Out of Scope、§35.8 Acceptance Criteria、§35.9 Hard Stop Conditions、
+  §35.10 最终接受状态。
+- **目标**：43 项 `COVERED` + 1 项 `OUT_OF_SCOPE`（AA-31）。
+- 新增权限族 17 项（`ACCOUNTING_SUBJECTS_*`、`ACCOUNTING_EVENTS_*`、`ACCOUNTING_RECONCILIATION_VIEW`、
+  `VOUCHER_CASHIER_REVIEW`、`ACCOUNTING_PERIOD_END_MANAGE`、`CASH_FLOW_VIEW`、`REPORT_TEMPLATE_*`、
+  `REPORT_INSTANCE_*`、`FIXED_ASSET_DEPRECIATE`、`FIXED_ASSET_DISPOSE`、`INVENTORY_COST_*`、
+  `MANAGEMENT_ACCOUNTING_*` 等）纳入既有五角色权限模型。
+
+### 49.4 Design（§31）
+
+- 正文：[`docs/design/accounting-analytics.md`](../design/accounting-analytics.md) `§31`
+  Accounting & Analytics Domain Technical Design。
+- 结构：§31.0 分层与依赖方向 / 新增模块 / 新增前端 surface 与 route、§31.1..§31.7 七个包的
+  数据模型与状态机与端点、§31.8 迁移与 Schema 策略、§31.9 事务并发幂等、§31.10 错误码总则、
+  §31.11 审计总则、§31.12 兼容性回归清单（12 条）、§31.13 测试策略、§31.14 实施顺序与 Gate、§31.15 设计状态。
+- 新增 11 个后端模块、7 个前端 route（`accounting-events` / `accounting-reconciliation` /
+  `accounting-reports` / `management-accounting` / `accounting-costing` 为新增；
+  `fixed-assets` 由 `enabled:false` 改为 enabled 并把 `FixedAssets` 组件自 `treasury-cost.jsx` 迁出）。
+- 新增 7 个 migration 文件；全部新增金额字段为安全整数分；SQLite / MySQL 双路径。
+- **实施顺序**：`AA-W1 → AA-W2 → AA-W5 → AA-W3 → AA-W6 → AA-W4 → AA-W7 → 整域 Acceptance`。
+
+### 49.5 兼容性承诺
+
+- 既有 HTTP 契约、报表 POSTED-only 口径、`createSystemVoucher` / `reverseSystemVoucher` 语义、
+  `systemHealth` 全部既有 check、库存估值权威流水关系、`LEGACY_UNVALUED` 阻断、
+  库存月结先于会计结账顺序、反结账 ADMIN 限制与留痕、既有 5 张执行报表、
+  `GET /api/voucher-templates` 与 `/api/fixed-assets` 既有路径与字段、route key 唯一性——
+  全部列为**不得破坏**项，并由回归测试固定（Design §31.12）。
+
+### 49.6 文档一致性
+
+- `docs/requirements/README.md` 与 `docs/design/README.md` 已登记本域正文；
+  `document.md` §0.1 与 `solution.md` §0.1 的「Accounting & Analytics — 尚无」行已替换为指向新正文。
+
+### 49.7 未解决事项与暂停点
+
+- **Implementation 状态 `NOT_AUTHORIZED`**：Design 已完成，按 AGENTS.md §4.3 **HARD STOP**，
+  等待业务所有者明确批准 Implementation。
+- 域级 Acceptance、Capability Freeze、Manual Closure 均**未签发**；
+  `docs/status/CAPABILITY_MATRIX.md` 中 B3106 / B3107 / B3114–B3117 仍记 `UNVERIFIED`
+  （**不得**凭本次审计或合同建立改为 `COVERED`，正式覆盖状态只按可执行证据登记）。
+- 本轮**未**修改任何实现代码、schema、migration、前端或 route；**未**运行测试套件；
+  **未**连接真实 MySQL；**未**执行 migration；**未** push / merge / tag / 发布 / 部署。

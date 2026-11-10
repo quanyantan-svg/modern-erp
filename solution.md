@@ -26,7 +26,7 @@
 | Inventory & Warehouse | [`docs/design/inventory-warehouse.md`](docs/design/inventory-warehouse.md) | §27 |
 | Finance Operations | [`docs/design/finance-operations.md`](docs/design/finance-operations.md) | §28.0–§28.29 |
 | Sales & Customer | [`docs/design/sales-customer/README.md`](docs/design/sales-customer/README.md) | §29 + §30 + Wave 8/9/11 基线 |
-| Accounting & Analytics | **尚无 Domain Technical Design** | — |
+| Accounting & Analytics | [`docs/design/accounting-analytics.md`](docs/design/accounting-analytics.md) | §31（Accounting & Analytics Domain Technical Design，2026-11-10 建立；AA-W1..AA-W7 七个实施包；Implementation `NOT_AUTHORIZED`，等待业务所有者批准） |
 | Platform | **尚无 Domain Technical Design** | — |
 
 ### 0.2 章节编号迁移规则

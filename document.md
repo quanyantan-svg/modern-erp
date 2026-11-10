@@ -27,7 +27,7 @@
 | Inventory & Warehouse | [`docs/requirements/inventory-warehouse.md`](docs/requirements/inventory-warehouse.md) | §32 |
 | Finance Operations | [`docs/requirements/finance-operations.md`](docs/requirements/finance-operations.md) | §33 |
 | Sales & Customer | [`docs/requirements/sales-customer/README.md`](docs/requirements/sales-customer/README.md) | §34 + Wave 8/9/10/11 修订 |
-| Accounting & Analytics | **尚无 Domain Closure Requirement** | — |
+| Accounting & Analytics | [`docs/requirements/accounting-analytics.md`](docs/requirements/accounting-analytics.md) | §35（Accounting & Analytics Domain Closure Requirement，2026-11-10 建立；AA-W1..AA-W7 全部纳入，AA-31 多币种 `OUT_OF_SCOPE`） |
 | Platform | **尚无 Domain Closure Requirement** | — |
 
 ### 0.2 章节编号迁移规则

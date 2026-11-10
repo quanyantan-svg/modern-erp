@@ -19,7 +19,7 @@
 | [`inventory-warehouse.md`](./inventory-warehouse.md) | Inventory & Warehouse | `solution.md` §27 | 已实施 |
 | [`finance-operations.md`](./finance-operations.md) | Finance Operations | `solution.md` §28.0–§28.29 | 已实施 |
 | [`sales-customer/`](./sales-customer/) | Sales & Customer | `solution.md` §29 / §30 / Wave 8/9/11 基线 | 已实施；分波次冻结基线 |
-| — | Accounting & Analytics | — | **尚无 Domain Technical Design** |
+| [`accounting-analytics.md`](./accounting-analytics.md) | Accounting & Analytics | `solution.md` §31 | Design 已完成（2026-11-10），覆盖 AA-W1..AA-W7 七个实施包；**Implementation 仍 `NOT_AUTHORIZED`**，需业务所有者批准后方可开工 |
 | — | Platform | — | **尚无 Domain Technical Design** |
 
 > 状态列依据见 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §35.3；
