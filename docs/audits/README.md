@@ -17,6 +17,7 @@
 | B3101 / B3121 采购与委外代码审计基线（2026-11-07） | B3101 采购管理、B3121 委外管理 | Procurement & Outsourcing | `v0.2` | `9b9cb09799aa05ccac43d02ac1718083921c6d04` | `PRELIMINARY_STATIC_REVIEW` | [`b3101-b3121-code-audit-20261107.md`](./b3101-b3121-code-audit-20261107.md) |
 | B3121 委外核心执行工作面审计（2026-11-10） | B3121 委外管理 | Procurement & Outsourcing | `v1.0` | `bbacab0` | `AUDIT_COMPLETE / COVERAGE_REVIEWED`（有界范围） | [`b3121-outsourcing-core-workbench-audit-20261110.md`](./b3121-outsourcing-core-workbench-audit-20261110.md) |
 | B3121 域级验收逐项复核（2026-11-10） | B3121 委外管理 | Procurement & Outsourcing | `v1.0` | `1ad7eaf` | `AUDIT_COMPLETE / COVERAGE_REVIEWED`（PRC-01..26 / VMI-01..05 / OUT-01..23 共 54 项 + 14 条 Issue 处置） | [`b3121-domain-acceptance-audit-20261110.md`](./b3121-domain-acceptance-audit-20261110.md) |
+| Accounting & Analytics 域级能力审计基线（2026-11-10） | B3106 存货核算、B3107 固定资产、B3114 智能会计平台、B3115 总账、B3116 报表、B3117 经营会计 | Accounting & Analytics | `v0.1` | `eee92c2` | `AUDIT_COMPLETE / COVERAGE_REVIEWED`（44 项 Capability 逐项取证；4 COVERED / 21 PARTIAL / 18 MISSING / 1 OUT_OF_SCOPE） | [`accounting-analytics-capability-audit-20261110.md`](./accounting-analytics-capability-audit-20261110.md) |
 
 ## 登记条目
 
@@ -52,6 +53,31 @@
 - M1-Core 首期包级 Acceptance（`M1_CORE_ACCEPTANCE_PASS`，2026-11-07）覆盖范围**仅**其七 Gate，
   **不**覆盖本台账的 Capability 粒度，**也不**授予 Capability Freeze / Domain Acceptance。
 
+### Accounting & Analytics 域级能力审计基线（2026-11-10）
+
+| 项 | 值 |
+|---|---|
+| 详细台账 | [ccounting-analytics-capability-audit-20261110.md](./accounting-analytics-capability-audit-20261110.md) |
+| 覆盖手册 | B3106 存货核算、B3107 固定资产、B3114 智能会计平台、B3115 总账、B3116 报表、B3117 经营会计 |
+| 覆盖 Capability | AA-01..AA-44（44 项，登记于台账 §2） |
+| 对应 Domain | Accounting & Analytics |
+| 审计版本 | 0.1（首次域级审计） |
+| 审计基准 SHA | ee92c21751b9e6fa224125611750a4af4988591（master，2026-11-10） |
+| 审计状态 | AUDIT_COMPLETE / COVERAGE_REVIEWED |
+| 审计方法 | 静态代码审计（route / handler / schema / 状态机 / 权限 / 事务 / 审计 / 测试 / 前端 surface 逐项定位）；**未**运行测试套件，**未**连接真实 MySQL |
+| Coverage 结论 | 44 项 = 4 COVERED / 21 PARTIAL / 18 MISSING / 1 OUT_OF_SCOPE |
+| 领域级结构缺口 | 7 条（ACC-X-01..07，登记于台账 §3） |
+| 建议范围包 | AA-W1..AA-W7（登记于台账 §4，**是建议不是授权**） |
+| 本轮性质 | **仅登记审计基线**：未实施任何代码整改，未签发任何 Acceptance / Freeze / Scope Decision |
+
+**边界**：
+
+- 本台账是 Accounting & Analytics 域的**首次域级审计**，用于支撑该域建立 Domain Closure Requirement 与
+  Domain Technical Design（当前 docs/requirements/README.md 与 docs/design/README.md 仍登记该域「尚无」）；
+- 台账中的 COVERED 判定基于静态证据，**尚未**经测试套件与 MySQL gate 复跑，不得视为已验收；
+- 台账 §4 的范围包与 §5 的 OUT_OF_SCOPE 建议**必须**由业务所有者逐项裁定后，才能进入 Requirement 阶段；
+- 本台账**不改写** document.md §22.6 / §22.7 / §22.14–§22.17 的手册能力基线初判；
+  正式 Capability 覆盖状态仍只在 docs/status/CAPABILITY_MATRIX.md 登记。
 ## 持续状态更新机制
 
 后续所有 B3101 / B3121 开发任务，都必须以
