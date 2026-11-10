@@ -1149,4 +1149,49 @@ M1-Core §7.5 对 `M1C-G03/G06` 的首期合同保留**数量归属守恒**、�
 
 #### 31.17.3 未发生事项
 
-本节不新增 release tag、不改变 `package.json` 版本、不执行真实环境 migration、不写业务数据库、不授权 push/merge/tag/发布/部署。域级 Acceptance 与 Capability Freeze 的签字仍需业务所有者在证据包呈现后单独给出。
+本节不新增 release tag、不改变 `package.json` 版本、不执行真实环境 migration、不写业务数据库、不授权 push/merge/tag/发布/部署。域级 Acceptance 与 Capability Freeze 的签字仍需业务所有者在证据包呈现后单独给出。---
+
+### 31.18 域级交付整改第三轮：参数接线、业务快照与 PRC-26 范围裁定（2026-11-10；`APPROVED` → `IMPLEMENTED`）
+
+> **用途 / Owner / 状态 / 权威关系**：本节是 §31.17 的续篇，记录业务所有者在同一轮对话中的两项追加决定：(1) **PRC-26 扫码闭环移出本域范围**；(2) 其余可实现的残余能力按本节合同实现。Owner 为 Procurement & Outsourcing Domain Owner；生命周期状态为 `IMPLEMENTED`；`document.md` 只承担导航。本节不取代 §31.1～§31.17 的任何正文。
+> **授权来源**：业务所有者指示「PRC-26 扫码闭环不用做了，手机上如果要实现扫码的话应该还需要加入视觉的东西太麻烦，直接删去；剩下的东西你如果能实现都实现吧；然后批准 ACK4 清单与 RunId」。
+
+#### 31.18.1 PRC-26 移出本域范围（业务所有者裁定）
+
+- **裁定**：**PRC-26 的“扫码 → 收货草稿 → 确认”闭环（Design §26.15 的 `lookup-document` / `draft-receipt` / `draft-notice` 三个 API 与移动端扫码工作面）移出采购与委外域的 Active Contract 范围**，不再作为本域 Closure 的前置条件。
+- **理由**：移动端扫码闭环需要视觉识别能力（相机 / 条码识别 / 标签），其产品与工程边界超出本域既有合同；为一个受限扫描闭环引入视觉子系统不符合本域的取舍。
+- **保留边界（不得被读成已实现，也不得被当作缺陷）**：
+  - 已有的**受限来源解析**继续保留并受测：`POST /api/procurement/scan` 只做「来源解析 + 类型隔离」，对 `OUTSOURCE_PROCESSING` 采购订单返回 409，对普通采购订单返回可解析的订单/行/数量草稿行。**它不创建收货草稿、不确认入库，LOT/SERIAL 身份不回传落库**。
+  - 该端点不得被描述为“扫码入仓闭环”，UI 不得以“已完成”描述仍受该边界限制的能力。
+- **未发生事项**：本裁定不删除既有的受限扫描端点与其回归测试；不新增任何视觉、相机、条码设计或标签打印能力；不把 OUT-01/OUT-02 的手工委外收货路径视为被本裁定覆盖。
+
+#### 31.18.2 采购参数接线（PRC-01）
+
+采购参数是**活的业务开关**，每个参数都有确定含义并被接在它所治理的业务事实上；参数变化在下一次业务动作生效，**不回写历史**：
+
+| 参数 | 取值 | 接线位置与行为 |
+|---|---|---|
+| `sourceControlEnabled` | 布尔（默认开） | 请购转采购订单的供应商分组转换：所选供应商在业务日期必须存在有效 `PURCHASE` 货源，否则 409 `PURCHASE_SOURCE_REQUIRED` |
+| `quotaEnabled` | 布尔（默认关） | 同一路径：该供应商在业务日期的采购配额必须存在，且本次分配数量不得超过配额比例，否则 409 `PURCHASE_QUOTA_NOT_CONFIGURED` / `PURCHASE_QUOTA_EXCEEDED` |
+| `requisitionPolicy` | `OPEN` / `SOURCE_REQUIRED` | 请购单创建：`SOURCE_REQUIRED` 时必须带来源指令，否则 409 `REQUISITION_SOURCE_REQUIRED` |
+| `poChangeEnabled` | 布尔（默认开） | 采购订单变更的**申请与适用**两端：关闭时 409 `PO_CHANGE_DISABLED_BY_PARAMETER` |
+| `receivingTolerancePolicy` | `STRICT` / `SOFT_BAND` | 收货容量：STRICT 不得超出订单数量；SOFT_BAND 允许到交期上下容差上限 |
+| `returnPolicy` | `STANDARD` / `REQUEST_REQUIRED` | 采购退货创建：`REQUEST_REQUIRED` 时必须来自已转换的退货申请，否则 409 `RETURN_REQUEST_REQUIRED` |
+| `prepaymentRequiredDefault` | 布尔（默认关） | 新建采购订单的 `prepayment_required` 默认值 |
+| `defaultReceiptBillingMode` | `SEPARATE` / `LEGACY_DIRECT` / `AUTO_BILL` | 采购收货的默认开票模式（既有接线） |
+| `numbering` | `PERIOD_SEQ` | 采购单号按期间序号生成（唯一取值） |
+
+#### 31.18.3 商业快照与交期区间（PRC-14 / PRC-16 / PRC-09）
+
+- 采购订单表头新增 `settlement_supplier_id` / `payee_supplier_id`：默认结算供应商等于供货供应商、付款供应商等于结算供应商，可被显式覆盖；历史行保持 NULL 并在读取时回落到供货供应商，**不回填**。
+- 采购订单行新增 `pricing_discount_scheme_id` / `discount_source`：价格来源已是 `price_entry_id`，折扣来源单独冻结；采购侧折扣**只**影响取价与订单快照，不得创建 AP 信用。
+- 新增只读端点 `GET /api/purchase-orders/:id/commercial-snapshot`：返回订单当时冻结的商业事实（供应商快照、结算/付款供应商、采购员/采购组、预付款要求、行级价格与折扣来源、交期计划）。该端点**只读**：不重算、不修复历史。
+- 交期计划新增 `planned_date_from` / `planned_date_to` / `sequence_no`：多次交货的 earliest/latest 区间与批次序号；区间开始晚于结束一律 400。
+
+#### 31.18.4 可验收条件
+
+| ID | 验收条件 |
+|---|---|
+| `PRC-DLV-17` | 采购参数九个开关全部接在真实业务事实上，各有正例与反例；参数变化不回写历史。 |
+| `PRC-DLV-18` | 商业快照端点返回冻结事实；结算/付款供应商默认等于供货供应商；折扣来源单独冻结；交期区间与批次序号可读且非法区间被拒。 |
+| `PRC-DLV-19` | PRC-26 的范围裁定被登记：受限扫描端点保留且边界可见，扫码入仓闭环明确不在本域范围。 |

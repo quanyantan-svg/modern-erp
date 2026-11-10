@@ -453,6 +453,92 @@ describe('Procurement commercial evidence: pricing primitive and PO change', () 
       assert.notEqual(row.onTimeRate, row.fulfilmentRate, '及时率与完成比不得是同一个口径');
     });
   });
+// ------------------------------------------------------------------
+  // F. 采购参数接线与商业快照
+  // ------------------------------------------------------------------
+  describe('F. 采购参数接线与商业快照', () => {
+    async function setParameters(patch) {
+      const result = await fixture.request('PATCH', '/api/procurement/parameters', fixture.tokens.admin, patch);
+      assert.equal(result.status, 200, result.data.error);
+      return result.data.parameters;
+    }
+
+    test('F1. PO Change 参数关闭时不得申请变更', async () => {
+      const orderId = await approvedOrder([{ productId: EA_PRODUCT, quantity: 5 }]);
+      await setParameters({ poChangeEnabled: false });
+      const blocked = await fixture.request('POST', '/api/procurement/purchase-order-changes', fixture.tokens.admin, {
+        orderId, action: 'ADD', payload: { productId: EA_PRODUCT, quantity: 1 },
+      });
+      assert.equal(blocked.status, 409, JSON.stringify(blocked.data));
+      assert.equal(blocked.data.code, 'PO_CHANGE_DISABLED_BY_PARAMETER');
+      await setParameters({ poChangeEnabled: true });
+      const allowed = await fixture.request('POST', '/api/procurement/purchase-order-changes', fixture.tokens.admin, {
+        orderId, action: 'ADD', payload: { productId: EA_PRODUCT, quantity: 1 },
+      });
+      assert.equal(allowed.status, 201, JSON.stringify(allowed.data));
+    });
+
+    test('F2. 请购策略要求来源时，无来源请购被拒绝', async () => {
+      await setParameters({ requisitionPolicy: 'SOURCE_REQUIRED' });
+      const rejected = await fixture.request('POST', '/api/purchase-requisitions', fixture.tokens.admin, {
+        requiredDate: isoDate(7), items: [{ productId: EA_PRODUCT, quantity: 2 }],
+      });
+      assert.equal(rejected.status, 409, JSON.stringify(rejected.data));
+      assert.equal(rejected.data.code, 'REQUISITION_SOURCE_REQUIRED');
+      await setParameters({ requisitionPolicy: 'OPEN' });
+    });
+
+    test('F3. 退货策略要求退货申请时，无申请退货被拒绝', async () => {
+      await setParameters({ returnPolicy: 'REQUEST_REQUIRED' });
+      const rejected = await fixture.request('POST', '/api/purchase-returns', fixture.tokens.warehouse, {
+        receiptId: 'no-such-receipt', supplierId: 'supplier-001', warehouseId: 'warehouse-001',
+        items: [{ receiptItemId: 'no-such-item', productId: EA_PRODUCT, quantity: 1 }],
+      });
+      assert.equal(rejected.status, 409, JSON.stringify(rejected.data));
+      assert.equal(rejected.data.code, 'RETURN_REQUEST_REQUIRED');
+      await setParameters({ returnPolicy: 'STANDARD' });
+    });
+
+    test('F4. 预付款默认参数落到新建采购订单', async () => {
+      await setParameters({ prepaymentRequiredDefault: true });
+      const created = await createOrder([{ productId: EA_PRODUCT, quantity: 2 }]);
+      assert.equal(created.status, 201, created.data.error);
+      const row = fixture.db.prepare('SELECT prepayment_required FROM purchase_orders WHERE id=?').get(created.data.id);
+      assert.equal(Number(row.prepayment_required), 1);
+      await setParameters({ prepaymentRequiredDefault: false });
+    });
+
+    test('F5. 商业快照端点只读返回冻结事实', async () => {
+      const orderId = await approvedOrder([{ productId: EA_PRODUCT, quantity: 3 }]);
+      const snapshot = await fixture.request('GET', `/api/purchase-orders/${orderId}/commercial-snapshot`, fixture.tokens.admin);
+      assert.equal(snapshot.status, 200, JSON.stringify(snapshot.data));
+      const commercial = snapshot.data.commercialSnapshot;
+      assert.equal(commercial.orderId, orderId);
+      assert.equal(commercial.settlementSupplierId, 'supplier-001', '结算供应商默认等于供货供应商');
+      assert.equal(commercial.payeeSupplierId, 'supplier-001', '付款供应商默认等于结算供应商');
+      assert.equal(commercial.items.length, 1);
+      assert.equal(commercial.items[0].price_entry_id !== null, true, '价格来源必须冻结');
+    });
+
+    test('F6. 交期区间与批次序号被冻结并可读', async () => {
+      const orderId = await approvedOrder([{ productId: EA_PRODUCT, quantity: 10 }]);
+      const itemId = fixture.db.prepare('SELECT id FROM purchase_order_items WHERE order_id=?').get(orderId).id;
+      const created = await fixture.request('POST', `/api/purchase-orders/${orderId}/delivery-schedules`, fixture.tokens.admin, {
+        orderItemId: itemId, plannedQuantity: 4, plannedDate: isoDate(7),
+        plannedDateFrom: isoDate(5), plannedDateTo: isoDate(9), sequenceNo: 2,
+      });
+      assert.equal(created.status, 201, JSON.stringify(created.data));
+      const row = fixture.db.prepare('SELECT * FROM purchase_order_delivery_schedules WHERE id=?').get(created.data.id);
+      assert.equal(row.planned_date_from, isoDate(5));
+      assert.equal(row.planned_date_to, isoDate(9));
+      assert.equal(Number(row.sequence_no), 2);
+      const inverted = await fixture.request('POST', `/api/purchase-orders/${orderId}/delivery-schedules`, fixture.tokens.admin, {
+        orderItemId: itemId, plannedQuantity: 1, plannedDate: isoDate(7), plannedDateFrom: isoDate(9), plannedDateTo: isoDate(5),
+      });
+      assert.equal(inverted.status, 400, JSON.stringify(inverted.data));
+    });
+  });
+
   describe('D. 采购订单执行余量口径', () => {
     test('D1. 加工费采购订单不形成普通采购供给', async () => {
       const orderId = await approvedOrder([{ productId: EA_PRODUCT, quantity: 8 }]);

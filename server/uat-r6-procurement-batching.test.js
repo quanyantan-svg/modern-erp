@@ -77,6 +77,13 @@ before(async () => {
   ensureProduct('r6-pcb', 'RM-PCB-200', 'TC200控制主板', 12800);
   ensureProduct('r6-lcd', 'RM-LCD-240', '2.4寸LCD显示模组', 8600);
   ensureProduct('r6-sensor', 'RM-SENSOR-TH01', '数字温湿度传感器', 3500);
+  // 货源控制启用时，请购转采购订单必须有有效采购货源（采购参数 sourceControlEnabled）。
+  for (const [index, productId] of ['r6-pcb', 'r6-lcd', 'r6-sensor'].entries()) {
+    for (const supplierId of ['r6-supplier-a', 'r6-supplier-b']) {
+      db.prepare("INSERT OR IGNORE INTO source_list_entries(id,supplier_id,product_id,source_type,enabled,effective_from,effective_to,version,created_by,created_at) VALUES(?,?,?,'PURCHASE',1,?,NULL,1,'user-admin',datetime('now'))").run(`src-r6-${index}-${supplierId}`, supplierId, productId, '2020-01-01');
+    }
+  }
+
   insertPurchasePrice(db, { supplierId: 'r6-supplier-a', productId: 'r6-pcb', unitPriceCents: 12800 });
   insertPurchasePrice(db, { supplierId: 'r6-supplier-a', productId: 'r6-lcd', unitPriceCents: 8600 });
   insertPurchasePrice(db, { supplierId: 'r6-supplier-b', productId: 'r6-sensor', unitPriceCents: 3500 });

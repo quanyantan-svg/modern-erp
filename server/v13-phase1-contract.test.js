@@ -183,6 +183,8 @@ describe('V1.3 Phase 1 process-integrity contract', () => {
         assert.equal((await request(`/api/purchase-requisitions/${pr.data.id}`, 'sales', 'PATCH', { items: [] })).status, 409);
       }
       assert.equal((await request(`/api/purchase-requisitions/${pr.data.id}/approve`, 'reviewer', 'POST', {})).status, 200);
+      // 货源控制启用时，请购转采购订单必须有有效采购货源（采购参数 sourceControlEnabled）。
+      db.prepare("INSERT OR IGNORE INTO source_list_entries(id,supplier_id,product_id,source_type,enabled,effective_from,effective_to,version,created_by,created_at) VALUES('src-phase1','sup','p1','PURCHASE',1,'2020-01-01',NULL,1,'user-admin',datetime('now'))").run();
       insertPurchasePrice(db, { supplierId: 'sup', productId: 'p1', unitPriceCents: priceCents });
       const po = await request(`/api/purchase-requisitions/${pr.data.id}/generate-purchase-order`, 'sales', 'POST', { supplierId: 'sup', paymentTerms: '月结' });
       assert.equal(po.status, 201, po.data.error);

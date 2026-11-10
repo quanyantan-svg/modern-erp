@@ -31,8 +31,10 @@ import {
   HttpError, allow, allowAny, readJson, requiredText, send,
 } from '../lib/http.js';
 import { lifecycleArchiveFilter } from './lifecycle-engine.js';
+import { allocateDocumentNumber } from './commercial-golive.js';
 import { createProductionOrderCommand } from './manufacturing-orders.js';
 import { createPurchaseOrderDraftCanonical } from './procurement-orders.js';
+import { assertPurchaseQuotaControl, assertPurchaseSourceControl, assertRequisitionSourcePolicy } from './procurement-policy.js';
 
 const PI_STATUS = { DRAFT: '草稿', RELEASED: '已下达', CANCELLED: '已取消' };
 const PUI_STATUS = { DRAFT: '草稿', RELEASED: '已下达', CANCELLED: '已取消' };
@@ -698,6 +700,7 @@ export async function createPurchaseRequisition(db, req, res, actor) {
   if (requiredDate && requiredDate < requestDate) throw new HttpError(400, '要求到货日不能早于请购日期');
   const notes = readString(body.notes, MAX_NOTE);
   const sourceInstructionId = body.sourceInstructionId ?? body.source_instruction_id ?? null;
+  assertRequisitionSourcePolicy(db, { sourceInstructionId });
   if (sourceInstructionId) {
     const source = db.prepare("SELECT id, status FROM purchase_instructions WHERE id=?").get(sourceInstructionId);
     if (!source) throw new HttpError(400, '来源采购指令不存在');
@@ -948,12 +951,20 @@ function createPurchaseOrderGroups(db, actor, rawItems, defaults = {}) {
   const paymentTerms = readString(defaults.paymentTerms ?? defaults.payment_terms, 200);
   const created = [];
   for (const [supplierId, group] of groups) {
+    for (const entry of group) {
+      assertPurchaseSourceControl(db, {
+        supplierId, productId: entry.source.product_id, businessDate: orderDate,
+      });
+      assertPurchaseQuotaControl(db, {
+        supplierId, productId: entry.source.product_id, businessDate: orderDate, quantity: entry.quantity,
+      });
+    }
     const expectedCandidates = group.map((entry) => entry.source.requiredDate).filter((date) => date && date >= orderDate).sort();
     const expectedDeliveryDate = requestedExpectedDate || expectedCandidates[0] || null;
     if (expectedDeliveryDate && expectedDeliveryDate < orderDate) throw new HttpError(400, '预计交期不能早于订单日期');
     const supplier = group[0].supplier;
     const poId = genId();
-    const orderNo = makeCode(db, 'purchase_orders', 'PO');
+    const orderNo = allocateDocumentNumber(db, 'PO', orderDate, `PO-${genId()}`);
     const requisitionNos = [...new Set(group.map((entry) => entry.source.requisitionNo))];
     const requisitionIds = [...new Set(group.map((entry) => entry.source.requisitionId))];
     const headerRequisitionId = requisitionIds.length === 1 ? requisitionIds[0] : null;

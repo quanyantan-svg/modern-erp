@@ -415,6 +415,8 @@ describe('D. Purchase Requisition', () => {
     database.prepare("INSERT INTO warehouses(id,code,name,active,created_at,updated_at) VALUES(?,?,?,1,datetime('now'),datetime('now'))")
       .run(warehouseId, 'WH-M12-' + warehouseId.slice(3, 7), 'M12 请购仓');
     insertPurchasePrice(database, { supplierId: 'supplier-001', productId: reqProdId, unitPriceCents: 1000 });
+    // 货源控制启用时，请购转采购订单必须有有效采购货源（采购参数 sourceControlEnabled）。
+    database.prepare("INSERT OR IGNORE INTO source_list_entries(id,supplier_id,product_id,source_type,enabled,effective_from,effective_to,version,created_by,created_at) VALUES(?,?,?,'PURCHASE',1,?,NULL,1,'user-admin',datetime('now'))").run('src-m12-req', 'supplier-001', reqProdId, '2020-01-01');
     seedInventory(warehouseId, reqProdId, 0);
     database.prepare(`
       INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,remark,creator_id,submitted_at,reviewed_at,created_at,updated_at)

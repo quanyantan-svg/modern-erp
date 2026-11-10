@@ -175,7 +175,7 @@ import {
   assertFinancialPeriodsOpen, createSystemVoucher, generalLedgerHandler, inventoryAccountRole, inventoryRollForwardHandler, inventoryValuationReport,
   issueSourceValue, postWipMovement, receivePositiveSourceValue, receiveSourceValue, receiveValue, restoreSourceValue, reverseSystemVoucher, reverseValuationSource, systemHealthHandler, wipRollForwardHandler,
 } from './modules/financial-inventory.js';
-import { autoBillReceipt, autoInvoiceDelivery, commercialApiHandler, quantitySnapshot, rational, roundRational } from './modules/commercial-golive.js';
+import { allocateDocumentNumber, autoBillReceipt, autoInvoiceDelivery, commercialApiHandler, quantitySnapshot, rational, roundRational } from './modules/commercial-golive.js';
 import {
   HttpError,
   assertAllowedFields,
@@ -329,6 +329,7 @@ import {
   updateOutsourcingProcessingPurchaseOrderCommercialFields,
   createDeliverySchedule,
   createPurchaseOrderChange,
+  getPurchaseOrderCommercialSnapshot,
   getPurchaseOrderExecutionView,
   listDeliverySchedules,
   listPurchaseOrderChanges,
@@ -341,6 +342,7 @@ import {
   listReceiptNotices,
 } from './modules/procurement-receiving.js';
 import { convertReceiptNoticeToReceipts } from './modules/procurement-notice-conversion.js';
+import { assertReturnRequestPolicy } from './modules/procurement-policy.js';
 import {
   createPurchaseReturnDraftCanonical,
   createReturnRequest,
@@ -924,6 +926,12 @@ ownedRouteTable.register({
   method: 'GET',
   path: /^\/api\/purchase-orders\/([^/]+)\/delivery-schedules$/,
   handler: ({ db, res, actor, params }) => listDeliverySchedules(db, res, actor, params[0]),
+  owner: 'server/modules/procurement-orders.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/purchase-orders\/([^/]+)\/commercial-snapshot$/,
+  handler: ({ db, res, actor, params }) => getPurchaseOrderCommercialSnapshot(db, res, actor, params[0]),
   owner: 'server/modules/procurement-orders.js',
 });
 ownedRouteTable.register({
@@ -3598,7 +3606,10 @@ function makeInventoryCheckNo() { const now = new Date(); return `IC-${now.toISO
 
 function makeInventoryAdjustmentNo() { const now = new Date(); return `IA-${now.toISOString().slice(0,10).replaceAll('-','')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random()*90+10)}`; }
 
-function makePurchaseOrderNo() { const now = new Date(); return `PO-${now.toISOString().slice(0, 10).replaceAll('-', '')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random() * 90 + 10)}`; }
+// 采购单号按期间序号生成（采购参数 numbering = PERIOD_SEQ，唯一取值）。
+function makePurchaseOrderNo(db, businessDate) {
+  return allocateDocumentNumber(db, 'PO', businessDate || new Date().toISOString().slice(0, 10), `PO-${randomUUID()}`);
+}
 
 function makeOrderNo() { const now = new Date(); return `SO-${now.toISOString().slice(0, 10).replaceAll('-', '')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random() * 90 + 10)}`; }
 
@@ -3641,7 +3652,7 @@ async function createPurchaseOrder(db, req, res, actor) {
     throw new HttpError(400, '通用采购订单接口不得指定业务类型或委外来源', { code: 'PURCHASE_ORDER_BUSINESS_TYPE_NOT_CLIENT_SETTABLE' });
   }
   const input = purchaseOrderInput(db, body);
-  const orderId = id(); const now = new Date().toISOString(); const orderNo = makePurchaseOrderNo();
+  const orderId = id(); const now = new Date().toISOString(); const orderNo = makePurchaseOrderNo(db, input.orderDate || now.slice(0, 10));
   // Wave A procurement: supplier snapshot for commercial identity;
   // Wave C procurement-orders: business_type defaults to STANDARD_PURCHASE.
   const supplier = db.prepare('SELECT contact,phone,address,default_payment_terms_days FROM suppliers WHERE id=?').get(input.supplierId);
@@ -6041,6 +6052,7 @@ async function createPurchaseReturn(db, req, res, actor) {
   const { receiptId, supplierId, warehouseId, remark, items } = body;
   const returnDate = normalizeDocumentDate(body?.returnDate || new Date().toISOString().slice(0, 10), '退货日期');
   if (!receiptId) throw new HttpError(400, '正常采购退货必须选择已确认采购入库单');
+  assertReturnRequestPolicy(db, { returnRequestId: body.returnRequestId });
   // 采购退货草稿由 canonical writer 唯一持有：退货申请转换与直接退货共用同
   // 一份写入逻辑（Active Design §26.14）。
   const created = createPurchaseReturnDraftCanonical(db, actor, {

@@ -281,6 +281,9 @@ export function migrateProcurementOutsourcingSchema(db) {
   safeAddColumn(db, 'purchase_orders', 'payment_terms_snapshot', 'payment_terms_snapshot TEXT');
   safeAddColumn(db, 'purchase_orders', 'prepayment_required', 'prepayment_required INTEGER NOT NULL DEFAULT 0');
   safeAddColumn(db, 'purchase_orders', 'version', 'version INTEGER NOT NULL DEFAULT 1');
+  // 商业快照：结算供应商与付款供应商默认等于供货供应商，可被显式覆盖（PRC-14）。
+  safeAddColumn(db, 'purchase_orders', 'settlement_supplier_id', 'settlement_supplier_id TEXT');
+  safeAddColumn(db, 'purchase_orders', 'payee_supplier_id', 'payee_supplier_id TEXT');
   safeAddColumn(db, 'purchase_order_items', 'is_gift_line', 'is_gift_line INTEGER NOT NULL DEFAULT 0');
   safeAddColumn(db, 'purchase_order_items', 'version', 'version INTEGER NOT NULL DEFAULT 1');
   safeAddColumn(db, 'purchase_order_items', 'execution_status', "execution_status TEXT NOT NULL DEFAULT 'OPEN'");
@@ -290,6 +293,9 @@ export function migrateProcurementOutsourcingSchema(db) {
   safeAddColumn(db, 'purchase_order_items', 'price_entry_id', 'price_entry_id TEXT');
   safeAddColumn(db, 'purchase_order_items', 'price_version', 'price_version INTEGER');
   safeAddColumn(db, 'purchase_order_items', 'pricing_evidence_json', 'pricing_evidence_json TEXT');
+  // 价格与折扣来源：价格来源已是 price_entry_id，折扣来源单独冻结（PRC-09 / PRC-14）。
+  safeAddColumn(db, 'purchase_order_items', 'pricing_discount_scheme_id', 'pricing_discount_scheme_id TEXT');
+  safeAddColumn(db, 'purchase_order_items', 'discount_source', 'discount_source TEXT');
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS receipt_notices (
@@ -880,6 +886,11 @@ export function migrateProcurementOutsourcingSchema(db) {
     db.exec('CREATE INDEX IF NOT EXISTS idx_purchase_return_request_items_request ON purchase_return_request_items(request_id, line_no)');
     // 正式转换后的采购退货单必须能回链它的业务意图来源。
     safeAddColumn(db, 'purchase_returns', 'return_request_id', 'return_request_id TEXT');
+
+  // 交期区间与批次序号：多次交货的 earliest/latest 边界（PRC-16）。
+  safeAddColumn(db, 'purchase_order_delivery_schedules', 'planned_date_from', 'planned_date_from TEXT');
+  safeAddColumn(db, 'purchase_order_delivery_schedules', 'planned_date_to', 'planned_date_to TEXT');
+  safeAddColumn(db, 'purchase_order_delivery_schedules', 'sequence_no', 'sequence_no INTEGER');
 
   safeAddColumn(db, 'purchase_order_changes', 'scope', "scope TEXT NOT NULL DEFAULT 'LINE'");
   safeAddColumn(db, 'purchase_order_changes', 'order_version_before', 'order_version_before INTEGER');

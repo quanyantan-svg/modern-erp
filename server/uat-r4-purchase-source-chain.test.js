@@ -92,6 +92,7 @@ before(async () => {
   salesToken = await login(baseUrl, 'sales', 'sales123');
   reviewerToken = await login(baseUrl, 'reviewer', 'review123');
 
+
   // Seed two products and one supplier for PR / PO creation paths.
   productA = ensureProduct('R4-PROD-A', 10000);
   productB = ensureProduct('R4-PROD-B', 12000);
@@ -101,6 +102,9 @@ before(async () => {
   supplier = ensureActiveSupplier();
   insertPurchasePrice(db, { supplierId: supplier, productId: productA, unitPriceCents: 10000 });
   insertPurchasePrice(db, { supplierId: supplier, productId: productB, unitPriceCents: 12000 });
+  // 货源控制启用时，请购转采购订单必须有有效采购货源（采购参数 sourceControlEnabled）。
+  db.prepare("INSERT OR IGNORE INTO source_list_entries(id,supplier_id,product_id,source_type,enabled,effective_from,effective_to,version,created_by,created_at) VALUES(?,?,?,'PURCHASE',1,?,NULL,1,'user-admin',datetime('now'))").run('src-r4-a', supplier, productA, '2020-01-01');
+  db.prepare("INSERT OR IGNORE INTO source_list_entries(id,supplier_id,product_id,source_type,enabled,effective_from,effective_to,version,created_by,created_at) VALUES(?,?,?,'PURCHASE',1,?,NULL,1,'user-admin',datetime('now'))").run('src-r4-b', supplier, productB, '2020-01-01');
 });
 
 after(async () => {

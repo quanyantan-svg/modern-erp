@@ -7,6 +7,7 @@ import {
 import { roundRational } from './commercial-golive.js';
 import { resolvePurchaseLinePricing } from './procurement-pricing.js';
 import { assertSupplierQualification } from './procurement-sourcing.js';
+import { assertPoChangeEnabled, procurementParameters } from './procurement-policy.js';
 
 const VIEW_PERMISSIONS = ['PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_MANAGE'];
 const CHANGE_PERMISSIONS = ['PO_CHANGE_VIEW', 'PO_CHANGE_MANAGE'];
@@ -18,8 +19,9 @@ function insertPurchaseOrderItem(db, { id: itemId, orderId, item, lineNo, pricin
   db.prepare(`INSERT INTO purchase_order_items(
       id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,purchase_requisition_item_id,is_gift_line,
       document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den,
-      pricing_uom_code,pricing_quantity_num,pricing_quantity_den,price_entry_id,price_version,pricing_evidence_json,version,execution_status)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      pricing_uom_code,pricing_quantity_num,pricing_quantity_den,price_entry_id,price_version,pricing_evidence_json,version,execution_status,
+      pricing_discount_scheme_id,discount_source)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     itemId, orderId, item.productId, Number(item.quantity), pricing.unitPriceCents, pricing.amountCents,
     lineNo, item.purchaseRequisitionItemId || null, item.isGiftLine ? 1 : 0,
     item.documentUomCode || null,
@@ -32,6 +34,8 @@ function insertPurchaseOrderItem(db, { id: itemId, orderId, item, lineNo, pricin
     pricing.pricingQuantityNum ?? null, pricing.pricingQuantityDen ?? null,
     pricing.priceEntryId || null, pricing.priceVersion ?? null,
     pricing.evidence ? JSON.stringify(pricing.evidence) : null, version, 'OPEN',
+    pricing.evidence?.appliedDiscount?.id || null,
+    pricing.evidence?.appliedDiscount ? `PRICING_DISCOUNT:${pricing.evidence.appliedDiscount.id}` : (pricing.evidence ? 'PRICE_LIST' : null),
   );
 }
 
@@ -147,20 +151,24 @@ export function createPurchaseOrderDraftCanonical(db, actor, command) {
   const assignment = resolvePurchaseOrderAssignment(db, {
     actorId: actor.id, buyerId: command.buyerId || null, purchasingGroupId: command.purchasingGroupId || null,
   });
+  const prepaymentRequired = command.prepaymentRequired === undefined
+    ? (procurementParameters(db).prepaymentRequiredDefault ? 1 : 0)
+    : (command.prepaymentRequired ? 1 : 0);
   const totalCents = pricedItems.reduce((sum, entry) => sum + entry.commercial.amountCents, 0);
   if (!Number.isSafeInteger(totalCents) || totalCents < 0) throw new HttpError(400, '采购订单总额必须为安全整数分');
   db.prepare(`INSERT INTO purchase_orders(
       id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at,
       order_date,expected_delivery_date,payment_terms,payment_terms_days,supplier_contact_name,supplier_contact_phone,supplier_address,
       business_type,source_outsourcing_order_id,supplier_contact_snapshot,supplier_address_snapshot,payment_terms_snapshot,purchase_requisition_id,
-      buyer_id,purchasing_group_id)
-    VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      buyer_id,purchasing_group_id,prepayment_required,settlement_supplier_id,payee_supplier_id)
+    VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     orderId, orderNo, command.supplierId, totalCents, command.remark || '', actor.id, now, now,
     command.orderDate || null, command.expectedDeliveryDate || null, command.paymentTerms || '', command.paymentTermsDays ?? null,
     command.supplierContactName || '', command.supplierContactPhone || '', command.supplierAddress || '',
     businessType, sourceOutsourcingOrderId, command.supplierContactSnapshot || '', command.supplierAddressSnapshot || '',
     command.paymentTermsSnapshot || '', command.purchaseRequisitionId || null,
-    assignment.buyerId, assignment.purchasingGroupId,
+    assignment.buyerId, assignment.purchasingGroupId, prepaymentRequired,
+    command.settlementSupplierId || command.supplierId, command.payeeSupplierId || command.settlementSupplierId || command.supplierId,
   );
   for (const [index, entry] of pricedItems.entries()) {
     insertPurchaseOrderItem(db, {
@@ -604,14 +612,17 @@ export async function createDeliverySchedule(db, req, res, actor, orderId) {
   if (!order) throw new HttpError(404, '采购订单不存在');
   if (order.status !== 'APPROVED') throw new HttpError(409, '已审批的采购订单才能维护交货计划');
   const body = await readJson(req);
-  assertAllowedFields(body, ['orderItemId', 'plannedQuantity', 'plannedDate', 'upperTolerancePct', 'lowerTolerancePct']);
+  assertAllowedFields(body, ['orderItemId', 'plannedQuantity', 'plannedDate', 'plannedDateFrom', 'plannedDateTo', 'sequenceNo', 'upperTolerancePct', 'lowerTolerancePct']);
   const orderItem = db.prepare('SELECT * FROM purchase_order_items WHERE id=? AND order_id=?').get(body.orderItemId, orderId);
   if (!orderItem) throw new HttpError(404, '订单明细不存在');
   const scheduleId = randomUUID();
   const now = new Date().toISOString();
   transaction(db, () => {
-    db.prepare(`INSERT INTO purchase_order_delivery_schedules(id,order_id,order_item_id,planned_quantity,planned_date,received_quantity,upper_tolerance_pct,lower_tolerance_pct,created_by,created_at,updated_at)
-      VALUES(?,?,?,?,?,0,?,?,?,?,?)`).run(scheduleId, orderId, body.orderItemId, Number(body.plannedQuantity), body.plannedDate, Number(body.upperTolerancePct || 0), Number(body.lowerTolerancePct || 0), actor.id, now, now);
+    const plannedDateFrom = body.plannedDateFrom || body.plannedDate;
+    const plannedDateTo = body.plannedDateTo || body.plannedDate;
+    if (plannedDateFrom > plannedDateTo) throw new HttpError(400, '交期区间开始日期不能晚于结束日期');
+    db.prepare(`INSERT INTO purchase_order_delivery_schedules(id,order_id,order_item_id,planned_quantity,planned_date,received_quantity,upper_tolerance_pct,lower_tolerance_pct,created_by,created_at,updated_at,planned_date_from,planned_date_to,sequence_no)
+      VALUES(?,?,?,?,?,0,?,?,?,?,?,?,?,?)`).run(scheduleId, orderId, body.orderItemId, Number(body.plannedQuantity), body.plannedDate, Number(body.upperTolerancePct || 0), Number(body.lowerTolerancePct || 0), actor.id, now, now, plannedDateFrom, plannedDateTo, body.sequenceNo === undefined ? null : Number(body.sequenceNo));
     audit(db, actor.id, 'CREATE', 'PO_DELIVERY_SCHEDULE', scheduleId, `${orderId}:${body.orderItemId}`);
   });
   return send(res, 201, { id: scheduleId });
@@ -625,6 +636,7 @@ export function listDeliverySchedules(db, res, actor, orderId) {
 
 export async function createPurchaseOrderChange(db, req, res, actor) {
   assertChangeManagePermission(actor);
+  assertPoChangeEnabled(db);
   const body = await readJson(req);
   assertAllowedFields(body, ['orderId', 'action', 'payload', 'scope', 'idempotencyKey']);
   const request = normalizeChangeRequest(body);
@@ -695,6 +707,7 @@ export async function approvePurchaseOrderChange(db, req, res, actor, changeId) 
 
 export async function applyPurchaseOrderChange(db, req, res, actor, changeId) {
   assertChangeManagePermission(actor);
+  assertPoChangeEnabled(db);
   const now = new Date().toISOString();
   let after = null;
   let replay = false;
@@ -837,6 +850,38 @@ export function listPurchaseOrderChanges(db, res, actor, orderId) {
   }
   for (const change of changes) change.items = itemsByChange.get(change.id) || [];
   return send(res, 200, { changes });
+}
+
+/**
+ * 采购订单商业快照读取端点（Design §26.6 / PRC-14）。
+ *
+ * 快照只读：它返回订单当时冻结的商业事实，不重算、不修复历史。
+ */
+export function getPurchaseOrderCommercialSnapshot(db, res, actor, orderId) {
+  assertViewPermission(actor);
+  const order = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(orderId);
+  if (!order) throw new HttpError(404, '采购订单不存在');
+  const items = db.prepare('SELECT id,line_no,product_id,quantity,unit_price_cents,amount_cents,is_gift_line,document_uom_code,document_quantity_num,document_quantity_den,base_quantity_num,base_quantity_den,pricing_uom_code,pricing_quantity_num,pricing_quantity_den,price_entry_id,price_version,pricing_discount_scheme_id,discount_source,purchase_requisition_item_id,version,execution_status FROM purchase_order_items WHERE order_id=? ORDER BY line_no').all(orderId);
+  const schedules = db.prepare('SELECT id,order_item_id,planned_date,planned_date_from,planned_date_to,sequence_no,planned_quantity,upper_tolerance_pct,lower_tolerance_pct FROM purchase_order_delivery_schedules WHERE order_id=? ORDER BY planned_date,id').all(orderId);
+  return send(res, 200, {
+    commercialSnapshot: {
+      orderId: order.id,
+      orderNo: order.order_no,
+      supplierId: order.supplier_id,
+      settlementSupplierId: order.settlement_supplier_id || order.supplier_id,
+      payeeSupplierId: order.payee_supplier_id || order.settlement_supplier_id || order.supplier_id,
+      buyerId: order.buyer_id || null,
+      purchasingGroupId: order.purchasing_group_id || null,
+      prepaymentRequired: Boolean(order.prepayment_required),
+      supplierContactSnapshot: order.supplier_contact_snapshot || null,
+      supplierAddressSnapshot: order.supplier_address_snapshot || null,
+      paymentTermsSnapshot: order.payment_terms_snapshot || null,
+      totalCents: Number(order.total_cents || 0),
+      version: Number(order.version || 1),
+      items,
+      deliverySchedules: schedules,
+    },
+  });
 }
 
 export function getPurchaseOrderExecutionView(db, res, actor, orderId) {

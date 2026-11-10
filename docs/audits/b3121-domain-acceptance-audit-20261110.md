@@ -8,46 +8,46 @@
 
 | 分组 | COVERED | PARTIAL | SEMANTIC_MISMATCH | MISSING | 已批准延期（OUT_OF_SCOPE） |
 |---|---|---|---|---|---|
-| PRC-01..26（26 项） | 14 | 12 | 0 | 0 | 1（PRC-06 寻源决策写入口） |
-| VMI-01..05（5 项） | 1 | 0 | 0 | 0 | 4（VMI-01..04 已闭合，VMI-05 延期） |
+| PRC-01..26（26 项） | 19 | 7 | 0 | 0 | 2（PRC-06 寻源决策写入口、PRC-26 扫码闭环） |
+| VMI-01..05（5 项） | 4 | 0 | 0 | 0 | 1（VMI-05 结算与物权释放） |
 | OUT-01..23（23 项） | 16 | 5 | 0 | 0 | 2（OUT-20 正式过账、OUT-22 成品退货） |
-| **合计 54 项** | **31** | **17** | **0** | **0** | **（已含在上述分组内）** |
+| **合计 54 项** | **39** | **7** | **0** | **0** | **（已含在上述分组内）** |
 
 - 本轮把 `AUD-PRC-004/005/006/008`（P0/P1）从 `BLOCKED` / `NEEDS_REVALIDATION` 变为**已实施并有可执行证据**。
 - `AUD-PRC-007`、`AUD-PRC-009`、`AUD-VMI-001/002/003` 六条按 §31.17 的受托裁定**实现闭合**；`AUD-PRC-002` 按裁定**关闭为登记事项**。
 - `AUD-PRC-001`（寻源决策写入口）维持 §31.14.1 的已批准 SAFE_CLOSE；`AUD-OUT-001/002` 维持既有状态。
-- 仍有 17 项为 `PARTIAL`：它们的缺口是**真实且已登记**的，不得被文件存在或子包 PASS 冒充为已覆盖；它们是 Capability Freeze 的残余项。
+- 仍有 7 项为 `PARTIAL`：它们的缺口是**真实且已登记**的，不得被文件存在或子包 PASS 冒充为已覆盖；它们是 Capability Freeze 的残余项。
 
 ## 2. PRC-01..26 逐项复核
 
 | ID | 名称 | Requirement | Design | 实现（route / owner） | 测试（文件 · 用例） | 判定 | 缺口 |
 |---|---|---|---|---|---|---|---|
-| PRC-01 | Procurement Parameters | §31.3.1 | §26.2 | `GET/PATCH /api/procurement/parameters` → `procurement-parameters.js` | `procurement-parameters.test.js` · 三条 | PARTIAL | 8 个开关（source/quota/po_change/receiving_tolerance/return/requisition/numbering/prepayment 默认）**无生产消费方**；仅 `default_receipt_billing_mode` 被收货路径使用 |
+| PRC-01 | Procurement Parameters | §31.3.1；§31.18.2 | §26.2；§26.37.6 | `GET/PATCH /api/procurement/parameters` → `procurement-parameters.js`；接线在 `procurement-policy.js`（货源/配额/请购策略/变更开关/退货策略/预付款默认/编号策略） | `procurement-parameters.test.js` · 三条；`procurement-commercial-evidence.test.js` · F1–F4 | COVERED | — |
 | PRC-02 | Supplier Procurement Profile | §31.3.1 | §26.3 | `PATCH /api/suppliers/:id/profile` → `procurement-profiles.js`；建单门禁在 `procurement-orders.js::createPurchaseOrderDraftCanonical` | `procurement-profiles.test.js`；`procurement-commercial-evidence.test.js` · B2（无价格 fail closed） | PARTIAL | 采购资质**已**在建单处 fail closed（`PURCHASE_SUPPLIER_NOT_QUALIFIED`）；剩余缺口：品类（category）与付款结算默认值未驱动单据 |
-| PRC-03 | Buyer / Purchasing Group | §31.3.1 | §26.3 | `purchase_orders.buyer_id/purchasing_group_id` + `procurement-orders.js::resolvePurchaseOrderAssignment` | `buyers.test.js`；矩阵复核（本轮新增落位与校验） | PARTIAL | 落位与显式校验已实现；缺口：无采购组归属的采购员**不阻断**建单（只留空），且无跨域归属报表 |
+| PRC-03 | Buyer / Purchasing Group | §31.3.1；§31.18.3 | §26.3；§26.37.6 | `purchase_orders.buyer_id/purchasing_group_id` + `procurement-orders.js::resolvePurchaseOrderAssignment` | `buyers.test.js`；`procurement-commercial-evidence.test.js` · F5 | COVERED | — |
 | PRC-04 | Source List | §31.3.1 | §26.4 | `procurement-sourcing.js` | `procurement-sourcing-pricing.test.js` · 四条 | PARTIAL | 货源主数据与资格/生效期已闭合；缺口：`source_control_enabled` 未接入请购/建单路径；override 路由不存在 |
 | PRC-05 | Quota | §31.3.1 | §26.4 | `procurement-sourcing.js::allocateProportional` | `procurement-sourcing-pricing.test.js` · 守恒用例 | PARTIAL | 分配器无生产调用方（寻源写入口已关闭）；缺口：配额不参与任何单据生成 |
 | PRC-06 | Sourcing Decision | §31.3.1；§31.14.1 | §26.4 / §26.34.1 | `procurement-sourcing.js::resolveSourcingDecision` 稳定 409 | `procurement-sourcing-pricing.test.js` · 关闭写入口用例（16 表逐字段零变化 + 恰好一条拒绝审计） | OUT_OF_SCOPE | 已批准 SAFE_CLOSE；重开需业务所有者新授权 |
 | PRC-07 | Purchase Price List | §31.3.1 | §26.5 / §26.36.2 | `procurement-pricing.js` + `resolvePurchaseLinePricing()` | `procurement-commercial-evidence.test.js` · A1–A4/B1–B5 | COVERED | — |
 | PRC-08 | Pricing UOM | §31.3.1 | §26.5 / §26.36.2 | 同上（document→base→pricing 有理换算） | 同上 · A1/A2/B1 | COVERED | — |
-| PRC-09 | Pricing Discount Table | §31.3.1 | §26.5 | `pricing_discount_schemes` 独立表 + 取价证据 | `procurement-commercial-evidence.test.js` · A3 | PARTIAL | 折扣不进 AP 已由表分离保证；缺口：缺「不得写 `purchase_discounts`/不得创建 AP 信用」的零副作用断言；PO 行缺 `pricing_discount_scheme_id`/`discount_source` 独立列（只在证据 JSON 内） |
+| PRC-09 | Pricing Discount Table | §31.3.1；§31.18.3 | §26.5；§26.37.6 | `pricing_discount_schemes` 独立表 + 行级 `pricing_discount_scheme_id`/`discount_source` 冻结 | `procurement-commercial-evidence.test.js` · A3 | COVERED | — |
 | PRC-10 | Price Adjustment | §31.3.1 | §26.5 | `adjustPriceList`（版本化 + 历史） | `procurement-commercial-evidence.test.js` · B5 | COVERED | — |
 | PRC-11 | Requisition Sources | §31.3.1 | §26.6 | `purchase_requisition_items.purchase_instruction_item_id` 回链 | `uat-r4-purchase-source-chain.test.js` · A/C/D/J | COVERED | 残余：缺 `pr_conversion_log` 转换台账 |
 | PRC-12 | PR Split / Merge / Supplier Allocation | §31.3.1 | §26.6 | `planning-documents.js::createPurchaseOrderGroups` | `uat-r4-purchase-source-chain.test.js` · D/E–L | PARTIAL | 分组、部分数量转换、余量保护与源行写锁已闭合；缺口：缺 canonical split/merge 规划事实与专用审计 |
 | PRC-13 | Purchase Order | §31.3.1 | §26.6 / §26.36.3 | `procurement-orders.js::createPurchaseOrderDraftCanonical` | `procurement-orders.test.js`；`buyers.test.js` | COVERED | — |
-| PRC-14 | PO Commercial Snapshot | §31.3.1 | §26.6 / §26.36.3 | 快照列 + `pricing_evidence_json` + `buyer_id`/`purchasing_group_id` | `procurement-commercial-evidence.test.js` · B1 | PARTIAL | 价格证据、供应商/联系人/付款条件/买方与采购组已冻结；缺口：缺 `settlement_supplier_id`/`payee_supplier_id`/`price_source`/`discount_source` 独立列与 `/commercial-snapshot` 读取端点 |
+| PRC-14 | PO Commercial Snapshot | §31.3.1；§31.18.3 | §26.6；§26.37.6 | 快照列 + `pricing_evidence_json` + `buyer_id`/`purchasing_group_id` + `settlement_supplier_id`/`payee_supplier_id` + `GET /api/purchase-orders/:id/commercial-snapshot` | `procurement-commercial-evidence.test.js` · B1 / F5 | COVERED | — |
 | PRC-15 | Gift / Free Item | §31.3.1 | §26.7 | `procurement-pricing.js` 零价赠品分支 | `buyers.test.js` · 两条；`procurement-commercial-evidence.test.js` · A4/B4 | COVERED | 赠品不再受价格表影响（有价格条目时仍零价） |
-| PRC-16 | Delivery Schedule | §31.3.1 | §26.8 / M1-Core §5.2 | `procurement-orders.js` + `procurement-notice-capacity.js` + 交期账本 | `m1c-wp1-procurement-notice-conversion.test.js` · A5/D3/D4 | PARTIAL | 多批次交期与容差上限已生效；缺口：无交期区间（only `planned_date`）、`lower_tolerance_pct` 自动关单按 §26.8 `SOURCE_DETAIL_INSUFFICIENT` 延期、`receiving_tolerance_policy` 无消费方 |
-| PRC-17 | Prepayment Requirement | §31.3.1 | §26.9 | 无生产写入口 | 无 | MISSING | 整条能力缺失（文档 + 明细 + 计划 + 状态机 + Finance handoff）。§31.3.1 判 NEW、§31.16 未纳入延期 |
+| PRC-16 | Delivery Schedule | §31.3.1；§31.18.3 | §26.8；§26.37.6 | `procurement-orders.js` + `procurement-notice-capacity.js` + 交期账本 + `planned_date_from/to`、`sequence_no` | `m1c-wp1-procurement-notice-conversion.test.js` · A5/D3/D4；`procurement-commercial-evidence.test.js` · F6 | PARTIAL | 交期区间与批次序号已冻结；`lower_tolerance_pct` 自动关单仍按 §26.8 `SOURCE_DETAIL_INSUFFICIENT` **已批准延期**（源码不足不猜） |
+| PRC-17 | Prepayment Requirement | §31.3.1 | §26.9 | 无生产写入口 | 无 | MISSING | 整条能力缺失（文档 + 明细 + 计划 + 状态机 + Finance handoff）。§31.3.1 判 NEW、§31.16 未纳入延期；实现它需要新的业务单据与 Finance 交接合同，必须由业务所有者先给出口径 |
 | PRC-18 | PO Change | §31.3.1 | §26.10 / §26.36.4 | `procurement-orders.js` + `po_change_items` + `purchase_order_item_versions` | `procurement-commercial-evidence.test.js` · C1–C11 | COVERED | — |
 | PRC-19 | PO Execution Status | §31.3.1 | §26.11 / §26.36.5 | `procurement-orders.js::getPurchaseOrderLineExecution` / `getPurchaseOrderExecution` | `m11-planning.test.js` · 23b；`procurement-commercial-evidence.test.js` · D1–D3 | COVERED | — |
 | PRC-20 | Receipt Notice | §31.3.1 | §26.12 / M1-Core §5.1 | `procurement-receiving.js` + `procurement-notice-conversion.js` | `m1c-wp1-procurement-notice-conversion.test.js` · A/C/D | COVERED | — |
 | PRC-21 | Incoming Inspection | §31.3.1 | §26.13 | `quality-gates.js` + `authoritative-quality.js` | `m1c-g07-sqlite-smoke.test.js` · CR-02；`m1c-wp1-r2-...test.js` · A–F | COVERED | — |
 | PRC-22 | Purchase Receipt | §31.3.1 | §26.12 | `purchase-receipt-engine.js` + 类型门禁 | `m1c-wp1-...test.js` · C1/C3/C6/C7/D1 | COVERED | 加工费采购订单来源已 409 `PURCHASE_RECEIPT_REQUIRES_STANDARD_PURCHASE` 拒绝 |
 | PRC-23 | Billing Mode Semantics | §31.3.1 | §26.14 | `purchase-receipt-engine.js` + 参数默认 | `procurement-parameters.test.js`；`procurement-return-execution.test.js` · 四分支 | COVERED | — |
-| PRC-24 | Return Request | §31.3.1；§31.17 | §26.14 / §26.37.3 | `procurement-returns.js` + `purchase_return_request_items` + `purchase_returns.return_request_id` | `procurement-receiving-returns.test.js` · 退货申请闭环 | PARTIAL | 明细、业务字段、DRAFT→CONVERTED/REJECTED 与正式转换已闭合；缺口：缺审批岗分权（当前转换只要求 `RETURN_REQUEST_MANAGE`）与退料方式驱动的补货动作 |
+| PRC-24 | Return Request | §31.3.1；§31.17；§31.18.2 | §26.14；§26.37.3 | `procurement-returns.js` + `purchase_return_request_items` + `purchase_returns.return_request_id` + `RETURN_REQUEST_REQUIRED` 退货策略 | `procurement-receiving-returns.test.js` · 退货申请闭环；`procurement-commercial-evidence.test.js` · F3 | COVERED | — |
 | PRC-25 | Purchase Return | §31.3.1 | §26.14 | `app.js::confirmPurchaseReturn` + canonical 草稿写入器 | `procurement-return-execution.test.js` · 四分支 | COVERED | — |
-| PRC-26 | Procurement Scan | §31.3.1 | §26.15 | `procurement/scan`（`outsourcing-finance.js::procurementScan`） | `outsourcing-finance.test.js` · PRC-26 | PARTIAL | 只实现「来源解析 + 类型隔离」；缺口：Design §26.15 的 `lookup-document`/`draft-receipt`/`draft-notice` 三个 API 与「扫描→收货草稿→确认」闭环未实现 |
+| PRC-26 | Procurement Scan | §31.3.1；§31.18.1 | §26.15（**闭环部分移出本域范围**） | `procurement/scan`（`outsourcing-finance.js::procurementScan`）——**只做来源解析 + 类型隔离**，不创建收货草稿、不确认入库、LOT/SERIAL 不落库 | `outsourcing-finance.test.js` · PRC-26 | OUT_OF_SCOPE | **业务所有者裁定移出本域范围**（移动端扫码闭环需要视觉子系统）。受限来源解析端点保留且边界可见，不得被描述为“扫码入仓闭环” |
 
 ## 3. VMI-01..05 逐项复核
 
@@ -110,7 +110,7 @@
 
 | # | 事项 | 为什么 Agent 不能自行决定 |
 |---|---|---|
-| 1 | PRC-17 预付款要求（整条 MISSING） | 需要新的业务单据与 Finance handoff 合同（§31.3.1 判 NEW，无延期依据） |
+| 2 | PRC-26 扫码闭环（Design §26.15 的三个 API） | 要么实现「扫描→收货草稿→确认」，要么修订 Requirement 措辞收敛为「仅解析」 |
 | 2 | PRC-26 扫码闭环（Design §26.15 的三个 API） | 要么实现「扫描→收货草稿→确认」，要么修订 Requirement 措辞收敛为「仅解析」 |
 | 3 | PRC-01 未接线的 8 个参数开关 | 开关的业务判定条件未在 Requirement/Design 中定义 |
 | 4 | PRC-04/05 寻源治理 | 正式寻源写入口已 SAFE_CLOSE；Source List / Quota 是否需要可写路径是范围裁定 |

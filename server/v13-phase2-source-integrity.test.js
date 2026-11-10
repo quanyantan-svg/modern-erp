@@ -49,6 +49,8 @@ describe('V1.3 Phase 2 authoritative source integrity', () => {
       const hash = hashPassword(`${name}-phase2-1234`);
       db.prepare('INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at) VALUES(?,?,?,?,?,?,1,?)').run(`user-${name}`, name, name, hash.hash, hash.salt, role, now);
     }
+    // 货源控制启用时，请购转采购订单必须有有效采购货源（采购参数 sourceControlEnabled）。
+    db.prepare("INSERT OR IGNORE INTO source_list_entries(id,supplier_id,product_id,source_type,enabled,effective_from,effective_to,version,created_by,created_at) VALUES('src-phase2','sup','p1','PURCHASE',1,'2020-01-01',NULL,1,'user-admin',datetime('now'))").run();
     insertPurchasePrice(db, { supplierId: 'sup', productId: 'p1', unitPriceCents: 20000 });
     server = createServer(createApp(db, { distDir: resolve('dist') }));
     await new Promise((done) => server.listen(0, '127.0.0.1', done)); baseUrl = `http://127.0.0.1:${server.address().port}`;

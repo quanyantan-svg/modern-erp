@@ -2354,4 +2354,40 @@ Implementation 建议拆为四个可独立验证的逻辑单元：I1 Pricing can
 
 - 全部增量迁移只新增列/表/索引，不重建历史表、不回填历史事实：历史 VMI 收货保持 `agreement_id IS NULL` 并在读时 fail closed；历史退货申请保持 `DRAFT` 且无明细。
 - 回滚只允许撤回新写入口与新 UI consumer 并让新 mutation fail closed；已写证据不回滚、不反向覆盖业务事实。
-- G07 固定场景因新增供应商资质步骤而变更，冻结摘要随之重新计算并写回三处断言；**该重新冻结待业务所有者显式确认**。
+- G07 固定场景因新增供应商资质步骤而变更，冻结摘要随之重新计算并写回三处断言；**该重新冻结待业务所有者显式确认**。---
+
+### 26.38 采购参数接线、商业快照与 PRC-26 范围裁定（2026-11-10；`APPROVED` → `IMPLEMENTED`）
+
+> **用途 / Owner / 状态 / 权威关系**：本节是 §26.37 的续篇，落实 Requirement §31.18 的三项决定：采购参数接线、商业快照与交期区间的冻结字段、PRC-26 扫码闭环移出本域范围。Owner 为 Procurement & Outsourcing Domain Owner；状态为 `IMPLEMENTED`（已按批准合同实施并通过本地 Gate，**尚未通过域级 Acceptance**），`solution.md` 只承担导航。
+
+#### 26.38.1 采购参数接线
+
+新增 `server/modules/procurement-policy.js` 作为参数接线层：它只读 `procurement_parameters` 的唯一权威行，把每个开关接在它所治理的业务事实上，并抛出稳定的业务错误码：
+
+| 开关 | 接线位置 | 错误码 |
+|---|---|---|
+| `sourceControlEnabled` | `planning-documents.js::createPurchaseOrderGroups`（选择供应商的分组转换） | `PURCHASE_SOURCE_REQUIRED` |
+| `quotaEnabled` | 同一转换：本次分配数量不得超过该供应商在该业务日期的配额比例 | `PURCHASE_QUOTA_NOT_CONFIGURED` / `PURCHASE_QUOTA_EXCEEDED` |
+| `requisitionPolicy` | `planning-documents.js::createPurchaseRequisition` | `REQUISITION_SOURCE_REQUIRED` |
+| `poChangeEnabled` | `procurement-orders.js::createPurchaseOrderChange` / `applyPurchaseOrderChange`（申请与适用两端） | `PO_CHANGE_DISABLED_BY_PARAMETER` |
+| `returnPolicy` | `app.js::createPurchaseReturn` | `RETURN_REQUEST_REQUIRED` |
+| `prepaymentRequiredDefault` | `procurement-orders.js::createPurchaseOrderDraftCanonical`（写入 `prepayment_required`） | — |
+| `numbering` | `app.js::makePurchaseOrderNo` 与 `planning-documents.js::createPurchaseOrderGroups` 改用 canonical `allocateDocumentNumber('PO', 期间)` | — |
+| `defaultReceiptBillingMode` | 既有收货路径 | — |
+
+货源与配额检查落在**选择供应商**的路径上：手工采购订单是采购员已经作出的商业决定，不在同一条路径上二次裁决货源。
+
+#### 26.38.2 商业快照与交期区间
+
+- 增量列：`purchase_orders.settlement_supplier_id` / `payee_supplier_id`（默认等于供货供应商，可显式覆盖）；`purchase_order_items.pricing_discount_scheme_id` / `discount_source`（价格来源已是 `price_entry_id`，折扣来源单独冻结）；`purchase_order_delivery_schedules.planned_date_from` / `planned_date_to` / `sequence_no`。
+- 只读端点 `GET /api/purchase-orders/:id/commercial-snapshot`（owner `server/modules/procurement-orders.js`）：返回订单当时冻结的商业事实，不重算、不修复历史；历史行缺新列时读取回落到既有语义。
+- 交期区间开始晚于结束一律 400；`lower_tolerance_pct` 的自动关单仍按 §26.8 `SOURCE_DETAIL_INSUFFICIENT` 已批准延期，不猜。
+
+#### 26.38.3 PRC-26 范围裁定
+
+Design §26.15 的**扫码入仓闭环**（`lookup-document` / `draft-receipt` / `draft-notice` 三个 API 与移动端扫码工作面）**移出本域 Active Contract 范围**。保留的边界：既有的 `POST /api/procurement/scan` 只做来源解析与类型隔离，不创建收货草稿、不确认入库、LOT/SERIAL 身份不回传落库；UI 不得以“已完成”描述该能力。本节不删除既有端点与其回归测试，也不引入任何视觉、相机或条码设计能力。
+
+#### 26.38.4 兼容与回滚
+
+- 全部为增量迁移，不回填历史事实；回滚只允许撤回新接线并让对应 mutation fail closed。
+- 采购单号改为期间序号后，历史单号不受影响；新单号格式为 `PO-<期间>-<序号>`。
