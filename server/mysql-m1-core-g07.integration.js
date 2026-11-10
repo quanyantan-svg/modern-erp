@@ -102,6 +102,12 @@ describe('M1C-G07 production HTTP / real MySQL handler concurrency', () => {
     }
 
     const today = new Date().toISOString().slice(0, 10);
+    // UAT-14 的当前合同：VMI 收货必须绑定业务日期上唯一有效的协议，并使用外部幂等键。
+    const vmiAgreement = await httpRequest(manifest.applications.A, { token: adminToken, method: 'POST', path: '/api/procurement/vmi/agreements', body: {
+      supplierId: 'supplier-001', warehouseId: 'warehouse-001', productId: setup.finished.id,
+      minStock: 10, maxStock: 100, reorderLevel: 20, effectiveFrom: today,
+    } });
+    assert.equal(vmiAgreement.status, 201, JSON.stringify(vmiAgreement.data));
     const vmi = await httpRequest(manifest.applications.A, { token: adminToken, method: 'POST', path: '/api/procurement/vmi/receipts', body: {
       supplierId: 'supplier-001', warehouseId: 'warehouse-001', productId: setup.finished.id, quantity: 2, receivedDate: today, idempotencyKey: 'm1-g07-uat14',
     } });
