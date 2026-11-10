@@ -2763,7 +2763,582 @@ Gate 状态不推进：`GATE_READY`、`GATE_AUTHORIZED`、`GATE_ACCEPTED` 均未
 
 M3 不确定 COMMIT 在真实 MySQL 下仍为 `NOT_PROVEN_ON_REAL_MYSQL`，不得随 OUT-001 其他用例通过而自动关闭。只有真实 MySQL 套件通过、所有子进程退出得到证明、Cleanup 与独立 Postflight 通过，才能登记 Gate 执行完成；Owner Acceptance 另行签发。
 
-### 45.9 仍需真实 MySQL 8 验证的清单（**未获授权，未运行**）
+### 45.17 OUT-001 一次性收尾修复：M1b / M3 / TAP 持久化 / N7 追溯（2026-11-09）
+
+本节登记本轮一次性收尾修复的**范围、证据与仍未关闭的事项**。本轮只修复 Gate 基础设施、测试层断言与文档追溯，**不改变** OUT-001 业务实现、Schema、Migration、ACK-4 Manifest、数据库权限、版本号与既有 release tag。
+
+| 项 | 本轮结果 |
+|---|---|
+| M1b 结构 | 改为「独立 HTTP 应用子进程 + 屏障会话」：父进程持有全局事务门禁，独立应用进程先取得自己的幂等命名锁、再阻塞在门禁上；观察到门禁等待者后证明命名锁在请求期间确实被持有；解除屏障后请求返回固定 409 `OUTSOURCING_WIP_TRANSFER_OVERDRAW`；ROLLBACK 后命名锁可被第三方会话重新取得；拒绝审计恰好一条；WIP / 身份 / 数量 / 幂等记录逐字段零变化；物理库存、估值与财务逐字段零变化；子进程正常退出（退出码 0 且无信号终止） |
+| M1b 异常与清理路径 | 清理钩子在任何可能抛错的步骤**之前**注册：屏障回滚、两个独立会话关闭与子进程回收在断言失败时同样执行；优雅退出超时先 `SIGKILL` 再报错，绝不把存活的子进程留给下一次 Gate；M2 的两个应用改为逐个关闭，一个关闭失败不阻断另一个的回收 |
+| 后代登记计数 | 独立 HTTP 应用进程由 2 个增至 3 个（M1b 1 个 + M2 2 个）；受控 registry 的条数校验同步收紧，少登记即 fail closed |
+| M3 会话状态 | `FRESH → ACTIVE → IDLE_TRUSTED` 的 COMMIT 路径与 ROLLBACK 路径各自独立断言；ROLLBACK 路径额外断言原始异常对象原样透出 |
+| M3 quarantine → 终止确认 | 锁释放未确认 → `NOT_OWNER` → `quarantine` → `TERMINATION_PENDING` → `TERMINATION_CONFIRMED` → `sessionState === 'TERMINATED'` 全链断言。**终止未确认时**与**终止已确认后**两次断言该连接不得再启动业务体（`MYSQL_TRANSACTION_ADMISSION_REFUSED` / `ADAPTER_QUARANTINED`）；核验连接必须可信且与原会话不同（R3） |
+| M3 不确定 COMMIT | recovery worker 夹具补齐与真实 Worker 一致的 `sessionLost` 标记；业务体注入连接丢失使 COMMIT 结果未知，并使随后的 ROLLBACK 同样无法被证明，因此适配器进入隔离而不是回到可信空闲状态；断言业务体只执行一次、原始错误原样透出且携带 `sessionLost` |
+| TAP 持久化 | 每个子进程（RESET / BOOTSTRAP / Suite / CLEANUP / Postflight）的 stdout 与 stderr **完整**写入 `%LOCALAPPDATA%\ModernERP\mysql-gate\evidence\<RunId>\suites\<label>\` 下的 `stdout.tap` / `stderr.log` / `result.json`；落盘路径绑定 RunId；成功、非零退出、超时与流异常路径都留下证据；TAP 不再只在内存中收集；必须等 Child 退出、两路输出流结束且文件 fd 关闭之后才计算字节数与 SHA-256 |
+| TAP 判定 | `result.json` 记录 suite 名、退出码、stdout/stderr 字节数与 SHA-256、替换次数与 TAP 汇总。TAP 解析要求 `tests/pass/fail/skipped` 齐全且 `pass+fail+cancelled+skipped+todo === tests`，否则判为解析失败；**TAP 解析失败、有失败项、有取消项或退出码非零时 `testsPassed` 一律不得为 true** |
+| 证据密钥 | 数据库密码、DPAPI 解密内容、Capability 明文与 approval 明文不落盘：输出在字节层被替换为 `[REDACTED]` 并记录替换次数；替换边界保证跨 chunk 与被 chunk 边界切开的密钥都不会先落盘再被替换 |
+| N7 追溯修复 | `a40e356` 新增 `docs/status/PROJECT_STATUS.md` §45.16，却未在提交消息中引用该章节编号或该文件完整路径，N7 因此 FAIL。修复方式为**只改提交消息**的有界本地历史重写：文件树、作者、提交者与时间戳逐项保持不变，新旧 HEAD 的 `git diff --exit-code` 为 0；原始历史由本地备份分支 `backup/n7-pre-rewrite-20261109-97eea5a5` 与既有候选分支 `candidate/out001-97eea5a` 继续保留 |
+| 摘要 | Gate 的最终 JSON summary 与 PowerShell Launcher 输出都逐条列出每个 suite 的证据文件路径、字节数与 SHA-256 |
+
+**本轮实际验证结果**（全部未连接真实 MySQL、未执行任何数据库写操作）：
+
+| 检查 | 命令 | 退出码 | 结果 |
+|---|---|---|---|
+| 语法检查 | `node --check`（11 个受影响的 js/mjs 文件） | 0 | 11/11 OK |
+| OUT-001 focused SQLite | `node --test server/mysql-out001.integration.js` | 0 | 34 tests：28 PASS / 6 SKIP（6 个真实 MySQL 用例）/ 0 FAIL |
+| disposable target guard | `node --test server/mysql-disposable-target-guard.test.js` | 0 | 10/10 PASS |
+| Gate infrastructure | `node --test server/mysql-out001-gate-infrastructure.test.js` | 0 | 27/27 PASS（其中 10 项为本轮新增的证据持久化用例） |
+| FAST | `pnpm test:fast` | 0 | 607/607 PASS / 0 FAIL / 0 SKIP |
+| FULL | `pnpm test` | 0 | 3398/3398 PASS / 0 FAIL / 0 SKIP |
+| Build | `pnpm build` | 0 | PASS |
+| Docs current | `node scripts/docs/check-doc-consistency.mjs --mode current --target HEAD` | 0 | N1、N3–N9 PASS，N2 `RETIRED` |
+| Docs migration | `node scripts/docs/check-doc-consistency.mjs --mode migration` | 0 | C1–C6 PASS |
+| `git diff --check` | `git diff --check` | 0 | PASS |
+
+**本轮明确未发生**：真实 MySQL Gate 未重新运行；未连接真实 MySQL；未执行 RESET / BOOTSTRAP / CLEANUP / Migration / DDL；未重新签发或消费 ACK-4（上一轮 ACK-4 的 RunId 已消费，不可复用）；未修改生产业务合同、Schema、Migration、命名锁合同、全局事务门禁与超时配置；未修改 `AUD-OUT-001` 的 `TESTED` / `PENDING_OWNER_APPROVAL` 状态；未把 `PRC-06` 改为 `COVERED`；未改变 M1-Core 七 Gate 的既有结果；未修改 `package.json` 版本与既有 release tag；未 Push / Merge / Tag / Release / Deploy。
+
+**仍未关闭的事项**：M3 的**真实**不确定 COMMIT 仍为 `NOT_PROVEN_ON_REAL_MYSQL`（真实库需要 `CONNECTION_ADMIN` 在提交中途 `KILL CONNECTION`，一次性 least-privilege 账户刻意没有该权限）；`GATE_READY` / `GATE_AUTHORIZED` / `GATE_EXECUTED` / `GATE_ACCEPTED` 仍未签发；`AUD-OUT-001` 仍为 `TESTED` / `PENDING_OWNER_APPROVAL`。
+
+**关于既有 Windows ACL 失败**：§45.16 记录的「既有 3380/3381、唯一 Windows ACL `SetAccessControl` 失败」在本轮 FULL 中**未复现**——本轮 FULL 为 3398/3398、0 FAIL，对应用例 `production evidence writer creates a readable sanitized file with platform restriction applied` 本轮 PASS。本轮**未修改**该用例、该 ACL 代码或任何权限配置，因此只登记「本轮未复现」这一事实，不把它记作已修复。
+
+**历史重写的边界与后续**：N7 修复只重写了本地工作分支 `fix/out001-mysql-test-fixtures`；`master` 与 `github/master` 仍指向旧历史，因此其 N7 仍为 FAIL，直到 Owner 批准把重写后的历史推送 / 合并为止。旧候选分支 `candidate/out001-97eea5a` 与本地备份分支均未被覆盖或删除。
+
+### 45.18 OUT-001 第二次受保护真实 MySQL 8 Gate 执行与 Launcher 报告链阻塞（2026-11-09）
+
+本节登记 Owner 对冻结候选 `candidate/out001-075e0f6` @ `075e0f6e61108a423c4ae0b194199edec2bc9465`
+的一次性真实 MySQL 8 Gate 授权、实际执行结果与执行后最小离线修补。它只登记本次执行事实，**不签发**
+`AUD-OUT-001` Acceptance、Domain Acceptance、Capability Freeze、Release 或 Deploy。
+
+| 项 | 实际结果 |
+|---|---|
+| Preflight | Windows PowerShell `5.1.26100.9711`；DPAPI CurrentUser PASS；MySQL `8.0.37`；`DATABASE()`、`CURRENT_USER()`、server UUID、grants SHA-256 与固定八字段身份完全一致；least privilege PASS；tables/views/triggers/routines/events=`0/0/0/0/0`；无 ACK-4 quarantine；Issuer 的显式 `System.Security` 与 SID-only ACL 合同 PASS |
+| ACK-4 | RunId `0adfecb6-7db9-4015-9c41-cc36ad42ec48`；Issuer exit `0`；10 分钟窗口；明文 approval 已删除；DPAPI Capability 仅当前 SID；Capability 已原子移动到 `ack4/consumed`，不得复用 |
+| RESET | exit `0`；初始 dropped=`0`；五类对象均为 `0` |
+| BOOTSTRAP | exit `0`；`bootstrapped=true` |
+| RUN | `server/mysql-out001.integration.js` exit `0`；真实 TAP `34 tests / 34 PASS / 0 FAIL / 0 SKIP / 0 CANCELLED`；M1、M1b、M2、M3、M4、M5 全部 PASS |
+| CLEANUP | exit `0`；dropped=`331`；inventory=`[]` |
+| Root Postflight | exit `0`；tables/views/triggers/routines/events=`0/0/0/0/0` |
+| 独立事后 Postflight | 同一固定身份与 least privilege 再次 PASS；五类对象仍为 `0/0/0/0/0`；无 quarantine |
+| 进程退出 | 4 个 ACK-4 child、3 个登记的 `OUT001_HTTP_APP` 后代与 Root PID 均已退出；没有残留应用子进程 |
+| Evidence | `%LOCALAPPDATA%\ModernERP\mysql-gate\evidence\0adfecb6-7db9-4015-9c41-cc36ad42ec48\`；5 组 `stdout.tap` / `stderr.log` / `result.json` 的实际字节数与 SHA-256 全部匹配；RunId 全部一致；密码、approval 明文与明文 Capability 文件均未出现 |
+| Root 终态 | 根据 `runOut001MySqlLifecycle()` 的唯一状态机与已持久化的 `testsPassed=true`、全部登记进程退出、Cleanup/Postflight 成功、无 quarantine，Root 已进入 `FINISHED`；但冻结 Launcher 未持久化最终 Root JSON，该 JSON 在下述报告阶段异常后丢失，故**完整 Root JSON 证据要求未满足** |
+| Launcher | exit `8`。数据库 Gate 已结束后，证据摘要读取不存在的 `tap.pass` / `tap.fail`，而持久化合同实际为 `tap.passed` / `tap.failed`；PowerShell StrictMode 抛出属性不存在异常。该失败不回滚已完成的 Gate，也不得被包装成 Launcher PASS |
+
+状态严格登记为：
+
+| 状态 | 本轮结论 |
+|---|---|
+| `GATE_READY` | 达成（本轮真实 DPAPI / ACL / target preflight 证据） |
+| `GATE_AUTHORIZED` | 达成且已消费（仅 RunId `0adfecb6-...`） |
+| `GATE_EXECUTED` | **EXECUTED**（真实 MySQL 套件与 Root cleanup/postflight 均实际运行） |
+| Gate 技术 PASS 登记 | **BLOCKED**：Launcher exit `8` 且最终 Root JSON 未持久化；不得登记完整 Gate PASS |
+| `GATE_ACCEPTED` | **NOT_ACCEPTED**；未签发 `AUD-OUT-001` Acceptance |
+| M3 真实不确定 COMMIT | 继续为 `NOT_PROVEN_ON_REAL_MYSQL`；本次 M3 PASS 不改变该残余边界 |
+
+执行后自动失败诊断确认唯一新增缺陷位于测试证据报告层。按 Owner 已授权的失败处置边界，从冻结候选创建
+本地分支 `fix/out001-launcher-tap-summary-0adfecb6`，仅将 Launcher 汇总字段修正为 `tap.passed` /
+`tap.failed`，并在 `server/mysql-out001-gate-infrastructure.test.js` 增加静态合同断言。离线 focused
+`27/27 PASS`；FAST 首次在受限沙箱复现已知 CIM/taskkill 权限失败并被终止，随后在所需权限下原命令
+`607/607 PASS`。**未**签发第二张 ACK-4、未再次运行数据库 Gate、未修改业务合同、Schema、Migration、
+数据库权限或版本号；未 Push / Merge / Tag / Release / Deploy。
+
+### 45.19 OUT-001 Root Evidence 持久化与历史 RunId 离线对账（2026-11-09）
+
+本节在 §45.18 的执行事实之上登记最终离线收尾；不改写 §45.18，也不把重建件冒充执行当时不存在的原始 Root JSON。Owner 已授权本轮代码、证据、测试、状态和本地 Git 收尾；未授权且本轮未发生任何 MySQL 连接、RESET / BOOTSTRAP / CLEANUP、ACK-4 签发或消费、数据库/Schema/Migration/权限变更、远端 Git 写入或发布动作。
+
+| 项目 | 本轮结论 |
+|---|---|
+| Root Evidence 合同 | 新增 `root-report.json` + `root-manifest.json`：绑定 UUIDv4 RunId、完整 Commit SHA、Manifest、Root 终态、测试/清理/进程退出布尔值、清理次数、子进程身份/退出码、Suite 与完整 evidence；报告按字节脱敏，临时文件原子 rename，既有目标拒绝覆盖，manifest 绑定报告文件名、字节数、SHA-256 与 evidence 数量。成功和已进入 Root 生命周期的失败路径均先持久化再输出；持久化失败不得 PASS。 |
+| Launcher 权威 | Launcher 不再信任 stdout 尾部 JSON；只接受经独立校验器复核 RunId、Commit SHA、Manifest、文件名、字节数、SHA-256、evidence 数量及必填字段后的 Root Artifact。只有 Node exit 0 且 Root=`FINISHED`、`testsPassed/cleanupProven/childrenExited=true` 才 exit 0；缺失、损坏、漂移或 launcher-result 持久化失败一律 `BLOCKED`。Gate 临时输出在删除前记录字节数与完整 SHA-256，`passed/failed` 字段合同继续保留。 |
+| 历史 RunId 对账 | 对 `0adfecb6-7db9-4015-9c41-cc36ad42ec48` 仅执行离线读取。五组 RESET / BOOTSTRAP / Suite / CLEANUP / Postflight 的 result、stdout、stderr 字节数与 SHA-256 全部自洽；exit 均为 0、无 stream error/failure；RESET dropped=0 且五类为零，BOOTSTRAP=true，TAP=34/34/0/0/0 且 M1/M1b/M2/M3/M4/M5 有实际 PASS 行，CLEANUP dropped=331，Postflight 五类为零。4 个 consumed child lease 与 3 个 descendant 的 RunId/PID/创建时间/operation 结构匹配。 |
+| Launcher 历史文件 | `launcher.stdout.log` 完整 SHA-256=`8580c507442214523f3e8910b1a4d4880d25ce13cab4ad6f4dd35beb27993a35`；历史 `launcher-result.json` 完整 SHA-256=`81c7b5c9d02ab7209f989a7bec76e4aa18c632dedc0cde1e1deb49e4a805e813`，均与既有记录匹配。 |
+| 重建件边界 | `%LOCALAPPDATA%\ModernERP\mysql-gate\evidence\0adfecb6-7db9-4015-9c41-cc36ad42ec48\root\root-reconciliation.json`，状态固定为 `RECONSTRUCTED_NOT_ORIGINAL`，`originalRootReportPresent=false`，文件 12380 bytes，SHA-256=`07577f303d85b2c86fc2cbf72fbb84ef194c35f5de581b0e714936771100e644`。它推断 Root 状态为 `FINISHED`，但历史进程退出只能登记 `REPORTED_NOT_REVERIFIED`：当前 PID 查询不得跨创建时间证明历史退出，避免 PID reuse 误判。该文件不能替代原始 Root report，也不能改写 Launcher exit 8。 |
+| 状态 | `GATE_EXECUTED=EXECUTED` 保持；完整技术 PASS 仍因执行时原始 Root JSON 缺失与 Launcher exit 8 而不登记；`GATE_ACCEPTED=NOT_ACCEPTED`；`AUD-OUT-001=TESTED / PENDING_OWNER_APPROVAL`；M3 真实不确定 COMMIT 继续为 `NOT_PROVEN_ON_REAL_MYSQL`。 |
+
+离线验证：focused `44/44 PASS`（其中新增 Root/对账行为用例 `17/17 PASS`）；FAST `624/624 PASS`；FULL `3415/3415 PASS`；Build PASS；全部修改的 Node 文件语法检查与 PowerShell AST 解析 PASS。文档 current/migration 与最终 `git diff --check` 结果登记于同日日志；本节不构成 Acceptance / Freeze。
+
+### 45.20 OUT-001 离线收尾关闭与下一阶段交接（2026-11-09）
+
+Owner 已确认正式关闭 **OUT-001 最终离线收尾修复**。本节只登记阶段关闭与后续工作包边界，不改写 §45.18 的历史执行事实或 §45.19 的 Root Evidence / 历史 RunId 对账事实。
+
+| 项目 | 正式处理 |
+|---|---|
+| OUT-001 最终离线收尾修复 | **CLOSED**。本轮 Root Evidence 持久化、Launcher 权威校验、历史 RunId 离线对账、行为测试、文档与提交工作均结束；不再围绕历史 Launcher exit 8 或缺失的原始 Root JSON 反复修补。 |
+| 历史记录 | §45.18 与 §45.19 均作为 append-only 历史记录保留，不回写、不重述为新的执行事实。历史 Launcher exit 8、原始 Root JSON 缺失、重建件 `RECONSTRUCTED_NOT_ORIGINAL`、历史进程退出 `REPORTED_NOT_REVERIFIED` 均保持原状。 |
+| Git 边界 | 不更新或合并 `master`；不移动、重建或删除任何 candidate；不创建或移动 release tag；不执行 Merge / Release / Deploy。当前工作分支与提交锚点按本次阶段关闭时的实际远端状态记录。 |
+| 下一阶段名称 | **OUT-001 Final Real MySQL Verification & Owner Acceptance**。该名称仅作为下一阶段工作包标识，不表示已经启动、授权、执行或验收。 |
+| 下一阶段启动条件 | 必须先冻结并核验新的候选 Commit SHA；由 Owner 明确授权唯一 disposable MySQL 目标与操作范围；签发全新的 RunId / ACK-4 Capability；按受保护流程执行真实 MySQL Gate，并取得执行当时原始 Root Artifact、Launcher 结果、完整证据与独立 Postflight。既有已消费 ACK-4 不得复用。 |
+| Acceptance 边界 | 本次阶段关闭不签发 `GATE_READY`、`GATE_AUTHORIZED`、新的 `GATE_EXECUTED`、技术 PASS、`GATE_ACCEPTED` 或 `AUD-OUT-001` Acceptance。既有 `GATE_EXECUTED=EXECUTED` 保持历史事实；`GATE_ACCEPTED=NOT_ACCEPTED`、`AUD-OUT-001=TESTED / PENDING_OWNER_APPROVAL` 与 M3 `NOT_PROVEN_ON_REAL_MYSQL` 均不变。 |
+
+**当前阶段终态**：`OUT-001_FINAL_OFFLINE_CLOSURE=CLOSED`。下一阶段 `OUT-001 Final Real MySQL Verification & Owner Acceptance` 为 **NOT_STARTED / NOT_AUTHORIZED**；本次未连接 MySQL、未执行数据库操作、未签发或消费 ACK-4、未变更数据库 / Schema / Migration / 权限、未更新 master / candidate / tag，亦未发布或部署。
+
+### 45.21 OUT-001 M3 不确定 COMMIT 最终专项修复：生产事务代码 + 真实故障注入装置（2026-11-09）
+
+本节登记本轮 **M3 最终专项修复** 的实现与离线验证事实。它**不**改写 §45.18、§45.19、§45.20 的历史记录，**不**签发 `GATE_READY` / `GATE_AUTHORIZED` / 新的 `GATE_EXECUTED` / 技术 PASS / `GATE_ACCEPTED` / `AUD-OUT-001` Acceptance / Capability Freeze / Release / Deploy。本轮**未连接真实 MySQL**、未执行 RESET / BOOTSTRAP / CLEANUP、未签发或消费 ACK-4。
+
+#### 45.21.1 已修复的生产代码
+
+| 文件 | 修复 |
+|---|---|
+| `server/db.js` | `transaction()` 的不确定 COMMIT 分支**前移到任何收尾动作之前**。判定条件为「COMMIT 已发出但未被确认」（`commitAttempted` 且 `mysqlRequestTimeout` / `sessionLost`）。该分支：保留原始 COMMIT 错误及其 `classification` / `sessionLost` / 原始错误码；立即隔离原适配器（原因 `uncertain_commit`）并由适配器终止其 Worker；**不在原适配器上发出 ROLLBACK**；**不在替代会话上代替原会话收尾**；**不重跑事务工作体**；**不把适配器恢复成可信空闲状态**；把不确定 COMMIT 标记传给上层调用者；命名锁登记**只在**终止确认为 `TERMINATION_CONFIRMED` 之后按「随会话销毁由服务器回收」清理，`TERMINATION_FAILED` 时保持隔离且不冒充 `SESSION_DESTROYED`。`commitAttempted` 在 COMMIT 被确认后立即复位，使之后的任何错误都不会被误判为不确定 COMMIT。普通业务错误、明确 ROLLBACK 与可证明安全的重试路径保持既有行为 |
+| `server/modules/outsourcing-finance.js` | `createWipTransfer()` 的 catch/finally：**不确定 COMMIT 不是已确认的业务拒绝**，因此不调用 `rejectWipTransfer()` 写普通拒绝审计、不在已被隔离的适配器上继续写入、保留原始异常、不产生第二笔业务事实；`finally` 的锁释放在隔离会话上不发出任何 SQL。正常 201、精确重放 201 与异载荷 409 的既有合同不变 |
+| `server/database/mysql-worker.js` + 新增 `server/database/mysql-worker-policy.js` | 把恢复策略的三个纯函数（`isRecoverableConnectionError` / `isReadOnlySql` / `classifyExecStatement`）抽到无副作用的独立模块，原模块的公开导出不变。**原因**：夹具 Worker 此前 `import` 生产 Worker 会连带注册其 `parentPort` 处理器，在夹具 Worker 内启动第二个真实 MySQL 客户端（并与夹具竞争同一响应缓冲）。这是 M3 离线夹具必须 hermetic 的直接阻断项 |
+
+#### 45.21.2 新增的真实故障注入装置与测试
+
+| 文件 | 用途 |
+|---|---|
+| `server/database/test-fixtures/mysql-commit-withholding-proxy.js` | 仅测试用的本地 TCP 代理：`node:net`、只绑定 `127.0.0.1`、只连已授权的 MySQL host/port、解析 MySQL packet framing（正确处理分包与粘包）、只识别 `COM_QUERY` 且语句恰为 `COMMIT` 的报文、原样转发给真实服务端、暂存服务端 OK 报文并上报 `COMMIT_RESPONSE_WITHHELD`、非 COMMIT 流量原样透传、服务端不确认时超时 fail closed、异常关闭不残留 socket。**不记录**认证包 / 口令 / SQL 参数 / 原始报文；**不新增** npm 依赖；**不修改** TLS 配置（目标启用 TLS 时调用方必须 fail closed） |
+| `server/database/test-fixtures/out001-m3-uncertain-commit-worker.js` | 仅测试用的夹具 Worker：与生产 Worker 共享同一恢复策略，并上报「会话计数」与「语句分类」，使离线用例可以证明不确定 COMMIT **未建立新的 Worker 会话**且**未发出 ROLLBACK** |
+| `server/mysql-out001-m3-uncertain-commit.test.js` | 确定性离线回归 11 项：packet parser 分包/粘包、只识别 COM_QUERY COMMIT、非 COMMIT 透传、COMMIT OK 暂存、代理超时 fail closed、无 socket 泄漏、不确定 COMMIT 不进入 `settleTransactionRollback()`、不建立新的 Worker 会话、终止确认后才清理锁登记、终止失败保持隔离、handler 不把不确定 COMMIT 记为普通拒绝、业务体只执行一次。已登记入 `FULL` 套件（`scripts/testing/test-suites.js`） |
+| `server/mysql-out001.integration.js` | M3 的**真实**故障注入替换原「以 recovery worker 夹具冒充真实证据」的部分：victim 经代理提交**真实** WIP Transfer；代理暂存真实 COMMIT OK；observer 以**同一 MySQL 账户**核验身份后执行 `KILL CONNECTION <verified_victim_id>`；随后逐条判定 R1～R5 |
+| `scripts/gates/mysql-out001-http-app-child.mjs` | 独立应用进程新增两个 IPC 探针：`CONNECTION_ID`（真实 connection id 与会话 epoch）与 `TRANSFER`（真实 WIP Transfer POST 及适配器自身的隔离 / 终止 / 异常分类结论） |
+| `server/test-utils/mysql-out001-target.js` | 新增可选的 loopback 代理绑定（`ERP_OUT_001_MYSQL_PROXY_BINDING`）。绑定**不改变**目标身份：disposable 目标守卫仍按上游身份判定，代理上游必须与 target proof 完全一致，database / user 仍逐一比对，连接身份（server UUID、grants 摘要、版本、CURRENT_USER、DATABASE）仍必须与 target proof 逐项相符 |
+
+#### 45.21.3 本轮离线验证结果（真实退出码）
+
+| # | 命令 | 退出码 | 结果 |
+|---|---|---|---|
+| 1 | M3 相关文件 `node --check`（11 个文件） | `0` | 全部通过 |
+| 2 | `node --test server/mysql-out001-m3-uncertain-commit.test.js` | `0` | `11/11 PASS`（0 FAIL / 0 SKIP / 0 CANCELLED） |
+| 3 | `node --test server/outsourcing-wip-transfer.test.js server/outsourcing-finance.test.js` | `0` | `28/28 PASS`（OUT-001 SQLite focused） |
+| 4 | `node --test server/mysql-out001-gate-infrastructure.test.js` | `0` | `44/44 PASS` |
+| 5 | `node --test server/mysql-disposable-target-guard.test.js` | `0` | `10/10 PASS` |
+| 6 | `pnpm test:fast` | `0` | `624/624 PASS` |
+| 7 | `pnpm test`（FULL） | `0` | `3426/3426 PASS`（较上一轮 3415 增加本轮新增的 11 项） |
+| 8 | `pnpm build` | `0` | 构建通过 |
+| 9 | `node scripts/docs/check-doc-consistency.mjs --mode migration` | `0` | `ALL CHECKS PASSED`（C1～C6 全 PASS） |
+| 10 | `node scripts/docs/check-doc-consistency.mjs`（current） | 提交前 `1` | 仅 **N7** 失败：N7 按设计拒绝「WORKTREE 含未提交或未跟踪的受治理文件变化」（本轮尚未提交的 `docs/design/procurement-outsourcing.md` 与 `docs/status/PROJECT_STATUS.md`）；N1、N3～N6、N8、N9 全 PASS，N2 为 `RETIRED`。提交后的复跑退出码登记在本轮交付报告 |
+| 11 | `git diff --check` | `0` | 无空白错误 |
+
+#### 45.21.4 真实 MySQL 尚未运行、M3 R1～R5 尚待 Gate 实证的项目
+
+本轮**全部** M3 真实证据仍为 `NOT_PROVEN_ON_REAL_MYSQL`。以下项目只能在受保护的 disposable MySQL Gate 中产生，不得以离线结果冒充：
+
+| 项 | 状态 |
+|---|---|
+| 代理在**真实** MySQL 上拦截真实 COMMIT OK | `NOT_PROVEN_ON_REAL_MYSQL`（离线仅证明 framing、识别、暂存与 fail-closed 行为） |
+| 观察者以同一账户 `KILL CONNECTION` 终止 victim 的真实权限路径 | `NOT_PROVEN_ON_REAL_MYSQL`（离线无真实权限判定） |
+| R1 原会话终止已确认（`TERMINATION_CONFIRMED`） | `NOT_PROVEN_ON_REAL_MYSQL` |
+| R2 命名锁已由服务器随会话释放 | `NOT_PROVEN_ON_REAL_MYSQL` |
+| R3 核验连接可信且 connection id 与会话 epoch 均不同 | `NOT_PROVEN_ON_REAL_MYSQL` |
+| R4 服务端 COMMIT 成功时恰好一笔转移事实、恰好一条幂等记录 | `NOT_PROVEN_ON_REAL_MYSQL` |
+| R5 相同幂等键重放返回原 id / 原 transferNo 且零新增事实 | `NOT_PROVEN_ON_REAL_MYSQL` |
+| 客户端在真实连接丢失下的原异常 classification / `sessionLost` 透出 | `NOT_PROVEN_ON_REAL_MYSQL` |
+
+#### 45.21.5 本轮状态与边界
+
+| 状态 | 本轮结论 |
+|---|---|
+| 生产事务代码 | **已修复并离线验证**：不确定 COMMIT 的处置顺序、标记透传、锁登记清理时机与 handler 处置均已按 §26.34.14.3 收敛 |
+| M3 真实故障注入装置 | **已实现，未执行**：`GATE_IMPLEMENTED`（装置与证据链已就位，等待 Owner 授权的受保护 Gate） |
+| M3 真实不确定 COMMIT | 继续为 `NOT_PROVEN_ON_REAL_MYSQL` |
+| `GATE_READY` / `GATE_AUTHORIZED` / 新的 `GATE_EXECUTED` / 技术 PASS / `GATE_ACCEPTED` | **未签发** |
+| `AUD-OUT-001` | 仍为 `TESTED` / `PENDING_OWNER_APPROVAL` |
+| `GATE_EXECUTED=EXECUTED`（§45.18 历史事实） | 保持不变 |
+| Schema / Migration / 数据库权限 / `package.json` version / release tag / master / candidate | **全部未变** |
+
+**HARD STOP**：本轮实现与离线回归全部通过，等待 Owner Review。**不得**自行签发 `GATE_READY`、ACK-4 或任何 Acceptance。
+
+### 45.22 OUT-001 M3 Gate 最终技术复核修正：账户身份比较与 R3 合同（2026-11-09）
+
+本节是对 §45.21 的**技术复核修正**，只追加、不改写 §45.18、§45.19、§45.20、§45.21 的任何结论。Owner 在复核 §45.21 的实现时指出两处**身份验证缺陷**：真实 Gate 的 M3 用 `PROCESSLIST.USER` 与 `CURRENT_USER()` 直接比较，且用两个独立 Worker 的原始 `sessionEpoch` 数字互相比较来证明「会话不同」。本节登记这两处的修正与离线验证结果。本轮**未连接真实 MySQL**、未执行 RESET / BOOTSTRAP / CLEANUP、未签发或消费 ACK-4、未签发任何 Gate 状态或 Acceptance。
+
+#### 45.22.1 两处缺陷与修正
+
+| # | 缺陷 | 修正 |
+|---|---|---|
+| 1 | **账户身份比较口径错误**：`CURRENT_USER()` 返回实际用于认证的 `user@host`，`PROCESSLIST.USER` 只返回裸用户名；原实现把两者直接比较，语义不成立，且对「观察者与 victim 是否同一账户」的判定不可靠 | `CONNECTION_ID` IPC 探针改为 `SELECT CONNECTION_ID() id, CURRENT_USER() currentUser, DATABASE() databaseName`，一并返回 `connectionId`、`currentUser`、`database`、`sessionEpoch`、`sessionState`；observer 侧同样取回 `CURRENT_USER()` 与 `DATABASE()`。身份核验固定为五条独立断言：`victimCurrentUser === observerCurrentUser`、`victimRow.user === targetConfig.user`、`victimRow.db === targetConfig.database`、`observerDatabase === targetConfig.database`、`victimConnectionId !== observerConnectionId`。**禁止** `PROCESSLIST.USER` 与 `CURRENT_USER()` 直接比较。**未增加** `PROCESS` / `CONNECTION_ADMIN` / `SUPER` 或任何其它数据库权限 |
+| 2 | **R3 的 epoch 合同无效**：`sessionEpoch` 是每个 `MySqlSyncAdapter` Worker **内部**的局部计数器，两个独立 Adapter 的原始数字互不可比；原实现用 `observer.sessionEpoch !== victimEpoch` 证明会话不同，该比较恒等于「两个无关计数器是否碰巧不等」，没有技术意义 | R3 改由三项共同证明：observer 是**独立创建的 Adapter**、它是**可信会话**（`mysqlSessionState()` ∈ `{IDLE_TRUSTED, FRESH}`）、它的 **connection id** 与 victim 不同。**不再**读取或比较 observer 的 epoch。victim 自身的 epoch `1 → 2` 保留为 **victim 自己**的会话被替换的独立证据（epoch 递增 + MySQL 分配新 connection id 同时成立），并明确**不**与 observer 的 epoch 交叉比较。代理的 `dropSession` 步骤据此重新定义为「触发 victim 自身的 session replacement」 |
+
+#### 45.22.2 判定逻辑的单一来源
+
+新增 `server/test-utils/out001-m3-identity.js`，把三项判定集中为**纯函数**并返回稳定的问题码，真实 Gate 与离线回归共用同一实现：
+
+| 函数 | 判定 |
+|---|---|
+| `out001M3AccountIdentityProblems()` | 账户身份五条断言；问题码含 `CURRENT_USER_MISMATCH`、`PROCESSLIST_USER_MISMATCH`、`PROCESSLIST_DB_MISMATCH`、`VICTIM_DATABASE_MISMATCH`、`OBSERVER_DATABASE_MISMATCH`、`SAME_CONNECTION_ID`、`INVALID_*_CONNECTION_ID`、`*_CURRENT_USER_MISSING` |
+| `out001M3R3Problems()` | R3 三项断言；**签名中没有任何 epoch 参数**，问题码含 `OBSERVER_SESSION_NOT_TRUSTED`、`OBSERVER_NOT_INDEPENDENT_ADAPTER`、`SAME_CONNECTION_ID`、`INVALID_*_CONNECTION_ID` |
+| `out001M3VictimSessionReplacementProblems()` | victim 自身会话替换；问题码含 `VICTIM_EPOCH_NOT_INCREMENTED`、`VICTIM_CONNECTION_ID_NOT_REPLACED` |
+
+#### 45.22.3 离线验证结果（真实退出码）
+
+| # | 命令 | 退出码 | 结果 |
+|---|---|---|---|
+| 1 | M3 相关文件 `node --check` | `0` | 全部通过 |
+| 2 | `node --test server/mysql-out001-m3-uncertain-commit.test.js` | `0` | `21/21 PASS`（较 §45.21 的 11 项新增 10 项：账户身份五条断言各自的失败口径、`PROCESSLIST.USER` 与 `CURRENT_USER()` 不可直接比较、R3 三项断言、R3 判定不含 epoch 且对 epoch 取值不敏感、victim 自身会话替换判定、真实 Gate 必须使用共享判定的源码合同） |
+| 3 | `node --test server/outsourcing-wip-transfer.test.js server/outsourcing-finance.test.js` | `0` | `28/28 PASS` |
+| 4 | `node --test server/mysql-out001-gate-infrastructure.test.js` | `0` | `44/44 PASS` |
+| 5 | `node --test server/mysql-disposable-target-guard.test.js` | `0` | `10/10 PASS` |
+| 6 | `pnpm test:fast` | `0` | `624/624 PASS` |
+| 7 | `pnpm test`（FULL） | `0` | `3436/3436 PASS`（较 §45.21 的 3426 增加本轮新增的 10 项） |
+| 8 | `pnpm build` | `0` | 构建通过 |
+| 9 | `node scripts/docs/check-doc-consistency.mjs --mode migration` | `0` | `ALL CHECKS PASSED`（C1～C6 全 PASS） |
+| 10 | `node scripts/docs/check-doc-consistency.mjs`（current） | 提交后 `0` | `ALL CHECKS PASSED`（N1、N3～N9 全 PASS，N2 `RETIRED`） |
+| 11 | `git diff --check` | `0` | 无空白错误 |
+
+#### 45.22.4 真实 MySQL 尚未运行的项目
+
+本轮**没有**产生任何新的真实 MySQL 证据。§45.21.4 登记的全部项目继续为 `NOT_PROVEN_ON_REAL_MYSQL`，包括：真实 COMMIT OK 拦截、同账户 `KILL CONNECTION` 的真实权限路径、R1 终止已确认、R2 命名锁由服务器释放、R3 核验连接可信且 connection id 不同、R4 恰好一笔转移事实与一条幂等记录、R5 重放返回原 id / 原 transferNo、客户端真实连接丢失下的原异常 classification 透出。**本轮修正的是判定口径本身**，它必须由受保护的 disposable MySQL Gate 才能实证。
+
+#### 45.22.5 本轮状态与边界
+
+| 状态 | 本轮结论 |
+|---|---|
+| 账户身份比较与 R3 合同 | **已修正并离线验证**；判定逻辑集中为单一来源的纯函数，真实 Gate 与离线回归共用 |
+| M3 真实故障注入装置 | 仍为 `GATE_IMPLEMENTED`（**未执行**） |
+| M3 真实不确定 COMMIT | 继续为 `NOT_PROVEN_ON_REAL_MYSQL` |
+| `GATE_READY` / `GATE_AUTHORIZED` / 新的 `GATE_EXECUTED` / 技术 PASS / `GATE_ACCEPTED` | **未签发** |
+| `AUD-OUT-001` | 仍为 `TESTED` / `PENDING_OWNER_APPROVAL` |
+| Schema / Migration / 数据库权限（含 `PROCESS` / `CONNECTION_ADMIN` / `SUPER`）/ `package.json` version / release tag / master / candidate | **全部未变** |
+
+**HARD STOP**：本轮实现与离线回归全部通过，等待 Owner Review。**不得**自行签发 `GATE_READY`、ACK-4 或任何 Acceptance。
+
+### 45.23 OUT-001 M3 R3 合同一致性最小修正（2026-11-09）
+
+本节是对 §45.22 的**一致性收尾**，只追加、不改写 §45.18、§45.19、§45.20、§45.21、§45.22 的任何结论。Owner 复核指出：§45.22 已在代码与 §26.34.16.3.1 修正了 R3 合同，但**基础合同正文 §26.34.14.3 仍保留旧的 epoch 措辞**，代理的 `dropSession` 旧 JSDoc 也仍在声称跨会话比较 epoch。本节登记该最小修正及其离线验证。本轮**未连接真实 MySQL**、未执行 RESET / BOOTSTRAP / CLEANUP、未签发或消费 ACK-4、未签发任何 Gate 状态或 Acceptance、未 Push。
+
+#### 45.23.1 修正内容
+
+| # | 位置 | 修正 |
+|---|---|---|
+| 1 | `docs/design/procurement-outsourcing.md` §26.34.14.3 的 **R3 基础合同行** | 与 §26.34.16.3.1 同步为三项：核验连接由**独立创建的 Adapter** 提供；它是**可信会话**（`mysqlSessionState()` ∈ `{IDLE_TRUSTED, FRESH}`）；其 **connection id** 与原会话不同。显式写明**禁止跨 Adapter 比较会话 epoch**（epoch 是每个 Worker 内部的局部计数器，两个独立 Adapter 的原始数字互不可比），且 **epoch 只用于证明同一 Worker 自身的 session replacement**。判定依据补引 `server/test-utils/out001-m3-identity.js` |
+| 2 | `docs/design/procurement-outsourcing.md` §26.34.14.3 的**审计义务** | 旧的「终止状态、epoch 变化」措辞会持续暗示跨 Worker 的 epoch 比较。改为「终止状态、原会话自身的会话替换证据」，并显式规定：审计记录会话标识时只允许使用**原会话自身**可证明的标识（其 connection id，以及其 Worker 自身 epoch 的递增），**禁止**把核验连接的 epoch 与原会话的 epoch 互相比较 |
+| 3 | `server/database/test-fixtures/mysql-commit-withholding-proxy.js` 的 `dropSession` JSDoc | 旧说明称它「使 victim 的 session epoch 与核验连接的 epoch 可证明地不同」，属于跨会话比较的旧语义。改为：它只触发**持有该会话的客户端自身**的一次 session replacement（victim 自己的 MySQL Worker 重连、开启新 MySQL 会话、获得新 connection id），这是它**唯一**证明的事情，且只关于 victim；它对任何其它适配器不作任何断言。会话 epoch 是 per-Worker 计数器，**从不跨 Adapter 比较**，因此该夹具刻意完全不建模 epoch。默认 reason 同步改为 `M3_VICTIM_SESSION_REPLACED` |
+| 4 | `server/mysql-out001-m3-uncertain-commit.test.js` | 新增两项防回归断言（`M3-O16`、`M3-O17`）并强化 `M3-O15`：`M3-O16` 定位 Design §26.34.14.3，禁止旧措辞（`epoch 与原会话不同` / `epoch 与核验连接不同` / `epoch 不同`）、要求 R3 行含「独立创建」「IDLE_TRUSTED」「connection id」「同一 Worker 自身」、要求审计义务不再使用裸的「epoch 变化」并显式禁止跨 Worker 比较；`M3-O17` 要求代理源码不含 `sessionEpoch` 标识符、`dropSession` 的说明必须点明 victim 与 session replacement、不得再出现「核验连接 epoch」措辞；`M3-O15` 增加标识符级的双向防线（`victimEpoch` 与 `observer` 不得相邻比较） |
+
+#### 45.23.2 修正范围与边界
+
+本轮**只**修正文档措辞、测试夹具注释与离线断言：**未修改**生产事务逻辑（`server/db.js`、`server/modules/outsourcing-finance.js`）、**未修改** Schema / Migration / 数据库权限（含 `PROCESS` / `CONNECTION_ADMIN` / `SUPER`）、**未修改** ACK-4 Manifest、**未修改**其它任何业务合同；master、candidate、release tag、`package.json` version 全部未变。§26.34.16.3 与 §26.34.16.3.1 在 §45.22 中已与新合同一致，本轮**无需**再改。
+
+#### 45.23.3 离线验证结果（真实退出码）
+
+| # | 命令 | 退出码 | 结果 |
+|---|---|---|---|
+| 1 | M3 相关修改文件 `node --check` | `0` | 通过 |
+| 2 | `node --test server/mysql-out001-m3-uncertain-commit.test.js` | `0` | `23/23 PASS`（较 §45.22 的 21 项新增 `M3-O16`、`M3-O17` 两项防回归断言） |
+| 3 | `node scripts/docs/check-doc-consistency.mjs --mode migration` | `0` | `ALL CHECKS PASSED`（C1～C6 全 PASS） |
+| 4 | `node scripts/docs/check-doc-consistency.mjs`（current） | 提交后 `0` | `ALL CHECKS PASSED`（N1、N3～N9 全 PASS，N2 `RETIRED`） |
+| 5 | `git diff --check` | `0` | 无空白错误 |
+
+本轮**未**重复运行完整 FULL 套件：本轮不修改任何生产代码，改动仅限一份设计文档、一处测试夹具注释与一份离线测试文件；受影响的 M3 focused 套件已全量重跑并全绿。
+
+**防回归断言的有效性（非空洞证明）**：把 §26.34.14.3 的 R3 行改回旧措辞后，`M3-O16` 立即失败；把代理 `dropSession` 的 JSDoc 改回旧措辞后，`M3-O17` 立即失败。两条断言各自承载实际重量，改动随即恢复。
+
+#### 45.23.4 本轮状态与边界
+
+| 状态 | 本轮结论 |
+|---|---|
+| R3 合同一致性 | **已修正并离线验证**：基础合同正文、验证方法、代理注释与离线断言四处口径一致 |
+| M3 真实故障注入装置 | 仍为 `GATE_IMPLEMENTED`（**未执行**） |
+| M3 真实不确定 COMMIT | 继续为 `NOT_PROVEN_ON_REAL_MYSQL`（§45.22.4 清单不变） |
+| `GATE_READY` / `GATE_AUTHORIZED` / 新的 `GATE_EXECUTED` / 技术 PASS / `GATE_ACCEPTED` | **未签发** |
+| `AUD-OUT-001` | 仍为 `TESTED` / `PENDING_OWNER_APPROVAL` |
+| Schema / Migration / 数据库权限 / ACK-4 Manifest / 生产事务逻辑 / `package.json` version / release tag / master / candidate / 远端 | **全部未变**；本轮**未 Push** |
+
+**HARD STOP**：本轮修正与离线验证完成，等待 Owner Review。**不得**自行签发 `GATE_READY`、ACK-4 或任何 Acceptance。
+
+### 45.24 OUT-001 M3 远端同步记录（2026-11-09）
+
+本节只登记 M3 最终提交在 **GitHub** 上的远端同步事实与前置核验结果。它**不**改写 §45.18、§45.19、§45.20、§45.21、§45.22、§45.23 的任何结论；**不**创建 Candidate Freeze；**不**签发 `GATE_READY` / `GATE_AUTHORIZED` / `GATE_ACCEPTED` 或任何 Acceptance。本工作包**未**发生 Merge、Tag、Release、Deploy、任何数据库操作，也**未**签发或消费 ACK-4。
+
+#### 45.24.1 前置核验（实际值）
+
+| 项 | 实际核验结果 |
+|---|---|
+| 工作分支 | `fix/out001-launcher-tap-summary-0adfecb6` |
+| 本地 HEAD | `7fda3e990aaa5d62340b1c489922c43b4e6a9295` |
+| 该提交的父提交 | `dc58771ba91ea41b1876b4de3e14cb78848b32ce` |
+| 该提交的标题 | 同步 OUT-001 M3 的 R3 合同并消除旧 epoch 语义 |
+| GitHub 工作分支 HEAD（核验时点） | `7fda3e990aaa5d62340b1c489922c43b4e6a9295`，与本地一致 |
+| 工作树 | clean（无未提交、无未跟踪文件） |
+| `master`（本地 = GitHub） | `97eea5a58bad774b36fbe0e94d60a1e35c2c3a3b`（未变） |
+| `candidate/out001-075e0f6`（GitHub） | `075e0f6e61108a423c4ae0b194199edec2bc9465`（未变） |
+| `candidate/out001-97eea5a`（GitHub） | `97eea5a58bad774b36fbe0e94d60a1e35c2c3a3b`（未变） |
+| `candidate/out001-a5fffd1`（GitHub） | `a5fffd10835336fc5137ff2768290f5c34def4ea`（未变） |
+| `fix/out001-mysql-test-fixtures`（GitHub） | `075e0f6e61108a423c4ae0b194199edec2bc9465`（保持不变） |
+| `package.json` version | `1.6.2`（未变） |
+| release tags | 本地 `29` 个；GitHub `3` 个（`v1.6.0`、`v1.6.1`、`v1.6.2`）；Gitee `29` 个 —— 数量与构成均**未变** |
+
+**核验发现的本地/远端 ref 差异（如实登记）**：本地还存在一条**仅本地**的分支 `candidate/out001-163e43c`（`163e43cdb7b52e2f90f711539573284db3b4c123`，"修复门禁：为 ACK-4 签发器加载 DPAPI 程序集"，是 `master` 的祖先）。它在 **GitHub 上没有对应 ref**，也不属于上述三条旧 candidate，因此**不在**本次同步范围内，且本工作包**未**推送它。
+
+#### 45.24.2 远端同步事实
+
+- M3 最终提交 `7fda3e990aaa5d62340b1c489922c43b4e6a9295`（父提交 `dc58771ba91ea41b1876b4de3e14cb78848b32ce`）**已同步至 GitHub** 的 `fix/out001-launcher-tap-summary-0adfecb6`。该状态在本工作包开始时即已成立（由 `git ls-remote` 核验），并非本次推送的结果。
+- 本次 §45.24 记录提交按授权**仅**推送到 GitHub 的同一工作分支 `fix/out001-launcher-tap-summary-0adfecb6`。推送后本地 HEAD 与 GitHub 远端 HEAD 将同为该记录的提交 SHA，工作树保持 clean；提交后的最终 SHA、`git ls-remote` 输出与 `git status` 实际结果登记在本轮交付报告。
+- **未**推送 Gitee、**未**推送 `master`、**未**推送任何 candidate、**未**推送 `fix/out001-mysql-test-fixtures`；**未**执行 Merge / Tag / Release / Deploy。
+
+#### 45.24.3 Gitee 同步状态（如实登记）
+
+**本次是 GitHub 单远端同步，不是双远端同步。** 实际核验结果：
+
+| Gitee（`origin`）上的 ref | 实际状态 |
+|---|---|
+| `fix/out001-launcher-tap-summary-0adfecb6` | **不存在** —— OUT-001 的工作分支从未同步到 Gitee |
+| `candidate/out001-075e0f6` | **不存在** |
+| `candidate/out001-97eea5a` | **不存在** |
+| `candidate/out001-a5fffd1` | **不存在** |
+| `fix/out001-mysql-test-fixtures` | **不存在** |
+| `master` | `a17ef2bb45b658d1c23136406f560e83634f0bbf`，与 GitHub 的 `master`（`97eea5a58bad774b36fbe0e94d60a1e35c2c3a3b`）**不同** |
+
+因此：GitHub 上的 M3 分支与三条 candidate **仅**存在于 GitHub；Gitee 上既没有这些分支，其 `master` 也处于另一个提交。任何把本次同步表述为「双远端同步」的描述都不成立。
+
+#### 45.24.4 本轮状态与边界
+
+| 状态 | 本轮结论 |
+|---|---|
+| M3 最终提交 `7fda3e9` 的 GitHub 同步 | **已达成并核验**（`git ls-remote` 匹配本地 HEAD） |
+| 本次 §45.24 记录提交的推送 | 仅推送到 GitHub 的原工作分支；推送后核验结果登记在本轮交付报告 |
+| Candidate Freeze | **未创建** |
+| `GATE_READY` / `GATE_AUTHORIZED` / 新的 `GATE_EXECUTED` / 技术 PASS / `GATE_ACCEPTED` | **未签发** |
+| `AUD-OUT-001` | 仍为 `TESTED` / `PENDING_OWNER_APPROVAL` |
+| M3 真实不确定 COMMIT | 继续为 `NOT_PROVEN_ON_REAL_MYSQL`（§45.22.4 清单不变） |
+| Merge / Tag / Release / Deploy / 数据库操作 / ACK-4 | **全部未发生** |
+| `master` / 三条 candidate / `fix/out001-mysql-test-fixtures` / `package.json` version / release tags | **全部未变** |
+
+**HARD STOP**：本工作包完成，等待 Owner Review。**不得**自行签发 `GATE_READY`、ACK-4、Candidate Freeze 或任何 Acceptance。
+
+### 45.25 OUT-001 Candidate Freeze（技术候选基线冻结）（2026-11-09）
+
+本节登记 OUT-001 的**技术候选基线冻结**。它**不**改写 §45.18、§45.19、§45.20、§45.21、§45.22、§45.23、§45.24 的任何结论；**不**签发 `GATE_READY` / `GATE_AUTHORIZED` / `GATE_ACCEPTED` / 任何 Acceptance；**不**构成业务 Capability Freeze、Domain Acceptance、Manual Closure、Release Readiness。本工作包**未** Push、未 Merge、未 Tag、未 Release / Deploy、未连接 MySQL、未执行 RESET / BOOTSTRAP / CLEANUP、未签发或消费 ACK-4。完整冻结证据见 [`docs/acceptance/out001-candidate-freeze-20261109.md`](../acceptance/out001-candidate-freeze-20261109.md)。
+
+#### 45.25.1 冻结对象
+
+| 项 | 值 |
+|---|---|
+| Candidate 名称 | `candidate/out001-d4c97a8`（**本地分支**，本轮**未 Push**） |
+| 冻结 SHA（完整） | `d4c97a8f8be5da56e43fc8346fc5b916f8c6a7ec` |
+| Source branch / Source SHA | `fix/out001-launcher-tap-summary-0adfecb6` / `d4c97a8f8be5da56e43fc8346fc5b916f8c6a7ec`（与冻结 SHA **精确相等**） |
+| Candidate HEAD 与冻结 SHA | **完全一致**（两个 `git rev-parse` 实测同一 SHA） |
+| Candidate 分支新增提交 | **0 条**；冻结后仍精确指向 `d4c97a8` |
+| 前置核验 | 工作树 clean；本地与 GitHub source HEAD 均为 `d4c97a8`；`candidate/out001-d4c97a8` 本地与 GitHub **均不存在**（未覆盖任何既有候选）；`master` = `97eea5a58bad774b36fbe0e94d60a1e35c2c3a3b`；三条旧 candidate 与 `fix/out001-mysql-test-fixtures` 全部保留未变；`package.json` version `1.6.2`；release tags 本地 `29` / GitHub `3` / Gitee `29` 均未变 |
+
+#### 45.25.2 候选上的离线回归（真实退出码，全为 0）
+
+| # | 命令 | 退出码 | 结果 |
+|---|---|---|---|
+| 1 | `node --test server/mysql-out001-m3-uncertain-commit.test.js` | `0` | `23/23 PASS` |
+| 2 | `node --test server/mysql-out001-gate-infrastructure.test.js` | `0` | `44/44 PASS` |
+| 3 | `node --test server/mysql-disposable-target-guard.test.js` | `0` | `10/10 PASS` |
+| 4 | `node --test server/outsourcing-wip-transfer.test.js` | `0` | `21/21 PASS` |
+| 5 | `node --test server/outsourcing-finance.test.js` | `0` | `7/7 PASS` |
+| 6 | `node --test server/outsourcing.test.js` | `0` | `5/5 PASS` |
+| 7 | `pnpm test:fast` | `0` | `624/624 PASS` |
+| 8 | `pnpm test`（FULL） | `0` | `3438/3438 PASS` |
+| 9 | `pnpm build` | `0` | 构建通过 |
+| 10 | Docs migration | `0` | `ALL CHECKS PASSED`（C1～C6） |
+| 11 | Docs current | `0` | `ALL CHECKS PASSED`（N1、N3～N9 含 N7；N2 `RETIRED`） |
+| 12 | `git diff --check` | `0` | 无空白错误 |
+
+#### 45.25.3 已证明 / 未证明边界
+
+| 项 | 结论 |
+|---|---|
+| 离线已证明 | M1～M5 的**代码路径**与离线夹具在本候选上全部通过；M3 的不确定 COMMIT 处置顺序、账户身份核验口径与 R3 合同有确定性离线证据（含两条变异实验证明防回归断言非空洞） |
+| 真实 MySQL 未证明 | **M1～M5 的真实执行未在本候选上重跑**。§45.18 的真实 Gate 34/34 PASS 是**旧候选 `075e0f6`** 的历史事实；本候选相对它改动了 `server/db.js` 与 `server/modules/outsourcing-finance.js`，二者都在 M1/M2/M4/M5 的执行路径上。**旧候选的 PASS 不得被描述为本候选的 PASS** |
+| M3 真实不确定 COMMIT | 继续为 **`NOT_PROVEN_ON_REAL_MYSQL`** —— 从未在任何候选上被真实证明 |
+| `GATE_READY` | **尚未签发** |
+| `AUD-OUT-001` | 仍为 `TESTED` / `PENDING_OWNER_APPROVAL` |
+| 不包含 | 真实 MySQL Acceptance、ACK-4、Capability Freeze、Domain Acceptance、Manual Closure、Release Readiness、Release、Deploy —— **全部不包含** |
+
+#### 45.25.4 本轮状态与边界
+
+| 状态 | 本轮结论 |
+|---|---|
+| Candidate Freeze | **达成**：`candidate/out001-d4c97a8` = `d4c97a8f8be5da56e43fc8346fc5b916f8c6a7ec`，本地，12 项离线回归全绿 |
+| 旧 candidate | **全部保留**：`candidate/out001-075e0f6`、`candidate/out001-97eea5a`、`candidate/out001-a5fffd1` 的 ref 与 SHA 均未改动；本地仅本地分支 `candidate/out001-163e43c` 未在同步范围内、未被改动 |
+| 远端 | 本候选与本冻结记录**均未 Push**；`master`、三条 candidate、`fix/out001-mysql-test-fixtures`、release tags、`package.json` version 全部未变；Gitee 未触碰 |
+| 后续授权边界 | 远端 Push 该 candidate、真实 MySQL Gate 的授权与执行、`GATE_READY` 签发、任何 Acceptance 签发，均需**单独**的 Owner 授权；真实 Gate 若获授权必须使用**全新** RunId / ACK-4，既有已消费的 ACK-4 不得复用，候选必须仍是本节登记的 SHA |
+
+**HARD STOP**：本工作包完成，等待 Owner Review 与远端 Push 的单独授权。**不得**自行 Push、Merge、Tag、Release / Deploy 或签发 `GATE_READY` / ACK-4 / 任何 Acceptance。
+
+### 45.26 OUT-001 Candidate 远端发布记录（2026-11-09）
+
+本节**追加**记录冻结候选 `candidate/out001-d4c97a8` 已在 **GitHub** 上发布的事实。它**不**改写 §45.18～§45.25 的任何结论。
+
+**关键口径**：§45.25 与 [`docs/acceptance/out001-candidate-freeze-20261109.md`](../acceptance/out001-candidate-freeze-20261109.md) 中记录的「本轮**未** Push」是**冻结形成当时**的历史事实，**不回写**、不修改、不删除。远端发布发生在冻结形成**之后**，因此由本节作为**后续事实**追加登记。
+
+#### 45.26.1 远端发布事实（实际核验值）
+
+| 项 | 实际值 |
+|---|---|
+| Frozen candidate | `candidate/out001-d4c97a8` |
+| Candidate SHA（完整） | `d4c97a8f8be5da56e43fc8346fc5b916f8c6a7ec` |
+| GitHub 上的 candidate ref | `refs/heads/candidate/out001-d4c97a8` = `d4c97a8f8be5da56e43fc8346fc5b916f8c6a7ec` —— **已成功推送 GitHub** |
+| Candidate 分支新增提交 | `0` 条（`git rev-list --count d4c97a8..candidate/out001-d4c97a8` = 0），冻结点未被移动 |
+| Source branch | `fix/out001-launcher-tap-summary-0adfecb6` |
+| Source branch HEAD | `37a17c091054d5026d1ec7813adf3e344597ec3d` |
+| GitHub 上的 source ref | `refs/heads/fix/out001-launcher-tap-summary-0adfecb6` = `37a17c091054d5026d1ec7813adf3e344597ec3d`（与本地一致） |
+| `master`（本地 = GitHub） | `97eea5a58bad774b36fbe0e94d60a1e35c2c3a3b` —— **未改变** |
+| `candidate/out001-075e0f6` | `075e0f6e61108a423c4ae0b194199edec2bc9465` —— 保留、未改变 |
+| `candidate/out001-97eea5a` | `97eea5a58bad774b36fbe0e94d60a1e35c2c3a3b` —— 保留、未改变 |
+| `candidate/out001-a5fffd1` | `a5fffd10835336fc5137ff2768290f5c34def4ea` —— 保留、未改变 |
+| `fix/out001-mysql-test-fixtures` | `075e0f6e61108a423c4ae0b194199edec2bc9465` —— 保持不变 |
+| `package.json` version | `1.6.2` —— 未改变 |
+| release tags | 本地 `29` / GitHub `3`（`v1.6.0`、`v1.6.1`、`v1.6.2`）/ Gitee `29` —— 未改变 |
+
+#### 45.26.2 双远端状态（如实登记）
+
+**GitHub 已同步，Gitee 未同步。** 本次发布只涉及 GitHub：Gitee（`origin`）上仍**不存在** `fix/out001-launcher-tap-summary-0adfecb6`、**不存在** `candidate/out001-d4c97a8`、**不存在**三条旧 candidate、**不存在** `fix/out001-mysql-test-fixtures`；Gitee 的 `master` 仍为 `a17ef2bb45b658d1c23136406f560e83634f0bbf`，与 GitHub 的 `master` **不同**。因此**不得**把本次发布描述为「双远端同步」。另如实登记：本地仅本地分支 `candidate/out001-163e43c`（`163e43cdb7b52e2f90f711539573284db3b4c123`）在两个远端上均无对应 ref，未被推送、未被改动。
+
+#### 45.26.3 本节不改变的事项
+
+| 状态 | 结论 |
+|---|---|
+| Candidate Freeze | 保持 §45.25 的 `FROZEN` 技术候选基线冻结；候选分支仍精确指向 `d4c97a8` |
+| M1～M5 的真实 MySQL 证据 | 仍**未**在本候选上重跑；旧候选 `075e0f6` 的 §45.18 历史 PASS **不得**被描述为本候选的 PASS |
+| M3 真实不确定 COMMIT | 继续为 `NOT_PROVEN_ON_REAL_MYSQL` |
+| `GATE_READY` / `GATE_AUTHORIZED` / 新的 `GATE_EXECUTED` / 技术 PASS / `GATE_ACCEPTED` | **未签发** |
+| `AUD-OUT-001` | 仍为 `TESTED` / `PENDING_OWNER_APPROVAL` |
+| 真实 MySQL Acceptance / ACK-4 / Capability Freeze / Domain Acceptance / Release | **全部不包含** |
+| Merge / Tag / Release / Deploy / 数据库操作 / ACK-4 签发或消费 / RunId 创建 | **全部未发生** |
+
+**HARD STOP**：本节为远端发布事实登记，**不**签发 `GATE_READY`，**不**执行真实 Gate。等待 Owner Review。
+
+### 45.27 OUT-001 GATE_READY 前置证据报告（2026-11-09）
+
+本节登记 `GATE_READY` 授权前的**前置证据收集**结果。它**不**改写 §45.18～§45.26 的任何结论，**不**签发 `GATE_READY` / `GATE_AUTHORIZED` / `GATE_EXECUTED` / `GATE_ACCEPTED` 或任何 Acceptance。本工作包**未**连接真实 MySQL 执行 Gate、**未**执行任何 DDL / DML、**未** `SET GLOBAL`、**未** `GRANT` / `REVOKE`、**未**签发或消费 ACK-4、**未**创建 RunId、**未** Merge / Tag / Release / Deploy、**未** Push。完整报告见 [`docs/acceptance/out001-gate-ready-preflight-20261109.md`](../acceptance/out001-gate-ready-preflight-20261109.md)。
+
+**报告状态：`PREFLIGHT_PASS_PENDING_OWNER_REVIEW`**（唯一允许的两种状态之一）。**`GATE_READY` 未签发。**
+
+#### 45.27.1 前置证据摘要
+
+| 项 | 实际结果 |
+|---|---|
+| Source / Candidate | `37a17c091054d5026d1ec7813adf3e344597ec3d` / `d4c97a8f8be5da56e43fc8346fc5b916f8c6a7ec`（候选新增提交 `0` 条；GitHub 两个 ref 均已核实） |
+| 候选上的静态检查 | `node --test`（ACK-4 runtime + Gate infrastructure + disposable target guard + M3）**83/83 PASS**，退出码 `0`；6 个 `node --check` 全部退出码 `0`；**全部在候选上执行**，未在 source branch 上代替 |
+| ACK-4 Runtime 合同 | A1～A8、A10、A11 **已满足**；A9 **部分满足**（见 R-1） |
+| Gate 编排合同 | B1～B3、B5、B7 **已满足**；B4 **已满足**（附 R-4）、B6 **部分满足**（见 R-5） |
+| Windows PowerShell | `5.1.26100.9711`（Desktop，非 PowerShell 7）；`MySQL80` = `Running`；`127.0.0.1:3306` 可连接 |
+| PowerShell AST | `issue-mysql-ack4.ps1` / `run-out001-mysql-gate.ps1` / `setup-mysql-local-gate.ps1` 解析错误数均为 `0`；**只解析、不执行** |
+| DPAPI | `DataProtectionScope.CurrentUser` 往返一致（`True`）；sentinel 明文未打印 |
+| 临时 ACL sentinel | Owner=当前 SID ✓、继承禁用 ✓、显式规则 `1` 条（仅当前 SID / FullControl / Allow）✓、继承规则 `0` 条 ✓、当前 SID 可读 ✓、临时文件已删除 ✓ |
+| 既有凭据 / baseline | `credential.dat` 与 `target.json` 均存在；DPAPI 凭据可由当前 SID 解密（**明文未打印**）；baseline 字段完整 |
+| 真实 MySQL 只读预检 | 退出码 `0`，`ok=true`，`drift=[]`，`nonEmpty=[]`：`DATABASE()`=`modern_erp_domain_test`、`CURRENT_USER()`=`modern_erp_test@127.0.0.1`、ServerUUID=`256c7a4e-d275-11f1-885b-b025aa71d167`、grants SHA-256=`bef61617d1b96913f479c7642176eca53f60410b003773707cd56355e4ce807e`、版本 `8.0.37`、`assertExactLeastPrivilegeGrants` 通过 |
+| 五类对象 inventory | `tables=0, views=0, triggers=0, routines=0, events=0` —— **五类全零** |
+| `log_bin` / `log_bin_trust_function_creators` | `ON` / `ON` —— `log_bin` 开启时后者必须为 `1`，**条件已满足**；**未** `SET GLOBAL`、**未**扩大权限 |
+| quarantine | 目录不存在；`assertNoAck4Quarantine()`（本轮实际 target identity）**PASS**；历史 RunId `0adfecb6-7db9-4015-9c41-cc36ad42ec48` 的 consumed 记录与 children 目录**保留、未复用、未删除**；已消费 RunId 总数仍为 `12`，**本工作包未创建任何新 RunId** |
+| 数据库访问性质 | 全部**只读**；**未**触碰 `calculator_db`；五类对象计数仍为零本身即「未创建任何对象」的证据 |
+
+#### 45.27.2 有界残余（授权前须由 Owner 逐条裁定）
+
+R-1 portable child lease 的 `childStartedAt` 由父进程生成，非操作系统进程创建时间；
+R-2 `CLEANUP` 类操作豁免于「第一个未完成操作」顺序检查；R-3 quarantine 恢复操作集合为另一个
+更窄的 2 操作 manifest 且在 OUT-001 Gate 中无生产调用方；R-4 DROP 原语同时允许 RESET 与
+CLEANUP，RESET 不被允许 DROP 仅靠固定调用方代码；R-5 Launcher Result 仅原子写入、未纳入 root
+manifest 亦未被独立校验器覆盖（Root Evidence 完全可验证）；R-6 破坏性环境变量被每个子进程继承；
+R-7 Postflight 子进程在 lease / 后代登记簿机制之外派生。
+
+七项均**不影响**任何可执行前置检查的通过结果，**不构成** `PREFLIGHT_BLOCKED`，但必须在
+授权 `GATE_READY` 前由 Owner 逐条裁定。
+
+#### 45.27.3 本轮状态与边界
+
+| 状态 | 本轮结论 |
+|---|---|
+| GATE_READY 前置证据 | **`PREFLIGHT_PASS_PENDING_OWNER_REVIEW`** |
+| `GATE_READY` | **未签发** |
+| `GATE_AUTHORIZED` / `GATE_EXECUTED` / 技术 PASS / `GATE_ACCEPTED` | **未签发** |
+| ACK-4 签发或消费 / RunId 创建 | **未发生** |
+| 真实 MySQL Gate 执行 / DDL / DML / `SET GLOBAL` / `GRANT` / `REVOKE` | **未发生** |
+| `calculator_db` | **未触碰** |
+| M1～M5 的真实 MySQL 证据 | 仍**未**在本候选上重跑；旧候选 `075e0f6` 的 §45.18 历史 PASS **不得**描述为本候选的 PASS |
+| M3 真实不确定 COMMIT | 继续为 `NOT_PROVEN_ON_REAL_MYSQL` |
+| `AUD-OUT-001` | 仍为 `TESTED` / `PENDING_OWNER_APPROVAL` |
+| Merge / Tag / Release / Deploy / Push / Gitee 同步 | **全部未发生** |
+| `master` / 三条旧 candidate / `candidate/out001-d4c97a8` / `fix/out001-mysql-test-fixtures` / release tags / `package.json` version | **全部未变** |
+
+**HARD STOP**：本工作包完成，等待业务所有者的独立技术复核与 `GATE_READY` 决定。**不得**自行
+签发 `GATE_READY`、创建 RunId、签发或消费 ACK-4、执行真实 Gate，或 Merge / Tag / Release /
+Deploy / Push。
+
+### 45.28 OUT-001 Gate 前置残余修复（2026-11-09）
+
+业务所有者于本轮明确选择「先修复 R-1～R-7，再执行 Gate」，并授权持续完成本工作包。
+原冻结候选 `d4c97a8f8be5da56e43fc8346fc5b916f8c6a7ec` 保留不动；新工作分支
+`fix/out001-gate-residuals` 从该候选创建，并带入 §45.25～§45.27 的历史文档。
+
+| 残余 | 本轮修复结果 |
+|---|---|
+| R-1 | 子 Lease 的创建时间由 Windows 进程身份查询提供，子进程独立复核；Root 也使用操作系统创建时间 |
+| R-2 | ACK-4 原语禁止 Cleanup 作为首个操作，保留失败后的有界 Cleanup |
+| R-3 | 增加独立 `ACK4_RECOVERY_V1` 恢复入口；旧 Root、子进程与 HTTP 后代退出证据不足即拒绝恢复 |
+| R-4 | RESET Lease 在原语层禁止进入 DROP 分支，DROP 仅允许 Cleanup / Recovery Cleanup |
+| R-5 | Launcher 结果增加独立字节/哈希 Manifest 与校验器；不再持久化指向已删除临时流的哈希 |
+| R-6 | Suite / Postflight 不继承三个破坏性环境变量；只读目标绑定改由 target proof 与实时连接身份检查 |
+| R-7 | Postflight 登记 PID / 操作系统创建时间与退出证明，并计入 `childrenExited` |
+
+Active Design 的有界技术修订见 `docs/design/procurement-outsourcing.md` §26.34.16.5。
+提交前离线 focused **90/90 PASS**，Build PASS，FULL 一次 **3444/3444 PASS**；
+FAST 首次因新增静态测试的断言过宽而 629/630，已修正并在 focused 复核。
+文档 current 模式在未提交工作树上仅 N7 按规则报未提交变更，提交后必须复跑。
+随后精确提交 `476200c` 上 FULL **3445/3445 PASS**；HEAVY 暴露旧的生产安全测试仍按 5 个演示用户断言，
+与已批准的委外双角色种子（现为 7 个）不符。测试断言及失败时连接关闭已修正，focused **15/15 PASS**，
+HEAVY **67/67 PASS**；最终候选 SHA、FAST 与文档检查以随后冻结记录为准。
+本节不签发真实 MySQL Gate PASS 或 OUT-001 Acceptance；真实 Gate、ACK-4、数据库操作在本节登记时均未执行。
+
+### 45.29 OUT-001 首轮真实 MySQL Gate 失败与恢复准备（2026-11-09）
+
+用户已授权修复残余并连续执行真实 Gate。本地冻结候选 `candidate/out001-05ff63a` =
+`05ff63a1d36144dde1ed6409a61f63ed2826df2b`，新 ACK-4 RunId
+`3cd3409c-0af7-438c-bf50-dd21883d3f75`。Launcher 对专用空库
+`modern_erp_domain_test` 的只读预检通过，五类对象均为零；随后真实执行 RESET 与
+BOOTSTRAP 均成功。HTTP suite 为 **33/34 PASS**，M1/M1b/M2/M4/M5 通过，M3 的真实
+`COMMIT_RESPONSE_WITHHELD` 等待 120 秒超时。此次 Root 的 `CLEANUP_UNVERIFIED`、
+`cleanupAttempts=0`、`childrenExited=false` 与 quarantine marker 均保留为失败事实，
+**不签发 Gate PASS**。
+
+直接清理阻塞原因已定位：真实套件登记 M1b 一个、M2 两个、M3 victim 一个，合计四个
+HTTP 后代；原登记簿验收、恢复入口与离线对账仍硬编码三个，导致即便后代全部退出也拒绝
+退出证明。实现与 Design §26.34.16.5 现统一为四个，并增加 M3 提前返回时的明确错误诊断；
+离线 focused **72/72 PASS**。旧候选及旧 ACK-4 不复用。下一步是在新提交上签发独立
+`ACK4_RECOVERY_V1`，先证明旧进程均已退出，再清理与 Postflight，随后分析 M3 真正失败原因。
+
+### 45.30 OUT-001 M3 真实协议诊断与修复（2026-11-09）
+
+恢复 RunId `6f043b64-decf-4255-b027-51d6dff7e985` 以新
+`ACK4_RECOVERY_V1` 完成旧进程退出检查、单次清理及 Postflight，终态 `FINISHED`。
+随后候选 `0699b02b9eaa6d60ef523762256850ddd6584ee0` 的 Gate RunId
+`2e0ebab7-24ce-48f1-b3b4-4d97ea0fd6a9`：suite **33/34**，M3 提前返回
+HTTP 201；四后代退出证明、CLEANUP、Postflight 全部通过，ACK-4 终态 `FAILED`，
+目标未隔离。诊断候选 `4a3f71246bba02bed9e020c8fcba9fe10c07fb13` 的
+RunId `7aa8d4f0-e33c-4363-b61a-8b3727029de1` 同样 **33/34**、清理证明通过；
+代理计数 `commitsForwarded=0`、`commitsWithheld=0`，而转移 HTTP 返回 201。
+
+根因在本机 `mysql2` 与 MySQL 8 协商 `CLIENT_QUERY_ATTRIBUTES` 后的 `COM_QUERY`
+编码：零属性时 SQL 前仍有 `parameter_count=0`、`parameter_set_count=1` 两字节；
+旧代理直接从命令字节后解析 SQL，因而未识别真实 `COMMIT`。代理现仅额外识别该精确
+两字节前缀，非零属性报文仍不当作 COMMIT；离线协议回归新增带前缀的真实代理暂存
+场景，M3 focused **24/24 PASS**。下一步在新候选上重跑完整真实 Gate，不沿用任何
+已消费 ACK-4 或历史 PASS。
+
+### 45.31 OUT-001 有界验收 PASS（2026-11-09）
+
+业务所有者本轮明确委托修复 R-1～R-7、执行真实 MySQL 8 Gate、遇错自行修复并完成
+OUT-001 Acceptance，且明确不因旧 hard stop 中断。固定执行候选为本地
+`candidate/out001-3d0aacf` @ `3d0aacf2793b3fd24373545dd1856829bc723d5e`，
+`package.json` 仍为 `1.6.2`。完整验收证据见
+[`out001-real-mysql-acceptance-20261109.md`](../acceptance/out001-real-mysql-acceptance-20261109.md)。
+
+| 项 | 当前结论与锚点 |
+|---|---|
+| `GATE_READY` / `GATE_AUTHORIZED` / `GATE_EXECUTED` | **PASS / 已执行**；新一次性 ACK-4 RunId `3e6041a4-3167-4434-aeea-13c331aa50a3` 绑定完整候选 SHA、`OUT_001_MYSQL_V1`、同一 disposable 目标与四项操作，已消费 |
+| 真实 MySQL 8 Gate | **PASS**：HTTP TAP **34/34**（M1/M1b/M2/M3/M4/M5 全部通过），Root `FINISHED`，五个子进程及四个 HTTP 后代退出，CLEANUP 一次与独立 Postflight 通过；Launcher exit `0`、结果 `PASS` |
+| 独立证据 | Root/Launcher 两个 Manifest 独立校验均 `valid=true`；Root report SHA-256 `4b7bf3e338f14e301e0dc771906210332ca852075759376230ad7f8b1465ea95`；Launcher result SHA-256 `83aacafb8969785273bc74c63cc2cd69acb6e8e38ecced8b46266add210a436d` |
+| 目标收尾 | Gate 后只读复检身份/授权指纹不漂移，五类对象均零，quarantine marker `0`；MySQL `8.0.37`，专用库 `modern_erp_domain_test` |
+| 最终离线与构建 | 固定候选 FAST **631/631 PASS**、FULL 最终重跑 **3446/3446 PASS**、HEAVY **67/67 PASS**、Build PASS、`git diff --check` PASS；FULL 首轮曾 3445/3446，未完整保存失败输出，原因不推断，已在验收证据中披露 |
+| `GATE_ACCEPTED` / `AUD-OUT-001` | **`GATE_ACCEPTED=PASS`；`AUD-OUT-001=ACCEPTED`（仅 §31.14.2 的有界 OUT-001 工作包）**。基于用户本轮委托授权与原始证据登记，不宣称存在事后独立人工复核或手写签名 |
+
+历史失败 RunId `3cd3409c-…` 的 `CLEANUP_UNVERIFIED` 已由独立恢复 RunId
+`6f043b64-…` 关闭，恢复证据与旧失败证据均保留；另两次 `FAILED` 的清理亦已证明，
+均未冒充本次 PASS。下一阶段开发可用上述固定 SHA 与有界验收结果作为输入，
+但本结论不签发成本携带 `B-P01/B-P02`、VMI、PRC-06、B3101/B3121 Manual Closure、
+Domain Acceptance、Release 或 Deploy。当前无 Push、Merge、Tag、发布或部署。
+
+### 45.9 历史待验证清单（2026-11-08 时点；当前 OUT-001 结论见 §45.31）
+
+> 本节保留当时的风险清单与证据边界；OUT-001 对应的当前真实 MySQL 结果以 §45.31 为准。
 
 以下结论在 SQLite 本地路径已成立，但**没有**任何真实 MySQL 8 实证，必须在获得授权的受保护 disposable MySQL Gate 中验证后才能进入 Acceptance：
 

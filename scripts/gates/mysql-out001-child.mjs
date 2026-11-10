@@ -18,6 +18,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { consumePortableChildLease } from './ack4/ack4-runtime.mjs';
 import { emitNodeTestTap } from './m1-core-g07-suite-reporter.mjs';
 import { OUT_001_MYSQL_SUITE_FILE } from './mysql-out001-static-preflight.mjs';
+import { readWindowsProcessIdentity } from './mysql-out001-descendant-registry.mjs';
 
 function required(name) {
   const value = String(process.env[name] || '').trim();
@@ -42,6 +43,8 @@ async function consume(operation) {
   const leasePath = resolve(required('ERP_OUT_001_ACK4_CHILD_LEASE'));
   await waitForLease(leasePath);
   const target = JSON.parse(readFileSync(required('ERP_OUT_001_TARGET_PROOF'), 'utf8'));
+  const identity = await readWindowsProcessIdentity(process.pid);
+  if (!identity) throw new Error('OUT_001_MYSQL_CHILD_PROCESS_IDENTITY_UNVERIFIED');
   consumePortableChildLease({
     leasePath,
     consumedDir: resolve(required('ERP_OUT_001_ACK4_CHILD_CONSUMED_DIR')),
@@ -49,10 +52,10 @@ async function consume(operation) {
     expected: {
       rootPid: Number(required('ERP_OUT_001_ROOT_PID')),
       childPid: process.pid,
-      childStartedAt: required('ERP_OUT_001_CHILD_STARTED_AT'),
+      childStartedAt: identity.processCreatedAt,
       commitSha: required('ERP_OUT_001_COMMIT_SHA'),
       target,
-      manifest: 'OUT_001_MYSQL_V1',
+      manifest: required('ERP_OUT_001_MANIFEST'),
       operation,
     },
   });
@@ -64,6 +67,10 @@ async function openVerifiedAdapter() {
 }
 
 async function databaseOperation(operation) {
+  const allowed = required('ERP_OUT_001_MANIFEST') === 'ACK4_RECOVERY_V1'
+    ? ['CLEANUP_SCHEMA_RECOVERY']
+    : ['RESET_SCHEMA_PRE_RUN', 'BOOTSTRAP_CURRENT_SCHEMA', 'CLEANUP_SCHEMA_POST_RUN'];
+  if (!allowed.includes(operation)) throw new Error('OUT_001_MYSQL_CHILD_OPERATION_OUT_OF_MANIFEST');
   await consume(operation);
   const [disposable, dbModule] = await Promise.all([
     import('../../server/test-utils/mysql-disposable-target.js'), import('../../server/db.js'),
@@ -110,6 +117,7 @@ async function suiteProcess() {
  * 重新证明目标身份（通过 openOut001MySqlAdapter）并统计五类对象。
  */
 async function postflightProcess() {
+  await waitForLease(required('ERP_OUT_001_POSTFLIGHT_READY'));
   const verified = await openVerifiedAdapter();
   try {
     const { wave10ObjectInventory } = await import('../../server/test-utils/mysql-wave10-campaign-target.js');

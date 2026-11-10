@@ -16,8 +16,10 @@
 // worker's contract. The real worker is exercised end-to-end in the
 // disposable MySQL integration test (server/mysql-v162-connection-recovery.integration.js).
 // The helpers `isRecoverableConnectionError` / `isReadOnlySql` /
-// `classifyExecStatement` are imported from the real worker module to ensure
-// a single source of truth for the recovery policy.
+// `classifyExecStatement` are imported from the shared policy module so that
+// there is a single source of truth for the recovery policy **and** so that
+// this fixture does not also load the production Worker entry point (whose
+// parentPort registration would start a second, real MySQL client here).
 
 import { parentPort } from 'node:worker_threads';
 import { encodeWorkerResponse } from '../mysql-worker-protocol.js';
@@ -25,7 +27,7 @@ import {
   classifyExecStatement,
   isReadOnlySql,
   isRecoverableConnectionError,
-} from '../mysql-worker.js';
+} from '../mysql-worker-policy.js';
 
 const SESSION_TIMEZONE = '+00:00';
 const SESSION_ISOLATION_LEVEL = 'READ COMMITTED';
@@ -64,7 +66,13 @@ function openSession(config) {
   return state._activeSession;
 }
 
-function dropSession(reason) {
+function dropSession(reason, error) {
+  // The real worker marks the surfaced error with `sessionLost` whenever it
+  // discards a stale connection, so the parent can tell that the response
+  // describes a replacement session and not the original one. The fixture
+  // mirrors that marker exactly; without it an uncertain COMMIT would be
+  // indistinguishable from an ordinary statement failure.
+  if (error) error.sessionLost = true;
   if (!state._activeSession) return;
   state._activeSession = null;
   if (state.inTransaction) state.inTransaction = false;
@@ -196,7 +204,7 @@ if (parentPort) {
           return;
         } catch (error) {
           if (!isRecoverableConnectionError(error) || state.inTransaction || !readOnly) {
-            if (isRecoverableConnectionError(error)) dropSession(error?.code);
+            if (isRecoverableConnectionError(error)) dropSession(error?.code, error);
             throw error;
           }
           dropSession(error?.code);
@@ -213,7 +221,7 @@ if (parentPort) {
           encodeWorkerResponse(shared, requestId, result);
           return;
         } catch (error) {
-          if (isRecoverableConnectionError(error)) dropSession(error?.code);
+          if (isRecoverableConnectionError(error)) dropSession(error?.code, error);
           throw error;
         }
       }
@@ -223,12 +231,18 @@ if (parentPort) {
         try {
           await runExec(payload.sql);
         } catch (error) {
-          if (isRecoverableConnectionError(error)) dropSession(error?.code);
+          if (isRecoverableConnectionError(error)) dropSession(error?.code, error);
           throw error;
         }
         if (classification === 'BEGIN') state.inTransaction = true;
         if (classification === 'COMMIT' || classification === 'ROLLBACK') state.inTransaction = false;
-        encodeWorkerResponse(shared, requestId, { ok: true, inTransaction: state.inTransaction });
+        // The real worker reports the canonical exec classification so the
+        // parent never re-derives it. Without it the adapter cannot move its
+        // session state between FRESH / ACTIVE / IDLE_TRUSTED, and the fixture
+        // would silently mis-model the very state machine it exists to cover.
+        encodeWorkerResponse(shared, requestId, {
+          ok: true, inTransaction: state.inTransaction, classification,
+        });
         return;
       }
 
@@ -240,6 +254,10 @@ if (parentPort) {
         errno: error?.errno,
         sqlState: error?.sqlState,
         fatal: error?.fatal,
+        // Same contract as the real worker's `serializableError`: a response
+        // that describes a replacement session carries the `sessionLost`
+        // marker, so the parent can classify an uncertain COMMIT.
+        sessionLost: error?.sessionLost === true ? true : undefined,
       }, 2);
     }
   });

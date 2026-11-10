@@ -143,13 +143,44 @@ function emptyOnlyDb({ tables = [], triggers = 0, routines = 0, events = 0, data
   };
 }
 
+function useResetLease() {
+  const target = {
+    ...config, selectedDatabase: config.database, currentUser: 'gate_a@localhost',
+    serverUuid: '00000000-0000-0000-0000-000000000001', grantsSha256: 'a'.repeat(64),
+  };
+  const keys = generateKeyPairSync('ed25519');
+  const root = {
+    state: 'CONSUMED', runId: '123e4567-e89b-42d3-a456-426614174001',
+    rootPid: process.ppid, rootStartedAt: 'root-start', commitSha: 'b'.repeat(40),
+    target, manifest: 'TEST_RESET_V1', operations: ['RESET_SCHEMA_PRE_RUN'],
+    nonce: 'unit-test-reset-nonce', childLeasePrivateKey: keys.privateKey,
+  };
+  const childStartedAt = 'child-start';
+  const child = issuePortableChildLease(root, { childPid: process.pid, childStartedAt, operation: 'RESET_SCHEMA_PRE_RUN' });
+  const leasePath = join(leaseDir, 'reset-lease.json');
+  writeFileSync(leasePath, JSON.stringify(child));
+  consumePortableChildLease({
+    leasePath, consumedDir: join(leaseDir, 'consumed'),
+    rootPublicKey: keys.publicKey.export({ type: 'spki', format: 'pem' }),
+    expected: { rootPid: process.ppid, childPid: process.pid, childStartedAt,
+      commitSha: root.commitSha, target, manifest: root.manifest, operation: 'RESET_SCHEMA_PRE_RUN' },
+  });
+}
+
 test('OUT-001 EMPTY_ONLY recheck accepts only a fully empty five-class inventory', () => {
+  useResetLease();
   const db = emptyOnlyDb();
   assert.deepEqual(assertDisposableMySqlSchemaEmpty(db, config), {
     tables: 0, views: 0, triggers: 0, routines: 0, events: 0,
   });
   const result = resetAuthorizedDisposableMySqlSchema(db, config, authorized, { requireEmpty: true });
   assert.equal(result.dropped, 0);
+  assert.deepEqual(db.executed, []);
+});
+
+test('RESET lease cannot invoke the DROP path', () => {
+  const db = emptyOnlyDb({ tables: [{ Tables_in_test: 'other', Table_type: 'BASE TABLE' }] });
+  assert.throws(() => resetAuthorizedDisposableMySqlSchema(db, config, authorized), /RESET lease cannot DROP/);
   assert.deepEqual(db.executed, []);
 });
 

@@ -53,6 +53,36 @@ $baselinePath = Join-Path $localDir 'target.json'
 $credentialPath = Join-Path $localDir 'credential.dat'
 $preflightHelper = Join-Path $repoRoot 'scripts\gates\mysql-local-preflight.mjs'
 $gateScript = Join-Path $repoRoot 'scripts\gates\mysql-out001-gate.mjs'
+$rootEvidenceVerifier = Join-Path $repoRoot 'scripts\gates\mysql-out001-root-evidence.mjs'
+$commitSha = (& git -C $repoRoot rev-parse HEAD).Trim()
+$manifestName = 'OUT_001_MYSQL_V1'
+
+function Write-LauncherResult([System.Collections.IDictionary]$Result) {
+  $rootDir = Join-Path $localDir "evidence\$RunId\root"
+  [System.IO.Directory]::CreateDirectory($rootDir) | Out-Null
+  $target = Join-Path $rootDir 'launcher-result.json'
+  $manifestTarget = Join-Path $rootDir 'launcher-manifest.json'
+  if (Test-Path -LiteralPath $target) { throw 'OUT_001_LAUNCHER_RESULT_OVERWRITE_REFUSED' }
+  if (Test-Path -LiteralPath $manifestTarget) { throw 'OUT_001_LAUNCHER_MANIFEST_OVERWRITE_REFUSED' }
+  $temporary = Join-Path $rootDir ('.launcher-result.' + [guid]::NewGuid().ToString() + '.tmp')
+  try {
+    $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes(($Result | ConvertTo-Json -Depth 20) + "`n")
+    $stream = [System.IO.File]::Open($temporary, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+    try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
+    [System.IO.File]::Move($temporary, $target)
+    $hasher = [System.Security.Cryptography.SHA256]::Create()
+    try { $digest = [BitConverter]::ToString($hasher.ComputeHash($bytes)).Replace('-', '').ToLowerInvariant() }
+    finally { $hasher.Dispose() }
+    $index = [ordered]@{
+      version = 1; runId = $RunId; commitSha = $commitSha; manifest = $manifestName
+      resultFile = 'launcher-result.json'; resultBytes = $bytes.Length; resultSha256 = $digest
+    }
+    $manifestBytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes(($index | ConvertTo-Json -Compress) + "`n")
+    $manifestTemp = Join-Path $rootDir ('.launcher-manifest.' + [guid]::NewGuid().ToString() + '.tmp')
+    [System.IO.File]::WriteAllBytes($manifestTemp, $manifestBytes)
+    [System.IO.File]::Move($manifestTemp, $manifestTarget)
+  } finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
+}
 
 function Write-Step([string]$message) {
   Write-Host "[out001-mysql-gate] $message"
@@ -98,7 +128,7 @@ function Invoke-NodeHelper {
   try {
     $previousPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    $process = Start-Process -FilePath 'node' -ArgumentList (ConvertTo-NativeArgument $HelperPath) -NoNewWindow -Wait -PassThru `
+    $process = Start-Process -FilePath 'node' -ArgumentList (ConvertTo-NativeArgument $HelperPath) -WindowStyle Hidden -Wait -PassThru `
       -WorkingDirectory $repoRoot -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile
     $ErrorActionPreference = $previousPreference
     $stdoutText = (Get-Content -Raw -Encoding UTF8 $stdoutFile) -replace "`0", ''
@@ -257,7 +287,7 @@ try {
     '--target-proof', (ConvertTo-NativeArgument $targetProofPath)
   )
   $gate = Start-Process -FilePath 'node' -ArgumentList $gateArguments `
-    -NoNewWindow -Wait -PassThru -WorkingDirectory $repoRoot -RedirectStandardOutput $gateOutFile -RedirectStandardError $gateErrFile
+    -WindowStyle Hidden -Wait -PassThru -WorkingDirectory $repoRoot -RedirectStandardOutput $gateOutFile -RedirectStandardError $gateErrFile
   $gateExit = $gate.ExitCode
   $ErrorActionPreference = $previousPreference
 } finally {
@@ -265,22 +295,53 @@ try {
 }
 $gateStdout = (Get-Content -Raw -Encoding UTF8 $gateOutFile) -replace "`0", ''
 $gateStderr = (Get-Content -Raw -Encoding UTF8 $gateErrFile) -replace "`0", ''
-Remove-Item $gateOutFile, $gateErrFile -ErrorAction SilentlyContinue
 
 # --- Root ACK-4 state -------------------------------------------------------
 Remove-Item Env:\ERP_MYSQL_TEST_ALLOW_RESET -ErrorAction SilentlyContinue
 Remove-Item Env:\ERP_MYSQL_TEST_DISPOSABLE_TARGET -ErrorAction SilentlyContinue
 Remove-Item Env:\ERP_MYSQL_TEST_DESTRUCTIVE_OPERATIONS -ErrorAction SilentlyContinue
 
-$rootState = 'UNKNOWN'
+$rootState = 'BLOCKED'
 $rootReport = $null
-$lastJson = $gateStdout -split "`r?`n" | Where-Object { $_.Trim().StartsWith('{') } | Select-Object -Last 1
-if ($lastJson) {
+$rootEvidenceValid = $false
+try {
+  $verifyOut = & node $rootEvidenceVerifier --run-id $RunId --commit-sha $commitSha --manifest $manifestName 2>&1
+  if ($LASTEXITCODE -ne 0) { throw ($verifyOut -join "`n") }
   try {
-    $rootReport = $lastJson | ConvertFrom-Json
+    $verified = ($verifyOut -join "`n") | ConvertFrom-Json
+    if ($verified.valid -ne $true) { throw 'root verifier did not return valid=true' }
+    $rootReport = $verified.report
     if ($rootReport.state) { $rootState = [string]$rootReport.state }
-  } catch { }
+    $rootEvidenceValid = $true
+  } catch { throw "root evidence JSON invalid: $($_.Exception.Message)" }
+} catch {
+  $rootState = 'BLOCKED'
+  $rootEvidenceDiagnostic = $_.Exception.Message
 }
+
+$launcherResult = [ordered]@{
+  version = 1; runId = $RunId; commitSha = $commitSha; manifest = $manifestName
+  gateExitCode = $gateExit; rootEvidenceValid = $rootEvidenceValid; rootState = $rootState
+  result = if ($gateExit -eq 0 -and $rootEvidenceValid -and $rootState -eq 'FINISHED' -and
+    $rootReport.testsPassed -eq $true -and $rootReport.cleanupProven -eq $true -and $rootReport.childrenExited -eq $true) { 'PASS' }
+    elseif ($rootState -eq 'BLOCKED') { 'BLOCKED' } else { 'FAIL' }
+  diagnostic = if ($rootEvidenceValid) { $null } else { $rootEvidenceDiagnostic }
+  gateOutputRetention = 'EPHEMERAL';
+  createdAt = [DateTime]::UtcNow.ToString('o')
+}
+try { Write-LauncherResult $launcherResult } catch {
+  $rootEvidenceValid = $false; $rootState = 'BLOCKED'; $rootEvidenceDiagnostic = $_.Exception.Message
+}
+if ($rootEvidenceValid) {
+  try {
+    $launcherVerify = & node $rootEvidenceVerifier --launcher --run-id $RunId --commit-sha $commitSha --manifest $manifestName 2>&1
+    if ($LASTEXITCODE -ne 0) { throw ($launcherVerify -join "`n") }
+    if ((($launcherVerify -join "`n") | ConvertFrom-Json).valid -ne $true) { throw 'launcher verifier did not return valid=true' }
+  } catch {
+    $rootEvidenceValid = $false; $rootState = 'BLOCKED'; $rootEvidenceDiagnostic = $_.Exception.Message
+  }
+}
+Remove-Item $gateOutFile, $gateErrFile -ErrorAction SilentlyContinue
 
 Clear-GateEnvironment
 $password = $null
@@ -288,12 +349,36 @@ Remove-Item -LiteralPath $targetProofPath -Force -ErrorAction SilentlyContinue
 Exit-GateLock $gateLock
 $gateLock = $null
 
+# The evidence is persisted by the gate itself; the launcher only reports the
+# paths so that a failed run can be reviewed without re-running anything.
 Write-Step ''
-if ($gateExit -eq 0 -and $rootState -eq 'FINISHED' -and $null -ne $rootReport -and
+Write-Step 'Gate evidence (stdout / stderr / result per child):'
+if ($null -ne $rootReport -and $null -ne $rootReport.evidence) {
+  foreach ($item in $rootReport.evidence) {
+    $tapSummary = 'n/a'
+    if ($null -ne $item.tap) {
+      $tapSummary = "tests=$($item.tap.tests) pass=$($item.tap.passed) fail=$($item.tap.failed) skipped=$($item.tap.skipped) cancelled=$($item.tap.cancelled)"
+    }
+    Write-Host ("  [{0}] exit={1} tapParsed={2} {3}" -f $item.suite, $item.exitCode, $item.tapParsed, $tapSummary)
+    Write-Host ("      stdout : {0} ({1} bytes, sha256 {2})" -f $item.stdoutPath, $item.stdoutBytes, $item.stdoutSha256)
+    Write-Host ("      stderr : {0} ({1} bytes, sha256 {2})" -f $item.stderrPath, $item.stderrBytes, $item.stderrSha256)
+    Write-Host ("      result : {0}" -f $item.resultPath)
+  }
+} else {
+  Write-Host '  (no evidence was produced)'
+}
+
+Write-Step ''
+if ($gateExit -eq 0 -and $rootEvidenceValid -and $rootState -eq 'FINISHED' -and $null -ne $rootReport -and
     $rootReport.testsPassed -eq $true -and $rootReport.cleanupProven -eq $true -and $rootReport.childrenExited -eq $true) {
   Write-Host '[out001-mysql-gate] RESULT = PASS' -ForegroundColor Green
   Write-Host '[out001-mysql-gate] ACK-4 STATE = FINISHED (cleanup independently post-flighted by the root)'
   exit 0
+}
+if (-not $rootEvidenceValid) {
+  Write-Host '[out001-mysql-gate] RESULT = BLOCKED' -ForegroundColor Red
+  Write-Host "[out001-mysql-gate] ROOT EVIDENCE = INVALID ($rootEvidenceDiagnostic)"
+  exit 8
 }
 if ($rootState -eq 'FAILED') {
   Write-Host '[out001-mysql-gate] RESULT = FAIL' -ForegroundColor Red

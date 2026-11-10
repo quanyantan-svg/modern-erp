@@ -4,9 +4,11 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
-export const OUT_001_DESCENDANT_PURPOSE = 'OUT001_M2_APP';
+export const OUT_001_DESCENDANT_PURPOSE = 'OUT001_HTTP_APP';
 const REGISTRY_VERSION = 1;
-const EXPECTED_M2_APP_COUNT = 2;
+// 每一个独立 HTTP 应用进程都必须登记：M1b 的被测应用 1 个，M2 的两个并发
+// 应用 2 个，M3 的 victim 应用 1 个。少一条即证明有进程没有被登记。
+export const OUT_001_EXPECTED_HTTP_APP_COUNT = 4;
 const MAX_REGISTRY_BYTES = 64 * 1024;
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -107,7 +109,7 @@ function parseRegistry({ registryPath, childLeasePath, runId }) {
   const state = lstatSync(controlledPath);
   if (state.size <= 0 || state.size > MAX_REGISTRY_BYTES) throw new Error('OUT_001_DESCENDANT_REGISTRY_INVALID');
   const lines = readFileSync(controlledPath, 'utf8').trim().split(/\r?\n/);
-  if (lines.length !== EXPECTED_M2_APP_COUNT) throw new Error('OUT_001_DESCENDANT_COUNT_INVALID');
+  if (lines.length !== OUT_001_EXPECTED_HTTP_APP_COUNT) throw new Error('OUT_001_DESCENDANT_COUNT_INVALID');
   const records = lines.map((line) => JSON.parse(line));
   const pids = new Set();
   for (const record of records) {

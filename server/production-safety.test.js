@@ -174,12 +174,15 @@ describe('Production Safety — createDatabase() in production', () => {
       process.env.ERP_SEED_DEMO = 'true';
       process.env.NODE_ENV = 'production';
       const db = makeDb('prod-explicit-true.db');
-      assert.equal(countRows(db, 'SELECT COUNT(*) cnt FROM users'), 5, 'demo users should be created when explicitly opted in');
-      const admin = db.prepare("SELECT * FROM users WHERE username='admin'").get();
-      assert.ok(admin, 'admin user should exist');
-      // 密码必须确实是 admin123(弱密码,仅在显式启用时)
-      assert.ok(verifyPassword('admin123', admin.password_salt, admin.password_hash));
-      db.close();
+      try {
+        assert.equal(countRows(db, 'SELECT COUNT(*) cnt FROM users'), 7, 'all seven demo roles should be created when explicitly opted in');
+        const admin = db.prepare("SELECT * FROM users WHERE username='admin'").get();
+        assert.ok(admin, 'admin user should exist');
+        // 密码必须确实是 admin123(弱密码,仅在显式启用时)
+        assert.ok(verifyPassword('admin123', admin.password_salt, admin.password_hash));
+      } finally {
+        db.close();
+      }
     } finally {
       if (originalSeed === undefined) delete process.env.ERP_SEED_DEMO;
       else process.env.ERP_SEED_DEMO = originalSeed;
