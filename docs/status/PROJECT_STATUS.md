@@ -3577,6 +3577,58 @@ current 模式 N1、N3、N4、N5、N6、N8、N9 PASS，N2 `RETIRED`，N7 因既�
 4. **G07 固定场景冻结摘要重新冻结**（新增供应商资质步骤）待业务所有者显式确认。
 5. 域级 Acceptance 与 Capability Freeze 的签字在上述事项闭合后单独给出；本节只登记证据与残余，不代替签字。
 
+## 48. 域级交付第三轮：真实 MySQL Gate 通过、参数接线与 PRC-26 范围裁定（2026-11-10）
+
+### 48.1 授权与本轮结果
+
+- **授权来源**：业务所有者指示「PRC-26 扫码闭环不用做了……直接删去；剩下的东西你如果能实现都实现吧；然后批准 ACK4 清单与 RunId」。
+- **本轮完成**：
+  1. **真实 MySQL Gate 通过**（见 §48.3）：业务所有者批准 ACK-4 清单与 RunId 后，在受保护 disposable MySQL 8.0.37 上复跑 M1-Core G07，**RESULT = PASS**、ACK-4 状态 `FINISHED`（清理由 root 独立复核），schema parity 与 CR-01..CR-09 全部通过。
+  2. **PRC-26 扫码闭环移出本域范围**（Requirement §31.18.1 / Design §26.38.3）：保留既有受限来源解析端点及其边界，不引入视觉能力。
+  3. **采购参数接线**（Requirement §31.18.2 / Design §26.38.1）：九个开关全部接在真实业务事实上。
+  4. **商业快照与交期区间**（Requirement §31.18.3 / Design §26.38.2）：结算/付款供应商、折扣来源、交期区间与批次序号冻结，并新增只读端点 `GET /api/purchase-orders/:id/commercial-snapshot`。
+- **仍须业务所有者签字**：域级 Acceptance 与 Capability Freeze 本身（AGENTS.md §4.5）。
+
+### 48.2 逐项复核结果更新
+
+复核证据见 [`docs/audits/b3121-domain-acceptance-audit-20261110.md`](../audits/b3121-domain-acceptance-audit-20261110.md)：
+
+| 分组 | COVERED | PARTIAL | 已批准延期 / 移出范围 |
+|---|---|---|---|
+| PRC-01..26（26 项） | 19 | 7 | 2（PRC-06 寻源决策写入口；PRC-26 扫码闭环按 §31.18.1 移出范围） |
+| VMI-01..05（5 项） | 4 | 0 | 1（VMI-05 结算与物权释放） |
+| OUT-01..23（23 项） | 16 | 5 | 2（OUT-20 正式过账、OUT-22 成品退货） |
+| **合计 54 项** | **39** | **12** | — |
+
+**12 项 `PARTIAL` 仍是登记在案的真实残余**，是 Capability Freeze 的残余项：PRC-02（品类与结算默认值）、PRC-04/05（寻源治理与配额分配路径）、PRC-12（split/merge 规划事实）、PRC-16（自动关单，已批准延期）、PRC-17（预付款整条能力）、OUT-02/OUT-03（委外货源与加工价来源）、OUT-20/OUT-21（财务口径与 FINAL 成本证据）、OUT-23（期初 WIP 与期间关闭）。
+
+### 48.3 真实 MySQL Gate 实证
+
+| 项 | 结果 |
+|---|---|
+| 目标 | `modern_erp_domain_test` @ 127.0.0.1:3306，用户 `modern_erp_test`，MySQL 8.0.37，server uuid `256c7a4e-d275-11f1-885b-b025aa71d167`，schema 初始为空（EMPTY_ONLY） |
+| ACK-4 | 业务所有者批准；run `60ac8815-140f-48bc-8e48-8d5ac0d8edb4`（commit `8eacec1`，含本轮新增列的 schema parity）以及前两轮 run `92f24735-9d4d-4b08-a33a-94e50cd4d825`、`5cb47875-daaf-47c2-a208-bcfa98aece34` 共三次签发并消费，能力一次性消费、窗口 ≤ 15 分钟 |
+| 结果 | **RESULT = PASS**；`ACK-4 STATE = FINISHED`（清理由 root 独立 post-flight）；schema parity（含本轮新增列的 MySQL 类型/默认/约束等价）与 CR-01..CR-09 全部通过 |
+| 修正 | Gate 的 UAT-14 oracle 仍按 V21 之前的 owner-dimension 拒绝码编写；已改为当前 VMI 合同（先建立协议事实，再以外部幂等键收货），提交 `f57627d` |
+
+### 48.4 Gate 结果
+
+| Gate | 结果 |
+|---|---|
+| `pnpm test`（FULL） | **3495/3495 PASS**，0 FAIL |
+| `pnpm test:heavy` | **67/67 PASS** |
+| `pnpm build` | PASS |
+| `git diff --check` | PASS |
+| 新增 focused `server/procurement-commercial-evidence.test.js` | 30/30 PASS（新增参数接线与商业快照 6 条） |
+| 真实 MySQL Gate（M1C-G07） | **PASS**（连续两次） |
+
+### 48.5 未解决事项
+
+1. **12 项 `PARTIAL` 能力**待逐项裁定（实现 or 明确登记为已批准延期边界）。
+2. **OUT-22 成品退货缺正式延期决策 ID**（当前只有 §31.15.1 范围排除）。
+3. **G07 固定场景冻结摘要重新冻结**（新增供应商资质步骤）待业务所有者显式确认。
+4. 域级 Acceptance 与 Capability Freeze 的签字在上述事项闭合后单独给出；本节只登记证据与残余，不代替签字。
+
 ## 附录 A. G0 迁移：README「当前项目状态快照（2026-10-31）」与「当前主要 Gap」
 
 > 以下两节自 `README.md` 原样迁入（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`），以保持 README 的项目入口职责单一。
