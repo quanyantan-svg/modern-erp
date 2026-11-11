@@ -803,6 +803,15 @@ export function describeM1CoreStructuralDifference(db, sqliteSnapshot, tableName
         const column = contract.columns.find((item) => item.column_name === detail);
         if (column) {
           lines.push(`  DEFAULT ${detail} mysql_column_default=${JSON.stringify(String(column.column_default ?? ''))} mysql_extra=${JSON.stringify(String(column.extra ?? ''))} mysql_data_type=${JSON.stringify(String(column.data_type ?? ''))}`);
+          // The two canonical forms are the actual comparison operands. Carrying
+          // them makes a failing Gate state WHICH side differs, not only that
+          // they do.
+          const sqliteColumn = sqlite.columns.find((item) => item.name === detail);
+          const mysqlCanonical = canonicalDefault(column.column_default, {
+            catalogue: true, extra: column.extra, numeric: isNumericColumn(sqliteColumn),
+          });
+          const sqliteCanonical = canonicalSqliteDefault(sqliteColumn?.dflt_value);
+          lines.push(`  DEFAULT ${detail} sqlite_column_default=${JSON.stringify(String(sqliteColumn?.dflt_value ?? ''))} sqlite_canonical=${JSON.stringify(sqliteCanonical)} mysql_canonical=${JSON.stringify(mysqlCanonical)}`);
         }
       } else if (kind === 'CHECKS') {
         for (const check of contract.checks) {

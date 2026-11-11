@@ -285,13 +285,15 @@ describe('Accounting & Analytics — 真实 MySQL 8 域级验收', () => {
       items: [{ itemCode: 'BAL', name: '期末余额', levelNo: 1, sortNo: 1, sourceKind: 'GL_BALANCE', sourceJson: { subjectCode: '1403', measure: 'CLOSING' } }],
     });
     assert.equal(template.status, 201, JSON.stringify(template.data));
-    assert.equal(db.prepare('SELECT COUNT(*) n FROM report_template_items WHERE template_id=?').get(template.data.id).n, 1);
+    const templateId = template.data.reportTemplate.id;
+    assert.ok(templateId, '报表模板必须返回 reportTemplate.id');
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM report_template_items WHERE template_id=?').get(templateId).n, 1);
 
-    const published = await fixture.request('POST', `/api/accounting/report-templates/${template.data.id}/publish`, subjectTokens.accounting, {});
+    const published = await fixture.request('POST', `/api/accounting/report-templates/${templateId}/publish`, subjectTokens.accounting, {});
     assert.equal(published.status, 200, JSON.stringify(published.data));
-    assert.equal(db.prepare('SELECT status FROM report_templates WHERE id=?').get(template.data.id).status, 'PUBLISHED');
+    assert.equal(db.prepare('SELECT status FROM report_templates WHERE id=?').get(templateId).status, 'PUBLISHED');
 
-    const instance = await fixture.request('POST', '/api/accounting/report-instances', subjectTokens.accounting, { templateId: template.data.id, period: PERIOD });
+    const instance = await fixture.request('POST', '/api/accounting/report-instances', subjectTokens.accounting, { templateId, period: PERIOD });
     assert.equal(instance.status, 201, JSON.stringify(instance.data));
     const instanceId = instance.data.reportInstance.id;
 
@@ -300,9 +302,9 @@ describe('Accounting & Analytics — 真实 MySQL 8 域级验收', () => {
     for (const table of ['report_templates', 'report_template_items', 'report_instances', 'report_instance_values']) {
       console.log('AA_REPORT_COUNT', table, Number(db.prepare(`SELECT COUNT(*) n FROM ${table}`).get().n));
     }
-    console.log('AA_REPORT_INSTANCE_ID', instanceId, 'TEMPLATE_ID', template.data.id);
+    console.log('AA_REPORT_INSTANCE_ID', instanceId, 'TEMPLATE_ID', templateId);
     console.log('AA_REPORT_VALUES_FOR_INSTANCE', Number(db.prepare('SELECT COUNT(*) n FROM report_instance_values WHERE instance_id=?').get(instanceId).n));
-    console.log('AA_REPORT_ITEMS_FOR_TEMPLATE', Number(db.prepare('SELECT COUNT(*) n FROM report_template_items WHERE template_id=?').get(template.data.id).n));
+    console.log('AA_REPORT_ITEMS_FOR_TEMPLATE', Number(db.prepare('SELECT COUNT(*) n FROM report_template_items WHERE template_id=?').get(templateId).n));
     assert.equal(db.prepare('SELECT COUNT(*) n FROM report_instance_values WHERE instance_id=?').get(instanceId).n, 1);
 
     const submitted = await fixture.request('POST', `/api/accounting/report-instances/${instanceId}/submit`, subjectTokens.accounting, {});
@@ -384,11 +386,14 @@ describe('Accounting & Analytics — 真实 MySQL 8 域级验收', () => {
     });
     assert.equal(allocated.status, 201, JSON.stringify(allocated.data));
 
+    // AA-W7.12 — the legal accounting period must be closed first, so the
+    // operating period closure is refused while it is still open.
     const closed = await fixture.request('POST', '/api/management/period-closures', subjectTokens.accounting, { managementBookId: bookId, period: PERIOD });
-    assert.equal(closed.status, 201, JSON.stringify(closed.data));
+    assert.equal(closed.status, 409, JSON.stringify(closed.data));
+    assert.equal(closed.data.code, 'MANAGEMENT_LEGAL_PERIOD_NOT_CLOSED');
+    // A refused closure must leave no partial state behind.
     const closure = db.prepare('SELECT * FROM operating_period_closures WHERE management_book_id=? AND period=?').get(bookId, PERIOD);
-    assert.ok(closure, '经营期间关账必须落在真实 MySQL 上');
-    assert.equal(closure.status, 'CLOSED');
+    assert.equal(closure, undefined, '被拒绝的经营关账不得留下关账记录');
   });
 
   test('AA-W1.15 并发创建同一科目在真实 MySQL 上只落一条', async () => {
