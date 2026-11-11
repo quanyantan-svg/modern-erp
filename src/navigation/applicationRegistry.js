@@ -80,7 +80,12 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('sourcing-pricing','寻源与定价','procurement-outsourcing','FLOW_SUPPORTING','WORKFLOW','primary','采购与委外','sourcingPricing',{any:['SOURCING_VIEW','PRICING_VIEW','PROCUREMENT_CONFIG_VIEW']}),
   route('outsourcing','委外加工','procurement-outsourcing','FLOW_PRIMARY','WORKFLOW','primary','采购与委外','outsourcing',{any:['OUTSOURCING_VIEW','OUTSOURCING_MANAGE','OUTSOURCING_RECEIVING_MANAGE','IQC_VIEW','IQC_MANAGE']}),
   route('product-costs','标准成本','accounting-analytics','ADVANCED_CONFIGURATION','CONFIG','contextual','会计与分析','costAccounting',{any:['COST_VIEW','COST_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
-  route('fixed-assets','固定资产','accounting-analytics','FLOW_SUPPORTING','LIST','secondary','会计与分析','fixedAssets',{any:['FIXED_ASSETS_VIEW','FIXED_ASSETS_MANAGE']},{desktopExposure:'role-workspace',mobileExposure:'role-workspace'}),
+  route('fixed-assets','固定资产','accounting-analytics','FLOW_SUPPORTING','LIST','secondary','会计与分析','fixedAssets',{any:['FIXED_ASSETS_VIEW','FIXED_ASSETS_MANAGE']},{desktopExposure:'navigation',mobileExposure:'launcher'}),
+  route('accounting-events','会计事件台账','accounting-analytics','FLOW_SUPPORTING','LIST','secondary','会计与分析','accountingEvents',{any:['ACCOUNTING_EVENTS_VIEW','ACCOUNTING_VIEW']},{desktopExposure:'navigation',mobileExposure:'launcher'}),
+  route('accounting-reconciliation','业务财务对账','accounting-analytics','FLOW_SUPPORTING','LIST','secondary','会计与分析','accountingReconciliation',{any:['ACCOUNTING_RECONCILIATION_VIEW','ACCOUNTING_VIEW']},{desktopExposure:'navigation',mobileExposure:'launcher'}),
+  route('accounting-reports','报表平台','accounting-analytics','REPORT','REPORT','secondary','会计与分析','accountingReports',{any:['REPORT_TEMPLATE_VIEW','REPORT_INSTANCE_VIEW']},{desktopExposure:'navigation',mobileExposure:'launcher'}),
+  route('management-accounting','经营会计','accounting-analytics','FLOW_SUPPORTING','LIST','secondary','会计与分析','managementAccounting',{any:['MANAGEMENT_ACCOUNTING_VIEW']},{desktopExposure:'navigation',mobileExposure:'launcher'}),
+  route('accounting-costing','存货核算','accounting-analytics','FLOW_SUPPORTING','LIST','secondary','会计与分析','accountingCosting',{any:['INVENTORY_COST_VIEW','ACCOUNTING_VIEW']},{desktopExposure:'navigation',mobileExposure:'launcher'}),
   route('cost-rates','成本费率','accounting-analytics','ADVANCED_CONFIGURATION','CONFIG','contextual','会计与分析','costAccounting',{any:['COST_VIEW','COST_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
   route('iqc','IQC 来料检验','manufacturing-quality','FLOW_INTERNAL_STEP','WORKFLOW','contextual','制造与质量','iqc',{any:['IQC_VIEW','IQC_MANAGE']},{parentRoute:'purchase-receipts'}),
   route('oqc','OQC 出货检验','manufacturing-quality','FLOW_INTERNAL_STEP','WORKFLOW','contextual','制造与质量','oqc',{any:['OQC_VIEW','OQC_MANAGE']},{parentRoute:'sales-deliveries'}),
@@ -142,6 +147,8 @@ const loadScreenModule = (path) => {
     case '../pages/wave8-sales.jsx': return import('../pages/wave8-sales.jsx');
     case '../pages/sourcing-pricing.jsx': return import('../pages/sourcing-pricing.jsx');
     case '../pages/outsourcing.jsx': return import('../pages/outsourcing.jsx');
+    case '../pages/accounting-analytics.jsx': return import('../pages/accounting-analytics.jsx');
+    case '../pages/fixed-assets.jsx': return import('../pages/fixed-assets.jsx');
     default: return Promise.reject(new Error(`Unknown route screen module: ${path}`));
   }
 };
@@ -172,6 +179,11 @@ const SCREEN_DEFINITIONS = Object.freeze({
   users: named('../pages/master-data.jsx','UsersRoles'), 'cash-journals': named('../pages/treasury-cost.jsx','CashJournals'),
   'bank-accounts': named('../pages/treasury-cost.jsx','BankAccounts'), bills: named('../pages/treasury-cost.jsx','Bills'),
   'fixed-assets': named('../pages/fixed-assets.jsx','FixedAssets'), 'product-costs': named('../pages/treasury-cost.jsx','ProductCosts'),
+  'accounting-events': named('../pages/accounting-analytics.jsx','AccountingEvents'),
+  'accounting-reconciliation': named('../pages/accounting-analytics.jsx','AccountingReconciliation'),
+  'accounting-reports': named('../pages/accounting-analytics.jsx','AccountingReports'),
+  'accounting-costing': named('../pages/accounting-analytics.jsx','InventoryCosting'),
+  'management-accounting': named('../pages/accounting-analytics.jsx','ManagementAccounting'),
   'cost-rates': named('../pages/treasury-cost.jsx','CostRates'), iqc: named('../pages/quality.jsx','IQCInspections'),
   oqc: named('../pages/quality.jsx','OQCInspections'), 'quality-control-points': named('../pages/quality.jsx','QualityControlPoints'),
   notifications: named('../pages/platform-notifications.jsx','Notifications'), workflows: named('../pages/platform-workflows.jsx','Workflows'),
@@ -288,6 +300,11 @@ export const APPLICATION_LAUNCHER_GROUPS = Object.freeze([
     ['business-overview','业务总览','overview'],
     ['accounting','会计凭证','accounting'],
     ['fixed-assets','固定资产','fixedAssets'],
+    ['accounting-events','会计事件台账','accountingEvents'],
+    ['accounting-reconciliation','业务财务对账','accountingReconciliation'],
+    ['accounting-reports','报表平台','accountingReports'],
+    ['management-accounting','经营会计','managementAccounting'],
+    ['accounting-costing','存货核算','accountingCosting'],
     ['decision-reports','销售统计','reports',{reportKey:'sales-summary',formalLabel:'销售统计分析表'}],
     ['decision-reports','销售未出货','reports',{reportKey:'sales-outstanding',formalLabel:'销售未出货反应表'}],
     ['decision-reports','采购统计','reports',{reportKey:'purchase-summary',formalLabel:'采购统计分析表'}],

@@ -1,0 +1,48 @@
+{
+  "capturedAt": "2026-11-11T14:18:10.356Z",
+  "results": [
+    {
+      "id": "AA-UAT-fixed-assets",
+      "label": "固定资产工作面四档宽度闭环",
+      "status": "PASS",
+      "action": "打开 #fixed-assets，在 320 / 390 / 430 / 680 CSS px 下断言面板已渲染且无整页横向滚动",
+      "evidence": "widths 320px, 390px, 430px, 680px: 工作面已渲染且无整页横向滚动"
+    },
+    {
+      "id": "AA-UAT-accounting-events",
+      "label": "会计事件工作面四档宽度闭环",
+      "status": "PASS",
+      "action": "打开 #accounting-events，在 320 / 390 / 430 / 680 CSS px 下断言面板已渲染且无整页横向滚动",
+      "evidence": "widths 320px, 390px, 430px, 680px: 工作面已渲染且无整页横向滚动"
+    },
+    {
+      "id": "AA-UAT-accounting-reconciliation",
+      "label": "业务财务对账工作面四档宽度闭环",
+      "status": "PASS",
+      "action": "打开 #accounting-reconciliation，在 320 / 390 / 430 / 680 CSS px 下断言面板已渲染且无整页横向滚动",
+      "evidence": "widths 320px, 390px, 430px, 680px: 工作面已渲染且无整页横向滚动"
+    },
+    {
+      "id": "AA-UAT-accounting-reports",
+      "label": "报表平台工作面四档宽度闭环",
+      "status": "PASS",
+      "action": "打开 #accounting-reports，在 320 / 390 / 430 / 680 CSS px 下断言面板已渲染且无整页横向滚动",
+      "evidence": "widths 320px, 390px, 430px, 680px: 工作面已渲染且无整页横向滚动"
+    },
+    {
+      "id": "AA-UAT-accounting-costing",
+      "label": "存货核算工作面四档宽度闭环",
+      "status": "PASS",
+      "action": "打开 #accounting-costing，在 320 / 390 / 430 / 680 CSS px 下断言面板已渲染且无整页横向滚动",
+      "evidence": "widths 320px, 390px, 430px, 680px: 工作面已渲染且无整页横向滚动"
+    },
+    {
+      "id": "AA-UAT-management-accounting",
+      "label": "经营会计工作面四档宽度闭环",
+      "status": "PASS",
+      "action": "打开 #management-accounting，在 320 / 390 / 430 / 680 CSS px 下断言面板已渲染且无整页横向滚动",
+      "evidence": "widths 320px, 390px, 430px, 680px: 工作面已渲染且无整页横向滚动"
+    }
+  ],
+  "browserErrors": []
+}
