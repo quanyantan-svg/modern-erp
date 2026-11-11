@@ -36,7 +36,14 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-if ($Script -ne 'test:mysql:m1-core') {
+# Only campaigns with an independently approved ACK-4 manifest may run here.
+# Each entry names the manifest string the issued capability must carry; a
+# capability issued for another campaign is rejected by the ACK-4 validator.
+$ApprovedCampaigns = @{
+  'test:mysql:m1-core'             = 'M1_CORE_G07_V1'
+  'test:mysql:accounting-analytics' = 'ACCOUNTING_ANALYTICS_MYSQL_V1'
+}
+if (-not $ApprovedCampaigns.ContainsKey($Script)) {
   Write-Host "[mysql-gate] BLOCKED: $Script has no independently approved ACK-4 manifest." -ForegroundColor Red
   exit 7
 }

@@ -21,6 +21,17 @@ export const OUT_001_MYSQL_MANIFEST = Object.freeze([
   'CLEANUP_SCHEMA_POST_RUN',
 ]);
 export const ACK4_TERMINAL_STATES = Object.freeze(['FINISHED', 'FAILED', 'CLEANUP_UNVERIFIED']);
+// Accounting & Analytics 域（AA-W1..AA-W7）的独立 ACK-4 Manifest。M1_CORE_MANIFEST
+// 与 OUT_001_MYSQL_MANIFEST 属于各自的 campaign，既不被本 Manifest 复用，也不被
+// 本 Manifest 修改；本 Manifest 的夹具操作名带 AA 前缀，使运行期证据可以唯一地归属
+// 本域 campaign，不会与 M1-Core G07 或 OUT-001 的证据混淆。
+export const ACCOUNTING_ANALYTICS_MYSQL_MANIFEST_NAME = 'ACCOUNTING_ANALYTICS_MYSQL_V1';
+export const ACCOUNTING_ANALYTICS_MYSQL_MANIFEST = Object.freeze([
+  'RESET_SCHEMA_PRE_RUN',
+  'BOOTSTRAP_CURRENT_SCHEMA',
+  'RUN_AA_HTTP_FIXTURES',
+  'CLEANUP_SCHEMA_POST_RUN',
+]);
 export const ACK4_RECOVERY_MANIFEST = Object.freeze([
   'INSPECT_QUARANTINE',
   'CLEANUP_SCHEMA_RECOVERY',
