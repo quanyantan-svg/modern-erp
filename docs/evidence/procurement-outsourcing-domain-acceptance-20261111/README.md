@@ -9,7 +9,7 @@
 
 | 文件 | 内容 |
 |---|---|
-| [`g07-outsourcing-wip-identity-effects-catalogue-capture.json`](./g07-outsourcing-wip-identity-effects-catalogue-capture.json) | `outsourcing_wip_identity_effects` 的**真实 MySQL 目录 CHECK 条款**只读观测结果 |
+| `g07-outsourcing-wip-identity-effects-catalogue-capture.json` | `outsourcing_wip_identity_effects` 的**真实 MySQL 目录 CHECK 条款**只读观测结果 |
 
 ## 观测来源
 
