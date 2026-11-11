@@ -375,4 +375,3 @@ export const accountingEventsHandlers = {
 };
 
 export { recordEvent as recordAccountingEvent };
-

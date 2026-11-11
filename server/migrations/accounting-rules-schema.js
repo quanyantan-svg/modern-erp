@@ -105,4 +105,3 @@ export function migrateAccountingRulesSchema(db) {
     grant.run('role-accounting', code);
   }
 }
-

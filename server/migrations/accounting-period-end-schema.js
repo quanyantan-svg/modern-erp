@@ -103,5 +103,16 @@ export function migrateAccountingPeriodEndSchema(db) {
       reversed_by        TEXT
     );
   `);
-}
 
+  // ---- AA-W3.14 profit transfer equity subject ----
+  // The profit-and-loss transfer needs a real equity account to carry the
+  // net result. It is seeded (idempotently) so the transfer can run on a
+  // fresh database without a manual setup step. `4103 本年利润` is the
+  // standard account for the current-year result.
+  db.prepare(
+    "INSERT OR IGNORE INTO accounting_subjects(id,code,name,type,direction,parent_id,active) VALUES(?,?,?,?,?,NULL,1)",
+  ).run('subject-4103', '4103', '本年利润', 'EQUITY', 'CREDIT');
+  db.prepare(
+    "INSERT OR IGNORE INTO account_role_mappings(role_code,subject_id,updated_by,updated_at) VALUES(?,?,?,?)",
+  ).run('PROFIT_TRANSFER', 'subject-4103', null, new Date().toISOString());
+}

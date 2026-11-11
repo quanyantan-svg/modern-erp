@@ -186,6 +186,19 @@ describe('Period Management', () => {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${approverToken}` },
     });
+    // AA-W3.16 — 期间仍有损益余额但未执行真实损益结转时，关账必须被拦截。
+    // 结转完成后本期损益科目余额归零，关账才被放行。
+    const blocked = await fetch(`${baseUrl}/api/period-closures/${closure.id}/close`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${periodManagerToken}` },
+    });
+    assert.equal(blocked.status, 409, '未结转时关账必须被拦截');
+    const transfer = await fetch(`${baseUrl}/api/accounting/profit-transfer`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${adminToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ period: '3000-04', reason: '期末损益结转' }),
+    });
+    assert.equal(transfer.status, 200, `profit transfer must succeed; got ${transfer.status} ${JSON.stringify(await transfer.clone().json())}`);
     const res = await fetch(`${baseUrl}/api/period-closures/${closure.id}/close`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${periodManagerToken}` },

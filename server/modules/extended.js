@@ -2,6 +2,7 @@
 import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, readJson, send } from '../lib/http.js';
 import { systemHealth } from './financial-inventory.js';
+import { assertProfitTransferred } from './accounting-period-end.js';
 
 const IQC_OQC_STATUSES = ['PENDING', 'COMPLETED'];
 const IQC_OQC_RESULTS = ['PASS', 'FAIL'];
@@ -240,6 +241,8 @@ export async function closePeriod(db, req, res, actor, closureId) {
   if (closure.status === "CLOSED") throw new HttpError(400, "期间已结账");
   if(!db.prepare("SELECT 1 FROM inventory_period_closures WHERE period_key=? AND status='CLOSED'").get(closure.period)) throw new HttpError(409,'必须先完成对应存货期间结账');
   const endDate=`${closure.period}-${String(new Date(Number(closure.period.slice(0,4)),Number(closure.period.slice(5,7)),0).getDate()).padStart(2,'0')}`; const health=systemHealth(db,{asOfDate:endDate}); const blocking=health.checks.filter(x=>x.severity==='BLOCKING'&&x.status==='FAIL'); if(blocking.length) throw new HttpError(409,`会计结账健康检查失败: ${blocking.map(x=>x.code).join(', ')}`);
+  // AA-W3.16 — 期间仍有损益余额但未执行真实损益结转时，禁止关闭会计期间。
+  assertProfitTransferred(db, closure.period);
 
   // 执行统一的关闭前置检查
   const checklistResult = getPeriodClosureChecklist(db, closure.period);
@@ -1030,8 +1033,11 @@ export function getIncomeStatement(db, res, actor, url) {
 
 // ============ 资产负债表 ============
 // as-of / period-end 时点报表。统计 voucher_date <= asOfDate 的累计余额。
-// 当前 schema 无自动损益结转，通过「未结转损益」虚拟权益行补偿。
-// 扩展恒等式：Assets = Liabilities + Posted Equity + Unclosed Profit。
+//
+// AA-W3.15 / §31.3.6 — 权益区读取**真实**权益科目余额。此前用于抵消
+// 「未结转损益」的虚拟权益行已随真实损益结转生效而移除；尚未结转的损益
+// 仍以 `equity.unclosedProfit` 显式列示，但**不再计入**权益合计。
+// 恒等式：Assets = Liabilities + Posted Equity（结转后自然成立）。
 
 export function getBalanceSheet(db, res, actor, url) {
   allow(actor, "REPORT_VIEW");
@@ -1101,7 +1107,8 @@ export function getBalanceSheet(db, res, actor, url) {
     if (r.type === 'EXPENSE') expenseNet = debit - credit;
   }
   const unclosedProfit = revenueNet - expenseNet;
-  const equityTotal = equityPosted.total + unclosedProfit;
+  // AA-W3.15 — 权益合计只包含真实权益科目余额。
+  const equityTotal = equityPosted.total;
 
   const totalAssets = assets.total;
   const totalLiabilitiesAndEquity = liabilities.total + equityTotal;

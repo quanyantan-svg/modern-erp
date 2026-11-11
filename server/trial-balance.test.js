@@ -280,7 +280,10 @@ describe('Phase E — Trial Balance end-to-end', () => {
     // 6408 委外加工费：委外加工费正式过账（C-P02）的借方科目，由采购与委外域
     // 的会计档案登记（server/migrations/procurement-outsourcing-finance-schema.js）。
     assert.ok(codes.includes('6408'), `trial balance must include the outsourcing processing fee subject 6408; got [${codes.join(',')}]`);
-    assert.equal(codes.length, 22, `trial balance must contain the 22 configured subjects; got [${codes.join(',')}]`);
+    // AA-W3.14 — 4103 本年利润 is the profit-and-loss transfer equity subject
+    // seeded by `server/migrations/accounting-period-end-schema.js`.
+    assert.ok(codes.includes('4103'), `trial balance must include the profit transfer subject 4103; got [${codes.join(',')}]`);
+    assert.equal(codes.length, 23, `trial balance must contain the 23 configured subjects; got [${codes.join(',')}]`);
   });
 
   test('POSTED manual voucher with period populated appears in Trial Balance', async () => {
@@ -594,10 +597,17 @@ describe('Phase E — Other reports unaffected by Trial Balance fix', () => {
     });
     const data = await r.json();
     assert.equal(data.asOfDate, '2026-09-30');
-    assert.equal(data.equationValid, true,
-      `balance sheet equationValid must hold; difference=${data.difference}`);
     assert.equal(data.totalAssets, 600000, '1001 库存现金 = 1000000 - 400000 = 600000');
+    // AA-W3.15 — 权益合计只读取**真实**权益科目余额。此前用于抵消「未结转
+    // 损益」的虚拟权益行已随真实损益结转生效而移除，因此在本期尚未执行
+    // 损益结转时，资产负债表如实反映差额。执行结转后恒等式必然成立，
+    // 见本文件末尾的 AA-W3.15 一致性对照测试。
+    assert.equal(data.equity.total, 0, '未结转时权益合计只包含真实权益科目余额');
     assert.equal(data.equity.unclosedProfit, 600000, 'revenue 1000000 - expense 400000 = 600000');
+    assert.equal(data.totalLiabilitiesAndEquity, 0);
+    assert.equal(data.difference, 600000, '差额等于尚未结转的损益');
+    assert.equal(data.equationValid, false,
+      `未结转时平衡表必须如实显示差额; difference=${data.difference}`);
   });
 
   test('Financial Summary still correct (revenue / expense / profit / ar / ap)', async () => {
@@ -1006,5 +1016,88 @@ describe('Phase E — POSTED-only direction behavior unchanged', () => {
     const res = await env.api('/api/reports/trial-balance?period=2027-04', {}, env.approverToken);
     const r1001 = row(res.data.trialBalance, '1001');
     assert.equal(r1001.closingBalance, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AA-W3.15 — 移除「未结转损益」虚拟权益行后的一致性对照
+//
+// 移除前：权益合计 = 真实权益 + 未结转损益。
+// 移除后：权益合计 = 真实权益（结转后未结转损益自然归零）。
+// 在**已执行真实损益结转**的期间，两者的数字必须完全一致 —— 这就是
+// 「移除前后一致性对照」要证明的事实。
+// ---------------------------------------------------------------------------
+
+describe('AA-W3.15 — 资产负债表移除虚拟权益行后的一致性对照', () => {
+  let env;
+  let baseUrl;
+  let adminToken;
+
+  before(async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'modern-erp-aa-w3-bs-'));
+    const database = createDatabase(join(tempDir, 'erp.db'));
+    const server = createServer(createApp(database, { distDir: undefined }));
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    baseUrl = `http://127.0.0.1:${server.address().port}`;
+    const login = await fetch(`${baseUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'admin123' }),
+    });
+    adminToken = (await login.json()).token;
+    env = { tempDir, database, server };
+  });
+
+  after(async () => {
+    await new Promise((r) => env.server.close(() => r()));
+    env.database.close();
+    rmSync(env.tempDir, { recursive: true, force: true });
+  });
+
+  async function api(path, opts = {}) {
+    const headers = { ...(opts.headers || {}) };
+    if (adminToken) headers.Authorization = `Bearer ${adminToken}`;
+    if (opts.body && typeof opts.body !== 'string') {
+      headers['Content-Type'] = 'application/json';
+      opts = { ...opts, body: JSON.stringify(opts.body) };
+    }
+    const res = await fetch(`${baseUrl}${path}`, { ...opts, headers });
+    const data = res.status === 204 ? null : await res.json().catch(() => ({}));
+    return { status: res.status, data };
+  }
+
+  test('执行真实损益结转后资产负债恒等式成立且数字与移除前一致', async () => {
+    const period = '2026-11';
+    const created = await api('/api/accounting-vouchers', {
+      method: 'POST',
+      body: {
+        voucherDate: period + '-10',
+        remark: 'AA-W3.15 consistency fixture',
+        entries: [
+          { subjectId: 'subject-001', direction: 'DEBIT', amountCents: 400000, summary: '收现' },
+          { subjectId: 'subject-006', direction: 'CREDIT', amountCents: 400000, summary: '收入' },
+        ],
+      },
+    });
+    assert.equal(created.status, 201, `create must succeed; got ${created.status} ${JSON.stringify(created.data)}`);
+    env.database.prepare("UPDATE accounting_vouchers SET status='POSTED', approver_id='user-admin', approved_at=? WHERE id=?")
+      .run(new Date().toISOString(), created.data.id);
+
+    const transfer = await api('/api/accounting/profit-transfer', {
+      method: 'POST',
+      body: { period, reason: 'AA-W3.15 一致性对照' },
+    }, adminToken);
+    assert.equal(transfer.status, 200, `profit transfer must succeed; got ${transfer.status} ${JSON.stringify(transfer.data)}`);
+
+    const sheet = await api('/api/reports/balance-sheet?period=' + period, {}, adminToken);
+    assert.equal(sheet.status, 200);
+    assert.equal(sheet.data.totalAssets, 400000);
+    // 移除前：权益合计 = 真实权益(0) + 未结转损益(400000) = 400000。
+    // 移除后：权益合计 = 真实权益(400000)。
+    assert.equal(sheet.data.equity.total, 400000, '结转后权益合计必须等于移除前的数值');
+    assert.equal(sheet.data.equity.unclosedProfit, 0, '结转后未结转损益必须为 0');
+    assert.equal(sheet.data.totalLiabilitiesAndEquity, 400000);
+    assert.equal(sheet.data.difference, 0);
+    assert.equal(sheet.data.equationValid, true);
   });
 });

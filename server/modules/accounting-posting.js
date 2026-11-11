@@ -16,7 +16,7 @@
 //   - SOD: the cashier reviewer must differ from the voucher creator and from
 //     the voucher approver. Violations are rejected by the backend.
 
-import { HttpError, allow, requiredText } from '../lib/http.js';
+import { HttpError, allow, allowAny, readJson, requiredText, send } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
 import { id, transaction } from '../db.js';
 import { createSystemVoucher, reverseSystemVoucher } from './financial-inventory.js';
@@ -268,3 +268,89 @@ export function listCorrections(db, voucherId) {
   return db.prepare('SELECT * FROM voucher_corrections WHERE original_voucher_id=? ORDER BY created_at,id').all(voucherId);
 }
 
+// ---------------------------------------------------------------------------
+// AA-W3 HTTP surface
+// ---------------------------------------------------------------------------
+
+/**
+ * AA-W3.5 / AA-W3.6 / AA-W3.7 — the cashier review node.
+ *
+ * The node is **explicit**: a voucher enters it when it is marked here or
+ * when its generating template declares the requirement. The legacy manual
+ * voucher flow is not auto-marked, because §31.12.1 requires the existing
+ * 录入 → 提交 → 审核 → 过账 chain to keep working unchanged.
+ */
+async function postCashierReview(db, req, res, actor, voucherId) {
+  allow(actor, 'VOUCHER_CASHIER_REVIEW');
+  const body = await readJson(req);
+  const action = requiredText(body.action, '复核动作', 20).toUpperCase();
+  const reason = body.reason === undefined ? '' : requiredText(body.reason, '复核意见', 500);
+  const status = cashierReview(db, {
+    voucherId,
+    actorId: actor.id,
+    action,
+    reason,
+    roleCode: actor.roleCode,
+  });
+  const voucher = db.prepare('SELECT cashier_review_status cashierReviewStatus,cashier_reviewed_by cashierReviewedBy,cashier_reviewed_at cashierReviewedAt,cashier_review_reason cashierReviewReason FROM accounting_vouchers WHERE id=?').get(voucherId);
+  return send(res, 200, { id: voucherId, status, review: voucher });
+}
+
+/**
+ * AA-W3.1 / AA-W3.2 / AA-W3.3 — the unified reversal entry point.
+ *
+ * Manual and system vouchers share this implementation, so the reversal
+ * semantics (mirrored direction, mirrored amount, one reversal per voucher)
+ * are identical for both.
+ */
+async function postReverse(db, req, res, actor, voucherId) {
+  allowAny(actor, ['VOUCHER_SUBMIT', 'VOUCHER_APPROVE']);
+  const body = await readJson(req);
+  const reason = requiredText(body.reason, '冲销原因', 500);
+  const reversalId = reverseVoucher(db, {
+    voucherId,
+    actorId: actor.id,
+    reason,
+    businessDate: body.businessDate || null,
+  });
+  const voucher = db.prepare('SELECT id,voucher_no voucherNo,status,reversal_of_id reversalOfId,source_type sourceType,source_id sourceId FROM accounting_vouchers WHERE id=?').get(reversalId);
+  return send(res, 201, { id: reversalId, ...voucher });
+}
+
+/**
+ * AA-W3.4 — the supplement (补记) entry point. The new voucher is linked to
+ * the original through `correction_of_id` and the difference stays
+ * comparable in `voucher_corrections`.
+ */
+async function postSupplement(db, req, res, actor, voucherId) {
+  allowAny(actor, ['VOUCHER_SUBMIT', 'VOUCHER_APPROVE']);
+  const body = await readJson(req);
+  const reason = requiredText(body.reason, '补记原因', 500);
+  const entries = Array.isArray(body.entries) ? body.entries : [];
+  const supplementId = supplementVoucher(db, {
+    voucherId,
+    actorId: actor.id,
+    entries,
+    reason,
+    businessDate: body.businessDate || null,
+  });
+  const voucher = db.prepare('SELECT id,voucher_no voucherNo,status,correction_of_id correctionOfId FROM accounting_vouchers WHERE id=?').get(supplementId);
+  return send(res, 201, { id: supplementId, ...voucher });
+}
+
+/**
+ * AA-W3.4 — the correction chain of one voucher.
+ */
+function getCorrections(db, res, actor, voucherId) {
+  allowAny(actor, ['ACCOUNTING_VIEW', 'VOUCHER_CASHIER_REVIEW', 'ACCOUNTING_PERIOD_END_MANAGE']);
+  const voucher = db.prepare('SELECT id,voucher_no voucherNo,status,source_type sourceType,source_id sourceId FROM accounting_vouchers WHERE id=?').get(voucherId);
+  if (!voucher) throw new HttpError(404, '凭证不存在', { code: 'VOUCHER_NOT_FOUND' });
+  return send(res, 200, { voucher, corrections: listCorrections(db, voucherId) });
+}
+
+export const accountingPostingHandlers = {
+  postCashierReview,
+  postReverse,
+  postSupplement,
+  getCorrections,
+};

@@ -447,6 +447,19 @@ describe('Balance Sheet — Multi-Month Accumulation (Critical)', () => {
 });
 
 describe('Balance Sheet — Equation Validation', () => {
+  // AA-W3.15 — 权益合计只读取真实权益科目余额，因此只有执行了真实损益结转
+  // 的期间，资产 = 负债 + 权益 才成立。移除「未结转损益」虚拟权益行前后的
+  // 数字在结转完成后必须完全一致。
+  async function transferProfit(period) {
+    const res = await fetch(`${baseUrl}/api/accounting/profit-transfer`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${adminToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ period, reason: '资产负债表一致性对照' }),
+    });
+    const data = await res.json();
+    assert.equal(res.status, 200, `profit transfer must succeed; got ${res.status} ${JSON.stringify(data)}`);
+  }
+
   test('valid accounting scenario returns equationValid=true with zero difference', async () => {
     await createAndPostVoucher('2093-03-15', [
       { subjectId: 'subject-002', direction: 'DEBIT', amountCents: 100000, summary: '银行存款' },
@@ -456,6 +469,7 @@ describe('Balance Sheet — Equation Validation', () => {
       { subjectId: 'subject-002', direction: 'DEBIT', amountCents: 30000, summary: '银行存款' },
       { subjectId: 'subject-006', direction: 'CREDIT', amountCents: 30000, summary: '主营业务收入' },
     ]);
+    await transferProfit('2093-03');
     const { data } = await getBalanceSheet('2093-03');
     assert.equal(data.totalAssets, 130000);
     assert.equal(data.totalLiabilitiesAndEquity, 130000);
@@ -468,6 +482,7 @@ describe('Balance Sheet — Equation Validation', () => {
       { subjectId: 'subject-002', direction: 'DEBIT', amountCents: 75000, summary: '银行存款' },
       { subjectId: 'subject-006', direction: 'CREDIT', amountCents: 75000, summary: '主营业务收入' },
     ]);
+    await transferProfit('2093-04');
     const { data } = await getBalanceSheet('2093-04');
     assert.equal(data.equationValid, true);
 

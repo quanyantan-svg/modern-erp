@@ -519,4 +519,3 @@ export const accountingRulesHandlers = {
 };
 
 export { recordEvent as recordRuleEvent };
-

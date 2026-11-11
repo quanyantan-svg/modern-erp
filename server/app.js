@@ -1,4 +1,4 @@
-﻿import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { id, transaction, verifyPassword } from './db.js';
 import { randomUUID } from 'node:crypto';
 import { audit } from './lib/audit.js';
@@ -207,6 +207,9 @@ import { accountingEventsHandlers } from './modules/accounting-events.js';
 import { accountingRulesHandlers } from './modules/accounting-rules.js';
 import { accountingReconciliationHandlers } from './modules/accounting-reconciliation.js';
 import { generateEventVoucher } from './modules/accounting-rules.js';
+import { accountingPeriodEndHandlers } from './modules/accounting-period-end.js';
+import { accountingPostingHandlers, assertCashierReviewCleared, reverseVoucher } from './modules/accounting-posting.js';
+import { getCashFlow } from './modules/accounting-cash-flow.js';
 import { paymentTermsDays } from './lib/payment-terms.js';
 import {
   createWarehouse,
@@ -1852,6 +1855,101 @@ ownedRouteTable.register({
   path: /^\/api\/accounting\/rules\/([^/]+)\/deactivate$/,
   handler: ({ db, req, res, actor, params }) => accountingRulesHandlers.deactivateRule(db, req, res, actor, params[0]),
   owner: 'server/modules/accounting-rules.js',
+});
+
+// Accounting & Analytics Domain Closure — AA-W3 总账增强与期末自动化。
+//
+// Canonical owners:
+//   server/modules/accounting-posting.js     凭证冲销 / 补记 / 出纳复核
+//   server/modules/accounting-period-end.js  期末定义与执行 / 损益结转
+//   server/modules/accounting-cash-flow.js   现金流量表与资金子账对账
+//
+// The legacy `/api/accounting-vouchers/:id/reverse` route stays on the
+// legacy chain (see the note next to it) but now delegates to the same
+// canonical implementation, so manual and system reversals share one path.
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/accounting\/vouchers\/([^/]+)\/cashier-review$/,
+  handler: ({ db, req, res, actor, params }) => accountingPostingHandlers.postCashierReview(db, req, res, actor, params[0]),
+  owner: 'server/modules/accounting-posting.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/accounting\/vouchers\/([^/]+)\/reverse$/,
+  handler: ({ db, req, res, actor, params }) => accountingPostingHandlers.postReverse(db, req, res, actor, params[0]),
+  owner: 'server/modules/accounting-posting.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/accounting\/vouchers\/([^/]+)\/supplement$/,
+  handler: ({ db, req, res, actor, params }) => accountingPostingHandlers.postSupplement(db, req, res, actor, params[0]),
+  owner: 'server/modules/accounting-posting.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/accounting\/vouchers\/([^/]+)\/corrections$/,
+  handler: ({ db, res, actor, params }) => accountingPostingHandlers.getCorrections(db, res, actor, params[0]),
+  owner: 'server/modules/accounting-posting.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/accounting/period-end/definitions',
+  handler: ({ db, res, actor, url }) => accountingPeriodEndHandlers.listDefinitions(db, res, actor, url),
+  owner: 'server/modules/accounting-period-end.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/accounting/period-end/definitions',
+  handler: ({ db, req, res, actor }) => accountingPeriodEndHandlers.createDefinition(db, req, res, actor),
+  owner: 'server/modules/accounting-period-end.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/accounting\/period-end\/definitions\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => accountingPeriodEndHandlers.updateDefinition(db, req, res, actor, params[0]),
+  owner: 'server/modules/accounting-period-end.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/accounting\/period-end\/definitions\/([^/]+)\/deactivate$/,
+  handler: ({ db, req, res, actor, params }) => accountingPeriodEndHandlers.deactivateDefinition(db, req, res, actor, params[0]),
+  owner: 'server/modules/accounting-period-end.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/accounting/period-end/runs',
+  handler: ({ db, req, res, actor }) => accountingPeriodEndHandlers.runPeriodEnd(db, req, res, actor),
+  owner: 'server/modules/accounting-period-end.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/accounting/period-end/runs',
+  handler: ({ db, res, actor, url }) => accountingPeriodEndHandlers.listRuns(db, res, actor, url),
+  owner: 'server/modules/accounting-period-end.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/accounting/profit-transfer',
+  handler: ({ db, req, res, actor }) => accountingPeriodEndHandlers.postProfitTransfer(db, req, res, actor),
+  owner: 'server/modules/accounting-period-end.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/accounting/profit-transfer',
+  handler: ({ db, res, actor, url }) => accountingPeriodEndHandlers.getProfitTransfer(db, res, actor, url),
+  owner: 'server/modules/accounting-period-end.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/accounting/profit-transfer/reverse',
+  handler: ({ db, req, res, actor }) => accountingPeriodEndHandlers.reverseProfitTransfer(db, req, res, actor),
+  owner: 'server/modules/accounting-period-end.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/accounting/cash-flow',
+  handler: ({ db, res, actor, url }) => getCashFlow(db, res, actor, url),
+  owner: 'server/modules/accounting-cash-flow.js',
 });
 
 // Wave 5B — Manufacturing Reference Data Decomposition. Canonical
@@ -5053,6 +5151,12 @@ async function approveAccountingVoucher(db, req, res, actor, voucherId) {
     throw new HttpError(409, '只有待审核凭证可以审核');
   }
 
+  // AA-W3.6 — the cashier review node is a pre-posting gate. A voucher that
+  // was marked for review must not reach POSTED before the reviewer clears
+  // it. The legacy manual vouchers are not auto-marked (§31.12.1), so this
+  // gate only fires for vouchers that actually entered the node.
+  assertCashierReviewCleared(voucher);
+
   // Cannot approve own voucher
   if (voucher.creator_id === actor.id) {
     throw new HttpError(403, '不能审核自己录入的凭证');
@@ -6878,9 +6982,21 @@ function snapshotProductionOrder(db, orderId, productId, bomId, quantity, routin
 }
 
 async function reverseManualVoucher(db,req,res,actor,voucherId){
-  allow(actor,'VOUCHER_SUBMIT'); const original=db.prepare('SELECT * FROM accounting_vouchers WHERE id=?').get(voucherId); if(!original)throw new HttpError(404,'凭证不存在'); if(original.voucher_origin!=='MANUAL'||original.source_type!=='MANUAL'||original.status!=='POSTED')throw new HttpError(409,'只能冲销已过账手工凭证'); if(db.prepare('SELECT 1 FROM accounting_vouchers WHERE reversal_of_id=?').get(voucherId))throw new HttpError(409,'手工凭证已经冲销'); const body=await readJson(req); const reason=requiredText(body.reason,'冲销原因',500); const businessDate=normalizeDocumentDate(body.businessDate||new Date().toISOString().slice(0,10),'冲销日期'); checkPeriodNotClosedForVoucher(db,businessDate,'冲销'); const entries=db.prepare('SELECT * FROM accounting_entries WHERE voucher_id=? ORDER BY line_no,id').all(voucherId); const reversalId=id(),now=new Date().toISOString(),voucherNo=makeVoucherNo(); transaction(db,()=>{db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,business_date,remark,creator_id,created_at,updated_at,status,voucher_origin,reversal_of_id,submitted_at,submitted_by,period) VALUES(?,?,?,?,?,?,?,?,?,?,'SUBMITTED','MANUAL',?,?,?,?,?)`).run(reversalId,voucherNo,'MANUAL_REVERSAL',reversalId,businessDate,businessDate,reason,actor.id,now,now,voucherId,now,actor.id,businessDate.slice(0,7)); const stmt=db.prepare('INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary,line_no) VALUES(?,?,?,?,?,?,?)'); entries.forEach((e,i)=>stmt.run(id(),reversalId,e.subject_id,e.direction==='DEBIT'?'CREDIT':'DEBIT',e.amount_cents,`冲销 ${original.voucher_no} ${e.summary||''}`,i+1)); audit(db,actor.id,'REVERSE_REQUEST','ACCOUNTING_VOUCHER',reversalId,reason);}); return send(res,201,{id:reversalId,voucherNo,status:'SUBMITTED',reversalOfId:voucherId});
+  allow(actor,'VOUCHER_SUBMIT');
+  const original=db.prepare('SELECT * FROM accounting_vouchers WHERE id=?').get(voucherId);
+  if(!original)throw new HttpError(404,'凭证不存在');
+  if(original.voucher_origin!=='MANUAL'||original.source_type!=='MANUAL'||original.status!=='POSTED')throw new HttpError(409,'只能冲销已过账手工凭证');
+  const body=await readJson(req);
+  const reason=requiredText(body.reason,'冲销原因',500);
+  const businessDate=normalizeDocumentDate(body.businessDate||new Date().toISOString().slice(0,10),'冲销日期');
+  checkPeriodNotClosedForVoucher(db,businessDate,'冲销');
+  // AA-W3.2 — manual and system reversals share the single canonical path.
+  // The response shape is preserved; the reversal itself is now produced by
+  // the domain implementation so the mirroring semantics cannot drift.
+  const reversalId=reverseVoucher(db,{voucherId,actorId:actor.id,reason,businessDate});
+  const reversal=db.prepare('SELECT id,voucher_no voucherNo,status FROM accounting_vouchers WHERE id=?').get(reversalId);
+  return send(res,201,{id:reversalId,voucherNo:reversal.voucherNo,status:reversal.status,reversalOfId:voucherId});
 }
-
 function listProductionOrders(db, res, actor, url) {
   allow(actor, 'PRODUCTION_ORDERS_VIEW');
   const search = '%' + (url.searchParams.get('search') || '') + '%';

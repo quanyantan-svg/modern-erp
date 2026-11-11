@@ -21,11 +21,16 @@ function closedThrough(rows, key) {
   return cutoff;
 }
 
-export function assertFinancialPeriodsOpen(db, businessDate) {
+export function assertFinancialPeriodsOpen(db, businessDate, allowClosedInventoryPeriod = false) {
   const date = String(businessDate || '');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new HttpError(400, '业务日期格式不正确');
   const inventoryCutoff = closedThrough(db.prepare("SELECT period_key FROM inventory_period_closures WHERE status='CLOSED' ORDER BY period_key").all(), 'period_key');
-  if (inventoryCutoff && date <= `${inventoryCutoff}-31`) {
+  // AA-W3.16 — the profit-and-loss transfer and the period-end adjustments
+  // are **general-ledger only** operations. They never touch inventory
+  // quantities or valuation, so the inventory month-end cutoff must not
+  // block them. The accounting period cutoff still applies: a closed
+  // accounting period can never receive new postings.
+  if (!allowClosedInventoryPeriod && inventoryCutoff && date <= `${inventoryCutoff}-31`) {
     throw new HttpError(409, `存货期间已结至 ${inventoryCutoff}`, {
       code: 'INVENTORY_PERIOD_CLOSED',
       resolution: '使用未结期间的业务日期，或先按治理流程反结账。',
@@ -170,7 +175,7 @@ export function receivePositiveSourceValue(db,input){
 }
 
 export function createSystemVoucher(db, input) {
-  assertFinancialPeriodsOpen(db, input.businessDate);
+     assertFinancialPeriodsOpen(db, input.businessDate, input.allowClosedInventoryPeriod === true);
   const existing = db.prepare("SELECT id FROM accounting_vouchers WHERE voucher_origin='SYSTEM' AND source_type=? AND source_id=?").get(input.sourceType,input.sourceId);
   if (existing) return existing.id;
   const normalized = input.entries.filter((e) => Number(e.amountCents) !== 0).map((e) => ({ ...e, amountCents: Math.abs(Number(e.amountCents)), subjectId: e.subjectId || accountForRole(db,e.role).id }));

@@ -595,6 +595,11 @@ const FULL = [
   // a positive and a negative assertion.
   'server/accounting-analytics-w1-w2.test.js',
 
+  // AA-W3 总账增强与期末自动化：冲销 / 补记统一路径、出纳复核 SOD、
+  // 现金流量表与资金子账对账、期末转账 / 摊销 / 计提、真实损益结转与
+  // 关账拦截、反结转留痕。
+  'server/accounting-analytics-w3.test.js',
+
   // ----- User / Auth / RBAC / SOD / Account-bootstrap -----
   'server/uat-r2-user-payload.test.js',
 

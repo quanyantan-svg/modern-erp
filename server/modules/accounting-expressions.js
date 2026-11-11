@@ -392,4 +392,3 @@ export const ACCOUNTING_EXPRESSION_LIMITS = Object.freeze({
   maxDepth: MAX_PARSE_DEPTH,
   templateIdentifiers: TEMPLATE_IDENTIFIERS,
 });
-
