@@ -1313,7 +1313,7 @@ ownedRouteTable.register({
 });
 ownedRouteTable.register({
   method: 'POST',
-  path: /^/api/procurement/outsourcing/processing-fee-accounting-profiles/([^/]+)/approval$/,
+  path: /^\/api\/procurement\/outsourcing\/processing-fee-accounting-profiles\/([^/]+)\/approval$/,
   handler: ({ db, req, res, actor, params }) => changeProcessingFeeAccountingProfileState(db, req, res, actor, params[0]),
   owner: 'server/modules/outsourcing-gl-policy.js',
 });
