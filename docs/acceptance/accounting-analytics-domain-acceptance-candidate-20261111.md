@@ -75,7 +75,7 @@ launcher 的「会计与分析」组由 8 项扩展为 **13 项**（新增上述
 | Gate | 结果 |
 |---|---|
 | `pnpm test:fast` | **632/632 PASS** |
-| `pnpm test`（FULL） | **3642/3642 PASS**，0 失败 |
+| `pnpm test`（FULL） | **3695/3695 PASS**，0 失败（459 个套件；含新登记的域级 schema 双引擎离线对等 53 条） |
 | `pnpm test:heavy` | **67/67 PASS** |
 | `pnpm build` | PASS |
 | `git diff --check` | PASS |
