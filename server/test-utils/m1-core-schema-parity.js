@@ -674,7 +674,36 @@ export function readMySqlInformationSchemaContract(db, tableName) {
       ON tc.CONSTRAINT_SCHEMA=cc.CONSTRAINT_SCHEMA AND tc.CONSTRAINT_NAME=cc.CONSTRAINT_NAME
     WHERE tc.TABLE_SCHEMA=DATABASE() AND tc.TABLE_NAME=? AND tc.CONSTRAINT_TYPE='CHECK'
     ORDER BY tc.CONSTRAINT_NAME`).all(tableName);
-  return Object.freeze({ tableName, columns, indexes, foreignKeys, checks });
+  return Object.freeze({
+    tableName,
+    columns: columns.map((column) => ({ ...column, column_default: decodeCatalogueText(column.column_default) })),
+    indexes, foreignKeys, checks,
+  });
+}
+
+/**
+ * `information_schema`'s string columns are declared latin1, so the driver
+ * decodes the server's utf8mb4 bytes one byte at a time: a Chinese character
+ * arrives as its individual bytes rather than as one character. The bytes are
+ * intact, so they can be decoded back into the text they encode.
+ *
+ * Only a string whose every code point fits in one byte is re-decoded, and
+ * only when those bytes are valid UTF-8 — otherwise the value is returned
+ * unchanged. This restores the catalogue's text without changing any
+ * comparison rule.
+ */
+export function decodeCatalogueText(value) {
+  if (value === null || value === undefined) return value;
+  const text = String(value);
+  if (!text) return value;
+  let latin1 = true;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text.charCodeAt(index) > 0xff) { latin1 = false; break; }
+  }
+  if (!latin1) return value;
+  const bytes = Buffer.from(text, 'latin1');
+  const decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  return decoded;
 }
 
 function extractSqliteChecks(sql) {
