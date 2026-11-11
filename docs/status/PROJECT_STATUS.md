@@ -4122,11 +4122,11 @@ M0 验收后，**后续业务包的启动仍需各自的显式授权**；W11-A �
 | 离线 MySQL DDL 对等 | AA 的 45 张新表与 AA-W5 加列在生产 MySQL DDL 翻译输出中全部存在 |
 | 文档一致性 `current` | N1、N3～N6、N8、N9 **PASS**；N2 `RETIRED`；**N7 FAIL**（既存历史提交 `a40e356` / `59eccd5` / `171ade5` / `4403a80` 的追溯债务，与本域无关） |
 | 文档一致性 `migration` | C1～C6 全 PASS |
-| **真实 MySQL 8 parity / concurrency** | **未运行** —— 统一 launcher 仅放行已批准 ACK-4 的 `test:mysql:m1-core` campaign，本域无 ACK-4 清单与 RunId |
+| **真实 MySQL 8 parity / concurrency**（受保护 disposable MySQL 8.0.37） | **PASS**：run `253e14e6-83d7-4d4e-82d3-9465984fc122`、commit `0a81155`；`RESULT = PASS`、`ACK-4 STATE = FINISHED`，清理由 root 独立 post-flight 证明（运行前后目标库对象数均为 0）；47 张表的目录对等、七个包的权威写入路径、三条并发 UNIQUE 边界与金额边界全部通过 |
 
 ### 52.6 必须随验收一并接受的残余
 
-1. **真实 MySQL Gate 未运行**：Requirement §35.8.1 第 6 项未闭合。离线 DDL 对等**不等于**真实 MySQL 验收——不连接 MySQL、不执行 MySQL migration、不覆盖并发行为。
+1. **真实 MySQL Gate 已通过**：Requirement §35.8.1 第 6 项已闭合（run `253e14e6-83d7-4d4e-82d3-9465984fc122` @ `0a81155`）。campaign 暴露并修复了两处真实缺陷：MySQL 重复键冲突返回 500（应 409）、MySQL 目录字面量与 latin1 解码导致的 schema 对等误判。
 2. **AA-07 已闭合**：业务所有者 2026-11-11 裁定选项 A，Requirement §35.4.6 补入 AA-W6.17～AA-W6.19、Design §31.6.2 补入口径不变量；**未新增实现代码**。见 §52.4。
 3. **试算平衡科目集合由 21 增至 27**：AA-W3 的 `4103` 与 AA-W5 的 `1601` / `1602` / `6602` / `6603` 入列；既有损益表与资产负债表口径不变。
 4. **既有 `accounting.jsx` 未改造**：其中「未结转损益（虚拟行，不持久化）」的资产负债表展示行仍保留，尽管 AA-W3 已实现真实损益结转并从结转链移除虚拟权益行补偿；该展示行与真实结转事实的一致性**未取得浏览器取证**。
@@ -4144,7 +4144,10 @@ M0 验收后，**后续业务包的启动仍需各自的显式授权**；W11-A �
 ### 52.8 未解决事项与暂停点
 
 - **域级 Acceptance 与 Capability Freeze 尚未签发**：本节只登记证据与残余，不代替业务所有者签字。
-- **真实 MySQL Gate 未运行**（Requirement §35.8.1 第 6 项）：业务所有者已于 2026-11-11 授权本域 ACK-4 campaign，本轮正在建立该 campaign 的 ACK-4 清单与 gate 脚本；在真实运行与清理证明产出前，该项**不得**记为已通过。
+- **跨域遗留：受保护门禁的失败信号不可靠**。本轮发现 TAP 报告器只监听 `test:fail` 事件，嵌套子测试的失败不一定到达该事件，
+  于是失败套件的子进程仍以 0 退出，**门禁会把失败的套件报成 PASS**。已修复并以负例证明守卫生效（`0a81155`）。
+  该缺陷同样影响采购与委外域 2026-11-11 已签发的 **M1-Core G07 campaign**，该域的 PASS 结论需按本修正重跑确认
+  （属采购与委外域的解冻范围，本域**不**代为处置）。
 - **Manual Closure 未签发**：B3106 / B3107 / B3114–B3117 手册级关闭是独立决定。
 - **Release Readiness 未签发**：本域的 Acceptance 与 Freeze **不**构成任何 Domain 的发布授权。
 - 本轮**未**执行真实环境 migration、业务数据库写入、真实 MySQL Gate、push / merge / tag / 发布 / 部署；**未**代替业务所有者签发 Acceptance 或 Freeze。

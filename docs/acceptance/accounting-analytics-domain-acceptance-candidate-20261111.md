@@ -87,18 +87,34 @@ AA-07 的合同缺位已由业务所有者 2026-11-11 的裁定闭合（见 §6�
 | 离线 MySQL DDL 对等探针 | AA 的 **45 张新表**与 AA-W5 的加列在生产 MySQL DDL 翻译器输出中**全部存在**；列集合两端一致；全部 `*_cents` 列为 `BIGINT`；AA-W1 自然键 UNIQUE 与状态机 CHECK 保留 |
 | 文档一致性 `current` | N1、N3～N6、N8、N9 **PASS**；N2 `RETIRED`；**N7 FAIL**（既存历史提交 `a40e356` / `59eccd5` / `171ade5` / `4403a80` 的追溯债务，与本域无关） |
 | 文档一致性 `migration` | C1～C6 全 PASS |
-| **真实 MySQL 8 parity / concurrency** | **未运行** —— 见 §7 |
+| **真实 MySQL 8 parity / concurrency**（受保护 disposable MySQL 8.0.37） | **PASS**：run `253e14e6-83d7-4d4e-82d3-9465984fc122`、commit `0a81155`；`state=FINISHED`、清理由 root 独立 post-flight 证明；目标 `modern_erp_domain_test` @ `127.0.0.1:3306`，server uuid `256c7a4e-d275-11f1-885b-b025aa71d167`；见 §5.1 与 §7 |
 
 ## 5. 必须随验收一并接受的事实
 
-### 5.1 真实 MySQL Gate 未运行（Requirement §35.8.1 第 6 项未闭合）
+### 5.1 真实 MySQL Gate 已运行并通过（Requirement §35.8.1 第 6 项闭合）
 
-Requirement §35.8.1 第 6 项要求「真实 MySQL 8 路径完成 parity / concurrency 验证（具备受保护 disposable 环境时）」。本轮**未**运行：
+- **执行**：受保护 disposable MySQL 8.0.37，目标 `modern_erp_domain_test` @ `127.0.0.1:3306`，账号 `modern_erp_test`；
+  ACK-4 manifest `ACCOUNTING_ANALYTICS_MYSQL_V1`，run `253e14e6-83d7-4d4e-82d3-9465984fc122`，commit `0a81155`；
+  `RESULT = PASS`、`ACK-4 STATE = FINISHED`，清理由 root **独立 post-flight** 证明（运行前后目标库对象数均为 0）。
+- **Parity**：本域 45 张新表与 AA-W5 加列的两张既有表（共 47 张）在真实 MySQL 8 目录上的**列集合、NULL 约束、
+  UNIQUE 与 CHECK 条款**与 canonical SQLite 快照逐项一致（用生产比较器判定，未另写比较逻辑）。
+- **Behaviour**：AA-W1 科目维护与事件台账、AA-W1 对账快照、AA-W2 凭证模板与规则、AA-W4 报表生命周期、
+  AA-W5 政策折旧并生成可对账凭证（借 折旧费用 / 贷 累计折旧，且同期间幂等）、AA-W6 暂估差异调整凭证、
+  AA-W7 经营账簿与关账前置，全部在真实 MySQL 上成立，权威事实由第三个进程直接从 MySQL 读取判定。
+- **Concurrency**：两条独立应用进程共享同一个 MySQL 库并发写入 —— 会计科目、凭证模板、核算范围三条
+  UNIQUE 边界各只有一个成功、另一个被拒，且权威表中只落一条。
+- **金额**：本域全部 `*_cents` 列在真实 MySQL 上都是安全整数分。
 
-- 本机统一 MySQL Gate launcher（`scripts/gates/run-mysql-local-gate.ps1`）当前**只放行** `test:mysql:m1-core` 一个已批准 ACK-4 的 campaign，其余脚本一律 `BLOCKED`；本域**没有**已批准的 ACK-4 清单与 RunId；
-- 本轮已用**离线 MySQL DDL 对等探针**（新登记的 `accounting-analytics-mysql-schema-parity.test.js`）证明本域 schema 在 MySQL 侧成立，但**离线探针不等于真实 MySQL 验收**——它不连接 MySQL、不执行 MySQL migration、不覆盖并发行为。
+**本次 campaign 暴露并已修复的两处真实缺陷**（均由本次实施产生，已提交）：
 
-**已披露限制**：在此之前，**不得**声称本域已通过真实 MySQL parity / concurrency 验收；`docs/status/CAPABILITY_MATRIX.md` 中本域五本手册的 `VERIFIED` 状态只依据本地可执行证据，不构成 MySQL 运行期验收结论。
+| 缺陷 | 现象 | 修复 |
+|---|---|---|
+| MySQL 重复键冲突返回 500 | MySQL 驱动把 `ER_DUP_ENTRY` 放在错误的 `code` 上、消息里只有人类可读文本，全局错误处理只看 `error.message`，因此并发重复插入在 MySQL 上是 500 而不是 409 | `server/app.js` 的全局处理同时检查 `error.code`（`90694fc`） |
+| MySQL 目录字面量与 latin1 解码 | ① `information_schema` 的字符串列声明为 latin1，驱动把服务端的 utf8mb4 字节逐字节解码，中文默认值以多个单字节字符到达，比较器无法与 canonical SQLite 文本相等；② 目录把字符串字面量渲染成带反斜杠转义的定界符，比较器只接受单反斜杠形式 | 比较器按 UTF-8 还原目录列文本（`78c1666`），并把「反斜杠串 + 引号」整体当作定界符（`fe9d079`） |
+
+**已披露限制**：本次 campaign **不**覆盖本域全部 85 条契约用例 —— 它覆盖 Parity、七个包的代表性权威写入路径、
+三条并发边界与金额边界；逐条契约用例仍以本地 SQLite 套件（85/85）为准。campaign 也**不**覆盖 MySQL 下的
+库存估值并发（该并发属 Inventory 域）。
 
 ### 5.2 AA-07 委外成本：已由业务所有者裁定闭合
 
@@ -146,18 +162,30 @@ AA-07 的实现位于采购与委外域（该域已于 2026-11-11 签发域级 A
 **后果**：AA-07 由 `PARTIAL` 转为 `COVERED`，全域复核结论为 **43 `COVERED` / 0 `PARTIAL` / 1 `OUT_OF_SCOPE`**，
 与 §35.3 目标一致；`docs/status/CAPABILITY_MATRIX.md` 中 B3106 由 `BLOCKED` 转为 `VERIFIED`。
 
-## 7. 待业务所有者授权：真实 MySQL Gate
+## 7. 真实 MySQL Gate：已执行并通过
 
-Requirement §35.8.1 第 6 项的真实 MySQL parity / concurrency 需要：
+Requirement §35.8.1 第 6 项已由业务所有者 2026-11-11 的授权（`OWNER_AUTHORIZED_AA_MYSQL_ACK4_CAMPAIGN_2026-11-11`）闭合：
 
-1. 一份**本域专属的 ACK-4 清单**（描述目标 disposable 数据库、破坏性操作范围、子进程契约、清理证明与 RunId 形态），由业务所有者签发；
-2. 一次**受授权的 RunId**；
-3. 一个把本域纳入覆盖范围的 campaign（本轮**未**创建）。
+| 项 | 值 |
+|---|---|
+| campaign | `test:mysql:accounting-analytics`（`scripts/gates/mysql-accounting-analytics-gate.mjs`） |
+| ACK-4 manifest | `ACCOUNTING_ANALYTICS_MYSQL_V1`（操作：`RESET_SCHEMA_PRE_RUN` / `BOOTSTRAP_CURRENT_SCHEMA` / `RUN_AA_HTTP_FIXTURES` / `CLEANUP_SCHEMA_POST_RUN`） |
+| run | `253e14e6-83d7-4d4e-82d3-9465984fc122` |
+| commit | `0a81155b97597c519a101827b050738cd0638f1c` |
+| 目标 | `modern_erp_domain_test` @ `127.0.0.1:3306`，账号 `modern_erp_test`，server 8.0.37，uuid `256c7a4e-d275-11f1-885b-b025aa71d167` |
+| 结果 | `RESULT = PASS`；`ACK-4 STATE = FINISHED`；清理由 root 独立 post-flight 证明（运行前后对象数均为 0） |
 
-统一 launcher 目前对未签发 ACK-4 的脚本一律 `BLOCKED`，因此本轮**未**运行任何真实 MySQL campaign。业务所有者可选择：
+**本轮新建的受保护资产**：`scripts/gates/mysql-accounting-analytics-gate.mjs`、
+`scripts/gates/mysql-accounting-analytics-child.mjs`、
+`scripts/gates/mysql-accounting-analytics-root-lifecycle.mjs`、
+`server/mysql-accounting-analytics.integration.js`、`server/test-support/accounting-mysql-http-fixture.js`；
+`scripts/gates/run-mysql-local-gate.ps1` 的放行表改为按 manifest 名的白名单。
+真实 MySQL integration 文件与既有 `mysql-*.integration.js` 一样**不**登记进 FULL / FAST 套件。
 
-- **授权本域 campaign**：按 ACK-4 流程新建清单与 gate 脚本后运行，产出真实 MySQL 证据并把 §5.1 闭合；
-- **本轮接受离线对等证据**：接受 §4 的离线 MySQL DDL 对等探针作为本域 schema 侧的 MySQL 路径证据，并把真实 MySQL Gate 登记为**域级 Acceptance 的后续条件**（此时 §35.8.1 第 6 项应记为**有界残余**，不得记为已通过）。
+**同时修正的门禁完整性缺陷**：TAP 报告器此前只监听 `test:fail` 事件，嵌套子测试的失败不一定到达该事件，
+于是失败套件的子进程仍以 0 退出，**门禁会把失败的套件报成 PASS**。已改为同时扫描合成 TAP 的 `not ok` 行，
+并以「失败套件 → `failed = true`」的负例证明该守卫真正生效（`0a81155`）。
+**该缺陷同样影响采购与委外域已签发的 M1-Core G07 campaign**（2026-11-11），该域的 PASS 结论需要按本修正重跑确认。
 
 ## 8. 签发后仍**不**签发的项
 
@@ -167,7 +195,7 @@ Requirement §35.8.1 第 6 项的真实 MySQL parity / concurrency 需要：
 
 ## 9. 本轮**未**发生的事项
 
-- 未运行真实 MySQL Gate（§7）；
+- 未在真实环境执行 migration；真实 MySQL 只在受保护 disposable 目标上运行（§7）；
 - 未在真实环境执行 migration，未写入任何业务数据库；
 - 未 push / merge / tag / 发布 / 部署；
 - 未把 AA-07 写成已覆盖，未代替业务所有者签发 Acceptance 或 Freeze；

@@ -119,6 +119,7 @@
    **0 `PARTIAL`**、**1 `OUT_OF_SCOPE`（AA-31 汇兑损益 / 多币种）**。
    六本手册据此全部记 `VERIFIED`（AA-07 委外成本的口径由采购与委外域已冻结的 canonical 实现承担，
    本域按 §35.4.6 AA-W6.17～AA-W6.19 只做权威事实引用 —— 业务所有者 2026-11-11 裁定选项 A）。
+   **真实 MySQL 8 Gate PASS**（受保护 disposable MySQL 8.0.37，run `253e14e6-83d7-4d4e-82d3-9465984fc122`，commit `0a81155`，`ACK-4 STATE = FINISHED`，清理独立 post-flight 证明）：47 张表的目录对等、七个包的权威写入路径、三条并发 UNIQUE 边界与金额边界全部通过 —— 见[验收候签材料 §5.1 / §7](../acceptance/accounting-analytics-domain-acceptance-candidate-20261111.md)。
    域级 Acceptance 与 Capability Freeze **尚未签发**，详见
    [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) 与
    [审计台账 §7](../audits/accounting-analytics-capability-audit-20261110.md)。
