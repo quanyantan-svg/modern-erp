@@ -604,6 +604,8 @@ const FULL = [
   // Accounting & Analytics AA-W6 存货核算深化（Requirement §35.4.6 / Design §31.6）。
   'server/accounting-analytics-w6.test.js',
   // 路由字面量守卫：正则路由的转义丢失会让应用无法启动。
+  // Accounting & Analytics AA-W4 报表平台（Requirement §35.4.4 / Design §31.4）。
+  'server/accounting-analytics-w4.test.js',
   'server/route-literal-guard.test.js',
 
   // ----- User / Auth / RBAC / SOD / Account-bootstrap -----

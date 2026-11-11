@@ -46,6 +46,7 @@ import { migrateAccountingRulesSchema } from './migrations/accounting-rules-sche
 import { migrateAccountingPeriodEndSchema } from './migrations/accounting-period-end-schema.js';
 import { migrateFixedAssetsSchema } from './migrations/fixed-assets-schema.js';
 import { migrateInventoryCostingSchema } from './migrations/inventory-costing-schema.js';
+import { migrateAccountingReportingSchema } from './migrations/accounting-reporting-schema.js';
 import { migrateInventoryPositionSchema } from './migrations/inventory-position-schema.js';
 import { migrateSalesCustomerDomain } from './migrations/sales-customer-domain.js';
 import { migrateW11ASelectorSearchKey } from './migrations/sales-customer-wave11-a-selector-search-key.js';
@@ -561,6 +562,8 @@ function createSqliteDatabase(filename) {
   migrateFixedAssetsSchema(db);
   // Accounting & Analytics Domain Closure — AA-W6 存货核算深化。
   migrateInventoryCostingSchema(db);
+  // Accounting & Analytics Domain Closure — AA-W4 报表平台。
+  migrateAccountingReportingSchema(db);
   migrateInventoryPositionSchema(db);
   migrateV13Phase7cPerformance(db);
   migrateManufacturingQualitySchema(db);

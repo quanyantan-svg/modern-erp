@@ -216,6 +216,11 @@ import {
   createPurchaseExpenseAllocationRule, getCostingCloseChecklist, listAccountingScopes, listCostingProfiles,
   listProvisionalReceipts, listPurchaseExpenseAllocationRules, listPurchaseExpenses,
 } from './modules/accounting-inventory-cost.js';
+import {
+  approveReportInstance, changeReportTemplateStatus, computeReportInstance,
+  createReportInstance, createReportTemplate, getReportInstance, listReportInstances, listReportTemplates,
+  previewReportTemplate, publishReportTemplate, submitReportInstance, updateReportTemplate,
+} from './modules/accounting-reporting.js';
 import { getCashFlow } from './modules/accounting-cash-flow.js';
 import { paymentTermsDays } from './lib/payment-terms.js';
 import {
@@ -2010,6 +2015,81 @@ ownedRouteTable.register({
 // Canonical owner: server/modules/accounting-inventory-cost.js
 //   核算范围 / 计价配置 / 暂估入库与差异调整 / 采购费用归集与分摊 /
 //   完工成本结转 / 受控成本调整 / 核算关账异常清单
+// Accounting & Analytics Domain Closure — AA-W4 报表平台.
+// Canonical owner: server/modules/accounting-reporting.js
+//   报表模板 / 行项目 / 可见范围 / 期间实例 / 计算 / 提交 / 审核
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/accounting/report-templates',
+  handler: ({ db, res, actor }) => listReportTemplates(db, res, actor),
+  owner: 'server/modules/accounting-reporting.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/accounting/report-templates',
+  handler: ({ db, req, res, actor }) => createReportTemplate(db, req, res, actor),
+  owner: 'server/modules/accounting-reporting.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/accounting\/report-templates\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateReportTemplate(db, req, res, actor, params[0]),
+  owner: 'server/modules/accounting-reporting.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/accounting\/report-templates\/([^/]+)\/publish$/,
+  handler: ({ db, req, res, actor, params }) => changeReportTemplateStatus(db, req, res, actor, params[0], 'publish'),
+  owner: 'server/modules/accounting-reporting.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/accounting\/report-templates\/([^/]+)\/archive$/,
+  handler: ({ db, req, res, actor, params }) => changeReportTemplateStatus(db, req, res, actor, params[0], 'archive'),
+  owner: 'server/modules/accounting-reporting.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/accounting\/report-templates\/([^/]+)\/preview$/,
+  handler: ({ db, res, actor, params, url }) => previewReportTemplate(db, res, actor, params[0], url),
+  owner: 'server/modules/accounting-reporting.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/accounting/report-instances',
+  handler: ({ db, res, actor, url }) => listReportInstances(db, res, actor, url),
+  owner: 'server/modules/accounting-reporting.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/accounting/report-instances',
+  handler: ({ db, req, res, actor }) => createReportInstance(db, req, res, actor),
+  owner: 'server/modules/accounting-reporting.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/accounting\/report-instances\/([^/]+)\/compute$/,
+  handler: ({ db, req, res, actor, params }) => computeReportInstance(db, req, res, actor, params[0]),
+  owner: 'server/modules/accounting-reporting.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/accounting\/report-instances\/([^/]+)\/submit$/,
+  handler: ({ db, req, res, actor, params }) => submitReportInstance(db, req, res, actor, params[0]),
+  owner: 'server/modules/accounting-reporting.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/accounting\/report-instances\/([^/]+)\/approve$/,
+  handler: ({ db, req, res, actor, params }) => approveReportInstance(db, req, res, actor, params[0]),
+  owner: 'server/modules/accounting-reporting.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/accounting\/report-instances\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getReportInstance(db, res, actor, params[0]),
+  owner: 'server/modules/accounting-reporting.js',
+});
 ownedRouteTable.register({
   method: 'GET',
   path: '/api/accounting/scopes',
