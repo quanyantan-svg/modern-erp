@@ -601,6 +601,10 @@ const FULL = [
   'server/accounting-analytics-w3.test.js',
   // Accounting & Analytics AA-W5 固定资产完整生命周期（Requirement §35.4.5 / Design §31.5）。
   'server/accounting-analytics-w5.test.js',
+  // Accounting & Analytics AA-W6 存货核算深化（Requirement §35.4.6 / Design §31.6）。
+  'server/accounting-analytics-w6.test.js',
+  // 路由字面量守卫：正则路由的转义丢失会让应用无法启动。
+  'server/route-literal-guard.test.js',
 
   // ----- User / Auth / RBAC / SOD / Account-bootstrap -----
   'server/uat-r2-user-payload.test.js',

@@ -210,6 +210,12 @@ import { generateEventVoucher } from './modules/accounting-rules.js';
 import { accountingPeriodEndHandlers } from './modules/accounting-period-end.js';
 import { accountingPostingHandlers, assertCashierReviewCleared, reverseVoucher } from './modules/accounting-posting.js';
 import { fixedAssetsHandlers } from './modules/fixed-assets.js';
+import {
+  adjustProvisionalReceipt, allocatePurchaseExpense, createAccountingScope, createCostAdjustment,
+  createCostingProfile, createProductionCostClosing, createProvisionalReceipt, createPurchaseExpense,
+  createPurchaseExpenseAllocationRule, getCostingCloseChecklist, listAccountingScopes, listCostingProfiles,
+  listProvisionalReceipts, listPurchaseExpenseAllocationRules, listPurchaseExpenses,
+} from './modules/accounting-inventory-cost.js';
 import { getCashFlow } from './modules/accounting-cash-flow.js';
 import { paymentTermsDays } from './lib/payment-terms.js';
 import {
@@ -1999,6 +2005,100 @@ ownedRouteTable.register({
   path: '/api/fixed-assets/depreciation',
   handler: ({ db, req, res, actor }) => fixedAssetsHandlers.postDepreciation(db, req, res, actor),
   owner: 'server/modules/fixed-assets.js',
+});
+// Accounting & Analytics Domain Closure — AA-W6 存货核算深化.
+// Canonical owner: server/modules/accounting-inventory-cost.js
+//   核算范围 / 计价配置 / 暂估入库与差异调整 / 采购费用归集与分摊 /
+//   完工成本结转 / 受控成本调整 / 核算关账异常清单
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/accounting/scopes',
+  handler: ({ db, res, actor }) => listAccountingScopes(db, res, actor),
+  owner: 'server/modules/accounting-inventory-cost.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/accounting/scopes',
+  handler: ({ db, req, res, actor }) => createAccountingScope(db, req, res, actor),
+  owner: 'server/modules/accounting-inventory-cost.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/accounting/costing-profiles',
+  handler: ({ db, res, actor }) => listCostingProfiles(db, res, actor),
+  owner: 'server/modules/accounting-inventory-cost.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/accounting/costing-profiles',
+  handler: ({ db, req, res, actor }) => createCostingProfile(db, req, res, actor),
+  owner: 'server/modules/accounting-inventory-cost.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/accounting/provisional-receipts',
+  handler: ({ db, res, actor }) => listProvisionalReceipts(db, res, actor),
+  owner: 'server/modules/accounting-inventory-cost.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/accounting/provisional-receipts',
+  handler: ({ db, req, res, actor }) => createProvisionalReceipt(db, req, res, actor),
+  owner: 'server/modules/accounting-inventory-cost.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/accounting\/provisional-receipts\/([^/]+)\/adjust$/,
+  handler: ({ db, req, res, actor, params }) => adjustProvisionalReceipt(db, req, res, actor, params[0]),
+  owner: 'server/modules/accounting-inventory-cost.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/purchase-expenses',
+  handler: ({ db, res, actor }) => listPurchaseExpenses(db, res, actor),
+  owner: 'server/modules/accounting-inventory-cost.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/purchase-expenses',
+  handler: ({ db, req, res, actor }) => createPurchaseExpense(db, req, res, actor),
+  owner: 'server/modules/accounting-inventory-cost.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/purchase-expense-allocation-rules',
+  handler: ({ db, res, actor }) => listPurchaseExpenseAllocationRules(db, res, actor),
+  owner: 'server/modules/accounting-inventory-cost.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/purchase-expense-allocation-rules',
+  handler: ({ db, req, res, actor }) => createPurchaseExpenseAllocationRule(db, req, res, actor),
+  owner: 'server/modules/accounting-inventory-cost.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/purchase-expenses\/([^/]+)\/allocate$/,
+  handler: ({ db, req, res, actor, params }) => allocatePurchaseExpense(db, req, res, actor, params[0]),
+  owner: 'server/modules/accounting-inventory-cost.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/accounting/cost-adjustments',
+  handler: ({ db, req, res, actor }) => createCostAdjustment(db, req, res, actor),
+  owner: 'server/modules/accounting-inventory-cost.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/accounting/production-cost-closings',
+  handler: ({ db, req, res, actor }) => createProductionCostClosing(db, req, res, actor),
+  owner: 'server/modules/accounting-inventory-cost.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/accounting/costing-close-checklist',
+  handler: ({ db, res, actor, url }) => getCostingCloseChecklist(db, res, actor, url),
+  owner: 'server/modules/accounting-inventory-cost.js',
 });
 ownedRouteTable.register({
   method: 'GET',

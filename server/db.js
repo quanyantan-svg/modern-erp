@@ -45,6 +45,7 @@ import { migrateAccountingEventsSchema } from './migrations/accounting-events-sc
 import { migrateAccountingRulesSchema } from './migrations/accounting-rules-schema.js';
 import { migrateAccountingPeriodEndSchema } from './migrations/accounting-period-end-schema.js';
 import { migrateFixedAssetsSchema } from './migrations/fixed-assets-schema.js';
+import { migrateInventoryCostingSchema } from './migrations/inventory-costing-schema.js';
 import { migrateInventoryPositionSchema } from './migrations/inventory-position-schema.js';
 import { migrateSalesCustomerDomain } from './migrations/sales-customer-domain.js';
 import { migrateW11ASelectorSearchKey } from './migrations/sales-customer-wave11-a-selector-search-key.js';
@@ -558,6 +559,8 @@ function createSqliteDatabase(filename) {
   // Runs after the accounting migrations so the seeded GL subjects and the
   // account-role mappings of the depreciation / disposal path exist.
   migrateFixedAssetsSchema(db);
+  // Accounting & Analytics Domain Closure — AA-W6 存货核算深化。
+  migrateInventoryCostingSchema(db);
   migrateInventoryPositionSchema(db);
   migrateV13Phase7cPerformance(db);
   migrateManufacturingQualitySchema(db);

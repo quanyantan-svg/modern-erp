@@ -108,6 +108,32 @@ export function receiveValue(db, input) {
   return writeMovement(db, input, quantity, value, method, key);
 }
 
+/**
+ * 在权威价值流水上追加一笔「只改变价值、不改变数量」的移动。
+ *
+ * 采购费用分摊（把已归集的费用资本化进存货价值）与成本调整（重估 / 差异 /
+ * 盘盈亏回冲）都属于这一类：数量不变，价值增减。该原语复用与 `receiveValue`
+ * 完全相同的余额键、估值方法、期间校验与余额守卫，因此权威余额、估值流水与
+ * 总账仍然同源，不存在第二套价值算法。
+ *
+ * 目标余额必须已经存在正数量：没有库存就没有可资本化或可回冲的对象。该守卫
+ * 与 `writeMovement` 的零数量残值守卫一致，因此调用方在写流水之前必须自行
+ * 校验目标余额，失败时整体回滚。
+ */
+export function allocateValue(db, input) {
+  assertFinancialPeriodsOpen(db, input.businessDate);
+  const valueDeltaCents = Number(input.valueDeltaCents);
+  if (!Number.isSafeInteger(valueDeltaCents) || valueDeltaCents === 0) {
+    throw new HttpError(400, '价值调整金额必须是非零整数分');
+  }
+  const { method, key, row } = getBalance(db, input);
+  if (!row || Math.abs(Number(row.quantity)) <= EPS) {
+    throw new HttpError(409, '目标库存没有可调整的数量余额');
+  }
+  const movement = writeMovement(db, input, 0, valueDeltaCents, method, key);
+  return { ...movement, unitCostCents: null };
+}
+
 export function issueValue(db, input) {
   assertFinancialPeriodsOpen(db, input.businessDate);
   const quantity = Number(input.quantity); if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, '出库估值数量无效');
