@@ -108,6 +108,7 @@ async function main() {
     await page.waitForLoadState('networkidle');
     const reviewerToken = await loginToken(page, 'reviewer', 'review123');
     const warehouseToken = await loginToken(page, 'warehouse', 'warehouse123');
+    const accountingToken = await loginToken(page, 'accounting', 'accounting123');
 
     await run('UAT-01', 'Supplier qualification edit/save', 'Suppliers route; PATCH profile; GET persisted profile', async () => {
       // 委外 WIP 仓库是发料/补料/退料的前置业务事实（OUT-04）。
@@ -137,10 +138,19 @@ async function main() {
       return `PR ${pr.id}; route #sourcing-pricing`;
     });
 
-    await run('UAT-03', 'Source List / eligible supplier resolution', 'Create source entry; query effective list', async () => {
+    await run('UAT-03', 'Source List / eligible supplier resolution', 'Create source entries (purchase + outsource); query effective list', async () => {
       const source = expect(await browserApi(page, 'POST', '/api/procurement/source-entries', {
         supplierId: 'supplier-001', productId: 'product-002', sourceType: 'PURCHASE', effectiveFrom: today,
       }), 201, 'create source entry');
+      // 请购转采购订单按「选择供应商」的路径裁决货源（PRC-04）：本单请购的货品是
+      // product-001，因此它也必须有有效采购货源。
+      expect(await browserApi(page, 'POST', '/api/procurement/source-entries', {
+        supplierId: 'supplier-001', productId: 'product-001', sourceType: 'PURCHASE', effectiveFrom: today,
+      }), 201, 'create purchase source entry for product-001');
+      // OUT-02：委外订单必须消费有效 OUTSOURCE 货源（与采购共用同一货源控制）。
+      expect(await browserApi(page, 'POST', '/api/procurement/source-entries', {
+        supplierId: 'supplier-001', productId: 'product-001', sourceType: 'OUTSOURCE', effectiveFrom: today,
+      }), 201, 'create outsource source entry for product-001');
       const list = expect(await browserApi(page, 'GET', `/api/procurement/source-entries?productId=product-002&date=${today}`), 200, 'resolve source list');
       if (!list.sourceEntries.some((entry) => entry.id === source.id)) throw new Error('eligible source not returned');
       return `source ${source.id} resolved eligible`;
@@ -412,6 +422,7 @@ async function main() {
         items: [{ productId: 'product-001', quantity: 15, unitPriceCents: 1000, processingPoItemId, sourceNoticeItemId: outNoticeItemId }],
       }, undefined, { 'idempotency-key': `uat-out-receipt-${state.outOrderId}` }), 201, 'create outsourcing receipt');
       state.outReceiptId = receipt.id;
+      state.outReceiptItemId = db.prepare('SELECT id FROM outsourcing_receipt_items WHERE receipt_id=? ORDER BY id LIMIT 1').get(receipt.id).id;
       expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/receipts/${receipt.id}/confirm`, {}, undefined, { 'idempotency-key': `uat-out-receipt-confirm-${receipt.id}` }), 200, 'confirm outsourcing receipt');
       const evidence = db.prepare('SELECT * FROM outsourcing_cost_evidences WHERE outsourcing_receipt_id=?').get(receipt.id);
       if (!evidence) throw new Error('cost evidence missing after receipt confirm');
@@ -426,15 +437,13 @@ async function main() {
         lines: [{ outsourcingReceiptItemId: receiptItemId, quantity: 15, unitPriceCents: 1000 }],
       }), 201, 'create processing fee bill');
       state.processingBillId = bill.id;
-      const posted = await browserApi(page, 'POST', `/api/procurement/outsourcing/processing-fee-bills/${bill.id}/post`);
-      if (posted.status !== 409 || posted.data.code !== 'OUTSOURCING_GL_POLICY_NOT_APPROVED') {
-        throw new Error(`unexpected ${posted.status} ${JSON.stringify(posted.data)}`);
-      }
+      // 草稿只是「待结算事实的登记」：不产生应付、凭证，也不刷新成本证据
+      // （Requirement §31.19.3 C-P01）。
       const ap = db.prepare("SELECT COUNT(*) n FROM account_payables WHERE source_type='SUPPLIER_BILL' AND source_id=?").get(bill.id).n;
       const evidence = db.prepare('SELECT * FROM outsourcing_cost_evidences WHERE outsourcing_receipt_id=?').get(state.outReceiptId);
-      if (ap !== 0) throw new Error('被拒绝的加工费过账不得产生应付事实');
+      if (ap !== 0) throw new Error('草稿不得产生应付事实');
       if (!evidence || evidence.basis_status === 'FINAL') throw new Error(`cost evidence must stay provisional: ${JSON.stringify(evidence)}`);
-      return `bill ${bill.id} DRAFT; post HTTP 409 OUTSOURCING_GL_POLICY_NOT_APPROVED; AP=0; evidence provisional`;
+      return `bill ${bill.id} DRAFT; AP=0; evidence provisional`;
     });
 
     await run('UAT-25', 'Finished Outsourcing Return', 'Assert the approved fail-closed boundary: no credit is handed over', async () => {
@@ -505,6 +514,188 @@ async function main() {
       }
       await page.setViewportSize({ width: 390, height: 900 });
       return `widths ${observed.join(', ')}: 无整页横向滚动且工作面已渲染`;
+    });
+
+    // ── 第四轮新增子能力：工作面可达性与业务事实 ─────────────────────────
+    await run('UAT-30', '预付款要求（PRC-17）', '建立预付款要求 → 过账 → canonical 付款事实与财务交接', async () => {
+      // 预付过账需要 canonical 结算账户（业务事实，不是测试捷径）。
+      const settlementAccountId = 'uat-prepay-bank';
+      db.prepare(`INSERT OR IGNORE INTO bank_accounts(id,bank_name,account_no,account_name,account_type,balance_cents,currency,active,created_at,updated_at,code,opening_balance_cents)
+        VALUES(?,'UAT 银行','UAT-001','UAT 预付结算户','CHECKING',0,'CNY',1,?,?,?,0)`)
+        .run(settlementAccountId, new Date().toISOString(), new Date().toISOString(), settlementAccountId);
+      const created = expect(await browserApi(page, 'POST', '/api/procurement/prepayment-requirements', {
+        poId: state.poId, prepaymentPctBasisNumerator: 30, prepaymentPctBasisDenominator: 100, dueDate: today,
+      }), 201, 'create prepayment requirement');
+      const requirement = created.prepaymentRequirement;
+      if (requirement.status !== 'DRAFT') throw new Error(`requirement must stay DRAFT: ${requirement.status}`);
+      if (requirement.expectedPaymentCents <= 0) throw new Error('预付金额必须由订单金额与比例推导');
+      // 职责分离：申请人（admin）不得过账自己的申请，过账由财务岗执行。
+      const selfPost = await browserApi(page, 'POST', `/api/procurement/prepayment-requirements/${requirement.id}/post`, {
+        settlementAccountId, paymentMethod: 'BANK',
+      });
+      if (selfPost.status !== 409 || selfPost.data.code !== 'PREPAYMENT_SELF_POST_FORBIDDEN') {
+        throw new Error(`申请人自批必须 409，实际 ${selfPost.status} ${JSON.stringify(selfPost.data)}`);
+      }
+      const posted = expect(await browserApi(page, 'POST', `/api/procurement/prepayment-requirements/${requirement.id}/post`, {
+        settlementAccountId, paymentMethod: 'BANK',
+      }, accountingToken), 200, 'post prepayment requirement');
+      if (posted.prepaymentRequirement.status !== 'POSTED') throw new Error('预付款要求未进入 POSTED');
+      const disbursement = db.prepare('SELECT * FROM payment_disbursements WHERE id=?').get(posted.prepaymentRequirement.financeHandoffId);
+      if (!disbursement) throw new Error('过账未产生 canonical 付款单');
+      const payable = db.prepare("SELECT * FROM account_payables WHERE source_type='PREPAYMENT_REQUIREMENT'").get();
+      if (!payable) throw new Error('过账未产生 PREPAYMENT_REQUIREMENT 应付项');
+      const audit = db.prepare("SELECT * FROM audit_logs WHERE entity_type='PREPAYMENT_REQUIREMENT' AND entity_id=? AND action='POST'").get(requirement.id);
+      if (!audit) throw new Error('过账必须写审计');
+      state.prepaymentId = requirement.id;
+      return `requirement ${requirement.id} DRAFT → POSTED; 付款单 ${disbursement.id}; 应付 ${payable.id}`;
+    });
+
+    await run('UAT-31', '货源 override（PRC-04）', '登记有界 override → 只读列表可见', async () => {
+      const override = expect(await browserApi(page, 'POST', '/api/procurement/source-entries/override', {
+        supplierId: 'supplier-001', productId: 'product-002', sourceType: 'PURCHASE',
+        reason: 'UAT：供应商尚未完成货源建档', effectiveFrom: today, effectiveTo: today,
+      }), 201, 'create source override');
+      const list = expect(await browserApi(page, 'GET', '/api/procurement/source-overrides'), 200, 'list source overrides');
+      if (!list.overrides.some((row) => row.id === override.id)) throw new Error('override 未出现在只读列表');
+      const audit = db.prepare("SELECT * FROM audit_logs WHERE entity_type='SOURCE_LIST_OVERRIDE' AND entity_id=? AND action='OVERRIDE'").get(override.id);
+      if (!audit) throw new Error('override 必须写恰好一条审计');
+      const missingReason = await browserApi(page, 'POST', '/api/procurement/source-entries/override', {
+        supplierId: 'supplier-001', productId: 'product-002', sourceType: 'PURCHASE',
+        reason: '   ', effectiveFrom: today, effectiveTo: today,
+      });
+      if (missingReason.status !== 400) throw new Error(`缺原因必须 400，实际 ${missingReason.status}`);
+      return `override ${override.id}；缺原因固定 400`;
+    });
+
+    await run('UAT-32', '交货计划下容差自动关单（PRC-16）', '收货确认触发自动关单并记录被容忍的短交数量', async () => {
+      const orderId = await createApprovedPo(page, reviewerToken, 10);
+      const item = db.prepare('SELECT id FROM purchase_order_items WHERE order_id=? AND product_id=?').get(orderId, 'product-001');
+      const schedule = expect(await browserApi(page, 'POST', `/api/purchase-orders/${orderId}/delivery-schedules`, {
+        orderItemId: item.id, plannedQuantity: 10, plannedDate: today,
+        plannedDateFrom: today, plannedDateTo: today, sequenceNo: 1,
+        upperTolerancePct: 5, lowerTolerancePct: 10,
+      }), 201, 'create delivery schedule');
+      const receipt = expect(await browserApi(page, 'POST', '/api/purchase-receipts', {
+        purchaseOrderId: orderId, supplierId: 'supplier-001', warehouseId: 'warehouse-001', receiptDate: today,
+        items: [{ purchaseOrderItemId: item.id, productId: 'product-001', quantity: 9, unitPriceCents: 1000, deliveryScheduleId: schedule.id }],
+      }), 201, 'create purchase receipt');
+      const iqc = expect(await browserApi(page, 'POST', '/api/iqc', { purchase_receipt_id: receipt.id }, warehouseToken), 201, 'create IQC');
+      expect(await browserApi(page, 'POST', `/api/iqc/${iqc.id}/complete`, {
+        result: 'PASS', inspection_quantity: 9, passed_quantity: 9, failed_quantity: 0,
+      }, warehouseToken), 200, 'complete IQC');
+      expect(await browserApi(page, 'POST', `/api/purchase-receipts/${receipt.id}`, { action: 'confirm' }, warehouseToken), 200, 'confirm receipt');
+      const row = db.prepare('SELECT status, closed_by FROM purchase_order_delivery_schedules WHERE id=?').get(schedule.id);
+      if (row.status !== 'CLOSED') throw new Error(`交货计划未自动关单：${row.status}`);
+      const close = db.prepare('SELECT * FROM po_delivery_schedule_closes WHERE delivery_schedule_id=?').get(schedule.id);
+      if (!close) throw new Error('关单事实缺失');
+      if (Number(close.tolerated_short_quantity) !== 1) throw new Error(`短交数量应为 1：${close.tolerated_short_quantity}`);
+      if (close.triggered_by !== 'RECEIPT_CONFIRM') throw new Error(`关单触发方式应为 RECEIPT_CONFIRM：${close.triggered_by}`);
+      return `schedule ${schedule.id} CLOSED；短交 ${close.tolerated_short_quantity}；triggered_by=${close.triggered_by}`;
+    });
+
+    await run('UAT-33', '加工费正式过账与红冲（OUT-20 / C-P01 / C-P03）', '过账产生 canonical 应付与凭证，红冲金额反向且数量守恒', async () => {
+      // UAT-24 已为该收货建立草稿账单（占满可开票量），这里对同一张账单过账：
+      // 同一收货的加工费不得被两张账单重复开票。
+      const bill = { id: state.processingBillId };
+      const posted = expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/processing-fee-bills/${bill.id}/post`), 200, 'post processing fee bill');
+      if (!posted) throw new Error('加工费过账未返回结果');
+      const payable = db.prepare("SELECT * FROM account_payables WHERE source_type='SUPPLIER_BILL' AND source_id=?").get(bill.id);
+      if (!payable) throw new Error('加工费过账未产生 canonical 应付');
+      if (Number(payable.amount_cents) !== 15000) throw new Error(`应付金额应为 15000：${payable.amount_cents}`);
+      const entries = db.prepare(`SELECT e.*, s.code subject_code FROM accounting_entries e
+        JOIN accounting_vouchers v ON v.id=e.voucher_id JOIN accounting_subjects s ON s.id=e.subject_id
+        WHERE v.source_type='SUPPLIER_BILL' AND v.source_id=?`).all(bill.id);
+      const debitCodes = entries.filter((row) => row.direction === 'DEBIT').map((row) => row.subject_code);
+      if (!debitCodes.includes('6408')) throw new Error(`借方必须是委外加工费科目 6408：${JSON.stringify(debitCodes)}`);
+      const evidence = db.prepare('SELECT * FROM outsourcing_cost_evidences WHERE outsourcing_receipt_id=?').get(state.outReceiptId);
+      if (!evidence || evidence.basis_status !== 'FINAL') throw new Error(`成本证据应转 FINAL：${JSON.stringify(evidence?.basis_status)}`);
+      const billItemId = db.prepare('SELECT id FROM supplier_bill_items WHERE bill_id=? ORDER BY line_no LIMIT 1').get(bill.id).id;
+      const reversal = expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/processing-fee-bills/${bill.id}/reverse`, {
+        items: [{ billItemId, quantity: 15 }], reason: 'UAT 红冲', businessDate: today,
+      }, undefined, { 'idempotency-key': `uat-reverse-${bill.id}` }), 200, 'reverse processing fee bill');
+      const reversalFact = db.prepare("SELECT * FROM outsourcing_processing_fee_reversals WHERE supplier_bill_id=? AND status='CONFIRMED'").get(bill.id);
+      if (!reversalFact) throw new Error('红冲事实缺失');
+      if (Number(reversalFact.reversal_amount_cents) !== 15000) throw new Error(`红冲金额应为 15000：${reversalFact.reversal_amount_cents}`);
+      const overReversal = await browserApi(page, 'POST', `/api/procurement/outsourcing/processing-fee-bills/${bill.id}/reverse`, {
+        items: [{ billItemId, quantity: 15 }], reason: 'UAT 重复红冲', businessDate: today,
+      }, undefined, { 'idempotency-key': `uat-reverse-over-${bill.id}` });
+      if (overReversal.status === 200) throw new Error('重复红冲必须被拒');
+      return `bill ${bill.id} POSTED → 红冲 ${reversalFact.reversal_amount_cents}；借方 6408；证据 FINAL`;
+    });
+
+    await run('UAT-34', '期初委外订单（OUT-23）', '期初订单带物料行 → 进入同一本 WIP 身份账且落在供应商 WIP 位置', async () => {
+      const created = expect(await browserApi(page, 'POST', '/api/procurement/outsourcing/opening-orders', {
+        supplierId: 'supplier-001', productId: 'product-001', orderQuantity: 100, unit: 'EA',
+        businessDate: today, remark: 'UAT 上线日历史委外',
+        items: [{ productId: 'product-001', quantity: 5, sourceWarehouseId: 'warehouse-001' }],
+      }), 201, 'create opening outsourcing order');
+      const order = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(created.id);
+      if (Number(order.is_opening) !== 1) throw new Error('期初订单必须被显式标记');
+      const effects = db.prepare('SELECT * FROM outsourcing_wip_identity_effects WHERE material_list_id IN (SELECT id FROM outsourcing_material_list WHERE order_id=?)').all(created.id);
+      if (effects.length !== 1 || effects[0].event_type !== 'OPENING') {
+        throw new Error(`期初结余必须进入同一本身份账：${JSON.stringify(effects.map((row) => row.event_type))}`);
+      }
+      const wipQuantity = Number(db.prepare("SELECT COALESCE(SUM(quantity),0) q FROM inventory WHERE warehouse_id='warehouse-002' AND product_id='product-001' AND active=1").get().q);
+      if (wipQuantity < 5) throw new Error(`期初 WIP 必须落在供应商 WIP 位置：${wipQuantity}`);
+      const vouchers = db.prepare('SELECT COUNT(*) n FROM accounting_vouchers').get().n;
+      const payables = db.prepare('SELECT COUNT(*) n FROM account_payables').get().n;
+      if (!vouchers || !payables) throw new Error('期初不得虚构凭证或应付');
+      return `opening order ${created.id}；身份账 1 条 OPENING；供应商 WIP ${wipQuantity}`;
+    });
+
+    await run('UAT-35', '加工费会计档案维护（OUT-20 / C-P02）', '列出 → 建立供应商级档案 → 暂停 → 重新批准', async () => {
+      const listed = expect(await browserApi(page, 'GET', '/api/procurement/outsourcing/processing-fee-accounting-profiles'), 200, 'list accounting profiles');
+      if (!listed.processingFeeAccountingProfiles.length) throw new Error('必须至少存在迁移预置的默认档案');
+      const created = expect(await browserApi(page, 'POST', '/api/procurement/outsourcing/processing-fee-accounting-profiles', {
+        scope: 'SUPPLIER', supplierId: 'supplier-002', profileCode: `UAT-SUP-${Date.now()}`,
+        taxMode: 'NO_TAX', processingFeeRole: 'OUTSOURCING_PROCESSING_FEE', effectiveFrom: today,
+      }), 201, 'create accounting profile');
+      const suspended = expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/processing-fee-accounting-profiles/${created.processingFeeAccountingProfile.id}/approval`, {
+        approvalState: 'SUSPENDED', reason: 'UAT 复核',
+      }), 200, 'suspend accounting profile');
+      if (suspended.processingFeeAccountingProfile.approvalState !== 'SUSPENDED') throw new Error('档案未暂停');
+      const approved = expect(await browserApi(page, 'POST', `/api/procurement/outsourcing/processing-fee-accounting-profiles/${created.processingFeeAccountingProfile.id}/approval`, {
+        approvalState: 'APPROVED',
+      }), 200, 're-approve accounting profile');
+      if (approved.processingFeeAccountingProfile.approvalState !== 'APPROVED') throw new Error('档案未重新批准');
+      const unresolved = await browserApi(page, 'POST', '/api/procurement/outsourcing/processing-fee-accounting-profiles', {
+        scope: 'SUPPLIER', supplierId: 'supplier-002', profileCode: `UAT-BAD-${Date.now()}`,
+        processingFeeRole: 'NO_SUCH_ROLE', effectiveFrom: today,
+      });
+      if (unresolved.status !== 409) throw new Error(`未解析角色码必须 409，实际 ${unresolved.status}`);
+      return `profile ${created.processingFeeAccountingProfile.id} 建立 → 暂停 → 重新批准；未解析角色码固定 409`;
+    });
+
+    await run('UAT-36', '第四轮新增工作面浏览器可达性', '采购订单详情、委外加工与寻源定价三个工作面在 390 px 下渲染新增面板且无整页横向滚动', async () => {
+      await page.setViewportSize({ width: 390, height: 900 });
+      const surfaces = [];
+
+      await page.goto(`${baseUrl}#purchase-orders/${state.poId}`, { waitUntil: 'networkidle' });
+      await page.waitForTimeout(600);
+      const poText = await page.evaluate(() => document.body.innerText || '');
+      if (!poText.includes('预付款要求')) throw new Error('采购订单详情未渲染预付款要求面板');
+      if (!poText.includes('交货计划')) throw new Error('采购订单详情未渲染交货计划面板');
+      const poOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      if (poOverflow > 1) throw new Error(`采购订单详情出现整页横向滚动：${poOverflow}px`);
+      surfaces.push('purchase-orders');
+
+      await page.goto(`${baseUrl}#sourcing-pricing`, { waitUntil: 'networkidle' });
+      await page.waitForTimeout(400);
+      const sourcingText = await page.evaluate(() => document.body.innerText || '');
+      if (!sourcingText.includes('货源 override')) throw new Error('寻源与定价未渲染货源 override 面板');
+      const sourcingOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      if (sourcingOverflow > 1) throw new Error(`寻源与定价出现整页横向滚动：${sourcingOverflow}px`);
+      surfaces.push('sourcing-pricing');
+
+      await page.goto(`${baseUrl}#outsourcing`, { waitUntil: 'networkidle' });
+      await page.waitForTimeout(400);
+      const outsourcingText = await page.evaluate(() => document.body.innerText || '');
+      if (!outsourcingText.includes('加工费会计档案')) throw new Error('委外加工未渲染加工费会计档案面板');
+      const outsourcingOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      if (outsourcingOverflow > 1) throw new Error(`委外加工出现整页横向滚动：${outsourcingOverflow}px`);
+      surfaces.push('outsourcing');
+
+      return `390px 渲染并无整页横向滚动：${surfaces.join(', ')}`;
     });
 
     console.log('=== Procurement & Outsourcing Functional Browser UAT ===');

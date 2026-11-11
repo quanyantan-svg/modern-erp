@@ -131,6 +131,9 @@ export default function SourcingPricingPage({ user, notify }) {
         </BusinessContentSection>
       )}
       {tab === 'preview' && <PricingPreviewPanel notify={notify}/>}
+      {tab === 'source' && (
+        <SourceOverridePanel canManage={canManage} notify={notify} onChanged={load} />
+      )}
       {tab === 'source' && !sources.length && <Empty title="暂无货源" />}
       {tab === 'quota' && !quotas.length && <Empty title="暂无配额" />}
       {editor && (
@@ -310,6 +313,145 @@ function PricingPreviewPanel({ notify }) {
           />
         </CompactRecordList>
       )}
+    </BusinessContentSection>
+  );
+}
+
+// 货源 override 面板（PRC-04 / Requirement §31.19.1）。
+//
+// override 是**有界、有限、可审计**的放行事实：权限 + 必填原因 + 生效区间 +
+// 恰好一条审计，且只在区间内放行。它不改写货源主数据。
+//
+// 后端合同：
+//   - GET  /api/procurement/source-overrides
+//   - POST /api/procurement/source-entries/override
+function SourceOverridePanel({ canManage, notify, onChanged }) {
+  const [overrides, setOverrides] = useState([]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState({
+    supplierId: '', productId: '', sourceType: 'PURCHASE', reason: '',
+    effectiveFrom: todayIso(), effectiveTo: todayIso(),
+  });
+
+  const load = useCallback(async () => {
+    try {
+      const data = await api('/api/procurement/source-overrides', { method: 'GET' });
+      setOverrides(data.overrides || []);
+      setError('');
+    } catch (err) {
+      setError(err.message || '加载失败');
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const submit = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      await api('/api/procurement/source-entries/override', {
+        method: 'POST',
+        body: {
+          supplierId: form.supplierId.trim(),
+          productId: form.productId.trim(),
+          sourceType: form.sourceType,
+          reason: form.reason.trim(),
+          effectiveFrom: form.effectiveFrom,
+          effectiveTo: form.effectiveTo,
+        },
+      });
+      setForm({ ...form, reason: '' });
+      await load();
+      if (onChanged) onChanged();
+      notify('货源 override 已登记');
+    } catch (err) {
+      setError(err.message || '登记失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <BusinessContentSection
+      title="货源 override"
+      description="在指定日期区间内放行一个供应商 / 货品 / 货源类型；区间之外不放行，也不改写货源主数据"
+    >
+      {error ? <InlineAlert tone="danger" title="操作未完成">{error}</InlineAlert> : null}
+      {canManage ? (
+        <form onSubmit={submit}>
+          <div className="field-grid">
+            <label>
+              <span>供应商</span>
+              <input
+                aria-label="override 供应商"
+                value={form.supplierId}
+                onChange={(event) => setForm({ ...form, supplierId: event.target.value })}
+              />
+            </label>
+            <label>
+              <span>货品</span>
+              <input
+                aria-label="override 货品"
+                value={form.productId}
+                onChange={(event) => setForm({ ...form, productId: event.target.value })}
+              />
+            </label>
+            <label>
+              <span>货源类型</span>
+              <select
+                aria-label="override 货源类型"
+                value={form.sourceType}
+                onChange={(event) => setForm({ ...form, sourceType: event.target.value })}
+              >
+                <option value="PURCHASE">采购货源</option>
+                <option value="OUTSOURCE">委外货源</option>
+              </select>
+            </label>
+            <label>
+              <span>生效开始</span>
+              <input
+                aria-label="override 生效开始"
+                type="date"
+                value={form.effectiveFrom}
+                onChange={(event) => setForm({ ...form, effectiveFrom: event.target.value })}
+              />
+            </label>
+            <label>
+              <span>生效结束</span>
+              <input
+                aria-label="override 生效结束"
+                type="date"
+                value={form.effectiveTo}
+                onChange={(event) => setForm({ ...form, effectiveTo: event.target.value })}
+              />
+            </label>
+            <label>
+              <span>原因</span>
+              <input
+                aria-label="override 原因"
+                value={form.reason}
+                onChange={(event) => setForm({ ...form, reason: event.target.value })}
+              />
+            </label>
+          </div>
+          <BusinessAction hierarchy="primary" type="submit" disabled={busy}>登记 override</BusinessAction>
+        </form>
+      ) : null}
+      <CompactRecordList data-testid="sourcing-override-list">
+        {overrides.map((item) => (
+          <CompactRecord
+            key={item.id}
+            title={`${item.supplierId} / ${item.productId}`}
+            subtitle={`${item.sourceType} / ${item.status}`}
+            metadata={[
+              { label: '生效区间', value: `${fmtDate(item.effectiveFrom)} → ${fmtDate(item.effectiveTo)}` },
+              { label: '原因', value: item.reason },
+            ]}
+          />
+        ))}
+      </CompactRecordList>
+      {!overrides.length ? <Empty title="暂无 override" text="没有有效货源时，可按有界区间登记一次有原因的放行。" /> : null}
     </BusinessContentSection>
   );
 }

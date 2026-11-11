@@ -11,9 +11,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { can, Empty } from '../components/ui.jsx';
+import { can, Empty, FormActions, Modal } from '../components/ui.jsx';
 import {
-  BottomActionBar, BusinessAction, BusinessActionBar, BusinessPageHeader, BusinessPageShell,
+  BottomActionBar, BusinessAction, BusinessActionBar, BusinessContentSection, BusinessPageHeader, BusinessPageShell,
   CompactRecord, CompactRecordList, DateField, DetailSection, FormRow, HelpDisclosure, InlineAlert,
   PrimaryButton, QuantityField, RecordCard, SecondaryButton, SelectField, StatusChip, TextField,
 } from '../components/design-system.jsx';
@@ -36,6 +36,8 @@ const RECEIPT_STATUS_LABELS = { PENDING_INSPECTION: '待检', EFFECTED: '已生�
 const PO_STATUS_LABELS = { DRAFT: '草稿', SUBMITTED: '已提交', APPROVED: '已审批', REJECTED: '已驳回' };
 const WORKSPACE_LABELS = { business: '委外业务', receiving: '委外收货', quality: '委外质检' };
 
+function money(cents) { return `¥${(Number(cents || 0) / 100).toFixed(2)}`; }
+function todayIso() { return new Date().toISOString().slice(0, 10); }
 function fmtDate(value) {
   if (!value) return '—';
   return String(value).slice(0, 10);
@@ -151,6 +153,7 @@ function BusinessWorkspace({ user, notify, navigation, focus }) {
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
+  const [creatingOpening, setCreatingOpening] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -177,7 +180,10 @@ function BusinessWorkspace({ user, notify, navigation, focus }) {
         title="委外订单"
         context="按角色展示任务、状态与下一步"
         primaryAction={can(user, 'OUTSOURCING_MANAGE') ? (
-          <BusinessAction hierarchy="primary" onClick={() => setCreating(true)}>新建委外订单</BusinessAction>
+          <>
+            <BusinessAction hierarchy="primary" onClick={() => setCreating(true)}>新建委外订单</BusinessAction>
+            <BusinessAction onClick={() => setCreatingOpening(true)}>新建期初委外订单</BusinessAction>
+          </>
         ) : null}
         secondaryActions={(
           <>
@@ -212,6 +218,14 @@ function BusinessWorkspace({ user, notify, navigation, focus }) {
           />
         ))}
       </CompactRecordList>
+      {creatingOpening ? (
+        <CreateOpeningOrderSheet
+          user={user}
+          notify={notify}
+          onClose={() => setCreatingOpening(false)}
+          onCreated={() => { setCreatingOpening(false); load(); }}
+        />
+      ) : null}
       {creating ? (
         <CreateOrderSheet
           user={user}
@@ -220,6 +234,7 @@ function BusinessWorkspace({ user, notify, navigation, focus }) {
           onCreated={(orderId) => { setCreating(false); load(); openOrder(orderId); }}
         />
       ) : null}
+      {can(user, 'SUPPLIER_BILL_MANAGE') ? <ProcessingFeeProfilePanel user={user} notify={notify} /> : null}
       {focus?.documentType === 'OUTSOURCING_ORDER' ? (
         <OrderDetailSheet
           user={user}
@@ -389,6 +404,13 @@ function OrderDetailSheet({ user, notify, navigation, orderId, onClose, onChange
           ) : null}
         </CompactRecordList>
       </DetailSection>
+
+      <ProcessingFeeBillPanel
+        user={user}
+        notify={notify}
+        outsourcingOrderId={orderId}
+        onChanged={load}
+      />
 
       {report ? (
         <DetailSection title="执行报表">
@@ -1254,5 +1276,423 @@ function DetailSheet({ title, onClose, children }) {
         </div>
       </section>
     </div>
+  );
+}
+
+// 委外加工费账单工作面（OUT-20 / Requirement §31.19.3）。
+//
+// 草稿账单只是「待结算事实的登记」；**过账**才产生 canonical 应付与凭证
+// （金额上界按收货生效时确认的加工费份额执行）。已过账的账单可按行**红冲**。
+//
+// 后端合同：
+//   - GET  /api/procurement/outsourcing/processing-fee-bills?outsourcingOrderId=
+//   - POST /api/procurement/outsourcing/processing-fee-bills/:id/post
+//   - POST /api/procurement/outsourcing/processing-fee-bills/:id/reverse
+function ProcessingFeeBillPanel({ user, notify, outsourcingOrderId, onChanged }) {
+  const [bills, setBills] = useState([]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [reversing, setReversing] = useState(null);
+
+  const load = useCallback(async () => {
+    try {
+      const params = new URLSearchParams();
+      if (outsourcingOrderId) params.set('outsourcingOrderId', outsourcingOrderId);
+      const data = await api(`/api/procurement/outsourcing/processing-fee-bills?${params.toString()}`, { method: 'GET' });
+      setBills(data.processingFeeBills || []);
+      setError('');
+    } catch (err) {
+      setError(err.message || '加载失败');
+    }
+  }, [outsourcingOrderId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const post = async (billId) => {
+    setBusy(true);
+    try {
+      await api(`/api/procurement/outsourcing/processing-fee-bills/${billId}/post`, { method: 'POST', body: {} });
+      await load();
+      if (onChanged) onChanged();
+      notify('加工费账单已过账');
+    } catch (err) {
+      setError(err.message || '过账失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reverse = async (billId, itemId, quantity) => {
+    setBusy(true);
+    try {
+      await api(`/api/procurement/outsourcing/processing-fee-bills/${billId}/reverse`, {
+        method: 'POST',
+        body: {
+          items: [{ billItemId: itemId, quantity: Number(quantity) }],
+          reason: '委外加工费红冲',
+          businessDate: todayIso(),
+        },
+      });
+      setReversing(null);
+      await load();
+      if (onChanged) onChanged();
+      notify('加工费账单已红冲');
+    } catch (err) {
+      setError(err.message || '红冲失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const canPost = can(user, 'SUPPLIER_BILL_MANAGE');
+
+  return (
+    <DetailSection title="加工费账单">
+      {error ? <InlineAlert tone="danger" title="操作未完成">{error}</InlineAlert> : null}
+      <CompactRecordList data-testid="outsourcing-processing-fee-bills">
+        {bills.map((bill) => (
+          <CompactRecord
+            key={bill.id}
+            title={bill.billNo || bill.id}
+            subtitle={`${bill.supplierInvoiceNo || '未填发票号'} / ${money(bill.netCents)}`}
+            status={<StatusChip status={bill.status}>{bill.status}</StatusChip>}
+            metadata={[
+              { label: '账单日期', value: fmtDate(bill.billDate) },
+              { label: '过账状态', value: bill.processingFeePostingState || '未过账' },
+              { label: '已红冲金额', value: money(bill.processingFeeReversedCents) },
+            ]}
+            action={canPost && bill.status === 'DRAFT' ? (
+              <SecondaryButton type="button" disabled={busy} onClick={() => post(bill.id)}>过账</SecondaryButton>
+            ) : null}
+          />
+        ))}
+      </CompactRecordList>
+      {!bills.length ? <Empty title="尚无加工费账单" text="加工费账单在收货生效后由财务岗按已约定的加工费单价登记。" /> : null}
+      {canPost && bills.some((bill) => bill.status === 'POSTED') ? (
+        <BusinessContentSection title="红冲" description="已过账的加工费账单可按行红冲：数量守恒，金额反向">
+          <CompactRecordList>
+            {bills.filter((bill) => bill.status === 'POSTED').map((bill) => (
+              <CompactRecord
+                key={bill.id}
+                title={bill.billNo || bill.id}
+                subtitle={`已过账 ${money(bill.netCents)}`}
+                metadata={(bill.items || []).map((item) => ({
+                  label: `行 ${item.lineNo}`, value: `${fmtNumber(item.quantity)} × ${money(item.unitPriceCents)}`,
+                }))}
+                action={(bill.items || []).map((item) => (
+                  <SecondaryButton
+                    key={item.id}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => (reversing === `${bill.id}:${item.id}`
+                      ? reverse(bill.id, item.id, item.quantity)
+                      : setReversing(`${bill.id}:${item.id}`))}
+                  >
+                    {reversing === `${bill.id}:${item.id}` ? '确认红冲' : '红冲'}
+                  </SecondaryButton>
+                ))}
+              />
+            ))}
+          </CompactRecordList>
+        </BusinessContentSection>
+      ) : null}
+    </DetailSection>
+  );
+}
+
+// 委外加工费会计档案维护面板（OUT-20 / C-P02）。
+//
+// 档案是过账的**唯一**科目来源：缺位或未批准时过账一律 fail closed。维护面
+// 只做「列出 / 建立 / 改变批准状态」三件事；改政策就是换一套档案，既有档案的
+// 科目、税率与有效期不被改写。维护权限是财务侧的过账权限。
+//
+// 后端合同：
+//   - GET  /api/procurement/outsourcing/processing-fee-accounting-profiles
+//   - POST /api/procurement/outsourcing/processing-fee-accounting-profiles
+//   - POST /api/procurement/outsourcing/processing-fee-accounting-profiles/:id/approval
+function ProcessingFeeProfilePanel({ user, notify }) {
+  const [profiles, setProfiles] = useState([]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState({
+    scope: 'SUPPLIER', supplierId: '', profileCode: '', taxMode: 'NO_TAX',
+    processingFeeRole: 'OUTSOURCING_PROCESSING_FEE', effectiveFrom: todayIso(),
+  });
+
+  const load = useCallback(async () => {
+    try {
+      const data = await api('/api/procurement/outsourcing/processing-fee-accounting-profiles', { method: 'GET' });
+      setProfiles(data.processingFeeAccountingProfiles || []);
+      setError('');
+    } catch (err) {
+      setError(err.message || '加载失败');
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const create = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      await api('/api/procurement/outsourcing/processing-fee-accounting-profiles', {
+        method: 'POST',
+        body: {
+          scope: form.scope,
+          supplierId: form.scope === 'SUPPLIER' ? form.supplierId.trim() : undefined,
+          profileCode: form.profileCode.trim(),
+          taxMode: form.taxMode,
+          processingFeeRole: form.processingFeeRole.trim(),
+          effectiveFrom: form.effectiveFrom,
+        },
+      });
+      setForm({ ...form, profileCode: '' });
+      await load();
+      notify('加工费会计档案已建立');
+    } catch (err) {
+      setError(err.message || '建立失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const changeState = async (profileId, approvalState) => {
+    setBusy(true);
+    try {
+      await api(`/api/procurement/outsourcing/processing-fee-accounting-profiles/${profileId}/approval`, {
+        method: 'POST', body: { approvalState },
+      });
+      await load();
+      notify(approvalState === 'APPROVED' ? '档案已批准' : '档案已暂停');
+    } catch (err) {
+      setError(err.message || '状态变更失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const canManage = can(user, 'SUPPLIER_BILL_MANAGE');
+
+  return (
+    <BusinessContentSection
+      title="加工费会计档案"
+      description="委外加工费过账的科目只来自已批准的档案；档案缺位时过账一律拒绝"
+    >
+      {error ? <InlineAlert tone="danger" title="操作未完成">{error}</InlineAlert> : null}
+      <CompactRecordList data-testid="outsourcing-processing-fee-profiles">
+        {profiles.map((profile) => (
+          <CompactRecord
+            key={profile.id}
+            title={profile.profileCode}
+            subtitle={`${profile.scope === 'GLOBAL' ? '全局' : profile.supplierId} / ${profile.taxMode}`}
+            status={<StatusChip status={profile.approvalState}>{profile.approvalState}</StatusChip>}
+            metadata={[
+              { label: '借方角色', value: profile.processingFeeRole },
+              { label: '进项税角色', value: profile.inputTaxRole || '—' },
+              { label: '差异角色', value: profile.varianceRole || '—' },
+              { label: '生效区间', value: `${fmtDate(profile.effectiveFrom)} → ${fmtDate(profile.effectiveTo)}` },
+            ]}
+            action={canManage ? (
+              profile.approvalState === 'APPROVED' ? (
+                <SecondaryButton type="button" disabled={busy} onClick={() => changeState(profile.id, 'SUSPENDED')}>暂停</SecondaryButton>
+              ) : (
+                <SecondaryButton type="button" disabled={busy} onClick={() => changeState(profile.id, 'APPROVED')}>批准</SecondaryButton>
+              )
+            ) : null}
+          />
+        ))}
+      </CompactRecordList>
+      {!profiles.length ? <Empty title="暂无会计档案" text="没有已批准的档案时，委外加工费过账一律拒绝。" /> : null}
+      {canManage ? (
+        <form onSubmit={create}>
+          <div className="field-grid">
+            <label>
+              <span>范围</span>
+              <select
+                aria-label="档案范围"
+                value={form.scope}
+                onChange={(event) => setForm({ ...form, scope: event.target.value })}
+              >
+                <option value="SUPPLIER">供应商级</option>
+                <option value="GLOBAL">全局</option>
+              </select>
+            </label>
+            <label>
+              <span>供应商</span>
+              <input
+                aria-label="档案供应商"
+                value={form.supplierId}
+                disabled={form.scope !== 'SUPPLIER'}
+                onChange={(event) => setForm({ ...form, supplierId: event.target.value })}
+              />
+            </label>
+            <label>
+              <span>档案编码</span>
+              <input
+                aria-label="档案编码"
+                value={form.profileCode}
+                onChange={(event) => setForm({ ...form, profileCode: event.target.value })}
+              />
+            </label>
+            <label>
+              <span>税务口径</span>
+              <select
+                aria-label="档案税务口径"
+                value={form.taxMode}
+                onChange={(event) => setForm({ ...form, taxMode: event.target.value })}
+              >
+                <option value="NO_TAX">不计进项税</option>
+                <option value="EXCLUSIVE">不含税</option>
+                <option value="INCLUSIVE">含税</option>
+              </select>
+            </label>
+            <label>
+              <span>加工费借方角色码</span>
+              <input
+                aria-label="档案加工费借方角色码"
+                value={form.processingFeeRole}
+                onChange={(event) => setForm({ ...form, processingFeeRole: event.target.value })}
+              />
+            </label>
+            <label>
+              <span>生效起始日</span>
+              <input
+                aria-label="档案生效起始日"
+                type="date"
+                value={form.effectiveFrom}
+                onChange={(event) => setForm({ ...form, effectiveFrom: event.target.value })}
+              />
+            </label>
+          </div>
+          <BusinessAction hierarchy="primary" type="submit" disabled={busy}>建立档案</BusinessAction>
+        </form>
+      ) : null}
+    </BusinessContentSection>
+  );
+}
+
+// 期初委外订单创建面（OUT-23 / Requirement §31.19.5）。
+//
+// 期初单据承载**上线日之前已经存在的委外事实**：可以只有订单（没有供应商 WIP
+// 结余），也可以带物料行承载期初委外 WIP。期初不产生历史凭证与应付。
+//
+// 后端合同：
+//   - POST /api/procurement/outsourcing/opening-orders
+function CreateOpeningOrderSheet({ user, notify, onClose, onCreated }) {
+  const [form, setForm] = useState({
+    supplierId: '', productId: '', orderQuantity: '', unit: 'EA',
+    businessDate: todayIso(), remark: '',
+  });
+  const [materials, setMaterials] = useState([{ productId: '', quantity: '', sourceWarehouseId: 'warehouse-001' }]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const updateMaterial = (index, patch) => {
+    setMaterials(materials.map((item, position) => (position === index ? { ...item, ...patch } : item)));
+  };
+
+  const submit = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const items = materials
+        .filter((item) => item.productId.trim() && String(item.quantity).trim() !== '')
+        .map((item) => ({
+          productId: item.productId.trim(),
+          quantity: Number(item.quantity),
+          sourceWarehouseId: item.sourceWarehouseId.trim() || undefined,
+        }));
+      await api('/api/procurement/outsourcing/opening-orders', {
+        method: 'POST',
+        body: {
+          supplierId: form.supplierId.trim(),
+          productId: form.productId.trim(),
+          orderQuantity: Number(form.orderQuantity),
+          unit: form.unit.trim() || undefined,
+          businessDate: form.businessDate,
+          remark: form.remark.trim() || undefined,
+          items: items.length ? items : undefined,
+        },
+      });
+      if (onCreated) onCreated();
+      notify('期初委外订单已建立');
+    } catch (err) {
+      setError(err.message || '建立失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title="新建期初委外订单" onClose={onClose}>
+      <form onSubmit={submit}>
+        {error ? <InlineAlert tone="danger" title="操作未完成">{error}</InlineAlert> : null}
+        <FormRow label="供应商">
+          <TextField
+            aria-label="期初供应商"
+            value={form.supplierId}
+            onChange={(event) => setForm({ ...form, supplierId: event.target.value })}
+          />
+        </FormRow>
+        <FormRow label="委外成品">
+          <TextField
+            aria-label="期初委外成品"
+            value={form.productId}
+            onChange={(event) => setForm({ ...form, productId: event.target.value })}
+          />
+        </FormRow>
+        <FormRow label="订单数量">
+          <QuantityField
+            aria-label="期初订单数量"
+            value={form.orderQuantity}
+            onChange={(event) => setForm({ ...form, orderQuantity: event.target.value })}
+          />
+        </FormRow>
+        <FormRow label="业务日期">
+          <DateField
+            aria-label="期初业务日期"
+            value={form.businessDate}
+            onChange={(event) => setForm({ ...form, businessDate: event.target.value })}
+          />
+        </FormRow>
+        <FormRow label="备注">
+          <TextField
+            aria-label="期初备注"
+            value={form.remark}
+            onChange={(event) => setForm({ ...form, remark: event.target.value })}
+          />
+        </FormRow>
+        <FormRow label="期初物料行">
+          <div>
+            {materials.map((item, index) => (
+              <div key={index} className="field-grid">
+                <TextField
+                  aria-label={`期初物料 ${index + 1} 货品`}
+                  value={item.productId}
+                  onChange={(event) => updateMaterial(index, { productId: event.target.value })}
+                />
+                <QuantityField
+                  aria-label={`期初物料 ${index + 1} 数量`}
+                  value={item.quantity}
+                  onChange={(event) => updateMaterial(index, { quantity: event.target.value })}
+                />
+                <TextField
+                  aria-label={`期初物料 ${index + 1} 来源仓`}
+                  value={item.sourceWarehouseId}
+                  onChange={(event) => updateMaterial(index, { sourceWarehouseId: event.target.value })}
+                />
+              </div>
+            ))}
+            <BusinessAction
+              type="button"
+              onClick={() => setMaterials([...materials, { productId: '', quantity: '', sourceWarehouseId: 'warehouse-001' }])}
+            >
+              增加物料行
+            </BusinessAction>
+          </div>
+        </FormRow>
+        <FormActions onClose={onClose} saveText="建立期初委外订单" />
+      </form>
+    </Modal>
   );
 }

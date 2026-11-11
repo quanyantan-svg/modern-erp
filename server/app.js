@@ -172,6 +172,9 @@ import {
   reverseTrackedSource, saveTrackedAllocations, sourceTrackingAllocations, traceHandler, transferTrackedInventory, updateProductTrackingHandler,
 } from './modules/traceability-quality.js';
 import {
+  changeProcessingFeeAccountingProfileState, createProcessingFeeAccountingProfile, listProcessingFeeAccountingProfiles,
+} from './modules/outsourcing-gl-policy.js';
+import {
   assertFinancialPeriodsOpen, createSystemVoucher, generalLedgerHandler, inventoryAccountRole, inventoryRollForwardHandler, inventoryValuationReport,
   issueSourceValue, postWipMovement, receivePositiveSourceValue, receiveSourceValue, receiveValue, restoreSourceValue, reverseSystemVoucher, reverseValuationSource, systemHealthHandler, wipRollForwardHandler,
 } from './modules/financial-inventory.js';
@@ -408,6 +411,7 @@ import {
   createFinishedReturn,
   createProcessingFeeBill,
   createWipTransfer,
+  listProcessingFeeBills,
   postProcessingFeeBill,
   previewOutsourcingDifference,
   procurementScan,
@@ -1284,10 +1288,34 @@ ownedRouteTable.register({
   owner: 'server/modules/outsourcing-finance.js',
 });
 ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/procurement/outsourcing/processing-fee-bills',
+  handler: ({ db, res, actor, url }) => listProcessingFeeBills(db, res, actor, url),
+  owner: 'server/modules/outsourcing-finance.js',
+});
+ownedRouteTable.register({
   method: 'POST',
   path: '/api/procurement/outsourcing/processing-fee-bills',
   handler: ({ db, req, res, actor }) => createProcessingFeeBill(db, req, res, actor),
   owner: 'server/modules/outsourcing-finance.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/procurement/outsourcing/processing-fee-accounting-profiles',
+  handler: ({ db, res, actor }) => listProcessingFeeAccountingProfiles(db, res, actor),
+  owner: 'server/modules/outsourcing-gl-policy.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/outsourcing/processing-fee-accounting-profiles',
+  handler: ({ db, req, res, actor }) => createProcessingFeeAccountingProfile(db, req, res, actor),
+  owner: 'server/modules/outsourcing-gl-policy.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^/api/procurement/outsourcing/processing-fee-accounting-profiles/([^/]+)/approval$/,
+  handler: ({ db, req, res, actor, params }) => changeProcessingFeeAccountingProfileState(db, req, res, actor, params[0]),
+  owner: 'server/modules/outsourcing-gl-policy.js',
 });
 ownedRouteTable.register({
   method: 'POST',

@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, setToken } from '../api.js';
 import { Active, ConfirmAction, ConfirmDelete, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity } from '../components/ui.jsx';
 import MobileWorkflowProgress from '../components/MobileWorkflowProgress.jsx';
@@ -1484,6 +1484,16 @@ function OrderDocumentDetail({
           </div>
         </BusinessContentSection>
 
+        {!isSales && (
+          <PurchasePrepaymentPanel
+            user={user}
+            notify={notify}
+            orderId={id}
+            orderStatus={order.status}
+            onChanged={reload}
+          />
+        )}
+
         {!isSales && <PurchaseExecutionSection id={id}/>}
 
         {!isSales && (
@@ -2907,4 +2917,224 @@ function InventoryTransferDetail({ value, onClose }) {
     <div className="table-wrap inset"><table><thead><tr><th>#</th><th>货品</th><th>单位</th><th className="number">调拨数量</th></tr></thead><tbody>{value.items?.map((item) => <tr key={item.id}><td>{item.line_no || item.id}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td>{item.unit}</td><td className="number"><strong>{item.quantity}</strong></td></tr>)}</tbody></table></div>
     {value.remark && <p className="remark"><b>备注：</b>{value.remark}</p>}
   </> : <Loading/> }</Modal>;
+}
+
+// 采购订单侧的预付款要求与交货计划工作面（PRC-17 / PRC-16）。
+//
+// 预付款要求是**业务意图层**：金额由采购订单权威金额与声明的有理比例推导，
+// 客户端金额只作断言；**过账**才产生 canonical 付款事实（采购侧不建第二套
+// 支付引擎），申请人不得过账自己的申请。
+//
+// 交货计划的下容差自动关单：判定只有一份函数，收货确认与显式关单共用；低于
+// 下容差一律拒绝且零副作用。
+//
+// 后端合同：
+//   - GET  /api/procurement/prepayment-requirements?poId=
+//   - POST /api/procurement/prepayment-requirements
+//   - POST /api/procurement/prepayment-requirements/:id/post
+//   - POST /api/procurement/prepayment-requirements/:id/cancel
+//   - GET  /api/purchase-orders/:id/delivery-schedules
+//   - POST /api/purchase-orders/:id/delivery-schedules/:scheduleId/close
+function PurchasePrepaymentPanel({ user, notify, orderId, orderStatus, onChanged }) {
+  const [requirements, setRequirements] = useState([]);
+  const [schedules, setSchedules] = useState([]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [form, setForm] = useState({
+    prepaymentPctBasisNumerator: '30', prepaymentPctBasisDenominator: '100', dueDate: todayIso(),
+  });
+
+  const load = useCallback(async () => {
+    try {
+      const [prepayment, delivery] = await Promise.all([
+        api(`/api/procurement/prepayment-requirements?poId=${encodeURIComponent(orderId)}`, { method: 'GET' }),
+        api(`/api/purchase-orders/${encodeURIComponent(orderId)}/delivery-schedules`, { method: 'GET' }),
+      ]);
+      setRequirements(prepayment.prepaymentRequirements || []);
+      setSchedules(delivery.schedules || []);
+      setError('');
+    } catch (err) {
+      setError(err.message || '加载失败');
+    }
+  }, [orderId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const create = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      await api('/api/procurement/prepayment-requirements', {
+        method: 'POST',
+        body: {
+          poId: orderId,
+          prepaymentPctBasisNumerator: Number(form.prepaymentPctBasisNumerator),
+          prepaymentPctBasisDenominator: Number(form.prepaymentPctBasisDenominator),
+          dueDate: form.dueDate,
+        },
+      });
+      setCreating(false);
+      await load();
+      if (onChanged) onChanged();
+      notify('预付款要求已建立');
+    } catch (err) {
+      setError(err.message || '建立失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const post = async (requirementId) => {
+    setBusy(true);
+    try {
+      await api(`/api/procurement/prepayment-requirements/${requirementId}/post`, {
+        method: 'POST', body: {},
+      });
+      await load();
+      if (onChanged) onChanged();
+      notify('预付款要求已过账');
+    } catch (err) {
+      setError(err.message || '过账失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancel = async (requirementId) => {
+    setBusy(true);
+    try {
+      await api(`/api/procurement/prepayment-requirements/${requirementId}/cancel`, {
+        method: 'POST', body: {},
+      });
+      await load();
+      if (onChanged) onChanged();
+      notify('预付款要求已取消');
+    } catch (err) {
+      setError(err.message || '取消失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const closeSchedule = async (scheduleId) => {
+    setBusy(true);
+    try {
+      await api(`/api/purchase-orders/${encodeURIComponent(orderId)}/delivery-schedules/${encodeURIComponent(scheduleId)}/close`, {
+        method: 'POST', body: {},
+      });
+      await load();
+      if (onChanged) onChanged();
+      notify('交货计划已关单');
+    } catch (err) {
+      setError(err.message || '关单失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const canCreate = can(user, 'PURCHASE_ORDERS_CREATE');
+  const canPost = can(user, 'PAYMENT_MANAGE') || can(user, 'SUPPLIER_BILL_MANAGE');
+
+  return (
+    <>
+      {error ? <InlineAlert tone="danger" title="操作未完成">{error}</InlineAlert> : null}
+      <BusinessContentSection
+        title="预付款要求"
+        description="金额由采购订单权威金额与预付比例推导；过账才产生付款事实，申请人不得过账自己的申请"
+        action={canCreate && orderStatus === 'APPROVED' ? (
+          <BusinessAction onClick={() => setCreating(true)}>新建预付款要求</BusinessAction>
+        ) : null}
+      >
+        <CompactRecordList data-testid="purchase-prepayment-requirements">
+          {requirements.map((requirement) => (
+            <CompactRecord
+              key={requirement.id}
+              title={requirement.requirementNo || requirement.id}
+              subtitle={`${money(requirement.expectedPaymentCents)} / ${requirement.status}`}
+              status={<StatusChip status={requirement.status}>{requirement.status}</StatusChip>}
+              metadata={[
+                { label: '预付比例', value: `${requirement.prepaymentPctBasisNumerator}/${requirement.prepaymentPctBasisDenominator}` },
+                { label: '到期日', value: requirement.dueDate },
+                { label: '财务交接', value: requirement.financeHandoffId || '未过账' },
+              ]}
+              action={requirement.status === 'DRAFT' && canPost ? (
+                <>
+                  <BusinessAction onClick={() => post(requirement.id)} disabled={busy}>过账</BusinessAction>
+                  <BusinessAction onClick={() => cancel(requirement.id)} disabled={busy}>取消</BusinessAction>
+                </>
+              ) : null}
+            />
+          ))}
+        </CompactRecordList>
+        {!requirements.length ? (
+          <EmptyState
+            title="暂无预付款要求"
+            description="已批准的采购订单可按合同预付比例建立预付款要求。"
+          />
+        ) : null}
+        {creating ? (
+          <form className="form-grid" onSubmit={create}>
+            <label>
+              预付比例分子
+              <input
+                aria-label="预付比例分子"
+                value={form.prepaymentPctBasisNumerator}
+                onChange={(event) => setForm({ ...form, prepaymentPctBasisNumerator: event.target.value })}
+              />
+            </label>
+            <label>
+              预付比例分母
+              <input
+                aria-label="预付比例分母"
+                value={form.prepaymentPctBasisDenominator}
+                onChange={(event) => setForm({ ...form, prepaymentPctBasisDenominator: event.target.value })}
+              />
+            </label>
+            <label>
+              预付到期日
+              <input
+                aria-label="预付到期日"
+                type="date"
+                value={form.dueDate}
+                onChange={(event) => setForm({ ...form, dueDate: event.target.value })}
+              />
+            </label>
+            <div className="full">
+              <FormActions onClose={() => setCreating(false)} saveText="建立预付款要求" />
+            </div>
+          </form>
+        ) : null}
+      </BusinessContentSection>
+
+      <BusinessContentSection
+        title="交货计划"
+        description="累计收货达到下容差时自动关单，并记录被容忍的短交数量；低于下容差不得关单"
+      >
+        <CompactRecordList data-testid="purchase-delivery-schedules">
+          {schedules.map((schedule) => (
+            <CompactRecord
+              key={schedule.id}
+              title={`计划 ${schedule.plannedDate || ''}`}
+              subtitle={`计划数量 ${schedule.plannedQuantity} / ${schedule.status || 'OPEN'}`}
+              status={<StatusChip status={schedule.status || 'OPEN'}>{schedule.status === 'CLOSED' ? '已关单' : '进行中'}</StatusChip>}
+              metadata={[
+                { label: '交期区间', value: `${schedule.plannedDateFrom || '—'} → ${schedule.plannedDateTo || '—'}` },
+                { label: '下容差', value: `${schedule.lowerTolerancePct ?? 0}%` },
+              ]}
+              action={schedule.status !== 'CLOSED' && canCreate ? (
+                <BusinessAction onClick={() => closeSchedule(schedule.id)} disabled={busy}>关单</BusinessAction>
+              ) : null}
+            />
+          ))}
+        </CompactRecordList>
+        {!schedules.length ? (
+          <EmptyState
+            title="暂无交货计划"
+            description="交货计划在采购订单上维护，收货确认后按下容差自动关单。"
+          />
+        ) : null}
+      </BusinessContentSection>
+    </>
+  );
 }

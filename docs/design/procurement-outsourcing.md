@@ -2501,3 +2501,38 @@ Design §26.15 的**扫码入仓闭环**（`lookup-document` / `draft-receipt` /
 - 既有委外与采购套件的夹具按新合同调整：委外订单创建前必须先建立有效 OUTSOURCE 货源（业务事实的表达方式，与「先建立采购价格条目」同理）；调整只改变测试如何表达业务事实，不改变被测业务合同的语义。
 - **G07 固定场景重新冻结**：固定场景新增「建立有效 OUTSOURCE 货源」步骤，冻结摘要重新计算并写回三处断言；**该重新冻结待业务所有者显式确认**，在此之前真实 MySQL Gate 的既有验收结论不因本次变更自动延续。
 - **未闭合项**：`outsourcing_wip_identity_effects.event_type` 的 CHECK 变化使 G07 离线对等回放使用的真实 MySQL 目录条款捕获值失效；该断言只能在受保护真实 MySQL Gate 复跑并重新捕获后恢复，不得以削弱断言或改写检查器的方式通过。
+
+### 26.40 域级交付收口补充：维护面、界面可达性与三项裁定（2026-11-11；`APPROVED` → `IMPLEMENTED`）
+
+> **用途 / Owner / 状态 / 权威关系**：本节落实 Requirement §31.20：OUT-20 会计档案维护面、第四轮新增子能力的界面可达性、三项裁定与 OUT-22 的正式延期决策。Owner 为 Procurement & Outsourcing Domain Owner；状态为 `IMPLEMENTED`。
+
+#### 26.40.1 会计档案维护面
+
+- canonical owner：`server/modules/outsourcing-gl-policy.js`（档案语义与解析的唯一 owner）；路由：
+  - `GET /api/procurement/outsourcing/processing-fee-accounting-profiles`（列出）
+  - `POST /api/procurement/outsourcing/processing-fee-accounting-profiles`（建立）
+  - `POST /api/procurement/outsourcing/processing-fee-accounting-profiles/:id/approval`（改变批准状态）
+- 读权限：`SUPPLIER_BILL_MANAGE` 或 `OUTSOURCING_MANAGE`；写权限：`SUPPLIER_BILL_MANAGE`（财务侧过账权限）。委外业务侧**不得**定义科目。
+- 建立时的校验顺序：范围 → 供应商存在 → 档案编码 → 税务口径 → 批准状态 → **角色码解析到启用科目** → 生效区间 → 窗口重叠。
+- 重新批准时**重读权威科目**并重新做窗口重叠判定：科目被停用后不得让档案复活。
+- 写档案与改批准状态都写 `OUTSOURCING_PROCESSING_FEE_PROFILE` 审计（`CREATE` / `APPROVE` / `SUSPEND`），审计不含口令或令牌。
+- 档案**不是**过账的前置检查以外的东西：缺档案或未批准时过账仍按 §26.39.8 fail closed。
+
+#### 26.40.2 界面可达性
+
+- 采购订单详情（`src/pages/master-data.jsx` → `OrderDocumentDetail`）：「预付款要求」与「交货计划」两个 `BusinessContentSection`，随采购订单详情一并加载。
+- 寻源与定价（`src/pages/sourcing-pricing.jsx`）：「货源 override」面板放在 Source List 标签页内，与货源主数据同屏。
+- 委外加工（`src/pages/outsourcing.jsx`）：订单详情内「加工费账单」面板（过账 / 红冲），业务工作面内「加工费会计档案」面板，以及「新建期初委外订单」动作与 `CreateOpeningOrderSheet`。
+- 前端**不**计算权威金额：预付金额、付款事实、关单判定、过账结果一律由服务端返回；前端只展示服务端给出的数字与状态。
+- 前端**不**放宽权限：面板的可见性与动作可用性按 `can(user, ...)` 判断，服务端仍独立 fail closed。
+
+#### 26.40.3 测试与证据
+
+- 新增 focused 套件 `server/outsourcing-gl-profile-maintenance.test.js`（6 条）：默认档案可读、拒绝路径零副作用、建立与重叠拒绝、批准状态变更与审计、职责分离 403、账单只读列表。
+- 浏览器 UAT `scripts/acceptance/procurement-outsourcing-functional-uat.mjs` 扩展到 **36 条**：新增 UAT-30 预付款要求（申请人自批 409 → 财务岗过账 → canonical 付款单 / 应付 / 审计）、UAT-31 货源 override、UAT-32 交货计划下容差自动关单（短交数量与触发方式）、UAT-33 加工费正式过账与红冲（借方 6408、证据 FINAL、重复红冲被拒）、UAT-34 期初委外订单（身份账 OPENING、供应商 WIP 位置、零凭证与应付）、UAT-35 会计档案维护、UAT-36 三个工作面在 390 px 下渲染新增面板且无整页横向滚动。
+- UAT-24 的断言按新合同改写：草稿只是登记（AP=0、证据 PROVISIONAL），过账行为由 UAT-33 覆盖。
+
+#### 26.40.4 兼容与回滚
+
+- 全部为增量：新增只读/写端点与前端面板，既有路由与页面行为不变。
+- 前端面板可独立下线而不影响服务端合同；服务端合同不可在档案维护面缺失时降级为「无档案即放行」。

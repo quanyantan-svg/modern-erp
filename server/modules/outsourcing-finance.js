@@ -1226,3 +1226,57 @@ export async function procurementScan(db, req, res, actor) {
     },
   });
 }
+
+/**
+ * 委外加工费账单的只读列表（OUT-20 的工作面读模型）。
+ *
+ * 只读：返回账单与其委外来源行，不重算金额、不修复历史。过滤条件：
+ * `outsourcingOrderId`（经来源收货回溯到委外订单）与 `supplierId`。
+ */
+export function listProcessingFeeBills(db, res, actor, url) {
+  allowAny(actor, ['SUPPLIER_BILL_MANAGE', 'OUTSOURCING_MANAGE', 'OUTSOURCING_VIEW']);
+  const outsourcingOrderId = url.searchParams.get('outsourcingOrderId');
+  const supplierId = url.searchParams.get('supplierId');
+  const where = ["bi.commercial_source_type='OUTSOURCING_RECEIPT_ITEM'"];
+  const params = [];
+  if (outsourcingOrderId) { where.push('o.order_id=?'); params.push(outsourcingOrderId); }
+  if (supplierId) { where.push('b.supplier_id=?'); params.push(supplierId); }
+  const rows = db.prepare(`SELECT b.*, o.order_id outsourcing_order_id
+    FROM supplier_bills b
+    JOIN supplier_bill_items bi ON bi.bill_id=b.id
+    LEFT JOIN outsourcing_receipt_items rbi ON rbi.id=bi.commercial_source_item_id
+    LEFT JOIN outsourcing_receipts o ON o.id=rbi.receipt_id
+    WHERE ${where.join(' AND ')}
+    GROUP BY b.id ORDER BY b.created_at DESC, b.id LIMIT 200`).all(...params);
+  const bills = rows.map((row) => {
+    const items = db.prepare(`SELECT id, commercial_source_id receipt_id, commercial_source_item_id receipt_item_id,
+        product_id, base_quantity_num, base_quantity_den, unit_price_cents, net_cents, line_no
+      FROM supplier_bill_items WHERE bill_id=? ORDER BY line_no, id`).all(row.id).map((item) => ({
+      id: item.id,
+      receiptId: item.receipt_id,
+      receiptItemId: item.receipt_item_id,
+      productId: item.product_id,
+      quantity: Number(item.base_quantity_num || 0) / Number(item.base_quantity_den || 1),
+      unitPriceCents: Number(item.unit_price_cents || 0),
+      netCents: Number(item.net_cents || 0),
+      lineNo: item.line_no,
+    }));
+    return {
+      id: row.id,
+      billNo: row.bill_no,
+      supplierId: row.supplier_id,
+      supplierInvoiceNo: row.supplier_invoice_no,
+      billDate: row.bill_date,
+      status: row.status,
+      netCents: Number(row.net_cents || 0),
+      grossCents: Number(row.gross_cents || 0),
+      processingFeePostingState: row.processing_fee_posting_state || null,
+      processingFeeProfileId: row.processing_fee_profile_id || null,
+      processingFeeReversedCents: Number(row.processing_fee_reversed_cents || 0),
+      outsourcingOrderId: row.outsourcing_order_id || null,
+      createdAt: row.created_at,
+      items,
+    };
+  });
+  return send(res, 200, { processingFeeBills: bills });
+}
