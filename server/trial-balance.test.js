@@ -283,7 +283,13 @@ describe('Phase E — Trial Balance end-to-end', () => {
     // AA-W3.14 — 4103 本年利润 is the profit-and-loss transfer equity subject
     // seeded by `server/migrations/accounting-period-end-schema.js`.
     assert.ok(codes.includes('4103'), `trial balance must include the profit transfer subject 4103; got [${codes.join(',')}]`);
-    assert.equal(codes.length, 23, `trial balance must contain the 23 configured subjects; got [${codes.join(',')}]`);
+    // AA-W5.14 — 1601 固定资产 / 1602 累计折旧 / 6602 折旧费用 / 6603 处置资产损益
+    // are seeded by `server/migrations/fixed-assets-schema.js` for the
+    // fixed-asset depreciation and disposal postings.
+    for (const expected of ['1601', '1602', '6602', '6603']) {
+      assert.ok(codes.includes(expected), `trial balance must include the fixed-asset subject ${expected}; got [${codes.join(',')}]`);
+    }
+    assert.equal(codes.length, 27, `trial balance must contain the 27 configured subjects; got [${codes.join(',')}]`);
   });
 
   test('POSTED manual voucher with period populated appears in Trial Balance', async () => {

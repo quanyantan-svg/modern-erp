@@ -40,7 +40,8 @@ describe('V1.2 release registries', () => {
     const path = join(tempDir, 'second-start.db');
     createDatabase(path).close();
     const reopened = createDatabase(path);
-    assert.equal(reopened.prepare('SELECT COUNT(*) count FROM permissions').get().count, 227);
+    // AA-W1..AA-W7 add 20 permissions on top of the pre-domain 227 baseline.
+    assert.equal(reopened.prepare('SELECT COUNT(*) count FROM permissions').get().count, 247);
     assert.equal(reopened.prepare('SELECT COUNT(*) count FROM roles').get().count, 7);
     assert.equal(reopened.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual(reopened.prepare('PRAGMA foreign_key_check').all(), []);

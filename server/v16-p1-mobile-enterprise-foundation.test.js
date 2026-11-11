@@ -224,13 +224,16 @@ describe('P1B — application launcher contract', () => {
     for (const page of ['notifications','approvals','users','workflows','data-cleanup']) assert.equal(launcherPages.has(page), false, page);
   });
 
-  test('disabled routes (cash-journals/bills/fixed-assets/workflows/data-cleanup) are not launcher tiles', () => {
+  test('disabled routes (cash-journals/bills/workflows/data-cleanup) are not launcher tiles', () => {
     const allTiles = applicationMetadata.MOBILE_APPLICATION_GROUPS
       .flatMap((g) => g.items);
     const tilePages = new Set(allTiles.map((i) => i.page));
-    for (const disabled of ['cash-journals', 'bills', 'fixed-assets', 'workflows', 'data-cleanup']) {
+    // AA-W5 enabled fixed-assets, so it left the frozen disabled set and is
+    // now a launcher tile for the Accounting & Analytics domain.
+    for (const disabled of ['cash-journals', 'bills', 'workflows', 'data-cleanup']) {
       assert.ok(!tilePages.has(disabled), `${disabled} must not be a launcher tile`);
     }
+    assert.ok(tilePages.has('fixed-assets'), 'fixed-assets must be a launcher tile after AA-W5 enabled it');
   });
 
   test('mobile common priority list is ordered and bounded', () => {

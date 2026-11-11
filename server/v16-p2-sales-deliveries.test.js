@@ -227,12 +227,14 @@ describe('V1.6.2 Phase 1 sales-delivery presentation contract', () => {
     );
   });
 
-  test('34. canonical 67 enabled / 5 disabled routes remain and sales-deliveries parentRoute stays a primary', () => {
+  test('34. canonical 79 enabled / 4 disabled routes remain and sales-deliveries parentRoute stays a primary', () => {
     // Finance Operations Domain Closure added finance-invoices + finance-treasury,
     // raising the canonical active count from 59 to 61. Wave 7 added
     // sales-prepayment-gates + sales-reservation-intents, raising it to 67.
-    assert.equal(ROUTE_PRESENTATIONS.length, 74, 'canonical routes plus W11-A U3 must remain enabled');
-    assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'frozen five disabled routes must remain disabled');
+    // The Accounting & Analytics Domain Closure (AA-W4 / AA-W6 / AA-W7) added
+    // 5 more domain routes, and AA-W5 enabled fixed-assets, leaving 4 disabled.
+    assert.equal(ROUTE_PRESENTATIONS.length, 79, 'canonical routes plus W11-A U3 and the AA domain closure must remain enabled');
+    assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 4, 'frozen four disabled routes must remain disabled');
 
     const salesDeliveryRoute = enabledByRoute.get('sales-deliveries');
     assert.ok(salesDeliveryRoute, 'sales-deliveries route must remain enabled');

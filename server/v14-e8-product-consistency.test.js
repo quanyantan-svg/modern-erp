@@ -10,11 +10,13 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const source = (path) => readFileSync(resolve(root, path), 'utf8');
 
 test('E8 audits the complete current user-facing application catalogue', () => {
-  const disabled = new Set(['cash-journals', 'bills', 'fixed-assets', 'workflows', 'data-cleanup']);
+  const disabled = new Set(['cash-journals', 'bills', 'workflows', 'data-cleanup']);
   const pages = new Set(ROUTE_PRESENTATIONS.map((item) => item.route));
   // Core Scope Cleanup removed the 6 extension routes
   // (projects, tasks, timesheets, contacts, followups, activities).
-  assert.equal(pages.size, 73);
+  // AA-W4 / AA-W6 / AA-W7 added 5 Accounting & Analytics domain routes, and
+  // AA-W5 enabled `fixed-assets`, so the frozen disabled set is now 4.
+  assert.equal(pages.size, 79);
   assert.deepEqual(new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)), disabled);
   for (const page of ['business-overview', 'orders', 'inventory-transactions', 'decision-reports', 'traceability']) {
     assert.ok(pages.has(page), `missing audited page ${page}`);

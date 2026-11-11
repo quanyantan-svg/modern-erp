@@ -186,6 +186,19 @@ describe('AA-W6 存货核算深化', () => {
       finalCents: 130000, reason: '重复调整',
     });
     assert.equal(repeat.status, 409, '已调整的暂估单不得再次调整');
+
+    // AA-W6.7 — the cost composition must be re-viewable, not only visible in
+    // the POST response of the adjustment.
+    const listed = await fixture.request('GET', '/api/accounting/provisional-receipts', fixture.tokens.accounting);
+    assert.equal(listed.status, 200, JSON.stringify(listed.data));
+    const receipt = listed.data.provisionalReceipts.find((row) => row.id === provisionalId);
+    assert.ok(receipt, '暂估入库单必须可回看');
+    assert.equal(Number(receipt.estimate_cents), 100000, '暂估金额必须原样回看');
+    assert.ok(receipt.adjustment, '暂估差异调整必须可回看');
+    assert.equal(Number(receipt.adjustment.final_cents), 120000);
+    assert.equal(Number(receipt.adjustment.difference_cents), 20000);
+    assert.equal(receipt.adjustment.reason, '正式发票高于暂估');
+    assert.ok(receipt.adjustment.voucher_id, '差异调整凭证必须可回看');
   });
 
   test('AA-W6.8/9/10 采购费用分摊：可重算、进入权威价值流水并生成凭证', async () => {

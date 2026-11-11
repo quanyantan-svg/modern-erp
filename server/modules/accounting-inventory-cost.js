@@ -202,7 +202,15 @@ export async function createCostingProfile(db, req, res, actor) {
 export function listProvisionalReceipts(db, res, actor) {
   allowAny(actor, VIEW_PERMISSIONS);
   const rows = db.prepare('SELECT * FROM provisional_receipts ORDER BY created_at DESC').all();
-  return send(res, 200, { provisionalReceipts: rows });
+  // AA-W6.7 — the receipt cost composition (estimate / final / difference) must be
+  // re-viewable, not only readable in the POST response of the adjustment.
+  const receipts = rows.map((row) => ({
+    ...row,
+    adjustment: db.prepare(
+      'SELECT * FROM provisional_receipt_adjustments WHERE provisional_receipt_id=? ORDER BY created_at DESC LIMIT 1',
+    ).get(row.id) || null,
+  }));
+  return send(res, 200, { provisionalReceipts: receipts });
 }
 
 export async function createProvisionalReceipt(db, req, res, actor) {

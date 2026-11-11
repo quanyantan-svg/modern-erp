@@ -25,7 +25,7 @@ test('P0-A registry owns 74 active and 4 disabled unique routes with valid scree
   // Procurement & Outsourcing Domain Closure adds 2 surfaces
   // (sourcing-pricing, outsourcing). Wave 7 adds 2 contextual sales-customer
   // surfaces (sales-prepayment-gates, sales-reservation-intents).
-  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 74);
+  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 79);
   assert.equal(DISABLED_APPLICATION_ROUTES.length, 4);
   assert.equal(new Set(APPLICATION_ROUTES.map((route) => route.key)).size, APPLICATION_ROUTES.length);
   assert.deepEqual(DISABLED_APPLICATION_ROUTES.map((route) => route.key), ['cash-journals','bills','workflows','data-cleanup']);
@@ -49,7 +49,7 @@ test('P0-A aliases and launcher entries are conflict-free registry projections',
     assert.equal(entry.group, group.key, `${entry.key} parent group`);
     assert.equal(groupKeys.has(entry.group), true, `${entry.key} valid group`);
   }
-  assert.equal(ROUTE_PRESENTATIONS.length, 74);
+  assert.equal(ROUTE_PRESENTATIONS.length, 79);
   assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 4);
   assert.deepEqual(MOBILE_APPLICATION_GROUPS.map((group) => group.key), APPLICATION_LAUNCHER_GROUPS.map((group) => group.key));
   const corePages = MOBILE_APPLICATION_GROUPS.filter((group) => group.kind === 'domain').flatMap((group) => group.items.map((item) => item.page));

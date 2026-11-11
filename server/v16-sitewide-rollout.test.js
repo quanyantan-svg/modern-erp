@@ -31,19 +31,26 @@ describe('V1.6 site-wide rollout source contract', () => {
     // The V1.6 matrix is frozen historical evidence. Sales Wave 2, Batch A
     // and Wave 7 own their acceptance evidence separately and must not rewrite it.
     const laterSalesRoutes = ['sales-pricing', 'quotations', 'delivery-notices', 'sales-order-changes', 'sales-prepayment-gates', 'sales-reservation-intents', 'service-fulfillments', 'consignment-commercial', 'credit-foundation', 'credit-check', 'credit-query', 'credit-special-approvals'];
-    assert.equal(rows.length, ROUTE_PRESENTATIONS.length - laterSalesRoutes.length);
+    // The Accounting & Analytics Domain Closure (AA-W4 / AA-W6 / AA-W7) added
+    // 5 domain routes; they carry their own acceptance evidence and must not
+    // rewrite the frozen V1.6 matrix either. AA-W5 also re-enabled
+    // `fixed-assets`, which the frozen V1.6 matrix still records as REMOVED.
+    const laterDomainClosureRoutes = ['accounting-events', 'accounting-reconciliation', 'accounting-reports', 'accounting-costing', 'management-accounting', 'fixed-assets'];
+    const laterRoutes = [...laterSalesRoutes, ...laterDomainClosureRoutes];
+    assert.equal(rows.length, ROUTE_PRESENTATIONS.length - laterRoutes.length);
     assert.equal(new Set(rows.map((row) => row.route)).size, rows.length);
-    assert.deepEqual([...rows.map((row) => row.route), ...laterSalesRoutes].sort(), ROUTE_PRESENTATIONS.map((route) => route.route).sort());
+    assert.deepEqual([...rows.map((row) => row.route), ...laterRoutes].sort(), ROUTE_PRESENTATIONS.map((route) => route.route).sort());
   });
 
   test('enabled route metadata remains unique', () => {
     const keys = ROUTE_PRESENTATIONS.map((route) => route.route);
-    assert.equal(keys.length, 73);
+    assert.equal(keys.length, 79);
     assert.equal(new Set(keys).size, keys.length);
   });
 
-  test('the frozen five disabled routes remain disabled and documented', () => {
-    assert.deepEqual(DISABLED_ROUTE_PRESENTATIONS.map((route) => route.route).sort(), ['bills', 'cash-journals', 'data-cleanup', 'fixed-assets', 'workflows']);
+  test('the frozen four disabled routes remain disabled and documented', () => {
+    // AA-W5 enabled fixed-assets, so it left the frozen disabled set.
+    assert.deepEqual(DISABLED_ROUTE_PRESENTATIONS.map((route) => route.route).sort(), ['bills', 'cash-journals', 'data-cleanup', 'workflows']);
     for (const route of DISABLED_ROUTE_PRESENTATIONS) {
       assert.match(matrix, new RegExp(`\\| ${route.route} \\| REMOVED \\| false \\| absent \\|`));
     }
