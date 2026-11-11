@@ -32,18 +32,18 @@
 | B3103 | 信用管理 | Sales & Customer | [`sales-customer/01-domain-closure.md` §34.8](../requirements/sales-customer/01-domain-closure.md) + [`03-wave-9-amendments.md`](../requirements/sales-customer/03-wave-9-amendments.md)（SC82–SC107）· CAP-28..36 | [`sales-customer/04-wave-9-credit-baseline.md` §36](../design/sales-customer/04-wave-9-credit-baseline.md) + [`05-wave-11-stage-c.md` §37.54](../design/sales-customer/05-wave-11-stage-c.md) | Wave 9 / Gate A / Wave 10 已冻结；W11-SEC-01 与 W11-A U1/U2/U3 单元级已冻结；**W11-A 整包未签发** | `HISTORICAL_EVIDENCE` |
 | B3104 | 库存管理 | Inventory & Warehouse | [`inventory-warehouse.md` §32.3](../requirements/inventory-warehouse.md) · INV-01..38 | [`inventory-warehouse.md` §27](../design/inventory-warehouse.md) | 实现 Partial；**未见独立 Domain-Level Acceptance** | `HISTORICAL_EVIDENCE` |
 | B3105 | 条码管理 | Inventory & Warehouse / Manufacturing & Quality | [`inventory-warehouse.md` §32.3](../requirements/inventory-warehouse.md) · INV-39..44 | [`inventory-warehouse.md` §27](../design/inventory-warehouse.md) | 解析/校验/规则与绑定 CRUD 已有；生成、标签打印与 PDA 执行层 `NOT_STARTED` | `PARTIAL / UNVERIFIED` |
-| B3106 | 存货核算 | Accounting & Analytics | 仅在 [`finance-operations.md` §33.1.3](../requirements/finance-operations.md) 确认归属 | **无 Accounting & Analytics Design** | 缺能力矩阵 | `UNVERIFIED` |
-| B3107 | 固定资产 | Accounting & Analytics | 仅在 [`finance-operations.md` §33.1.3](../requirements/finance-operations.md) 确认归属 | **无 Accounting & Analytics Design** | 缺能力矩阵 | `UNVERIFIED` |
+| B3106 | 存货核算 | Accounting & Analytics | [`accounting-analytics.md` §35](../requirements/accounting-analytics.md) · AA-01..AA-09 | [`accounting-analytics.md` §31.6](../design/accounting-analytics.md) | AA-W6 已实施：`accounting_scopes` / `product_costing_profiles` / `provisional_receipts` / `purchase_expenses` / `cost_adjustments` / `production_cost_closings` + 核算关账异常清单；`AA-W6` 专项测试 **PASS**。**逐项复核 8 `COVERED` + 1 `PARTIAL`** —— **AA-07 委外成本未闭合**：§35.4.6 无 AA-07 条款、本域无 `OUTSOURCE` 取数规则，口径现由采购与委外域已冻结实现承担，待业务所有者裁定（[审计台账 §7.3](../audits/accounting-analytics-capability-audit-20261110.md)） | `BLOCKED` |
+| B3107 | 固定资产 | Accounting & Analytics | [`accounting-analytics.md` §35](../requirements/accounting-analytics.md) · AA-10..AA-17 | [`accounting-analytics.md` §31.5](../design/accounting-analytics.md) | AA-W5 已实施：资产类型 / 位置 / 折旧政策独立实体、资产卡片生命周期、采购转固、受控变更单、拆分合并、借用盘点、**按政策自动计提折旧并生成凭证**、受控处置；route `fixed-assets` 已 enabled 并进入 launcher；`AA-W5` 专项测试 **PASS**。**逐项复核 8 `COVERED` / 0 `PARTIAL`** | `VERIFIED` |
 | B3108 | 应付款-业务应付 | Finance Operations | [`finance-operations.md` §33.5 + §33.2](../requirements/finance-operations.md) · FO01..FO58 | [`finance-operations.md` §28](../design/finance-operations.md) | 实现完成；**未见独立 Domain-Level Acceptance** | `HISTORICAL_EVIDENCE` |
 | B3109 | 应付款-暂估应付 | Finance Operations | 同上 | 同上 | 同上 | `HISTORICAL_EVIDENCE` |
 | B3110 | 应收款-业务应收 | Finance Operations | 同上 | 同上 | 同上 | `HISTORICAL_EVIDENCE` |
 | B3111 | 应收款-暂估应收 | Finance Operations | 同上 | 同上 | 同上 | `HISTORICAL_EVIDENCE` |
 | B3112 | 发票管理 | Finance Operations | 同上 | 同上 | 同上 | `HISTORICAL_EVIDENCE` |
 | B3113 | 出纳管理 | Finance Operations | 同上 | 同上 | 同上 | `HISTORICAL_EVIDENCE` |
-| B3114 | 智能会计平台 | Accounting & Analytics | **无 Domain Closure Requirement** | **无 Design** | 缺能力矩阵 | `UNVERIFIED` |
-| B3115 | 总账 | Accounting & Analytics | **无 Domain Closure Requirement** | **无 Design** | 缺能力矩阵 | `UNVERIFIED` |
-| B3116 | 报表 | Accounting & Analytics | **无 Domain Closure Requirement** | **无 Design** | 缺能力矩阵 | `UNVERIFIED` |
-| B3117 | 经营会计 | Accounting & Analytics | **无 Domain Closure Requirement** | **无 Design** | 缺能力矩阵 | `UNVERIFIED` |
+| B3114 | 智能会计平台 | Accounting & Analytics | [`accounting-analytics.md` §35](../requirements/accounting-analytics.md) · AA-18..AA-24 | [`accounting-analytics.md` §31.1、§31.2](../design/accounting-analytics.md) | AA-W1 + AA-W2 已实施：会计事件台账（DB 级自然键唯一）、未生成与异常清单、受控修复（重试 / 跳过并说明原因 / 恢复，均写审计）、业务↔GL 对账工作台与不可变快照、统一期末关账检查、会计科目维护、凭证模板与规则平台（命中唯一、未命中显式失败）、批量生成逐条独立事务；`AA-W1/W2` 专项测试 **PASS**。**逐项复核 7 `COVERED` / 0 `PARTIAL`** | `VERIFIED` |
+| B3115 | 总账 | Accounting & Analytics | [`accounting-analytics.md` §35](../requirements/accounting-analytics.md) · AA-25..AA-32 | [`accounting-analytics.md` §31.3](../design/accounting-analytics.md) | AA-W3 已实施：冲销与补记统一 canonical 路径（金额镜像）、出纳复核独立节点与权限（SOD 生效）、三段式现金流量表与资金子账对账、期末转账 / 摊销 / 计提、**真实损益结转**并移除虚拟权益行；`AA-W3` 专项测试 **PASS**。**逐项复核 7 `COVERED` + 1 `OUT_OF_SCOPE`**（AA-31 汇兑损益 / 多币种，业务所有者 2026-11-10 裁定） | `VERIFIED` |
+| B3116 | 报表 | Accounting & Analytics | [`accounting-analytics.md` §35](../requirements/accounting-analytics.md) · AA-33..AA-38 | [`accounting-analytics.md` §31.4](../design/accounting-analytics.md) | AA-W4 已实施：报表模板 + 行项目 + 可见范围 + 版本、受限文法公式引擎（无 `eval` / `Function`，失败显式报错不静默取 0）、期间实例生命周期（实例化 → 重算 → 提交 → 审核，提交与审核分离并留痕）、自定义报表；既有 5 张固定执行报表口径不变；`AA-W4` 专项测试 **PASS**。**逐项复核 6 `COVERED` / 0 `PARTIAL`** | `VERIFIED` |
+| B3117 | 经营会计 | Accounting & Analytics | [`accounting-analytics.md` §35](../requirements/accounting-analytics.md) · AA-39..AA-44 | [`accounting-analytics.md` §31.7](../design/accounting-analytics.md) | AA-W7 已实施：经营账簿 / 经营单元、经营台账（只取已过账事实、归集幂等）、内部结算价格、费用归集与分摊（可重算一致、基数缺失 fail closed）、经营损益与法定损益勾稽（差额显式三段）、经营期间关账与受控反结账；`AA-W7` 专项测试 **PASS**。**逐项复核 6 `COVERED` / 0 `PARTIAL`** | `VERIFIED` |
 | B3118 | 工程数据 | Master & Engineering | [`master-engineering.md` §28.3](../requirements/master-engineering.md) · ME-01..31 | [`master-engineering.md` §23](../design/master-engineering.md) | 实现完成；**未见独立 Domain-Level Acceptance** | `HISTORICAL_EVIDENCE` |
 | B3119 | 生产管理 | Manufacturing & Quality | [`manufacturing-quality.md` §29.3](../requirements/manufacturing-quality.md) · MQ-01..43 | [`manufacturing-quality.md` §24](../design/manufacturing-quality.md) | 实现完成；**未见独立 Domain-Level Acceptance** | `HISTORICAL_EVIDENCE` |
 | B3120 | 计划管理 | Planning | [`planning.md` §30.2](../requirements/planning.md) · PL-01..45 | [`planning.md` §25](../design/planning.md) | `Final Acceptance: PASS`；**有明确用户 Freeze** | `VERIFIED` |
@@ -112,9 +112,16 @@
 
 ## 覆盖缺口说明
 
-1. **Accounting & Analytics（B3106、B3107、B3114–B3117）** 是当前最大的矩阵空洞 ——
-   既无 Domain Closure Requirement，也无 Domain Technical Design，因此全部记 `UNVERIFIED`。
-   这是**如实登记**，不是遗漏；补齐需要先走 Requirement 阶段。
+1. **Accounting & Analytics（B3106、B3107、B3114–B3117）** 已于 2026-11-10 建立 Domain Closure
+   Requirement（[`accounting-analytics.md` §35](../requirements/accounting-analytics.md)）与 Domain Technical
+   Design（[`accounting-analytics.md` §31](../design/accounting-analytics.md)），并于 2026-11-11 完成
+   AA-W1..AA-W7 全部七个范围包的实施与逐项复核：六本手册共 44 项 Capability，**42 `COVERED`**、
+   **1 `PARTIAL`（AA-07 委外成本）**、**1 `OUT_OF_SCOPE`（AA-31 汇兑损益 / 多币种）**。
+   B3107 / B3114 / B3115 / B3116 / B3117 据此记 `VERIFIED`；**B3106 记 `BLOCKED`** —— AA-07 的
+   合同条款缺位且本域无实现，属 AGENTS.md §35.9 第 4 项 Hard Stop，待业务所有者裁定。
+   域级 Acceptance 与 Capability Freeze **尚未签发**，详见
+   [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) 与
+   [审计台账 §7](../audits/accounting-analytics-capability-audit-20261110.md)。
 2. **Platform（B3122）** 同理，只有手册基线，`NOT_STARTED`。
 3. **Inventory & Warehouse / Manufacturing & Quality / Finance Operations / Master & Engineering**
    实现完成但缺**独立 Domain-Level Acceptance token**，故记 `HISTORICAL_EVIDENCE` 而非 `VERIFIED`。

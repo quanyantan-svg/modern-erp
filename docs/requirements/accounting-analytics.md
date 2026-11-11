@@ -528,14 +528,20 @@ Accounting & Analytics 域级 Acceptance 必须同时满足：
 
 | 项 | 值 |
 |---|---|
-| Requirement 状态 | `APPROVED`（业务所有者 2026-11-10 授权：AA-W1..AA-W7 全部纳入；AA-31 `OUT_OF_SCOPE`；Requirement + Design 连续执行授权） |
-| Design 状态 | 待 §31 签署 |
-| Implementation 状态 | `NOT_AUTHORIZED`（Design 完成后 HARD STOP，等待批准） |
-| Domain Acceptance | 未签发 |
+| Requirement 状态 | `IMPLEMENTED`（业务所有者 2026-11-10 授权：AA-W1..AA-W7 全部纳入；AA-31 `OUT_OF_SCOPE`；Requirement + Design 连续执行授权。AA-W1..AA-W7 七个范围包已于 2026-11-11 全部实施完毕并通过本地 Gate，**尚未经业务所有者验收**） |
+| Design 状态 | `APPROVED` → 已实施（`docs/design/accounting-analytics.md` §31） |
+| Implementation 状态 | `COMPLETE`（AA-W1 → AA-W2 → AA-W5 → AA-W3 → AA-W6 → AA-W4 → AA-W7，提交 `3876bd3` / `e40a015` / `943414c` / `5e6739d` / `bc2035d` / `d9e7319`） |
+| Domain Acceptance | 未签发（候签材料见 `docs/acceptance/accounting-analytics-domain-acceptance-candidate-20261111.md`） |
 | Capability Freeze | 未签发 |
 | Manual Closure | 未闭合 |
 | Release Readiness | 未就绪 |
 
+**未解决矛盾（须随验收一并处置）**：`AA-07 委外成本` 在 §35.3 记为目标 `COVERED` 并归属 AA-W6，
+但 §35.4.6 的 AA-W6 条款**不含 AA-07**，本域亦无 `OUTSOURCE` 取数规则 —— 属 AGENTS.md §35.9 第 4 项
+Hard Stop。逐项复核结论因此为 **42 `COVERED` / 1 `PARTIAL`（AA-07）/ 1 `OUT_OF_SCOPE`（AA-31）**，
+而非 §35.3 的 43 + 1。裁定选项见
+[`docs/audits/accounting-analytics-capability-audit-20261110.md`](../audits/accounting-analytics-capability-audit-20261110.md) §7.3。
+
 ---
 
-**ACCOUNTING & ANALYTICS DOMAIN CLOSURE REQUIREMENT APPROVED FOR AUTHORIZED DESIGN**
+**ACCOUNTING & ANALYTICS DOMAIN CLOSURE REQUIREMENT IMPLEMENTED — AWAITING OWNER ACCEPTANCE**

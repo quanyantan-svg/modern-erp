@@ -210,8 +210,109 @@
 
 ---
 
-## 7. 变更历史
+## 7. 实施后逐项复核（2026-11-11）
+
+> 本节是 AA-W1..AA-W7 实施完成后的**逐项复核**，取代 §2 的实施前判定；§2 的原始判定作为审计基线**保留不变**。
+> 判定沿用 §「审计方法」的同一把尺子：(a) 有生产写入口或权威读入口；(b) 有服务端来源 / 状态 / 权限 / 事务约束；
+> (c) 有可执行测试覆盖正例。**不凭文件存在或表存在宣称覆盖。**
+> 本节**不构成** Capability Freeze 或 Domain Acceptance —— 正式覆盖状态只登记在
+> [`docs/status/CAPABILITY_MATRIX.md`](../status/CAPABILITY_MATRIX.md)，且须有可执行证据。
+
+### 7.1 复核统计
+
+| 手册 | Capability 数 | COVERED | PARTIAL | MISSING | OUT_OF_SCOPE |
+|---|---|---|---|---|---|
+| B3106 存货核算 | 9 | 8 | 1 | 0 | 0 |
+| B3107 固定资产 | 8 | 8 | 0 | 0 | 0 |
+| B3114 智能会计平台 | 7 | 7 | 0 | 0 | 0 |
+| B3115 总账 | 8 | 7 | 0 | 0 | 1 |
+| B3116 报表 | 6 | 6 | 0 | 0 | 0 |
+| B3117 经营会计 | 6 | 6 | 0 | 0 | 0 |
+| **合计** | **44** | **42** | **1** | **0** | **1** |
+
+对比 §35.3 的目标判定（43 `COVERED` + 1 `OUT_OF_SCOPE`）：**AA-07 委外成本** 未能在本域闭合，
+是本轮唯一的未解决矛盾（见 §7.3）。
+
+### 7.2 逐项复核结论
+
+| Capability | 基线判定 | 复核判定 | 证据（写入口 / 约束 / 可执行测试） |
+|---|---|---|---|
+| AA-01 核算范围与核算体系 | `PARTIAL` | `COVERED` | `accounting_scopes` / `product_costing_profiles`（`server/migrations/inventory-costing-schema.js`）；`accounting-inventory-cost.js::resolveCostingProfile`；「AA-W6.1/2 核算范围是独立实体，维度非法、编码重复与越权一律拒绝」 |
+| AA-02 计价方法 | `PARTIAL` | `COVERED` | 同上「AA-W6.3 计价方法按属性 > 类别 > 默认选择，同级并列时 fail closed」「AA-W6.4 已有估值移动的物料变更计价方法被拒绝」 |
+| AA-03 采购入库成本 | `PARTIAL` | `COVERED` | 成本构成四段齐备：暂估 `provisional_receipts` / 正式与差异 `provisional_receipt_adjustments` / 分摊费用 `purchase_expense_allocations` / 权威估值流水 `inventory_valuation_movements`；「AA-W6.5/6」「AA-W6.8/9/10」；构成经 `GET /api/accounting/provisional-receipts` 与 `GET /api/purchase-expenses` **可回看**（AA-W6.7） |
+| AA-04 采购费用分配 | `MISSING` | `COVERED` | `purchase_expenses` / `purchase_expense_allocation_rules` / `purchase_expense_allocations`；「AA-W6.8/9/10 采购费用分摊：可重算、进入权威价值流水并生成凭证」 |
+| AA-05 暂估成本 | `PARTIAL` | `COVERED` | 「AA-W6.5/6 暂估入库单与差异调整：差异走调整凭证，暂估金额不被改写」 |
+| AA-06 生产入库成本 | `PARTIAL` | `COVERED` | `production_cost_closings`（`product_cost_cents + variance_cents == wip_cents`，`variance_target` 显式）；「AA-W6.11/12 完工成本结转：金额守恒、差异去向显式并与 GL 一致」 |
+| **AA-07 委外成本** | `PARTIAL` | **`PARTIAL`（未闭合）** | **本域无实现**：§35.4.6 的 AA-W6 条款未包含 AA-07，本域模块无任何 `OUTSOURCE` 取数规则；委外成本口径当前由采购委外域 canonical 实现承担（`server/modules/outsourcing-finance.js` 读取 `backflush.valuation.issuedValueCents` + `outsourcing-gl-policy.js::resolveProcessingFeeAccountingProfile`，2026-11-11 域级 Acceptance 已冻结）。详见 §7.3 |
+| AA-08 出库核算 / 成本调整 | `PARTIAL` | `COVERED` | `cost_adjustments` + 调整凭证 + 原因与授权人可追溯；「AA-W6.13/14 成本调整：生成凭证并可追溯原因与授权人」 |
+| AA-09 存货关账 | `PARTIAL` | `COVERED` | `GET /api/accounting/costing-close-checklist` 五类异常清单（估值↔GL 差异、`LEGACY_UNVALUED`、负库存/残值、暂估未结转、成本调整未过账）+ `systemHealth` 合并展示；「AA-W6.15/16」 |
+| AA-10 资产基础资料 | `PARTIAL` | `COVERED` | 资产类别 / 位置 / 折旧政策为独立实体，卡片引用而非内嵌文本；「AA-W5 · 资产类别、资产位置与折旧政策是独立实体，卡片引用而非内嵌文本」 |
+| AA-11 资产卡片 | `PARTIAL` | `COVERED` | `fixed_assets` 生命周期主对象（状态机 DRAFT→ACTIVE→IDLE→DISPOSING→DISPOSED）；AA-W5 全部用例 |
+| AA-12 采购转固 | `MISSING` | `COVERED` | 「AA-W5 · 转固金额取自采购收货单并绑定来源，同一来源不得重复转固」「转固不允许调用方提供金额」「只有已确认的采购收货单可以转固」 |
+| AA-13 资产变更 | `PARTIAL` | `COVERED` | 「AA-W5 · 变更未生效前资产当前值不得被改写，审核人不得是制单人」「已计提折旧的资产不得直接改原值」 |
+| AA-14 拆分 / 合并 | `MISSING` | `COVERED` | 「AA-W5 · 拆分必须价值守恒，累计折旧按原值比例结转」「合并后原值等于合并前合计」 |
+| AA-15 借用 / 盘点 | `MISSING` | `COVERED` | 「AA-W5 · 借用登记与归还受控，未归还时不得重复借出」「盘点差异被记录但不得改写资产原值或累计折旧」 |
+| AA-16 折旧 | `PARTIAL` | `COVERED` | 「AA-W5 · 按期间自动计提、生成凭证并与 GL 累计折旧科目对账，且同期间幂等」「手工折旧录入受控：超过剩余可折旧金额被拒绝」 |
+| AA-17 资产处置 | `MISSING` | `COVERED` | 「AA-W5 · 处置生成凭证并结转处置损益，审核人不得是制单人」「已处置资产不得再计提折旧」 |
+| AA-18 业务 → 凭证平台 | `PARTIAL` | `COVERED` | `accounting-rules.js` 模板 + 规则绑定 + 命中解析；「AA-W2.1」「AA-W2.5 规则命中唯一：未命中与歧义都显式失败」「AA-W2.6 科目通过角色解析，缺少映射时失败」 |
+| AA-19 凭证模板 | `PARTIAL` | `COVERED` | 模板可创建 / 修改 / 停用 + 试算 preview + **被生成链路真实消费**；「AA-W2.1」「AA-W2.2 停用模板后新业务不再命中，已生成凭证不受影响」「AA-W2.3 已被使用过的模板版本不得原地改写」 |
+| AA-20 自动 / 批量生成 | `PARTIAL` | `COVERED` | `POST /api/accounting/events/batch-generate`（逐条独立事务）+ `accounting_generation_runs` 状态追踪；「AA-W2.9 批量生成逐条独立事务，单条失败不回滚整批」 |
+| AA-21 业务与凭证关系 | `PARTIAL` | `COVERED` | `accounting_events` 唯一台账，自然键 DB 级唯一；「AA-W1.1」「AA-W1.4」 |
+| AA-22 未生成 / 异常处理 | `MISSING` | `COVERED` | `GET /api/accounting/events/ungenerated` + 稳定错误码 + 受控修复（重试 / 跳过并说明原因 / 恢复，均写审计）；「AA-W1.5/1.6」「AA-W1.7」「AA-W1.8 重复修复不会产生第二张凭证」 |
+| AA-23 业务财务对账 | `PARTIAL` | `COVERED` | `GET /api/accounting/reconciliation` + 不可变快照 `accounting_reconciliation_runs`；「AA-W1.9」「AA-W1.10 对账快照可按期间回看且重复运行幂等」 |
+| AA-24 期末检查 | `PARTIAL` | `COVERED` | `GET /api/accounting/close-checklist` 统一检查 + 真实拦截关账；「AA-W1.12/1.13」「AA-W1.12 存在未生成事件时关账被真实拦截」 |
+| AA-25 凭证录入 | `COVERED` | `COVERED` | 既有 `/api/accounting-vouchers` 契约未变（§35.6.1 回归固定） |
+| AA-26 凭证过账 | `COVERED` | `COVERED` | 既有 `status='POSTED'` 口径未变（§35.6.2 回归固定） |
+| AA-27 凭证纠错 | `PARTIAL` | `COVERED` | `accounting-posting.js` 统一冲销 / 补记路径，金额与方向镜像；「AA-W3.1/W3.3」「AA-W3.4」 |
+| AA-28 出纳复核 | `MISSING` | `COVERED` | 独立节点 + `VOUCHER_CASHIER_REVIEW` 权限 + 制单人≠复核人 + 未复核不得过账；「AA-W3.5」「AA-W3.6」「AA-W3.7」 |
+| AA-29 现金流量 | `MISSING` | `COVERED` | 三段式现金流量表 + 未分类现金分录显式 + 与资金子账差异标记；「AA-W3.8/W3.9」「AA-W3.10」 |
+| AA-30 期末转账 / 摊销 / 计提 | `MISSING` | `COVERED` | 期末定义 + 幂等执行 + 凭证生成；「AA-W3.11」「AA-W3.12/W3.13」 |
+| AA-31 汇兑损益 | `OUT_OF_SCOPE` | `OUT_OF_SCOPE` | 业务所有者 2026-11-10 裁定；本域单本位币 CNY（§35.6.9） |
+| AA-32 损益结转 / 总账结账 | `PARTIAL` | `COVERED` | 真实损益结转（结转后损益归零、权益承接净损益）+ 未结转禁止关账 + 反结转限 ADMIN 且留痕 + **移除虚拟权益行**；「AA-W3.14」「AA-W3.16」「AA-W3.17」「AA-W3.15 移除虚拟权益行后资产负债表口径自洽」 |
+| AA-33 财务报表 | `COVERED` | `COVERED` | 既有口径未变（§35.6.2 回归固定） |
+| AA-34 试算平衡 | `COVERED` | `COVERED` | 既有口径未变；试算平衡科目集合由 21→22→23→27（AA-W3 / AA-W5 种子科目），已由 `server/trial-balance.test.js` 固定 |
+| AA-35 报表模板 | `MISSING` | `COVERED` | `report_templates` + 行项目 + 可见范围 + 状态 + 版本；「AA-W4.1/2」 |
+| AA-36 公式 | `MISSING` | `COVERED` | 受限文法求值，无 `eval` / `Function` / 动态代码执行面，失败显式报错不静默取 0；「AA-W4.4/6/7」 |
+| AA-37 报表编制流程 | `MISSING` | `COVERED` | 实例化 → 重算 → 提交 → 审核，提交与审核分离、审核留痕、审核后重算生成新版本；「AA-W4.8/9/10」 |
+| AA-38 管理 / 自定义报表 | `PARTIAL` | `COVERED` | 自定义报表沿用同一模板与期间口径、可见范围受控；既有 5 张固定执行报表口径与入口不变；「AA-W4.11/12」「AA-W4.13」 |
+| AA-39 经营账簿 / 组织 | `MISSING` | `COVERED` | `management_books` / `profit_centers` 独立实体；「AA-W7.1/2」 |
+| AA-40 经营数据来源 | `MISSING` | `COVERED` | `operating_ledger_entries` 只取已过账事实、归集幂等、来源可追溯；「AA-W7.3/4」 |
+| AA-41 内部结算 | `MISSING` | `COVERED` | `internal_settlement_prices` 可维护、非法窗口被拒；「AA-W7.5」 |
+| AA-42 费用归集分配 | `MISSING` | `COVERED` | `cost_collection_plans` + `allocation_rules` + `allocation_results`，可重算一致、基数缺失 fail closed；「AA-W7.7/8」 |
+| AA-43 经营损益 | `MISSING` | `COVERED` | 经营损益与法定损益勾稽，差额显式列出（未分配 / 内部交易抵消 / 口径差异三段）；「AA-W7.9/10」 |
+| AA-44 经营会计关账 | `MISSING` | `COVERED` | 经营关账要求归集与分摊完成、法定期间先行、受控反结账；「AA-W7.11/12」 |
+
+### 7.3 唯一未解决矛盾：AA-07 委外成本
+
+**事实**：
+
+1. `docs/requirements/accounting-analytics.md` §35.3 把 AA-07 的目标判定记为 `COVERED`，归属范围包 AA-W6；
+2. 但同一份 Requirement 的 §35.4.6（AA-W6 的可验收条款）**不含任何 AA-07 条款** —— AA-07 没有可实施、可测试的合同条款；
+3. 本域 6 个后端模块与 7 个 migration 中**没有任何 `OUTSOURCE` 取数规则**；
+4. 委外成本口径当前由采购与委外域的 canonical 实现承担：材料成本取本域权威估值流水
+   （`outsourcing-finance.js` 的 `backflush.valuation.issuedValueCents`），加工费取自
+   `outsourcing-gl-policy.js::resolveProcessingFeeAccountingProfile` 解析的会计档案；
+   该域已于 2026-11-11 签发域级 Acceptance 与 Capability Freeze；
+5. §35.2 第 2 条同时要求「本域的委外成本来源必须是采购与委外域的**权威事实引用**」。
+
+**矛盾**：§35.3 要求「在本域固化取数规则」，§35.4.6 却没有该规则，§35.2 又禁止本域另立事实。
+按 AGENTS.md §4.4，实施阶段**不得**自行新增业务规则；按 §35.9 第 4 项，这属于
+「Capability 编号与真实业务关系不一致」的 Hard Stop。
+
+**待业务所有者裁定的两个选项**（**本轮未自行选择**）：
+
+| 选项 | 内容 | 影响 |
+|---|---|---|
+| **A** | 裁定 AA-07 由采购与委外域已冻结的 canonical 实现承担，本域只做**权威事实引用**；据此在 §35.4.6 补一条明示条款 | 复核结论变为 **43 `COVERED` + 1 `OUT_OF_SCOPE`**，与 §35.3 目标一致；不改代码 |
+| **B** | 在 §35.4.6 补一条条款，要求本域提供**只读**的委外成本构成投影（材料成本 + 加工费），事实来源仍是采购与委外域 | 需新增一条只读端点与测试；不新增业务事实、不改他域实现；复核结论同样变为 43 `COVERED` |
+
+无论选 A 或 B，**AA-07 的合同条款都必须先在 Requirement 层落定**，再进入 Implementation。
+
+---
+
+## 8. 变更历史
 
 | 版本 | 日期 | 变更 | 基准 SHA |
 |---|---|---|---|
 | `v0.1` | 2026-11-10 | 首次域级审计：44 项 Capability 逐项取证与判定；登记 7 条领域级结构缺口；提出 7 个范围包建议 | `eee92c21751b9e6fa224125611750a4af4988591` |
+| `v0.2` | 2026-11-11 | AA-W1..AA-W7 实施后逐项复核：42 `COVERED` / 1 `PARTIAL`（AA-07）/ 1 `OUT_OF_SCOPE`；登记唯一未解决矛盾 AA-07 与两个待裁定选项；§2 实施前判定保留不变 | `d9e7319`（AA-W7 提交） |

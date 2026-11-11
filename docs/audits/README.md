@@ -17,7 +17,7 @@
 | B3101 / B3121 采购与委外代码审计基线（2026-11-07） | B3101 采购管理、B3121 委外管理 | Procurement & Outsourcing | `v0.2` | `9b9cb09799aa05ccac43d02ac1718083921c6d04` | `PRELIMINARY_STATIC_REVIEW` | [`b3101-b3121-code-audit-20261107.md`](./b3101-b3121-code-audit-20261107.md) |
 | B3121 委外核心执行工作面审计（2026-11-10） | B3121 委外管理 | Procurement & Outsourcing | `v1.0` | `bbacab0` | `AUDIT_COMPLETE / COVERAGE_REVIEWED`（有界范围） | [`b3121-outsourcing-core-workbench-audit-20261110.md`](./b3121-outsourcing-core-workbench-audit-20261110.md) |
 | B3121 域级验收逐项复核（2026-11-10） | B3121 委外管理 | Procurement & Outsourcing | `v1.0` | `1ad7eaf` | `AUDIT_COMPLETE / COVERAGE_REVIEWED`（PRC-01..26 / VMI-01..05 / OUT-01..23 共 54 项 + 14 条 Issue 处置） | [`b3121-domain-acceptance-audit-20261110.md`](./b3121-domain-acceptance-audit-20261110.md) |
-| Accounting & Analytics 域级能力审计基线（2026-11-10） | B3106 存货核算、B3107 固定资产、B3114 智能会计平台、B3115 总账、B3116 报表、B3117 经营会计 | Accounting & Analytics | `v0.1` | `eee92c2` | `AUDIT_COMPLETE / COVERAGE_REVIEWED`（44 项 Capability 逐项取证；4 COVERED / 21 PARTIAL / 18 MISSING / 1 OUT_OF_SCOPE） | [`accounting-analytics-capability-audit-20261110.md`](./accounting-analytics-capability-audit-20261110.md) |
+| Accounting & Analytics 域级能力审计基线（2026-11-10） | B3106 存货核算、B3107 固定资产、B3114 智能会计平台、B3115 总账、B3116 报表、B3117 经营会计 | Accounting & Analytics | `v0.2` | `d9e7319` | `AUDIT_COMPLETE / COVERAGE_REVIEWED`（2026-11-11 实施后逐项复核：**42 COVERED / 1 PARTIAL（AA-07）/ 0 MISSING / 1 OUT_OF_SCOPE**；§2 实施前判定保留不变） | [`accounting-analytics-capability-audit-20261110.md`](./accounting-analytics-capability-audit-20261110.md) |
 
 ## 登记条目
 

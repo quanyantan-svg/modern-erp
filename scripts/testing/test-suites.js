@@ -608,6 +608,10 @@ const FULL = [
   'server/accounting-analytics-w4.test.js',
   // Accounting & Analytics AA-W7 经营会计（Requirement §35.4.7 / Design §31.7）。
   'server/accounting-analytics-w7.test.js',
+  // Accounting & Analytics 域级 schema 双引擎离线对等（Requirement §35.6 /
+  // Design §31.8）：驱动生产 SQLite→MySQL DDL 翻译，确认 AA 的 45 张新表与
+  // AA-W5 的加列在 MySQL 侧同样成立。不连接 MySQL，不冒充真实 MySQL Gate。
+  'server/accounting-analytics-mysql-schema-parity.test.js',
   'server/route-literal-guard.test.js',
 
   // ----- User / Auth / RBAC / SOD / Account-bootstrap -----

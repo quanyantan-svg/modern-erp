@@ -4059,3 +4059,90 @@ M0 验收后，**后续业务包的启动仍需各自的显式授权**；W11-A �
 - **跨域事实登记**：本轮新增会计科目 `6408 委外加工费`（委外加工费借方角色）；试算平衡科目集合由 21 变为 22（既有损益表与资产负债表口径不变）。该科目属 Accounting & Analytics 域的会计政策范畴，本域只登记角色，不取得该域的任何结论。
 - **保留边界**：`B-P01`（跨单成本携带）与 `B-P02`（委外差异生效）仍按既有延期；`VMI-05`、`PRC-06`、`OUT-22` 三项仍按已批准决定排除在本域范围外。
 - 本轮**未**执行真实环境 migration、业务数据库写入、真实 MySQL 之外的破坏性操作、push / merge / tag / 发布 / 部署。
+
+## 52. Accounting & Analytics 会计与分析域：域级收口、逐项复核与域级验收候签（2026-11-11）
+
+### 52.1 授权、范围与状态
+
+- **授权来源**：业务所有者 2026-11-11 指令——「w1、w2、w3 和 w5 应该已经做完，请接着做剩余 wave，最终目标是域级 acceptance 和 freezen」，即在既有 AA-W1..AA-W7 合同下继续实施剩余范围包并推进到域级验收。
+- **本轮范围**：补齐 Design §31.0.3 约定的 5 个前端工作面与浏览器四档验收；补齐 AA-W6.7 入库成本构成的可回看；同步本域改动引起的共享固化断言；完成 44 项 Capability 的实施后逐项复核；建立域级 Acceptance 与 Capability Freeze 候签材料。
+- **本轮状态**：Requirement §35 与 Design §31 的生命周期状态由 `APPROVED` 推进到 **`IMPLEMENTED`**；域级 Acceptance 与 Capability Freeze **候签材料已就绪，尚未签发**。
+- **未获授权、因而未执行**：真实环境 migration、业务数据库写入、真实 MySQL Gate（需本域 ACK-4 清单与 RunId，由业务所有者签发）、push / merge / tag / 发布 / 部署。
+
+### 52.2 剩余范围包的实施收口
+
+七个范围包的后端实现此前已全部落地（AA-W1+AA-W2 `3876bd3`、AA-W5 `e40a015`、AA-W3 `943414c`、AA-W6 `5e6739d`、AA-W4 `bc2035d`、AA-W7 `d9e7319`）。本轮收口的是**界面可达性**与**合同可回看性**：
+
+| 项 | 内容 |
+|---|---|
+| 前端工作面 | 新增 `src/pages/accounting-analytics.jsx`，按 Design §31.0.3 以单一页面承载 5 个新 route（`accounting-events` / `accounting-reconciliation` / `accounting-reports` / `accounting-costing` / `management-accounting`），每个 route 只有一个 active executable screen；`fixed-assets` 已由 AA-W5 启用并迁出到 `src/pages/fixed-assets.jsx` |
+| Registry | 5 个新 route + `loadScreenModule` / `SCREEN_DEFINITIONS` 映射 + 5 个图标键；launcher「会计与分析」组由 8 项扩展为 **13 项** |
+| AA-W6.7 | `listProvisionalReceipts` 增加可选字段 `adjustment`，使暂估入库单的暂估 / 正式 / 差异 / 差异原因**可回看**；此前差异调整只在 `POST /adjust` 的响应里出现，调整后无任何读路径 |
+| 共享断言同步 | 权限 227→247、active route 74→79、disabled route 5→4（AA-W5 启用 `fixed-assets`）引起的 14 个跨域共享套件固化计数断言，已逐条同步并附改动理由；**未**放宽业务语义断言、**未**删除断言、**未**降级测试分类 |
+| 新增离线对等探针 | 新登记 `server/accounting-analytics-mysql-schema-parity.test.js`（53 条），驱动生产 SQLite→MySQL DDL 翻译，确认 AA 的 **45 张新表**与 AA-W5 加列在 MySQL 侧全部成立、列集合两端一致、全部 `*_cents` 列为 `BIGINT` |
+
+### 52.3 逐项复核结论
+
+44 项 Capability 的实施后判定与逐行证据见
+[`docs/audits/accounting-analytics-capability-audit-20261110.md`](../audits/accounting-analytics-capability-audit-20261110.md) §7：
+
+| 手册 | Capability 数 | `COVERED` | `PARTIAL` | `MISSING` | `OUT_OF_SCOPE` |
+|---|---|---|---|---|---|
+| B3106 存货核算 | 9 | 8 | **1（AA-07）** | 0 | 0 |
+| B3107 固定资产 | 8 | 8 | 0 | 0 | 0 |
+| B3114 智能会计平台 | 7 | 7 | 0 | 0 | 0 |
+| B3115 总账 | 8 | 7 | 0 | 0 | 1（AA-31） |
+| B3116 报表 | 6 | 6 | 0 | 0 | 0 |
+| B3117 经营会计 | 6 | 6 | 0 | 0 | 0 |
+| **合计** | **44** | **42** | **1** | **0** | **1** |
+
+对比 Requirement §35.3 的目标判定（43 `COVERED` + 1 `OUT_OF_SCOPE`），唯一差额是 **AA-07 委外成本**。
+
+### 52.4 唯一未解决矛盾：AA-07 委外成本
+
+- §35.3 把 AA-07 记为目标 `COVERED` 并归属 AA-W6；但 §35.4.6（AA-W6 的可验收条款）**不含任何 AA-07 条款**，本域 6 个后端模块与 7 个 migration 中**没有任何 `OUTSOURCE` 取数规则**；
+- 委外成本口径当前由采购与委外域的 canonical 实现承担（材料成本取本域权威估值流水 `outsourcing-finance.js` 的 `backflush.valuation.issuedValueCents`；加工费取 `outsourcing-gl-policy.js::resolveProcessingFeeAccountingProfile` 解析的会计档案），该域已于 2026-11-11 签发域级 Acceptance 与 Capability Freeze；
+- §35.2 第 2 条同时要求本域的委外成本来源必须是采购与委外域的**权威事实引用**；
+- 判定：属 AGENTS.md §35.9 第 4 项 Hard Stop（Capability 编号与真实业务关系不一致），**本轮未自行裁定、未自行实现**。两个待裁定选项（A：裁定由采购与委外域已冻结实现承担并补明示条款；B：补条款要求本域提供只读委外成本构成投影）见候签材料 §6。
+
+### 52.5 Gate 结果（本地，2026-11-11）
+
+| Gate | 结果 |
+|---|---|
+| `pnpm test:fast` | **632/632 PASS** |
+| `pnpm test`（FULL） | **3642/3642 PASS**，0 失败 |
+| `pnpm test:heavy` | **67/67 PASS** |
+| `pnpm build` | PASS |
+| `git diff --check` | PASS |
+| focused（会计与分析域 6 个套件） | **85/85 PASS** |
+| focused（域级 schema 双引擎离线对等，新登记） | **53/53 PASS** |
+| focused（14 个共享 route 清单套件） | **250/250 PASS** |
+| 浏览器四档宽度验收（真实 Edge，6 个工作面 × 320/390/430/680） | **6/6 PASS**，浏览器错误 **0** |
+| 离线 MySQL DDL 对等 | AA 的 45 张新表与 AA-W5 加列在生产 MySQL DDL 翻译输出中全部存在 |
+| 文档一致性 `current` | N1、N3～N6、N8、N9 **PASS**；N2 `RETIRED`；**N7 FAIL**（既存历史提交 `a40e356` / `59eccd5` / `171ade5` / `4403a80` 的追溯债务，与本域无关） |
+| 文档一致性 `migration` | C1～C6 全 PASS |
+| **真实 MySQL 8 parity / concurrency** | **未运行** —— 统一 launcher 仅放行已批准 ACK-4 的 `test:mysql:m1-core` campaign，本域无 ACK-4 清单与 RunId |
+
+### 52.6 必须随验收一并接受的残余
+
+1. **真实 MySQL Gate 未运行**：Requirement §35.8.1 第 6 项未闭合。离线 DDL 对等**不等于**真实 MySQL 验收——不连接 MySQL、不执行 MySQL migration、不覆盖并发行为。
+2. **AA-07 未闭合**：见 §52.4。
+3. **试算平衡科目集合由 21 增至 27**：AA-W3 的 `4103` 与 AA-W5 的 `1601` / `1602` / `6602` / `6603` 入列；既有损益表与资产负债表口径不变。
+4. **既有 `accounting.jsx` 未改造**：其中「未结转损益（虚拟行，不持久化）」的资产负债表展示行仍保留，尽管 AA-W3 已实现真实损益结转并从结转链移除虚拟权益行补偿；该展示行与真实结转事实的一致性**未取得浏览器取证**。
+5. **冻结的 V1.6 历史证据未改写**：`docs/v1.6-sitewide-rollout-matrix.md` 保持不变，新增 route 按既有 `laterSalesRoutes` 机制登记。
+
+### 52.7 文档与状态登记
+
+- 新增 `docs/acceptance/accounting-analytics-domain-acceptance-candidate-20261111.md`：域级 Acceptance 与 Capability Freeze **候签**材料，含 Gate 证据、披露限制与两项待裁定事项。
+- 更新 `docs/requirements/accounting-analytics.md` §35.10 与 `docs/design/accounting-analytics.md` §31.15：生命周期状态推进到 `IMPLEMENTED`，登记 AA-07 矛盾与实施偏离。
+- 更新 `docs/audits/accounting-analytics-capability-audit-20261110.md`：新增 §7 实施后逐项复核（42 `COVERED` / 1 `PARTIAL` / 1 `OUT_OF_SCOPE`）与 §7.3 AA-07 矛盾；§2 实施前判定保留不变。
+- 更新 `docs/status/CAPABILITY_MATRIX.md`：B3107 / B3114 / B3115 / B3116 / B3117 记 `VERIFIED`；**B3106 记 `BLOCKED`**（AA-07 未闭合）。
+- 追加 `log/2026-11-11.md`。
+
+### 52.8 未解决事项与暂停点
+
+- **域级 Acceptance 与 Capability Freeze 尚未签发**：本节只登记证据与残余，不代替业务所有者签字。
+- 待业务所有者裁定：**AA-07**（选项 A / B）；**真实 MySQL Gate**（授权本域 ACK-4 campaign，或接受离线对等证据并把真实 MySQL Gate 登记为域级 Acceptance 的后续条件）。
+- **Manual Closure 未签发**：B3106 / B3107 / B3114–B3117 手册级关闭是独立决定。
+- **Release Readiness 未签发**：本域的 Acceptance 与 Freeze **不**构成任何 Domain 的发布授权。
+- 本轮**未**执行真实环境 migration、业务数据库写入、真实 MySQL Gate、push / merge / tag / 发布 / 部署；**未**把 AA-07 宣称为已覆盖；**未**代替业务所有者签发 Acceptance 或 Freeze。

@@ -1067,12 +1067,17 @@ AA-W1 → AA-W2 → AA-W5 → AA-W3 → AA-W6 → AA-W4 → AA-W7 → 整域 Acc
 
 | 项 | 值 |
 |---|---|
-| Design 状态 | `APPROVED_FOR_IMPLEMENTATION_PENDING_OWNER_CONFIRMATION` |
-| Requirement 状态 | `APPROVED`（`docs/requirements/accounting-analytics.md` §35，2026-11-10） |
-| Implementation 状态 | `NOT_AUTHORIZED` |
-| Domain Acceptance | 未签发 |
+| Design 状态 | `APPROVED` → 已实施（AA-W1..AA-W7 七个范围包按 §31.14 顺序全部落地） |
+| Requirement 状态 | `IMPLEMENTED`（`docs/requirements/accounting-analytics.md` §35，2026-11-10 批准、2026-11-11 实施完毕） |
+| Implementation 状态 | `COMPLETE`（提交 `3876bd3` / `e40a015` / `943414c` / `5e6739d` / `bc2035d` / `d9e7319`；前端工作面 `src/pages/accounting-analytics.jsx` 按 §31.0.3 承载 5 个新 route） |
+| Domain Acceptance | 未签发（候签材料见 `docs/acceptance/accounting-analytics-domain-acceptance-candidate-20261111.md`） |
 | Capability Freeze | 未签发 |
+
+**实施偏离登记（按 §31.0.3 执行）**：本域 5 个新 route（`accounting-events` / `accounting-reconciliation` /
+`accounting-reports` / `accounting-costing` / `management-accounting`）全部绑定到单一页面
+`src/pages/accounting-analytics.jsx` 的 5 个具名导出，每个 route 只有一个 active executable screen；
+`fixed-assets` 由 `enabled:false` 改为 enabled 并迁出到 `src/pages/fixed-assets.jsx`，未新增第二套固定资产 route。
 
 ---
 
-**ACCOUNTING & ANALYTICS DOMAIN TECHNICAL DESIGN COMPLETE — HARD STOP, AWAITING IMPLEMENTATION APPROVAL**
+**ACCOUNTING & ANALYTICS DOMAIN TECHNICAL DESIGN IMPLEMENTED — AWAITING OWNER ACCEPTANCE**
