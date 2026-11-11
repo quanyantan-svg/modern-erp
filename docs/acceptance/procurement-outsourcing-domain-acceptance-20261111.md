@@ -40,7 +40,7 @@ PROCUREMENT_OUTSOURCING_CAPABILITY_FREEZE
 | Gate | 已登记结果 |
 |---|---|
 | 真实 MySQL Gate（M1C-G07，受保护 disposable MySQL 8.0.37） | **PASS**：schema parity + CR-01..CR-09 全部通过；`state=FINISHED`、清理由 root 独立 post-flight 证明；目标 `modern_erp_domain_test` @ `127.0.0.1:3306`，server uuid `256c7a4e-d275-11f1-885b-b025aa71d167` |
-| G07 离线对等回放 | **55/55 PASS**（真实 MySQL 目录捕获条款已按 run `b9023437` 的实测值更新，见 [`docs/evidence/procurement-outsourcing-domain-acceptance-20261111/`](../evidence/procurement-outsourcing-domain-acceptance-20261111/g07-outsourcing-wip-identity-effects-catalogue-capture.json)） |
+| G07 离线对等回放 | **55/55 PASS**（真实 MySQL 目录捕获条款已按 run `b9023437` 的实测值更新，见 [`docs/evidence/procurement-outsourcing-domain-acceptance-20261111/`](../evidence/procurement-outsourcing-domain-acceptance-20261111/README.md)） |
 | `pnpm test`（FULL） | 见 §7 登记 |
 | `pnpm test:fast` | 见 §7 登记 |
 | `pnpm test:heavy` | **67/67 PASS** |

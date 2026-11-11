@@ -4023,7 +4023,7 @@ M0 验收后，**后续业务包的启动仍需各自的显式授权**；W11-A �
 |---|---|
 | 真实 MySQL Gate 的 ACK-4 清单与 RunId | 业务所有者在本轮指示中授权；已签发并执行 run `b9023437-4030-46f2-b469-0a08396bd7f6`（commit `9a4ccbb`）→ `state=FINISHED`、`testsPassed=true`、`cleanupProven=true`、`childrenExited=true` |
 | G07 固定场景重新冻结 | 确认摘要 `f112c88cb6d327f4885cf349de4a6c4efd6b4a1499e0547727e7103ccad33f`（摘要链 `60f7888f…` → `aa024bd5…` → `f112c88c…`） |
-| G07 目录条款重新捕获 | 以该次真实 MySQL 8.0.37 运行的**只读观测**（`information_schema.CHECK_CONSTRAINTS`）写回冻结捕获值；离线对等回放恢复 55/55 PASS；证据 [`docs/evidence/procurement-outsourcing-domain-acceptance-20261111/`](../evidence/procurement-outsourcing-domain-acceptance-20261111/g07-outsourcing-wip-identity-effects-catalogue-capture.json) |
+| G07 目录条款重新捕获 | 以该次真实 MySQL 8.0.37 运行的**只读观测**（`information_schema.CHECK_CONSTRAINTS`）写回冻结捕获值；离线对等回放恢复 55/55 PASS；证据 [`docs/evidence/procurement-outsourcing-domain-acceptance-20261111/`](../evidence/procurement-outsourcing-domain-acceptance-20261111/README.md) |
 | M1-Core G06 被取代断言的重新确认 | 随本次域级 Acceptance 重新确认（共享入口仍一律 409，专用入口按 `C-P02` 档案放行） |
 | 供应商品类的单向门禁口径 | 确认为域级合同（Requirement §31.19.2 / §31.20.3） |
 | 委外加工费会计档案无产品内维护入口 | 实现维护面（Requirement §31.20.1 / Design §26.40.1）：列出 / 建立 / 暂停 / 重新批准；建立时校验角色码解析到启用科目、同范围窗口不重叠；维护权限属财务侧 |

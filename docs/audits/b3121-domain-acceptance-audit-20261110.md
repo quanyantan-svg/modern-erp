@@ -138,7 +138,7 @@
 |---|---|
 | 真实 MySQL Gate | run `b9023437-4030-46f2-b469-0a08396bd7f6`，commit `9a4ccbb`，目标 `modern_erp_domain_test` @ `127.0.0.1:3306`（MySQL 8.0.37，server uuid `256c7a4e-d275-11f1-885b-b025aa71d167`） |
 | 结果 | `state=FINISHED`、`testsPassed=true`、`cleanupProven=true`、`childrenExited=true`；schema parity 与 CR-01..CR-09 全部通过 |
-| 目录条款观测 | 受保护 disposable MySQL 上对 `information_schema.CHECK_CONSTRAINTS` 的**只读**观测（随 Gate 运行窗口进行）；证据见 [`docs/evidence/procurement-outsourcing-domain-acceptance-20261111/`](../evidence/procurement-outsourcing-domain-acceptance-20261111/g07-outsourcing-wip-identity-effects-catalogue-capture.json) |
+| 目录条款观测 | 受保护 disposable MySQL 上对 `information_schema.CHECK_CONSTRAINTS` 的**只读**观测（随 Gate 运行窗口进行）；证据见 [`docs/evidence/procurement-outsourcing-domain-acceptance-20261111/`](../evidence/procurement-outsourcing-domain-acceptance-20261111/README.md) |
 | 捕获值 | ``(`event_type` in (_utf8mb4\'ISSUE\',…,_utf8mb4\'TRANSFER_OUT\',_utf8mb4\'OPENING\'))`` |
 | 离线回放 | 恢复通过（`m1-core-g07-infrastructure.test.js` + `m1c-g07-sqlite-smoke.test.js` 合计 **55/55 PASS**） |
 
