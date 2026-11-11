@@ -221,6 +221,12 @@ import {
   createReportInstance, createReportTemplate, getReportInstance, listReportInstances, listReportTemplates,
   previewReportTemplate, publishReportTemplate, submitReportInstance, updateReportTemplate,
 } from './modules/accounting-reporting.js';
+import {
+  closeOperatingPeriod, collectOperatingLedger, createAllocationRule, createInternalSettlementPrice,
+  createManagementBook, createProfitCenter, getManagementProfitLoss, listAllocationRules,
+  listCollectionPlans, listInternalSettlementPrices, listManagementBooks, listOperatingLedger,
+  listOperatingPeriodClosures, reopenOperatingPeriod, runAllocation,
+} from './modules/management-accounting.js';
 import { getCashFlow } from './modules/accounting-cash-flow.js';
 import { paymentTermsDays } from './lib/payment-terms.js';
 import {
@@ -2089,6 +2095,100 @@ ownedRouteTable.register({
   path: /^\/api\/accounting\/report-instances\/([^/]+)$/,
   handler: ({ db, res, actor, params }) => getReportInstance(db, res, actor, params[0]),
   owner: 'server/modules/accounting-reporting.js',
+});
+// Accounting & Analytics Domain Closure — AA-W7 经营会计.
+// Canonical owner: server/modules/management-accounting.js
+//   经营账簿 / 经营单元 / 内部结算价 / 经营台账归集 / 费用分摊 /
+//   经营损益与法定损益勾稽 / 经营期间关账与受控反关账
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/management/books',
+  handler: ({ db, res, actor }) => listManagementBooks(db, res, actor),
+  owner: 'server/modules/management-accounting.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/management/books',
+  handler: ({ db, req, res, actor }) => createManagementBook(db, req, res, actor),
+  owner: 'server/modules/management-accounting.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/management/profit-centers',
+  handler: ({ db, req, res, actor }) => createProfitCenter(db, req, res, actor),
+  owner: 'server/modules/management-accounting.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/management/internal-prices',
+  handler: ({ db, res, actor }) => listInternalSettlementPrices(db, res, actor),
+  owner: 'server/modules/management-accounting.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/management/internal-prices',
+  handler: ({ db, req, res, actor }) => createInternalSettlementPrice(db, req, res, actor),
+  owner: 'server/modules/management-accounting.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/management/ledger',
+  handler: ({ db, res, actor, url }) => listOperatingLedger(db, res, actor, url),
+  owner: 'server/modules/management-accounting.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/management/collection-plans',
+  handler: ({ db, res, actor }) => listCollectionPlans(db, res, actor),
+  owner: 'server/modules/management-accounting.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/management/collect',
+  handler: ({ db, req, res, actor }) => collectOperatingLedger(db, req, res, actor),
+  owner: 'server/modules/management-accounting.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/management/allocation-rules',
+  handler: ({ db, res, actor }) => listAllocationRules(db, res, actor),
+  owner: 'server/modules/management-accounting.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/management/allocation-rules',
+  handler: ({ db, req, res, actor }) => createAllocationRule(db, req, res, actor),
+  owner: 'server/modules/management-accounting.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/management/allocation-runs',
+  handler: ({ db, req, res, actor }) => runAllocation(db, req, res, actor),
+  owner: 'server/modules/management-accounting.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/management/profit-loss',
+  handler: ({ db, res, actor, url }) => getManagementProfitLoss(db, res, actor, url),
+  owner: 'server/modules/management-accounting.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/management/period-closures',
+  handler: ({ db, res, actor }) => listOperatingPeriodClosures(db, res, actor),
+  owner: 'server/modules/management-accounting.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/management/period-closures',
+  handler: ({ db, req, res, actor }) => closeOperatingPeriod(db, req, res, actor),
+  owner: 'server/modules/management-accounting.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/management\/period-closures\/([^/]+)\/reopen$/,
+  handler: ({ db, req, res, actor, params }) => reopenOperatingPeriod(db, req, res, actor, params[0]),
+  owner: 'server/modules/management-accounting.js',
 });
 ownedRouteTable.register({
   method: 'GET',
