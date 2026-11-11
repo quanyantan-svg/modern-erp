@@ -200,6 +200,14 @@ const FULL = [
   // G07 oracle/runner/parity infrastructure contract. Pure source and mock
   // checks; the real MySQL integration file is deliberately outside FULL.
   'server/m1-core-g07-infrastructure.test.js',
+  // The duplicate-key → 409 mapping must hold on both engines: SQLite puts
+  // "UNIQUE constraint failed" in the message, MySQL puts "ER_DUP_ENTRY" in
+  // the error code. Pure predicate checks; no database.
+  'server/app-duplicate-key-mapping.test.js',
+  // MySQL renders a string DEFAULT with escaped delimiters and delivers
+  // information_schema's latin1 columns byte-by-byte; both differences must
+  // canonicalize to the same text as the SQLite side. Pure offline checks.
+  'server/m1-core-schema-parity-catalogue.test.js',
   // M1C-WP0-R1 focused regression for the outsourcing GL source-level policy
   // guard and the receiving-effect permission isolation. One disposable
   // isolated SQLite file per run.
@@ -763,6 +771,10 @@ const FULL = [
   'scripts/gates/ack4-runtime.test.js',
   'scripts/gates/m1-core-g07-child-lifecycle.test.js',
   'scripts/gates/m1-core-g07-diagnostics.test.js',
+  // The protected gate's child exit code must depend on the suite result:
+  // a failing suite must exit non-zero. Drives the reporter in a child
+  // process; no database.
+  'scripts/gates/m1-core-g07-suite-reporter.test.js',
 
   // ----- V22 — Finance Operations Domain Closure -----
   // Wave A foundation: parameters, recognition policy, payment terms,

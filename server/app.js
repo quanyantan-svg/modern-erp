@@ -3172,6 +3172,20 @@ const TOKEN_LENGTH = boundedInteger(process.env.TOKEN_LENGTH, 32, 32, 64);
 const STATUS_LABELS = { DRAFT: '草稿', SUBMITTED: '待审核', APPROVED: '已审核', REJECTED: '已驳回' };
 const PURCHASE_STATUS_LABELS = STATUS_LABELS;
 
+/**
+ * Whether a driver error is a duplicate-key violation.
+ *
+ * SQLite puts "UNIQUE constraint failed" in the **message**; the MySQL driver
+ * puts "ER_DUP_ENTRY" in the error **code** and only the human-readable text
+ * in the message. Inspecting the message alone therefore let a concurrent
+ * duplicate insert surface as a 500 on MySQL instead of a 409.
+ */
+export function isDuplicateKeyConflict(error) {
+  if (!error) return false;
+  if (error.code === 'ER_DUP_ENTRY') return true;
+  return /UNIQUE constraint failed|ER_DUP_ENTRY/i.test(String(error.message || ''));
+}
+
 export function createApp(db, options = {}) {
   // 预付款过账复用 canonical 凭证生成器（PRC-17 / Design §26.9）。
   setPrepaymentVoucherGenerator(generateVoucher);
@@ -3214,12 +3228,8 @@ export function createApp(db, options = {}) {
         const safe = serializeError(error, requestId);
         return send(res, error.status, safe);
       }
-      // A duplicate-key violation must be a 409 on **both** engines. SQLite puts
-      // "UNIQUE constraint failed" in the message; the MySQL driver puts
-      // "ER_DUP_ENTRY" in the error *code* and only the human text in the
-      // message, so the code has to be inspected as well — otherwise a
-      // concurrent duplicate insert surfaces as a 500 on MySQL.
-      if (/UNIQUE constraint failed|ER_DUP_ENTRY/i.test(String(error.message)) || error?.code === 'ER_DUP_ENTRY') {
+      // A duplicate-key violation must be a 409 on **both** engines.
+      if (isDuplicateKeyConflict(error)) {
         return send(res, 409, serializeError(new HttpError(409, '编号或账号已存在，请更换后重试'), requestId));
       }
       (logger || createStructuredLogger()).error('unhandled_request_error', {

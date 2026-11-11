@@ -702,8 +702,13 @@ export function decodeCatalogueText(value) {
   }
   if (!latin1) return value;
   const bytes = Buffer.from(text, 'latin1');
-  const decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-  return decoded;
+  try {
+    // `fatal` makes an invalid byte sequence an error instead of a replacement
+    // character; a value that is not valid UTF-8 is left exactly as it is.
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return value;
+  }
 }
 
 function extractSqliteChecks(sql) {
