@@ -161,6 +161,14 @@ describe('Accounting & Analytics — 真实 MySQL 8 域级验收', () => {
 
   test('AA 域 47 张表在真实 MySQL 8 目录上与 canonical SQLite 结构一致', () => {
     const snapshot = captureSqliteSnapshot((path) => createSqliteDatabase(path), false);
+    // ASCII-only observation of the live catalogue default, so the evidence
+    // survives a lossy diagnostic writer.
+    const observed = db.prepare("SELECT COLUMN_DEFAULT d,EXTRA e FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='fixed_assets' AND COLUMN_NAME='unit'").get();
+    const observedText = String(observed?.d ?? '');
+    const sqliteUnit = snapshot.tables.find((t) => t.name === 'fixed_assets').columns.find((c) => c.name === 'unit');
+    console.log('AA_PARITY_RAW_MYSQL_DEFAULT', JSON.stringify(observedText), [...observedText].map((c) => c.codePointAt(0).toString(16)).join(' '));
+    console.log('AA_PARITY_RAW_SQLITE_DEFAULT', JSON.stringify(String(sqliteUnit?.dflt_value ?? '')), [...String(sqliteUnit?.dflt_value ?? '')].map((c) => c.codePointAt(0).toString(16)).join(' '));
+    console.log('AA_PARITY_MYSQL_EXTRA', JSON.stringify(String(observed?.e ?? '')));
     const result = assertM1CoreInformationSchemaParity(db, snapshot, AA_PARITY_TABLES);
     assert.equal(result.source, 'information_schema');
     assert.equal(result.status, 'MATCHED');
@@ -289,6 +297,12 @@ describe('Accounting & Analytics — 真实 MySQL 8 域级验收', () => {
 
     const computed = await fixture.request('POST', `/api/accounting/report-instances/${instanceId}/compute`, subjectTokens.accounting, {});
     assert.equal(computed.status, 200, JSON.stringify(computed.data));
+    for (const table of ['report_templates', 'report_template_items', 'report_instances', 'report_instance_values']) {
+      console.log('AA_REPORT_COUNT', table, Number(db.prepare(`SELECT COUNT(*) n FROM ${table}`).get().n));
+    }
+    console.log('AA_REPORT_INSTANCE_ID', instanceId, 'TEMPLATE_ID', template.data.id);
+    console.log('AA_REPORT_VALUES_FOR_INSTANCE', Number(db.prepare('SELECT COUNT(*) n FROM report_instance_values WHERE instance_id=?').get(instanceId).n));
+    console.log('AA_REPORT_ITEMS_FOR_TEMPLATE', Number(db.prepare('SELECT COUNT(*) n FROM report_template_items WHERE template_id=?').get(template.data.id).n));
     assert.equal(db.prepare('SELECT COUNT(*) n FROM report_instance_values WHERE instance_id=?').get(instanceId).n, 1);
 
     const submitted = await fixture.request('POST', `/api/accounting/report-instances/${instanceId}/submit`, subjectTokens.accounting, {});
@@ -353,6 +367,22 @@ describe('Accounting & Analytics — 真实 MySQL 8 域级验收', () => {
     assert.equal(collected.status, 201, JSON.stringify(collected.data));
     const ledger = db.prepare('SELECT * FROM operating_ledger_entries WHERE management_book_id=? AND period=?').all(bookId, PERIOD);
     assert.ok(Array.isArray(ledger));
+
+    // AA-W7.11 — the operating period closure must refuse while the cost
+    // allocation of the period is not complete. The refusal is the contract.
+    const refused = await fixture.request('POST', '/api/management/period-closures', subjectTokens.accounting, { managementBookId: bookId, period: PERIOD });
+    assert.equal(refused.status, 409, JSON.stringify(refused.data));
+    assert.equal(refused.data.code, 'MANAGEMENT_ALLOCATION_INCOMPLETE');
+
+    const rule = await fixture.request('POST', '/api/management/allocation-rules', subjectTokens.accounting, {
+      code: 'AA-MY-RULE', name: '真实 MySQL 分摊规则', managementBookId: bookId, basisType: 'EQUAL',
+      driver: { targets: [{ profitCenterId: center.data.profitCenter.id, weight: 100 }] },
+    });
+    assert.equal(rule.status, 201, JSON.stringify(rule.data));
+    const allocated = await fixture.request('POST', '/api/management/allocation-runs', subjectTokens.accounting, {
+      managementBookId: bookId, period: PERIOD, ruleId: rule.data.allocationRule.id,
+    });
+    assert.equal(allocated.status, 201, JSON.stringify(allocated.data));
 
     const closed = await fixture.request('POST', '/api/management/period-closures', subjectTokens.accounting, { managementBookId: bookId, period: PERIOD });
     assert.equal(closed.status, 201, JSON.stringify(closed.data));

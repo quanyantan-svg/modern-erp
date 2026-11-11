@@ -3214,7 +3214,12 @@ export function createApp(db, options = {}) {
         const safe = serializeError(error, requestId);
         return send(res, error.status, safe);
       }
-      if (/UNIQUE constraint failed|ER_DUP_ENTRY/i.test(String(error.message))) {
+      // A duplicate-key violation must be a 409 on **both** engines. SQLite puts
+      // "UNIQUE constraint failed" in the message; the MySQL driver puts
+      // "ER_DUP_ENTRY" in the error *code* and only the human text in the
+      // message, so the code has to be inspected as well — otherwise a
+      // concurrent duplicate insert surfaces as a 500 on MySQL.
+      if (/UNIQUE constraint failed|ER_DUP_ENTRY/i.test(String(error.message)) || error?.code === 'ER_DUP_ENTRY') {
         return send(res, 409, serializeError(new HttpError(409, '编号或账号已存在，请更换后重试'), requestId));
       }
       (logger || createStructuredLogger()).error('unhandled_request_error', {
