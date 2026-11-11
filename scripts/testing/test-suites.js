@@ -599,6 +599,8 @@ const FULL = [
   // 现金流量表与资金子账对账、期末转账 / 摊销 / 计提、真实损益结转与
   // 关账拦截、反结转留痕。
   'server/accounting-analytics-w3.test.js',
+  // Accounting & Analytics AA-W5 固定资产完整生命周期（Requirement §35.4.5 / Design §31.5）。
+  'server/accounting-analytics-w5.test.js',
 
   // ----- User / Auth / RBAC / SOD / Account-bootstrap -----
   'server/uat-r2-user-payload.test.js',

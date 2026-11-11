@@ -244,7 +244,7 @@ describe('M2 canonical role application matrix', () => {
 
     test(`${roleId} never exposes disabled routes via the launcher`, () => {
       const pages = applicationPagesFor(roleId);
-      for (const disabled of ['cash-journals', 'bills', 'fixed-assets', 'workflows', 'data-cleanup']) {
+      for (const disabled of ['cash-journals', 'bills', 'workflows', 'data-cleanup']) {
         assert.ok(!pages.includes(disabled), `${roleId} must not see disabled ${disabled}`);
       }
     });

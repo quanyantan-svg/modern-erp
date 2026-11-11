@@ -80,6 +80,7 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('sourcing-pricing','寻源与定价','procurement-outsourcing','FLOW_SUPPORTING','WORKFLOW','primary','采购与委外','sourcingPricing',{any:['SOURCING_VIEW','PRICING_VIEW','PROCUREMENT_CONFIG_VIEW']}),
   route('outsourcing','委外加工','procurement-outsourcing','FLOW_PRIMARY','WORKFLOW','primary','采购与委外','outsourcing',{any:['OUTSOURCING_VIEW','OUTSOURCING_MANAGE','OUTSOURCING_RECEIVING_MANAGE','IQC_VIEW','IQC_MANAGE']}),
   route('product-costs','标准成本','accounting-analytics','ADVANCED_CONFIGURATION','CONFIG','contextual','会计与分析','costAccounting',{any:['COST_VIEW','COST_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
+  route('fixed-assets','固定资产','accounting-analytics','FLOW_SUPPORTING','LIST','secondary','会计与分析','fixedAssets',{any:['FIXED_ASSETS_VIEW','FIXED_ASSETS_MANAGE']},{desktopExposure:'role-workspace',mobileExposure:'role-workspace'}),
   route('cost-rates','成本费率','accounting-analytics','ADVANCED_CONFIGURATION','CONFIG','contextual','会计与分析','costAccounting',{any:['COST_VIEW','COST_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
   route('iqc','IQC 来料检验','manufacturing-quality','FLOW_INTERNAL_STEP','WORKFLOW','contextual','制造与质量','iqc',{any:['IQC_VIEW','IQC_MANAGE']},{parentRoute:'purchase-receipts'}),
   route('oqc','OQC 出货检验','manufacturing-quality','FLOW_INTERNAL_STEP','WORKFLOW','contextual','制造与质量','oqc',{any:['OQC_VIEW','OQC_MANAGE']},{parentRoute:'sales-deliveries'}),
@@ -91,7 +92,6 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
 const DISABLED_ROUTE_DEFINITIONS = Object.freeze([
   route('cash-journals','现金日记账','finance-operations','SYSTEM_SUPPORT','LIST','contextual','财务运营','cashJournals',{any:['CASH_JOURNALS_VIEW','CASH_JOURNALS_MANAGE']},{enabled:false}),
   route('bills','票据管理','finance-operations','SYSTEM_SUPPORT','LIST','contextual','财务运营','bills',{any:['BILLS_VIEW','BILLS_MANAGE']},{enabled:false}),
-  route('fixed-assets','固定资产','accounting-analytics','SYSTEM_SUPPORT','LIST','contextual','会计与分析','fixedAssets',{any:['FIXED_ASSETS_VIEW','FIXED_ASSETS_MANAGE']},{enabled:false}),
   route('workflows','审批流','platform','SYSTEM_SUPPORT','CONFIG','contextual','系统设置','approvals',{any:['WORKFLOW_VIEW','WORKFLOW_MANAGE']},{enabled:false}),
   route('data-cleanup','数据整理','platform','SYSTEM_SUPPORT','CONFIG','contextual','系统设置','cleanup',{permission:'USERS_MANAGE'},{enabled:false}),
 ]);
@@ -171,7 +171,7 @@ const SCREEN_DEFINITIONS = Object.freeze({
   warehouses: named('../pages/master-data.jsx','Warehouses'), inventory: named('../pages/master-data.jsx','Inventory'),
   users: named('../pages/master-data.jsx','UsersRoles'), 'cash-journals': named('../pages/treasury-cost.jsx','CashJournals'),
   'bank-accounts': named('../pages/treasury-cost.jsx','BankAccounts'), bills: named('../pages/treasury-cost.jsx','Bills'),
-  'fixed-assets': named('../pages/treasury-cost.jsx','FixedAssets'), 'product-costs': named('../pages/treasury-cost.jsx','ProductCosts'),
+  'fixed-assets': named('../pages/fixed-assets.jsx','FixedAssets'), 'product-costs': named('../pages/treasury-cost.jsx','ProductCosts'),
   'cost-rates': named('../pages/treasury-cost.jsx','CostRates'), iqc: named('../pages/quality.jsx','IQCInspections'),
   oqc: named('../pages/quality.jsx','OQCInspections'), 'quality-control-points': named('../pages/quality.jsx','QualityControlPoints'),
   notifications: named('../pages/platform-notifications.jsx','Notifications'), workflows: named('../pages/platform-workflows.jsx','Workflows'),
@@ -287,6 +287,7 @@ export const APPLICATION_LAUNCHER_GROUPS = Object.freeze([
   launcherGroup('accounting-analytics','Accounting & Analytics','domain','analytics', [
     ['business-overview','业务总览','overview'],
     ['accounting','会计凭证','accounting'],
+    ['fixed-assets','固定资产','fixedAssets'],
     ['decision-reports','销售统计','reports',{reportKey:'sales-summary',formalLabel:'销售统计分析表'}],
     ['decision-reports','销售未出货','reports',{reportKey:'sales-outstanding',formalLabel:'销售未出货反应表'}],
     ['decision-reports','采购统计','reports',{reportKey:'purchase-summary',formalLabel:'采购统计分析表'}],

@@ -23,14 +23,14 @@ after(() => { rmSync(tempDir, { recursive: true, force: true }); });
 
 describe('V1.2 release registries', () => {
   test('permission, role, approval and lifecycle registries stay canonical', () => {
-    assert.equal(PERMISSIONS.length, 227);
+    assert.equal(PERMISSIONS.length, 247);
     assert.deepEqual(APPROVAL_DOCUMENT_TYPES, ['SALES_ORDER', 'PURCHASE_ORDER', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER', 'PURCHASE_REQUISITION', 'PRODUCTION_ORDER']);
     assert.equal(Object.keys(LIFECYCLE_ENTITIES).length, 25);
 
     const db = createDatabase(join(tempDir, 'registry.db'));
     // M1-P-03（Active Design §8.1.3）新增 role-outsourcing 与 role-outsourcing-receiving 两个系统角色。
     assert.equal(db.prepare('SELECT COUNT(*) count FROM roles').get().count, 7);
-    assert.equal(db.prepare("SELECT COUNT(*) count FROM role_permissions WHERE role_id='role-admin'").get().count, 227);
+    assert.equal(db.prepare("SELECT COUNT(*) count FROM role_permissions WHERE role_id='role-admin'").get().count, 247);
     assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
     db.close();

@@ -47,7 +47,7 @@ function assertRouteScreen(routeKey, modulePath, exportName) {
 
 // ----- 1. Route inventory assertions (derived from authoritative source) -----
 
-test('P8 route inventory: 73 enabled + 5 disabled = 78 entries', () => {
+test('P8 route inventory: 74 enabled + 4 disabled = 78 entries', () => {
   // Core Scope Cleanup removed the 6 extension routes
   // (projects, tasks, timesheets, contacts, followups, activities).
   // Planning Closure added 2 contextual routes (planning-reservations,
@@ -55,8 +55,8 @@ test('P8 route inventory: 73 enabled + 5 disabled = 78 entries', () => {
   // Procurement & Outsourcing Domain Closure adds sourcing-pricing + outsourcing.
   // Finance Operations Domain Closure adds finance-invoices + finance-treasury
   // as dedicated primary routes, raising the count from 59 to 61.
-  assert.equal(ROUTE_PRESENTATIONS.length, 73, 'ROUTE_PRESENTATIONS must include the W11-A U3 route');
-  assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'DISABLED_ROUTE_PRESENTATIONS must hold 5 removed/disabled routes');
+  assert.equal(ROUTE_PRESENTATIONS.length, 74, 'ROUTE_PRESENTATIONS must include the W11-A U3 route');
+  assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 4, 'DISABLED_ROUTE_PRESENTATIONS must hold 4 removed/disabled routes');
   assert.equal(ROUTE_PRESENTATIONS.length + DISABLED_ROUTE_PRESENTATIONS.length, 78);
 });
 

@@ -44,6 +44,7 @@ import { migrateProcurementOutsourcingOpeningSchema } from './migrations/procure
 import { migrateAccountingEventsSchema } from './migrations/accounting-events-schema.js';
 import { migrateAccountingRulesSchema } from './migrations/accounting-rules-schema.js';
 import { migrateAccountingPeriodEndSchema } from './migrations/accounting-period-end-schema.js';
+import { migrateFixedAssetsSchema } from './migrations/fixed-assets-schema.js';
 import { migrateInventoryPositionSchema } from './migrations/inventory-position-schema.js';
 import { migrateSalesCustomerDomain } from './migrations/sales-customer-domain.js';
 import { migrateW11ASelectorSearchKey } from './migrations/sales-customer-wave11-a-selector-search-key.js';
@@ -553,6 +554,10 @@ function createSqliteDatabase(filename) {
   migrateAccountingEventsSchema(db);
   migrateAccountingRulesSchema(db);
   migrateAccountingPeriodEndSchema(db);
+  // Accounting & Analytics Domain Closure — AA-W5 fixed-asset lifecycle.
+  // Runs after the accounting migrations so the seeded GL subjects and the
+  // account-role mappings of the depreciation / disposal path exist.
+  migrateFixedAssetsSchema(db);
   migrateInventoryPositionSchema(db);
   migrateV13Phase7cPerformance(db);
   migrateManufacturingQualitySchema(db);

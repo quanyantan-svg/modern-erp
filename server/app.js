@@ -209,6 +209,7 @@ import { accountingReconciliationHandlers } from './modules/accounting-reconcili
 import { generateEventVoucher } from './modules/accounting-rules.js';
 import { accountingPeriodEndHandlers } from './modules/accounting-period-end.js';
 import { accountingPostingHandlers, assertCashierReviewCleared, reverseVoucher } from './modules/accounting-posting.js';
+import { fixedAssetsHandlers } from './modules/fixed-assets.js';
 import { getCashFlow } from './modules/accounting-cash-flow.js';
 import { paymentTermsDays } from './lib/payment-terms.js';
 import {
@@ -1952,6 +1953,168 @@ ownedRouteTable.register({
   owner: 'server/modules/accounting-cash-flow.js',
 });
 
+// Accounting & Analytics Domain Closure — AA-W5 fixed-asset lifecycle.
+//
+// Canonical owner:
+//   server/modules/fixed-assets.js  资产卡片 / 字典与政策 / 转固 / 变更单 /
+//                                    拆分合并 / 借用盘点 / 折旧计提 / 处置
+//
+// The legacy `/api/fixed-assets` paths, methods, request bodies and response
+// shapes are preserved (Requirement §35.6.1). The only semantic extension is
+// `POST /api/fixed-assets/depreciation`, which now accepts a `period` for the
+// policy-driven run; the legacy manual body stays available as a controlled
+// `ADJUSTMENT` entry (Design §31.5.4).
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/fixed-assets',
+  handler: ({ db, res, actor, url }) => fixedAssetsHandlers.listAssets(db, res, actor, url),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/fixed-assets',
+  handler: ({ db, req, res, actor }) => fixedAssetsHandlers.createAsset(db, req, res, actor),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/fixed-assets/transfer',
+  handler: ({ db, req, res, actor }) => fixedAssetsHandlers.transferFromReceipt(db, req, res, actor),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/fixed-assets/merge',
+  handler: ({ db, req, res, actor }) => fixedAssetsHandlers.mergeAssets(db, req, res, actor),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/fixed-assets/stocktakes',
+  handler: ({ db, req, res, actor }) => fixedAssetsHandlers.createStocktake(db, req, res, actor),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/fixed-assets/depreciation',
+  handler: ({ db, req, res, actor }) => fixedAssetsHandlers.postDepreciation(db, req, res, actor),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/fixed-asset-types',
+  handler: ({ db, res, actor }) => fixedAssetsHandlers.listAssetTypes(db, res, actor),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/fixed-asset-types',
+  handler: ({ db, req, res, actor }) => fixedAssetsHandlers.createAssetType(db, req, res, actor),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/fixed-asset-locations',
+  handler: ({ db, res, actor }) => fixedAssetsHandlers.listAssetLocations(db, res, actor),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/fixed-asset-locations',
+  handler: ({ db, req, res, actor }) => fixedAssetsHandlers.createAssetLocation(db, req, res, actor),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/depreciation-policies',
+  handler: ({ db, res, actor }) => fixedAssetsHandlers.listDepreciationPolicies(db, res, actor),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/depreciation-policies',
+  handler: ({ db, req, res, actor }) => fixedAssetsHandlers.createDepreciationPolicy(db, req, res, actor),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/depreciation-policies\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => fixedAssetsHandlers.updateDepreciationPolicy(db, req, res, actor, params[0]),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/fixed-assets\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => fixedAssetsHandlers.updateAsset(db, req, res, actor, params[0]),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/fixed-assets\/([^/]+)\/depreciations$/,
+  handler: ({ db, res, actor, params }) => fixedAssetsHandlers.listDepreciations(db, res, actor, params[0]),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/fixed-assets\/([^/]+)\/change-requests$/,
+  handler: ({ db, req, res, actor, params }) => fixedAssetsHandlers.createChangeRequest(db, req, res, actor, params[0]),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/fixed-assets\/change-requests\/([^/]+)\/submit$/,
+  handler: ({ db, req, res, actor, params }) => fixedAssetsHandlers.submitChangeRequest(db, req, res, actor, params[0]),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/fixed-assets\/change-requests\/([^/]+)\/approve$/,
+  handler: ({ db, req, res, actor, params }) => fixedAssetsHandlers.approveChangeRequest(db, req, res, actor, params[0]),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/fixed-assets\/([^/]+)\/split$/,
+  handler: ({ db, req, res, actor, params }) => fixedAssetsHandlers.splitAsset(db, req, res, actor, params[0]),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/fixed-assets\/([^/]+)\/loans$/,
+  handler: ({ db, req, res, actor, params }) => fixedAssetsHandlers.createLoan(db, req, res, actor, params[0]),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/fixed-assets\/loans\/([^/]+)\/return$/,
+  handler: ({ db, req, res, actor, params }) => fixedAssetsHandlers.returnLoan(db, req, res, actor, params[0]),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/fixed-assets\/stocktakes\/([^/]+)\/complete$/,
+  handler: ({ db, req, res, actor, params }) => fixedAssetsHandlers.completeStocktake(db, req, res, actor, params[0]),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/fixed-assets\/([^/]+)\/disposals$/,
+  handler: ({ db, req, res, actor, params }) => fixedAssetsHandlers.createDisposal(db, req, res, actor, params[0]),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/fixed-assets\/disposals\/([^/]+)\/submit$/,
+  handler: ({ db, req, res, actor, params }) => fixedAssetsHandlers.submitDisposal(db, req, res, actor, params[0]),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/fixed-assets\/disposals\/([^/]+)\/approve$/,
+  handler: ({ db, req, res, actor, params }) => fixedAssetsHandlers.approveDisposal(db, req, res, actor, params[0]),
+  owner: 'server/modules/fixed-assets.js',
+});
+
 // Wave 5B — Manufacturing Reference Data Decomposition. Canonical
 // owner of the legacy BOM-bound work-centre / routing-operation routes
 // (`/api/work-centers`, `/api/routing-operations`) extracted from
@@ -2869,14 +3032,6 @@ async function handleApi(db, req, res, url) {
   const billMatch = pathname.match(/^\/api\/bills\/([^/]+)$/);
   if (billMatch && req.method === 'PATCH') return updateBill(db, req, res, actor, billMatch[1]);
 
-  // Fixed Assets
-  if (pathname === '/api/fixed-assets' && req.method === 'GET') return listFixedAssets(db, res, actor, url);
-  if (pathname === '/api/fixed-assets' && req.method === 'POST') return createFixedAsset(db, req, res, actor);
-  const assetMatch = pathname.match(/^\/api\/fixed-assets\/([^/]+)$/);
-  if (assetMatch && req.method === 'PATCH') return updateFixedAsset(db, req, res, actor, assetMatch[1]);
-  if (pathname === '/api/fixed-assets/depreciation' && req.method === 'POST') return calculateDepreciation(db, req, res, actor);
-  const assetDepMatch = pathname.match(/^\/api\/fixed-assets\/([^/]+)\/depreciations$/);
-  if (assetDepMatch && req.method === 'GET') return getFixedAssetDepreciations(db, res, actor, assetDepMatch[1]);
   if (poMatch && req.method === 'PUT') return updatePurchaseOrder(db, req, res, actor, poMatch[1]);
 
   // V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E +
@@ -5530,107 +5685,6 @@ async function updateBill(db, req, res, actor, billId) {
 
 
 
-// ============ 固定资产管理 ============
-
-function listFixedAssets(db, res, actor, url) {
-  allow(actor, 'ACCOUNTING_VIEW');
-  const where = [];
-  const params = [];
-  const status = url.searchParams.get('status');
-  const assetType = url.searchParams.get('asset_type');
-  
-  if (status) { where.push('status = ?'); params.push(status); }
-  if (assetType) { where.push('asset_type = ?'); params.push(assetType); }
-  
-  const sql = `SELECT fa.asset_code, fa.asset_name, fa.asset_type AS category, fa.purchase_date,
-    fa.purchase_amount_cents, fa.status, fa.net_value_cents, fa.accumulated_depreciation_cents,
-    fa.depreciation_method, fa.service_years, fa.residual_value_cents,
-    u.display_name creatorName,
-    COALESCE((SELECT SUM(depreciation_amount_cents) FROM asset_depreciations WHERE asset_id = fa.id), 0) AS totalDepreciatedCents
-    FROM fixed_assets fa
-    JOIN users u ON u.id = fa.creator_id
-    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-    ORDER BY fa.created_at DESC LIMIT 100`;
-  
-  const assets = db.prepare(sql).all(...params);
-  
-  // 统计汇总
-  const summary = {
-    totalCount: assets.length,
-    totalOriginal: assets.reduce((s, a) => s + a.purchase_amount_cents, 0),
-    totalDepreciation: assets.reduce((s, a) => s + a.accumulated_depreciation_cents, 0),
-    totalNetValue: assets.reduce((s, a) => s + a.net_value_cents, 0)
-  };
-  
-  return send(res, 200, { assets, summary });
-}
-
-async function createFixedAsset(db, req, res, actor) {
-  allow(actor, 'FIXED_ASSETS_MANAGE');
-  const body = await readJson(req);
-  const { asset_code, asset_name, asset_type, spec, unit, purchase_date, purchase_amount, service_years, depreciation_method, residual_value, location, custodian, remark } = body;
-  
-  if (!asset_code || !asset_name || !asset_type) throw new HttpError(400, '请填写完整的资产信息');
-  
-  const assetId = id();
-  const now = new Date().toISOString();
-  const amountCents = Math.round((purchase_amount || 0) * 100);
-  const residualCents = Math.round((residual_value || 0) * 100);
-  
-  db.prepare(`INSERT INTO fixed_assets(id, asset_code, asset_name, asset_type, spec, unit, purchase_date, purchase_amount_cents, service_years, depreciation_method, residual_value_cents, accumulated_depreciation_cents, net_value_cents, location, custodian, remark, creator_id, created_at, updated_at)
-    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(assetId, asset_code, asset_name, asset_type, spec || '', unit || '台', purchase_date || null, amountCents, service_years || 5, depreciation_method || 'STRAIGHT_LINE', residualCents, amountCents - residualCents, location || '', custodian || '', remark || '', actor.id, now, now);
-  
-  return send(res, 201, { id: assetId });
-}
-
-async function updateFixedAsset(db, req, res, actor, assetId) {
-  allow(actor, 'FIXED_ASSETS_MANAGE');
-  const asset = db.prepare('SELECT * FROM fixed_assets WHERE id = ?').get(assetId);
-  if (!asset) throw new HttpError(404, '资产不存在');
-  
-  const body = await readJson(req);
-  const { status, location, custodian, remark } = body;
-  const now = new Date().toISOString();
-  
-  db.prepare('UPDATE fixed_assets SET status = ?, location = ?, custodian = ?, remark = ?, updated_at = ? WHERE id = ?')
-    .run(status || asset.status, location || asset.location, custodian || asset.custodian, remark || asset.remark, now, assetId);
-  
-  audit(db, actor.id, 'UPDATE', 'FIXED_ASSET', assetId, '更新固定资产 ' + asset.asset_code);
-  
-  return send(res, 200, { success: true });
-}
-
-async function calculateDepreciation(db, req, res, actor) {
-  allow(actor, 'FIXED_ASSETS_MANAGE');
-  const body = await readJson(req);
-  const { asset_id, depreciation_amount } = body;
-  
-  if (!asset_id) throw new HttpError(400, '请选择资产');
-  
-  const asset = db.prepare('SELECT * FROM fixed_assets WHERE id = ?').get(asset_id);
-  if (!asset) throw new HttpError(404, '资产不存在');
-  
-  const depId = id();
-  const now = new Date().toISOString();
-  const depCents = Math.round((depreciation_amount || 0) * 100);
-  const newAccumulated = asset.accumulated_depreciation_cents + depCents;
-  const newNetValue = asset.purchase_amount_cents - newAccumulated;
-  
-  transaction(db, () => {
-    db.prepare(`INSERT INTO asset_depreciations(id, asset_id, depreciation_date, depreciation_amount_cents, accumulated_amount_cents, net_value_cents, creator_id, created_at)
-      VALUES(?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(depId, asset_id, now.slice(0, 10), depCents, newAccumulated, newNetValue, actor.id, now);
-    
-    db.prepare('UPDATE fixed_assets SET accumulated_depreciation_cents = ?, net_value_cents = ?, updated_at = ? WHERE id = ?')
-      .run(newAccumulated, newNetValue, now, asset_id);
-    
-    audit(db, actor.id, 'DEPRECIATE', 'FIXED_ASSET', asset_id, '计提折旧 ' + money(depCents));
-  });
-  
-  return send(res, 200, { id: depId });
-}
-
 // ============ 成本管理 ============
 
 const COST_RATE_TYPES = new Set(['MATERIAL_RATE', 'LABOR_RATE', 'OVERHEAD_RATE']);
@@ -7135,14 +7189,6 @@ const RECEIPT_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '�
 const DELIVERY_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 const RETURN_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 
-
-async function getFixedAssetDepreciations(db, res, actor, assetId) {
-  allowAny(actor, ['FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE']);
-  const depreciations = db.prepare(`SELECT ad.*, u.name creatorName 
-    FROM asset_depreciations ad LEFT JOIN users u ON u.id=ad.creator_id
-    WHERE ad.asset_id=? ORDER BY ad.depreciation_date DESC`).all(assetId);
-  return send(res, 200, { depreciations });
-}
 
 const BILL_TYPES = { RECEivable: '应收票据', PAYable: '应付票据' };
 const BILL_STATUS = { PENDING: '待承兑', ACCEPTED: '已承兑', DISCOUNTED: '已贴现', ENDORSED: '已背书', PAID: '已到期', CANCELLED: '已作废' };

@@ -38,7 +38,7 @@ describe('M8 AR/AP and settlement workflow', () => {
   after(async () => { await new Promise((done, fail) => server.close((error) => error ? fail(error) : done())); db.close(); rmSync(temp, { recursive: true, force: true }); });
 
   test('permission registry keeps the approved Wave 10 family plus M1-Core M-17; role registry holds the canonical five-role model', () => {
-    assert.equal(PERMISSIONS.length, 227);
+    assert.equal(PERMISSIONS.length, 247);
     for (const code of ['AR_VIEW', 'COLLECTION_MANAGE', 'AP_VIEW', 'PAYMENT_MANAGE']) assert.ok(PERMISSIONS.some(([item]) => item === code));
     // M1-P-03（Active Design §8.1.3）新增 role-outsourcing 与 role-outsourcing-receiving 两个系统角色。
     assert.equal(db.prepare('SELECT COUNT(*) n FROM roles').get().n, 7);
