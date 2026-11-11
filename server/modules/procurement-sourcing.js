@@ -232,6 +232,97 @@ export async function disableSourceEntry(db, req, res, actor, entryId) {
   return send(res, 200, { ok: true });
 }
 
+/**
+ * PRC-04 — 货源控制的显式 override。
+ *
+ * 货源控制启用时，一个在业务日期没有有效货源的供应商不得被静默使用。业务
+ * 需要放行时，必须由有权限的人**显式**放行，并且：
+ *
+ *   - 写明**原因**（必填，不可为空）；
+ *   - 指定**放行的业务日期区间**（override 永远是有界的，不是永久放行）；
+ *   - 写入**可追溯审计**（谁、何时、为什么、放行哪个供应商 / 货品 / 货源
+ *     类型 / 日期区间）。
+ *
+ * override 不改写 `source_list_entries`，也不影响其它供应商或其它货源类型。
+ * 同一供应商 / 货品 / 货源类型上，互不重叠的 override 可以并存。
+ */
+export async function overrideSourceEntry(db, req, res, actor) {
+  assertManagePermission(actor);
+  const body = await readJson(req);
+  assertAllowedFields(body, ['supplierId', 'productId', 'sourceType', 'reason', 'effectiveFrom', 'effectiveTo']);
+  const supplierId = requiredText(body.supplierId, '供应商', 100);
+  const productId = requiredText(body.productId, '产品', 100);
+  const sourceType = normalizeSourceType(body.sourceType);
+  // 原因必填：没有原因的 override 不是业务事实。
+  const reason = requiredText(body.reason, 'override 原因', 500);
+  const effectiveFrom = requiredText(body.effectiveFrom, '生效开始日期', 10);
+  const effectiveTo = requiredText(body.effectiveTo, '生效结束日期', 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(effectiveTo)) {
+    throw new HttpError(400, 'override 日期区间格式应为 YYYY-MM-DD');
+  }
+  if (effectiveTo < effectiveFrom) {
+    throw new HttpError(400, 'override 结束日期不能早于开始日期', { code: 'SOURCE_OVERRIDE_WINDOW_INVALID' });
+  }
+  if (!db.prepare('SELECT id FROM suppliers WHERE id=?').get(supplierId)) throw new HttpError(409, '供应商不存在');
+  if (!db.prepare('SELECT id FROM products WHERE id=?').get(productId)) throw new HttpError(409, '产品不存在');
+  const overrideId = randomUUID();
+  const now = new Date().toISOString();
+  transaction(db, () => {
+    // 同一三元组上不得有重叠的 ACTIVE override：否则「放行区间」不再唯一，
+    // 审计会失去确定性含义。
+    const overlapping = db.prepare(`SELECT id, effective_from, effective_to FROM source_list_overrides
+      WHERE supplier_id=? AND product_id=? AND source_type=? AND status='ACTIVE'
+        AND NOT (effective_to < ? OR effective_from > ?)`)
+      .all(supplierId, productId, sourceType, effectiveFrom, effectiveTo);
+    if (overlapping.length) {
+      throw new HttpError(409, '该供应商 / 货品 / 货源类型在所选日期区间已有生效的 override', { code: 'SOURCE_OVERRIDE_OVERLAP' });
+    }
+    db.prepare(`INSERT INTO source_list_overrides(
+        id,supplier_id,product_id,source_type,effective_from,effective_to,reason,status,created_by,created_at)
+      VALUES(?,?,?,?,?,?,?,'ACTIVE',?,?)`).run(
+      overrideId, supplierId, productId, sourceType, effectiveFrom, effectiveTo, reason, actor.id, now,
+    );
+    audit(db, actor.id, 'OVERRIDE', 'SOURCE_LIST_OVERRIDE', overrideId, JSON.stringify({
+      supplierId, productId, sourceType, effectiveFrom, effectiveTo, reason,
+    }));
+  });
+  return send(res, 201, {
+    id: overrideId,
+    supplierId, productId, sourceType, effectiveFrom, effectiveTo, reason,
+  });
+}
+
+/**
+ * 列出货源 override（审计可读投影）。
+ */
+export function listSourceOverrides(db, res, actor, url) {
+  assertViewPermission(actor);
+  const conditions = [];
+  const params = [];
+  const supplierId = url.searchParams.get('supplierId');
+  const productId = url.searchParams.get('productId');
+  const sourceType = url.searchParams.get('sourceType');
+  if (supplierId) { conditions.push('supplier_id=?'); params.push(supplierId); }
+  if (productId) { conditions.push('product_id=?'); params.push(productId); }
+  if (sourceType) { conditions.push('source_type=?'); params.push(normalizeSourceType(sourceType)); }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const rows = db.prepare(`SELECT * FROM source_list_overrides ${where} ORDER BY created_at DESC, id DESC LIMIT 200`).all(...params);
+  return send(res, 200, {
+    overrides: rows.map((row) => ({
+      id: row.id,
+      supplierId: row.supplier_id,
+      productId: row.product_id,
+      sourceType: row.source_type,
+      effectiveFrom: row.effective_from,
+      effectiveTo: row.effective_to,
+      reason: row.reason,
+      status: row.status,
+      createdBy: row.created_by,
+      createdAt: row.created_at,
+    })),
+  });
+}
+
 export async function upsertQuota(db, req, res, actor) {
   assertManagePermission(actor);
   const body = await readJson(req);

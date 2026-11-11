@@ -293,6 +293,11 @@ const FULL = [
   // ----- Procurement & Outsourcing Domain — Wave B/C/D/E/F/G/H/I + Return Execution -----
   'server/procurement-sourcing-pricing.test.js',
   'server/procurement-orders.test.js',
+  'server/procurement-sourcing-capabilities.test.js',
+  // 预付款要求（PRC-17）：业务意图层 + Finance handoff，不建第二支付引擎。
+  'server/procurement-prepayment.test.js',
+  // 委外加工价来源与期初 WIP / 期间关闭接入（OUT-03 / OUT-23）。
+  'server/out-03-out-23.test.js',
   // 采购取价证据与采购订单变更合同回归（Active Design §26.36 / §31.16
   // PRC-DLV-01..09）：错误场景、权限分离、幂等、执行下界与失败零副作用。
   'server/procurement-commercial-evidence.test.js',

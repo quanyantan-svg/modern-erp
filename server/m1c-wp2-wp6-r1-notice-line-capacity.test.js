@@ -29,9 +29,7 @@
 
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import {
-  createApprovedProcessingPo, createProcurementFixture, outsourcingReceiptBody, seedApprovedOutsourceBom, seedPurchasePrice,
-} from './test-support/procurement-http-fixture.js';
+import { createApprovedProcessingPo, createProcurementFixture, outsourcingReceiptBody, seedApprovedOutsourceBom, seedPurchasePrice, seedOutsourceSource } from './test-support/procurement-http-fixture.js';
 
 describe('M1C-WP2–WP6-R1 — outsourcing notice line capacity and processing fee amount', () => {
   let fixture;
@@ -69,6 +67,7 @@ describe('M1C-WP2–WP6-R1 — outsourcing notice line capacity and processing f
       qualificationValidFrom: isoDate(-30), qualificationValidTo: isoDate(180), supplierWipWarehouseId: 'warehouse-002',
     });
     assert.equal(result.status, 200, result.data.error);
+    await seedOutsourceSource(fixture, [{ supplierId: 'supplier-001', productId: 'product-001', effectiveFrom: isoDate(-30) }]);
     const now = new Date().toISOString();
     fixture.db.prepare(`INSERT INTO inventory_valuation_balances(balance_key,valuation_method,product_id,warehouse_id,lot_id,serial_id,quantity,value_cents,updated_at)
       VALUES(?, 'MOVING_AVERAGE', ?, 'warehouse-001', NULL, NULL, 1000, 1000000, ?)

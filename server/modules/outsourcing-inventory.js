@@ -192,6 +192,36 @@ function postTrackingAndValuation(db, mutation, { sourceType, sourceId, sourceIt
   return { replayed: false, issuedValueCents };
 }
 
+/**
+ * OUT-23 期初委外 WIP 身份供给（期初建账）。
+ *
+ * 期初结余是**同一本** WIP 身份账上的一次 SUPPLY 事实（§26.34.15.2）：
+ * 它必须能被后续 RETURN / BACKFLUSH / TRANSFER_OUT 正常消费，因此**不能**
+ * 写在账本之外，否则就等于建了第二套 WIP 账本。
+ *
+ * 与 `recordSupply` 的差异只有两点：
+ *   1. `event_type='OPENING'` —— 期初建账事实，与业务发料事实可区分；
+ *   2. 不产生物理库存流水 —— 期初库存位置由**期初建账写入路径**单独建立，
+ *      本函数只负责身份账的事实（数量 + 身份 + 余额）。
+ *
+ * 幂等：与 `recordSupply` 共用同一张 effect 表的 `idempotency_key` 唯一约束，
+ * 同一 Idempotency-Key 的精确重放返回既有 effect，异内容重放 fail closed。
+ */
+export function recordOpeningWipSupply(db, {
+  material, identity, quantity, openingOrderId, openingLineId, businessDate, idempotencyKey,
+}) {
+  return recordSupply(db, {
+    material,
+    identity,
+    eventType: 'OPENING',
+    eventId: openingOrderId,
+    eventItemId: openingLineId,
+    quantity,
+    businessDate,
+    idempotencyKey,
+  });
+}
+
 export function executeOutsourcingMove(db, {
   actor, order, material, sourceType, eventType, eventId, quantity, businessDate,
   identityInput, direction, idempotencyKey,

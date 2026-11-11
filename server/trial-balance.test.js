@@ -277,7 +277,10 @@ describe('Phase E — Trial Balance end-to-end', () => {
         `trial balance must include subject ${expected} regardless of activity; got [${codes.join(',')}]`);
     }
     for (const expected of ['1403','1404','1406','5101','5102','6402','6403','6404','6405','6406']) assert.ok(codes.includes(expected), `trial balance must include Phase 6D role subject ${expected}`);
-    assert.equal(codes.length, 21, `trial balance must contain the 21 configured subjects; got [${codes.join(',')}]`);
+    // 6408 委外加工费：委外加工费正式过账（C-P02）的借方科目，由采购与委外域
+    // 的会计档案登记（server/migrations/procurement-outsourcing-finance-schema.js）。
+    assert.ok(codes.includes('6408'), `trial balance must include the outsourcing processing fee subject 6408; got [${codes.join(',')}]`);
+    assert.equal(codes.length, 22, `trial balance must contain the 22 configured subjects; got [${codes.join(',')}]`);
   });
 
   test('POSTED manual voucher with period populated appears in Trial Balance', async () => {

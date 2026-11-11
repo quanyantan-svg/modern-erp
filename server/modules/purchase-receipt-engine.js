@@ -38,6 +38,7 @@ import {
   listOpenScheduleEffects, recordScheduleConsumption, recordScheduleConsumptionReversal,
   SCHEDULE_EFFECT_BUSINESS_EVENT_TYPE,
 } from './procurement-schedule-ledger.js';
+import { triggerLowerToleranceAutoClose } from './procurement-orders.js';
 
 const EPSILON = 1e-9;
 
@@ -295,6 +296,13 @@ export function confirmPurchaseReceiptCore(db, actor, receiptId, { idempotencyKe
     if (locked.billing_mode === 'AUTO_BILL') autoBillReceipt(db, receiptId, actor.id, `AUTO_BILL:${receiptId}`);
   }
   saveIdempotency(db, 'PURCHASE_RECEIPT_CONFIRM', receiptId, idempotencyKey, fingerprint, { ok: true, id: receiptId, status: 'CONFIRMED' });
+  // PRC-16: 收货确认后由 canonical 写者触发下容差自动关单判定。判定公式只
+  // 存在一份（在 procurement-orders.js::evaluateDeliveryScheduleClose）；本处
+  // 只在「可关单」时写关单事实，不满足条件时保持 OPEN，收货确认不受影响。
+  triggerLowerToleranceAutoClose(db, {
+    deliveryScheduleIds: authoritative.items.map((item) => item.delivery_schedule_id).filter(Boolean),
+    actor,
+  });
   audit(db, actor.id, 'CONFIRM', 'PURCHASE_RECEIPT', receiptId, '确认采购入库 ' + locked.receipt_no);
   return { receiptId, status: 'CONFIRMED' };
 }

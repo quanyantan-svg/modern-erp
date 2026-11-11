@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import {
   createApprovedProcessingPo, createProcurementFixture, outsourcingReceiptBody,
-  prepareOutsourcingReceiptSource, seedApprovedOutsourceBom,
+  prepareOutsourcingReceiptSource, seedApprovedOutsourceBom, seedOutsourceSource,
 } from './test-support/procurement-http-fixture.js';
 
 describe('委外核心执行工作面 — 状态机门禁、受限读模型与来源级授权', () => {
@@ -34,6 +34,12 @@ describe('委外核心执行工作面 — 状态机门禁、受限读模型与�
       supplierWipWarehouseId: 'warehouse-002',
     });
     assert.equal(qualified.status, 200, qualified.data.error);
+    // OUT-02: 委外订单必须消费有效 OUTSOURCE 货源（货源控制的采购参数开关对
+    // 委外同样生效）。因此测试必须先表达这条业务事实。
+    await seedOutsourceSource(fixture, [
+      { supplierId: 'supplier-001', productId: 'product-001', effectiveFrom: isoDate(-30) },
+      { supplierId: 'supplier-001', productId: 'product-002', effectiveFrom: isoDate(-30) },
+    ]);
     // 委外发料需要源仓的权威库存与估值余额。
     const now = new Date().toISOString();
     for (const productId of ['product-001', 'product-002']) {

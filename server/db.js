@@ -37,6 +37,10 @@ import { migrateEngineeringChangeSchema } from './migrations/engineering-change-
 import { migrateManufacturingQualitySchema } from './migrations/manufacturing-quality-schema.js';
 import { migratePlanningDomainSchema } from './migrations/planning-domain-schema.js';
 import { migrateProcurementOutsourcingSchema } from './migrations/procurement-outsourcing-schema.js';
+import { migrateProcurementSourcingSchema } from './migrations/procurement-sourcing-schema.js';
+import { migrateProcurementPrepaymentSchema } from './migrations/procurement-prepayment-schema.js';
+import { migrateProcurementOutsourcingFinanceSchema } from './migrations/procurement-outsourcing-finance-schema.js';
+import { migrateProcurementOutsourcingOpeningSchema } from './migrations/procurement-outsourcing-opening-schema.js';
 import { migrateInventoryPositionSchema } from './migrations/inventory-position-schema.js';
 import { migrateSalesCustomerDomain } from './migrations/sales-customer-domain.js';
 import { migrateW11ASelectorSearchKey } from './migrations/sales-customer-wave11-a-selector-search-key.js';
@@ -333,6 +337,8 @@ function createSqliteDatabase(filename) {
   migrateEngineeringRoutingSchema(db);
   migrateEngineeringChangeSchema(db);
   migrateProcurementOutsourcingSchema(db);
+  migrateProcurementSourcingSchema(db);
+  migrateProcurementPrepaymentSchema(db);
   normalizeCostRates(db);
   seed(db);
   // Add missing columns to existing tables
@@ -515,6 +521,8 @@ function createSqliteDatabase(filename) {
   migrateV13Phase6CManufacturingExecution(db);
   migrateV13Phase6DFinancialInventory(db);
   migrateV13Phase6ECommercialGoLive(db);
+  migrateProcurementOutsourcingFinanceSchema(db);
+  migrateProcurementOutsourcingOpeningSchema(db);
   migrateInventoryPositionSchema(db);
   migrateV13Phase7cPerformance(db);
   migrateManufacturingQualitySchema(db);

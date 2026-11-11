@@ -80,7 +80,7 @@ describe('M1C-G07 same-source SQLite HTTP setup', () => {
     assert.equal(computeM1CoreG07FixtureDigest(), M1_CORE_G07_FIXED_FIXTURE_DIGEST);
     // 2026-11-10：委外流转改为精确动作、用料快照前置到 DRAFT 阶段后，固定场景必须沿新合同重写，
     // 冻结摘要随之重新计算；该重新冻结待业务所有者显式确认。
-    assert.equal(M1_CORE_G07_FIXED_FIXTURE_DIGEST, 'aa024bd56ae4eccd53242171f46bbd741bd1586f986d7d3ce92a8f5a53b8019f');
+    assert.equal(M1_CORE_G07_FIXED_FIXTURE_DIGEST, 'f112c88cb6d327f4885cf349de4a6c4efd6b4a4b1499e0547727e7103ccad33f');
     assert.deepEqual(active.setup.map((step) => step.id).slice(-4), ['noticeGet', 'convert', 'iqc', 'iqcComplete']);
     assert.deepEqual(createStep.body, { purchase_receipt_id: { $ref: 'setup.convert.receipts.0.id' } });
     assert.deepEqual(completeStep.body, {

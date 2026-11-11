@@ -12,7 +12,7 @@
 
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { createApprovedProcessingPo, createProcurementFixture, seedApprovedOutsourceBom, seedPurchasePrice } from './test-support/procurement-http-fixture.js';
+import { createApprovedProcessingPo, createProcurementFixture, seedApprovedOutsourceBom, seedPurchasePrice, seedOutsourceSource } from './test-support/procurement-http-fixture.js';
 
 describe('M1C-WP-1 — receipt notice sources, business-type scoped capacity and notice conversion', () => {
   let fixture;
@@ -89,6 +89,7 @@ describe('M1C-WP-1 — receipt notice sources, business-type scoped capacity and
       qualificationValidFrom: isoDate(-30), qualificationValidTo: isoDate(180),
     });
     assert.equal(result.status, 200, result.data.error);
+    await seedOutsourceSource(fixture, [{ supplierId: 'supplier-001', productId: 'product-001', effectiveFrom: isoDate(-30) }]);
   }
 
   async function createReleasedOutsourcingOrder(orderQuantity) {

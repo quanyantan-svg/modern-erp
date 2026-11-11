@@ -15,7 +15,7 @@ import { after, before, describe, test } from 'node:test';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createProcurementFixture, seedApprovedOutsourceBom } from './test-support/procurement-http-fixture.js';
+import { createProcurementFixture, seedApprovedOutsourceBom, seedOutsourceSource } from './test-support/procurement-http-fixture.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -87,6 +87,7 @@ describe('M1C processing PO canonical production path', () => {
       qualificationValidFrom: isoDate(-30), qualificationValidTo: isoDate(180),
     });
     assert.equal(qualified.status, 200, qualified.data.error);
+    await seedOutsourceSource(fixture, [{ supplierId: 'supplier-001', productId: 'product-001', effectiveFrom: isoDate(-30) }]);
     orderId = await releaseOrder(10);
     adminCreatedOrderId = await releaseOrder(4);
     normalizationOrderId = await releaseOrder(3);

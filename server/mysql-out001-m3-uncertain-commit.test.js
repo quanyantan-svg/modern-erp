@@ -43,7 +43,7 @@ import {
 } from './database/test-fixtures/mysql-commit-withholding-proxy.js';
 import { isUncertainCommitOutcome, transaction } from './db.js';
 import { createWipTransfer } from './modules/outsourcing-finance.js';
-import { createProcurementFixture, seedApprovedOutsourceBom } from './test-support/procurement-http-fixture.js';
+import { createProcurementFixture, seedApprovedOutsourceBom, seedOutsourceSource } from './test-support/procurement-http-fixture.js';
 import {
   out001M3AccountIdentityProblems,
   out001M3R3Problems,
@@ -818,6 +818,7 @@ async function qualifyOutsourceSupplier(fixture) {
     qualificationValidFrom: isoDate(-30), qualificationValidTo: isoDate(180), supplierWipWarehouseId: 'warehouse-002',
   });
   assert.equal(result.status, 200, result.data.error);
+  await seedOutsourceSource(fixture, [{ supplierId: 'supplier-001', productId: 'product-001', effectiveFrom: isoDate(-30) }]);
   fixture.db.prepare(`INSERT INTO inventory_valuation_balances(balance_key,valuation_method,product_id,warehouse_id,lot_id,serial_id,quantity,value_cents,updated_at)
     VALUES('NONE:warehouse-001:product-001','MOVING_AVERAGE','product-001','warehouse-001',NULL,NULL,100,100000,?)
     ON CONFLICT(balance_key) DO NOTHING`).run(new Date().toISOString());

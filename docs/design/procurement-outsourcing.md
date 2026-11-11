@@ -2391,3 +2391,113 @@ Design §26.15 的**扫码入仓闭环**（`lookup-document` / `draft-receipt` /
 
 - 全部为增量迁移，不回填历史事实；回滚只允许撤回新接线并让对应 mutation fail closed。
 - 采购单号改为期间序号后，历史单号不受影响；新单号格式为 `PO-<期间>-<序号>`。
+
+### 26.39 域级交付整改第四轮：残余能力的设计（2026-11-11；`APPROVED` → `IMPLEMENTED`）
+
+> **用途 / Owner / 状态 / 权威关系**：本节落实 Requirement §31.19 的十项残余能力合同。Owner 为 Procurement & Outsourcing Domain Owner；状态为 `IMPLEMENTED`（已按批准合同实施并通过本地 Gate，**尚未通过域级 Acceptance**），`solution.md` 只承担导航。本节不取代 §26.1～§26.38 的任何正文。
+
+#### 26.39.1 模块责任与 canonical owner
+
+| 能力 | canonical owner | 新增 / 变更的路由 |
+|---|---|---|
+| PRC-02 付款天数与品类门禁 | `server/modules/procurement-policy.js`（`resolvePaymentTermsDays`、`assertSupplierCategoryAllows`）+ `server/modules/procurement-orders.js`（`resolvePurchaseOrderPaymentTerms`、`resolvePurchaseOrderHeaderCommercial`） | 无新路由（写入口既有） |
+| PRC-04 货源 override | `server/modules/procurement-sourcing.js` | `POST /api/procurement/source-entries/override`、`GET /api/procurement/source-overrides` |
+| PRC-12 分配事实 | `server/modules/planning-documents.js::recordPrConversionAllocations`（写）+ `server/modules/procurement-orders.js::replacePurchaseOrderItemsCanonical`（保持指针） | 无新路由 |
+| PRC-16 自动关单 | `server/modules/procurement-orders.js`（`evaluateDeliveryScheduleClose`、`closeDeliveryScheduleByLowerTolerance`、`closeDeliverySchedule`） | `POST /api/purchase-orders/:id/delivery-schedules/:scheduleId/close` |
+| PRC-17 预付款要求 | 新增 `server/modules/procurement-prepayment.js` | `GET/POST /api/procurement/prepayment-requirements`、`GET /api/procurement/prepayment-requirements/:id`、`POST .../:id/post`、`POST .../:id/cancel` |
+| OUT-02 委外货源 | `server/modules/procurement-policy.js::assertSourceControl`（与采购共用同一实现） | 无新路由 |
+| OUT-03 加工价来源 | `server/modules/outsourcing.js::resolveOutsourcingProcessingPrice` + `assertProcessingPoPriceSource` | 无新路由（加工费 PO 创建既有） |
+| OUT-20 / OUT-21 过账与成本证据 | `server/modules/outsourcing-finance.js`（`postProcessingFeeBill`、`reverseProcessingFeeBill`、`refreshOutsourcingCostEvidence`）+ `server/modules/outsourcing-gl-policy.js`（`resolveProcessingFeeAccountingProfile`、来源级守卫） | `POST /api/procurement/outsourcing/processing-fee-bills/:id/post`、`POST /api/procurement/outsourcing/processing-fee-bills/:id/reverse` |
+| OUT-23 期初与关闭接入 | `server/modules/outsourcing.js::createOpeningOutsourcingOrderCanonical`、`server/modules/inventory-period-close.js`、`server/modules/finance-business-close.js` | `POST /api/procurement/outsourcing/opening-orders` |
+
+原则不变：同一业务原语只有一个 active canonical implementation（货源规则一份、付款天数口径一份、品类门禁一份），域内模块只组合既有原语，不复制判定。
+
+#### 26.39.2 PRC-02 付款天数解析与冻结
+
+- `resolvePurchaseOrderPaymentTerms(db, { businessType, supplierId, clientPaymentTermsDays, clientSpecified })` 是**唯一**的付款天数口径解析原语：普通采购订单在客户端未指定时取供应商采购档案默认值；委外加工费采购订单的付款条件由已批准的委外合同决定，**不**使用采购档案默认值（保持既有语义：客户端给出什么就是什么，没有就是空）。
+- `clientSpecified` 是权威的「客户端是否明确说了天数」信号。调用方必须把「客户端是否说了」与「补齐后的天数」**分开**传递，否则档案默认值会被误记成 `CLIENT`，来源列会说谎。`purchaseOrderInput` 因此同时返回 `paymentTermsDays` 与 `paymentTermsDaysClientSpecified`。
+- 创建（`createPurchaseOrderDraftCanonical`）与整体改写（`app.js::updatePurchaseOrder`）都调用同一原语，并在订单上冻结 `payment_terms_days` + `payment_terms_days_source` + `supplier_category_snapshot`。改写路径同样执行品类门禁：改写可以换供应商，品类必须重新判定。
+- 委外加工费采购订单的 `payment_terms_days_source` 取 `CLIENT` 或 `NONE`，与普通采购的 `SUPPLIER_DEFAULT` 语义区分。
+
+#### 26.39.3 PRC-04 货源 override
+
+- `source_list_overrides` 是**有界、有限、可审计**的放行事实：`(supplier, product, source_type, effective_from, effective_to)` + 必填原因 + 创建人。**它不改写货源主数据**（不改 `source_list_entries.enabled`，不回写货源本身）。
+- 判定顺序与采购货源完全一致：`resolveEffectiveSource` 先查业务日期上有效的货源条目，没有再查业务日期上有效的 `ACTIVE` override，两者都没有即无货源。override 是**区间内放行**，不是永久放行。
+- 写入口要求管理权限、原因非空、区间合法（`effective_to >= effective_from`）、同键区间不重叠（409 `SOURCE_OVERRIDE_OVERLAP`），并写恰好一条 `SOURCE_LIST_OVERRIDE` 审计（含供应商、货品、货源类型、区间与原因）。
+
+#### 26.39.4 PRC-12 分配事实与草稿改写
+
+- `pr_conversion_allocations` 是**只追加**的转换决定事实：`(请购明细 → 采购订单明细 → 供应商 → 分配数量)`，分配数量以有理数对保存，附请购数量、业务日期、转换标识与创建人。`UNIQUE(requisition_item_id, purchase_order_item_id)` 保证不重复。
+- 数量守恒在事务内重读权威事实后校验：同一请购明细的**累计**分配量（含历史分配）不得超过请购数量，越界即 409 `PR_CONVERSION_ALLOCATION_EXCEEDS_QUANTITY`，且不写任何分配事实。
+- 每次转换写一次 `PR_CONVERSION` 审计，内容包含请购单、转换标识与按供应商汇总的分配量。
+- **草稿整体改写与分配事实的关系**：`purchase_order_items.id` 被分配事实以外键引用，因此带分配事实的行**原位更新**（行标识不变），分配事实**不做任何 UPDATE**，外键指针原样有效。两道 fail-closed 门禁在任何写入之前生效：分配事实的请购明细被改写删除 → 409 `PO_ITEM_ALLOCATION_SOURCE_LOST`；分配数量与改写后的行数量不一致 → 409 `PO_ITEM_ALLOCATION_QUANTITY_MISMATCH`。同一请购明细存在多条分配事实 → 409 `PO_ITEM_ALLOCATION_DUPLICATE_FACT`。
+
+#### 26.39.5 PRC-16 交货计划自动关单
+
+- 判定只有一份：`evaluateDeliveryScheduleClose` 计算「累计已确认收货数量」与「计划数量 × (1 − lower_tolerance_pct)」的关系，返回可关单与否、短交数量与触发方式。
+- 触发点有两个：**收货确认**（canonical 写者在同一事务内触发）与**显式关单端点**。两者调用同一判定函数，因此不存在第二份公式。
+- 关单事实写入 `po_delivery_schedule_closes`：计划数量、已收数量、被容忍的短交数量、下容差、关闭原因与触发方式（`EXPLICIT` / `RECEIPT_CONFIRM`）。交货计划自身记录 `status` / `closed_at` / `closed_by`。
+- 低于下容差一律 409 `PO_DELIVERY_SCHEDULE_NOT_CLOSEABLE`，且不写关单事实（零副作用）。
+
+#### 26.39.6 PRC-17 预付款要求
+
+- 采购侧只拥有**业务意图层**：`prepayment_requirements`（状态、比例、到期日、推导金额、冻结的订单与来源）+ `prepayment_requirement_items`（逐行预付份额）。金额由采购订单的权威金额与声明的有理比例按 `HALF_UP` 推导，逐行计算后与总额**完全核对一致**；核对不一致即 409 `PREPAYMENT_LINES_NOT_RECONCILABLE`。
+- **过账**才产生付款：`postProcurementPrepaymentRequirement` 在事务内调用 canonical 结算路径（`createSettlementDocument` / `confirmSettlementDocument` → `payment_disbursements` + `payment_disbursement_items`），并用 `ensurePayableSource` 写 `source_type='PREPAYMENT_REQUIREMENT'` 的应付项；凭证由 canonical 凭证生成器产生（通过 `setPrepaymentVoucherGenerator` 注入，**不在采购侧自写凭证**）。财务路径不可用或失败时整体回滚（409 `PREPAYMENT_FINANCE_HANDOFF_FAILED`）。
+- 状态机 `DRAFT → POSTED → CANCELLED` 单向实现；过账与取消都写审计；幂等键使用 canonical 三元组 `(operation_type, document_id, idempotency_key)`。
+- 职责分离：申请人不得过账自己的申请（409 `PREPAYMENT_SELF_POST_FORBIDDEN`）；过账要求财务付款权限；缺结算账户 fail closed（400 `PREPAYMENT_SETTLEMENT_ACCOUNT_REQUIRED`）。
+
+#### 26.39.7 OUT-02 委外货源与 OUT-03 加工价来源
+
+- OUT-02：委外订单创建调用**与采购同一份** `assertSourceControl`，只把 `sourceType` 换成 `OUTSOURCE`；货源控制的参数开关对委外同样生效（关闭时委外不再要求货源）。无有效 OUTSOURCE 货源即 409 `OUTSOURCE_SOURCE_REQUIRED`，且订单零副作用（拒绝审计恰好一条）。
+- OUT-03：加工费采购订单的价格来源解析顺序为 —— 业务日期上有效的 **OUTSOURCE 价格条目**优先（冻结 `price_entry_id` + `price_version` + 证据）；没有有效条目时冻结为**委外合同**来源（`price_entry_id` 保持 NULL，证据读出「来源 = 委外合同 + 委外订单号 + 金额 + 业务日期」）。客户端单价只作断言，与权威单价不一致即 409 `OUTSOURCING_PROCESSING_PRICE_ASSERTION_MISMATCH`，零业务副作用。**普通 PURCHASE 价格条目不得**被用来替代委外价格来源；OUTSOURCE 条目停用后退回委外合同来源。
+
+#### 26.39.8 OUT-20 / OUT-21 过账、红冲与成本证据
+
+- **入口分层**（C-P04）：共享入口（`POST /api/supplier-bills/:id/post`、`:id/match`）继续按账单行的商业来源拒绝委外来源账单，判定依据是 `supplier_bill_items.commercial_source_type`，与路由、操作人、账单级单一列无关；委外专属入口（`POST /api/procurement/outsourcing/processing-fee-bills/:id/post`）在存在已批准会计档案时放行。两种模式的拒绝都发生在任何写入之前。
+- **科目解析**（C-P02）：`resolveProcessingFeeAccountingProfile` 按「供应商级优先于全局级」解析 `APPROVED` 且在业务日期上有效的档案；档案引用的每一个角色码都必须在 `account_role_mappings` 里解析到启用科目，否则返回 NULL 并 fail closed（409 `OUTSOURCING_GL_PROFILE_NOT_APPROVED`）。默认预置一套全局档案 `DEFAULT_NO_TAX`（借方 6408 委外加工费），科目与角色码**只在档案与科目登记簿中出现一次**，业务代码不硬编码科目。
+- **过账事务**（C-P01）：在一个事务内重读权威事实（收货生效状态、保留加工数量、已过账开票数量、已红冲数量）→ 校验金额上界 → 写 canonical 应付项 → 写 canonical 系统凭证（借方走档案角色，不走 GRNI）→ 刷新成本证据 → 写审计。任一步失败整体回滚。
+- **红冲**（C-P03）：`reverseProcessingFeeBill` 按行红冲，写 `outsourcing_processing_fee_reversals`（数量、金额、业务日期、原因、状态），生成方向相反的等额凭证与反向应付调整；累计红冲数量不得超过该行已开票数量（409 `OUTSOURCING_PROCESSING_FEE_REVERSAL_EXCEEDS`）；幂等键保证精确重放只返回已记录结果。
+- **成本证据**（OUT-21）：`refreshOutsourcingCostEvidence` 写 `processing_fee_basis_cents`（收货生效时确认，永不被账单改写）、`processing_fee_actual_cents`（canonical 账单实际金额）、`variance_cents`（实际 − 基准）与 `basis_status`。已红冲的行从实际金额与开票数量中扣除，避免重复计入。
+
+#### 26.39.9 OUT-23 期初委外与期间关闭接入
+
+- `createOpeningOutsourcingOrderCanonical` 创建显式标记 `is_opening` 的期初委外订单与 `outsourcing_opening_material_lines`（数量有理数对、来源仓、供应商 WIP 位置、身份）。期初行同时进入 `outsourcing_material_list`（`opening_line_id`、`is_opening`），使供应商 WIP 余额读模型可读。
+- 期初结余写入**同一本**身份账：`outsourcing_wip_identity_effects` 的 `event_type` 增加 `'OPENING'`（`effect_direction='SUPPLY'`）。SQLite 不能 ALTER CHECK，因此按仓库既有模式重建表并逐行原样搬运历史行（迁移自身校验行数）；MySQL 走 `MODIFY COLUMN` 修改 CHECK 表达式，**不重建表**（重建会破坏自引用外键且 DDL 自动提交）。身份口径按产品跟踪策略判定，不符即 409 `WIP_IDENTITY_POLICY_MISMATCH`。
+- 期初**不产生**凭证、应付或收入；供应商无委外 WIP 位置时 409 `OUTSOURCING_OPENING_WIP_WAREHOUSE_MISSING`；物料行格式非法 400 `OUTSOURCING_OPENING_MATERIAL_REQUIRED`。
+- 期间关闭接入：`inventory-period-close.js` 的预检查新增 `OUTSOURCING_SUPPLY_CONSISTENCY`（委外供给一致性），委外库存流水的业务日期必须可追溯（不再落入 `LEGACY_BUSINESS_DATE_UNKNOWN`）；`finance-business-close.js` 的业务关闭读模型新增 `outsourcingExposure`（未过账加工费与供应商 WIP 数量），**不新增关闭轴**（既有 `AP` / `AR` / `TREASURY` 三轴不变）。
+
+#### 26.39.10 Schema / Migration 与 SQLite / MySQL parity
+
+新增四个**纯加法**、幂等、可重放的迁移文件：
+
+| 文件 | 内容 |
+|---|---|
+| `server/migrations/procurement-sourcing-schema.js` | `source_list_overrides`、`pr_conversion_allocations`、`po_delivery_schedule_closes`；`purchase_orders.payment_terms_days_source` / `supplier_category_snapshot`；`purchase_order_delivery_schedules.status` / `closed_at` / `closed_by` |
+| `server/migrations/procurement-prepayment-schema.js` | `prepayment_requirements`、`prepayment_requirement_items` 及其状态列 |
+| `server/migrations/procurement-outsourcing-finance-schema.js` | `outsourcing_processing_fee_accounting_profiles`、`outsourcing_processing_fee_reversals`；`supplier_bills` 的加工费过账状态列；`outsourcing_cost_evidences` 的 FINAL 口径列；科目 6408 与角色映射；默认全局档案 |
+| `server/migrations/procurement-outsourcing-opening-schema.js` | `outsourcing_opening_material_lines`；`outsourcing_orders.is_opening` / `opening_business_date` / `opening_source_reference`；`outsourcing_material_list.opening_line_id` / `is_opening`；`outsourcing_wip_identity_effects.event_type` 增加 `'OPENING'` |
+
+- 全部只加结构、**不回填**历史事实：历史采购订单的 `payment_terms_days_source` 取默认值、`supplier_category_snapshot` 保持 NULL 并在读取时回落；历史委外订单 `is_opening` 为 0。
+- 唯一性一律使用两引擎等价的组合键（`UNIQUE(requisition_item_id, purchase_order_item_id)`、`UNIQUE(reversal_no)`），不使用任何单引擎行为。
+- MySQL 等价性：`TEXT NOT NULL DEFAULT` 经 canonical MySQL 类型映射落为 `LONGTEXT NOT NULL DEFAULT (...)`（表达式默认值），与既有 `purchase_orders.business_type` 同路径，已由既有真实 MySQL Gate 证明。
+- **已知 parity 影响**：`outsourcing_wip_identity_effects.event_type` 的 CHECK 表达式发生变化，因此 G07 离线对等回放使用的**真实 MySQL 目录条款捕获值**失效，必须由新一轮受保护真实 MySQL Gate 重新捕获后才能恢复该断言 —— 见 §26.39.13。
+
+#### 26.39.11 事务、幂等、错误码与审计
+
+- 全部 mutation 在单一事务内完成，重读权威状态后再写入；失败整体回滚，零业务副作用。
+- 幂等沿用 canonical 三元组 `(operation_type, document_id, idempotency_key)`；过账与红冲使用 `Idempotency-Key` 请求头。
+- 新增稳定错误码（按域归族）：`SOURCE_OVERRIDE_WINDOW_INVALID` / `SOURCE_OVERRIDE_OVERLAP`、`PR_CONVERSION_ALLOCATION_EXCEEDS_QUANTITY`、`PO_ITEM_ALLOCATION_SOURCE_LOST` / `PO_ITEM_ALLOCATION_QUANTITY_MISMATCH` / `PO_ITEM_ALLOCATION_DUPLICATE_FACT`、`PO_DELIVERY_SCHEDULE_NOT_CLOSEABLE`、`OUTSOURCE_SOURCE_REQUIRED`、`SUPPLIER_CATEGORY_NOT_OUTSOURCE`、`OUTSOURCING_PROCESSING_PRICE_ASSERTION_MISMATCH`、`OUTSOURCING_GL_PROFILE_NOT_APPROVED`、`OUTSOURCING_PROCESSING_FEE_PRICE_MISMATCH` / `_REVERSAL_EXCEEDS` / `_ALREADY_POSTED` / `_NOT_POSTED` / `_INVALID_QUANTITY` / `_INVALID_AMOUNT` / `_NOT_REVERSIBLE`、`OUTSOURCING_OPENING_MATERIAL_REQUIRED` / `OUTSOURCING_OPENING_WIP_WAREHOUSE_MISSING`、`WIP_IDENTITY_POLICY_MISMATCH`、`PREPAYMENT_*` 族。
+- 关键 mutation 写审计（创建 / 过账 / 取消 / override / 关单 / 红冲 / 拒绝），审计**不含**密码或令牌。
+
+#### 26.39.12 兼容与回滚
+
+- 全部为增量迁移，不删除、不改写历史行；回滚只允许撤回新接线并让对应 mutation fail closed。
+- 委外加工费正式过账**改变**了既有合同（此前一律 409）：M1-Core G06 的该条断言被 Requirement §31.19.7(5) 取代，必须随域级 Acceptance 重新确认；共享入口的拒绝边界**未变**。
+- 新增 6408「委外加工费」科目使试算平衡的科目集合由 21 变为 22；既有损益表与资产负债表口径不变（新增科目零余额时不产生行）。
+
+#### 26.39.13 测试、验收与本节已知的未闭合项
+
+- 新增 focused 套件：`server/procurement-sourcing-capabilities.test.js`（PRC-02 / PRC-04 / PRC-12 / PRC-16 / OUT-02）、`server/procurement-prepayment.test.js`（PRC-17）、`server/out-03-out-23.test.js`（OUT-03 / OUT-23）；既有 `server/outsourcing-finance.test.js` 扩展 OUT-20 / OUT-21 / C-P01 / C-P03 / C-P04。
+- 既有委外与采购套件的夹具按新合同调整：委外订单创建前必须先建立有效 OUTSOURCE 货源（业务事实的表达方式，与「先建立采购价格条目」同理）；调整只改变测试如何表达业务事实，不改变被测业务合同的语义。
+- **G07 固定场景重新冻结**：固定场景新增「建立有效 OUTSOURCE 货源」步骤，冻结摘要重新计算并写回三处断言；**该重新冻结待业务所有者显式确认**，在此之前真实 MySQL Gate 的既有验收结论不因本次变更自动延续。
+- **未闭合项**：`outsourcing_wip_identity_effects.event_type` 的 CHECK 变化使 G07 离线对等回放使用的真实 MySQL 目录条款捕获值失效；该断言只能在受保护真实 MySQL Gate 复跑并重新捕获后恢复，不得以削弱断言或改写检查器的方式通过。

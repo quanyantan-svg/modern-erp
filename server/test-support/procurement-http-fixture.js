@@ -119,6 +119,25 @@ async function createMySqlProcurementFixture(prefix) {
 }
 
 /**
+ * Give a supplier/product pair an effective OUTSOURCE source list entry.
+ *
+ * OUT-02：委外订单创建时必须消费有效 `source_type='OUTSOURCE'` 货源；货源
+ * 控制的采购参数开关对委外同样生效。因此任何要创建委外订单的测试必须先
+ * 表达这条业务事实 —— 与 `seedPurchasePrice` 表达采购价格事实同理。
+ */
+export async function seedOutsourceSource(fixture, entries, token = fixture.tokens.admin) {
+  for (const entry of entries) {
+    const result = await fixture.request('POST', '/api/procurement/source-entries', token, {
+      supplierId: entry.supplierId,
+      productId: entry.productId,
+      sourceType: 'OUTSOURCE',
+      effectiveFrom: entry.effectiveFrom || '2020-01-01',
+    });
+    assert.equal(result.status, 201, result.data.error);
+  }
+}
+
+/**
  * Give a supplier/product pair an effective purchase price.
  *
  * An ordinary purchase order fails closed without an effective supplier price

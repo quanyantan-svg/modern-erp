@@ -18,10 +18,7 @@ import { join, resolve } from 'node:path';
 import { createApp } from './app.js';
 import { createDatabase } from './db.js';
 import { matchSupplierBill, postSupplierBill } from './modules/commercial-golive.js';
-import {
-  createApprovedProcessingPo, outsourcingReceiptBody, prepareOutsourcingReceiptSource,
-  seedApprovedOutsourceBom,
-} from './test-support/procurement-http-fixture.js';
+import { createApprovedProcessingPo, outsourcingReceiptBody, prepareOutsourcingReceiptSource, seedApprovedOutsourceBom, seedOutsourceSource } from './test-support/procurement-http-fixture.js';
 
 const POLICY_CODE = 'OUTSOURCING_GL_POLICY_NOT_APPROVED';
 
@@ -201,6 +198,7 @@ async function buildOutsourcingReceipt(fixture) {
     qualificationValidFrom: isoDate(-30), qualificationValidTo: isoDate(180), supplierWipWarehouseId: 'warehouse-002',
   });
   assert.equal(qualify.status, 200, qualify.data.error);
+  await seedOutsourceSource(fixture, [{ supplierId: 'supplier-001', productId: 'product-001', effectiveFrom: isoDate(-30) }]);
   const bomId = seedApprovedOutsourceBom(fixture, 'product-001', [
     { productId: 'product-001', requiredQuantity: 0.1 },
   ], 'r1-gl-policy', isoDate(-30));

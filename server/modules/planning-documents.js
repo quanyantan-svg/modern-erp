@@ -35,6 +35,7 @@ import { allocateDocumentNumber } from './commercial-golive.js';
 import { createProductionOrderCommand } from './manufacturing-orders.js';
 import { createPurchaseOrderDraftCanonical } from './procurement-orders.js';
 import { assertPurchaseQuotaControl, assertPurchaseSourceControl, assertRequisitionSourcePolicy } from './procurement-policy.js';
+import { rationalAdd, rationalCmp } from './procurement-sourcing.js';
 
 const PI_STATUS = { DRAFT: '草稿', RELEASED: '已下达', CANCELLED: '已取消' };
 const PUI_STATUS = { DRAFT: '草稿', RELEASED: '已下达', CANCELLED: '已取消' };
@@ -920,8 +921,79 @@ function validateBatchAssignment(db, entry, index) {
   return {
     requisitionItemId, supplierId, supplier, source, quantity,
     quantityRational: toExactRational(quantity, `第${index + 1}行转换数量`),
+    requisitionQuantityRational: toExactRational(Number(source.quantity), `第${index + 1}行请购数量`),
     documentUomCode: source.baseUomCode || null,
   };
+}
+
+/**
+ * PRC-12 — 请购转采购订单的**不可变分配事实**。
+ *
+ * 既有 batch converter 的分组逻辑不被重写；本函数只在其之上把
+ * 「请购明细 → 采购订单明细 → 供应商 → 分配数量」写成一张不可变事实表，
+ * 并写一次可追溯审计（谁、哪个请购单、拆到哪几个供应商、各分配多少）。
+ *
+ * 数量守恒：同一请购明细的**累计**分配量（含历史分配）不得超过其请购数量。
+ * 守恒在事务内重读权威事实后校验；越界即拒绝，不写任何分配事实。
+ */
+function recordPrConversionAllocations(db, { actor, orderDate, now, facts }) {
+  if (!facts.length) return [];
+  const conversionId = genId();
+  // 累计分配量按请购明细汇总；历史分配同样计入（事实表是 append-only）。
+  const accumulated = new Map();
+  for (const row of db.prepare('SELECT requisition_item_id, allocated_quantity_num num, allocated_quantity_den den FROM pr_conversion_allocations').all()) {
+    const current = accumulated.get(row.requisition_item_id) || { num: 0, den: 1 };
+    accumulated.set(row.requisition_item_id, rationalAdd(current, { num: Number(row.num), den: Number(row.den) }));
+  }
+  const pending = new Map();
+  for (const fact of facts) {
+    const current = pending.get(fact.requisitionItemId) || { num: 0, den: 1 };
+    pending.set(fact.requisitionItemId, rationalAdd(current, { num: fact.allocatedNum, den: fact.allocatedDen }));
+  }
+  for (const [requisitionItemId, added] of pending) {
+    const fact = facts.find((item) => item.requisitionItemId === requisitionItemId);
+    const total = rationalAdd(accumulated.get(requisitionItemId) || { num: 0, den: 1 }, added);
+    const requisitionQuantity = { num: fact.requisitionQuantityNum, den: fact.requisitionQuantityDen };
+    if (rationalCmp(total, requisitionQuantity) > 0) {
+      throw new HttpError(409, `请购明细 ${requisitionItemId} 的累计分配量 ${total.num}/${total.den} 超过请购数量 ${requisitionQuantity.num}/${requisitionQuantity.den}`, {
+        code: 'PR_CONVERSION_ALLOCATION_EXCEEDS_QUANTITY',
+      });
+    }
+  }
+  const insert = db.prepare(`INSERT INTO pr_conversion_allocations(
+      id,requisition_id,requisition_item_id,purchase_order_id,purchase_order_item_id,supplier_id,product_id,
+      allocated_quantity_num,allocated_quantity_den,requisition_quantity_num,requisition_quantity_den,
+      business_date,conversion_id,created_by,created_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  for (const fact of facts) {
+    insert.run(
+      genId(), fact.requisitionId, fact.requisitionItemId, fact.purchaseOrderId, fact.purchaseOrderItemId,
+      fact.supplierId, fact.productId, fact.allocatedNum, fact.allocatedDen,
+      fact.requisitionQuantityNum, fact.requisitionQuantityDen,
+      orderDate, conversionId, actor.id, now,
+    );
+  }
+  // 一次转换一条审计：谁、哪个请购单、拆到哪几个供应商、各分配多少。
+  const bySupplier = new Map();
+  for (const fact of facts) {
+    const current = bySupplier.get(fact.supplierId) || { quantity: 0, items: 0 };
+    bySupplier.set(fact.supplierId, { quantity: current.quantity + fact.allocatedNum / fact.allocatedDen, items: current.items + 1 });
+  }
+  const requisitionIds = [...new Set(facts.map((fact) => fact.requisitionId))];
+  audit(db, actor.id, 'ALLOCATE', 'PR_CONVERSION', conversionId, JSON.stringify({
+    requisitionIds,
+    conversionId,
+    orderDate,
+    supplierAllocations: [...bySupplier.entries()].map(([supplierId, value]) => ({ supplierId, ...value })),
+    allocations: facts.map((fact) => ({
+      requisitionItemId: fact.requisitionItemId,
+      purchaseOrderId: fact.purchaseOrderId,
+      purchaseOrderItemId: fact.purchaseOrderItemId,
+      supplierId: fact.supplierId,
+      allocatedQuantity: `${fact.allocatedNum}/${fact.allocatedDen}`,
+    })),
+  }));
+  return facts;
 }
 
 function createPurchaseOrderGroups(db, actor, rawItems, defaults = {}) {
@@ -950,6 +1022,9 @@ function createPurchaseOrderGroups(db, actor, rawItems, defaults = {}) {
   const requestedExpectedDate = readDate(defaults.expectedDeliveryDate ?? defaults.expected_delivery_date, '预计交期');
   const paymentTerms = readString(defaults.paymentTerms ?? defaults.payment_terms, 200);
   const created = [];
+  // PRC-12：一次转换的分配事实集合（请购明细 → 采购订单明细 → 供应商 → 数量）。
+  // 既有 batch converter 的分组逻辑**不被重写**；本表只在其之上记录不可变事实。
+  const allocationFacts = [];
   for (const [supplierId, group] of groups) {
     for (const entry of group) {
       assertPurchaseSourceControl(db, {
@@ -968,6 +1043,8 @@ function createPurchaseOrderGroups(db, actor, rawItems, defaults = {}) {
     const requisitionNos = [...new Set(group.map((entry) => entry.source.requisitionNo))];
     const requisitionIds = [...new Set(group.map((entry) => entry.source.requisitionId))];
     const headerRequisitionId = requisitionIds.length === 1 ? requisitionIds[0] : null;
+    // 采购订单行 ID 在写单前确定，供分配事实引用。
+    const orderItemIds = group.map(() => genId());
     const written = createPurchaseOrderDraftCanonical(db, actor, {
       id: poId, orderNo, now, supplierId, businessType: 'STANDARD_PURCHASE',
       remark: `批量转换请购单 ${requisitionNos.join('、')}`,
@@ -976,7 +1053,7 @@ function createPurchaseOrderGroups(db, actor, rawItems, defaults = {}) {
       purchaseRequisitionId: headerRequisitionId, auditAction: 'GENERATE',
       auditDetail: `按供应商批量生成 ${orderNo}; 来源 ${requisitionNos.join(',')}`,
       items: group.map((entry, lineIndex) => ({
-        id: genId(), productId: entry.source.product_id, quantity: entry.quantity,
+        id: orderItemIds[lineIndex], productId: entry.source.product_id, quantity: entry.quantity,
         documentUomCode: entry.documentUomCode,
         documentQuantityNumerator: entry.quantityRational.num,
         documentQuantityDenominator: entry.quantityRational.den,
@@ -987,8 +1064,23 @@ function createPurchaseOrderGroups(db, actor, rawItems, defaults = {}) {
         purchaseRequisitionItemId: entry.requisitionItemId,
       })),
     });
+    group.forEach((entry, lineIndex) => {
+      allocationFacts.push({
+        requisitionId: entry.source.requisitionId,
+        requisitionItemId: entry.requisitionItemId,
+        purchaseOrderId: poId,
+        purchaseOrderItemId: orderItemIds[lineIndex],
+        supplierId,
+        productId: entry.source.product_id,
+        allocatedNum: entry.quantityRational.num,
+        allocatedDen: entry.quantityRational.den,
+        requisitionQuantityNum: entry.requisitionQuantityRational.num,
+        requisitionQuantityDen: entry.requisitionQuantityRational.den,
+      });
+    });
     created.push({ id: poId, orderNo, supplierId, itemCount: group.length, totalCents: written.totalCents });
   }
+  recordPrConversionAllocations(db, { actor, orderDate, now, facts: allocationFacts });
   const affectedRequisitions = [...new Set(assignments.map((entry) => entry.source.requisitionId))];
   for (const requisitionId of affectedRequisitions) {
     const sourceItems = db.prepare('SELECT id,quantity FROM purchase_requisition_items WHERE requisition_id=?').all(requisitionId);

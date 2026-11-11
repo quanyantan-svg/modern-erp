@@ -40,9 +40,7 @@
 
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import {
-  createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource,
-} from './test-support/procurement-http-fixture.js';
+import { createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource, seedOutsourceSource } from './test-support/procurement-http-fixture.js';
 import {
   G03_BUSINESS_FACT_TABLES, G04_BUSINESS_FACT_TABLES,
   changedTables, g03BusinessFactTableReport, snapshotTables,
@@ -189,6 +187,7 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
     await qualifySupplier();
     // 委外成品（父项货品）：委外订单与 OUTSOURCE BOM 的父项。
     parentId = await createProduct(PARENT_CODE, 'NONE', 'FINISHED_GOOD');
+    await seedOutsourceSource(fixture, [{ supplierId: 'supplier-001', productId: parentId, effectiveFrom: isoDate(-30) }]);
   });
   after(async () => fixture.close());
 
@@ -853,6 +852,7 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
 
     before(async () => {
       r1ParentId = await createProduct('WP7A-R1-FG', 'NONE', 'FINISHED_GOOD');
+      await seedOutsourceSource(fixture, [{ supplierId: 'supplier-001', productId: r1ParentId, effectiveFrom: isoDate(-30) }]);
       r1CostProductId = await createProduct('WP7A-R1-COST', 'NONE');
       await receiveStock(r1CostProductId, 100);
       seedValuationBalance({
@@ -1057,7 +1057,7 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
       assert.equal(issue.status, 201, issue.data.error);
     });
 
-    test('G06-1 委外来源账单在专用与共享入口一律 409，AP / 凭证 / 库存 / 估值 / 成本 / 单据逐字段零变化', async () => {
+    test('G06-1 委外来源账单在共享入口一律 409；专用入口按 C-P02 会计档案过账', async () => {
       const source = await prepareOutsourcingReceiptSource(fixture, orderId, 10, 'wp7a-g06');
       const receipt = await fixture.request('POST', '/api/procurement/outsourcing/receipts', fixture.tokens.outsourcingReceiving, {
         orderId, quantity: 10, receivedDate: isoDate(), businessDate: isoDate(), processingPoId: source.processingPoId,
@@ -1083,8 +1083,8 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
       const before = businessSnapshot(billId, receipt.data.id);
       const rejectsBefore = countRejects('SUPPLIER_BILL', billId);
 
+      // C-P04 跨域边界：共享入口是普通采购的公共通道，继续拒绝委外来源账单。
       const attempts = [
-        { name: '专用过账', path: `/api/procurement/outsourcing/processing-fee-bills/${billId}/post`, body: undefined, actor: 'accounting' },
         { name: '共享过账', path: `/api/supplier-bills/${billId}/post`, body: undefined, actor: 'accounting' },
         { name: '共享匹配', path: `/api/supplier-bills/${billId}/match`, body: { items: [] }, actor: 'accounting' },
         { name: '管理员共享过账', path: `/api/supplier-bills/${billId}/post`, body: undefined, actor: 'admin' },
@@ -1107,6 +1107,24 @@ describe('M1C-WP7-A — M1-Core 首期 Gate 补证（G03 / G04 / G06）', () => 
       assert.equal(forbiddenBody.includes('OUTSOURCING_RECEIPT_ITEM'), false, '403 响应不得泄露账单来源');
       assert.equal(forbiddenBody.includes(billId), false, '403 响应不得泄露业务单据标识');
       assert.equal(businessSnapshot(billId, receipt.data.id), before, '403 拒绝后业务事实必须逐字段零变化');
+
+      // 专用入口：委外加工费的正式过账（C-P01/C-P02/C-P03）。金额上界取收货
+      // 生效时确认的加工费金额，借方走委外加工费科目，不照搬普通采购 GRNI。
+      const posted = await fixture.request('POST', `/api/procurement/outsourcing/processing-fee-bills/${billId}/post`,
+        fixture.tokens.accounting);
+      assert.equal(posted.status, 200, JSON.stringify(posted.data));
+      const payable = fixture.db.prepare("SELECT * FROM account_payables WHERE source_type='SUPPLIER_BILL' AND source_id=?").get(billId);
+      assert.ok(payable, '专用过账必须产生 canonical 应付');
+      assert.equal(Number(payable.amount_cents), 5000);
+      const voucher = fixture.db.prepare("SELECT * FROM accounting_vouchers WHERE source_type='SUPPLIER_BILL' AND source_id=?").get(billId);
+      assert.ok(voucher, '专用过账必须产生 canonical 凭证');
+      const entries = fixture.db.prepare('SELECT e.*, s.code subject_code FROM accounting_entries e JOIN accounting_vouchers v ON v.id=e.voucher_id JOIN accounting_subjects s ON s.id=e.subject_id WHERE v.id=? ORDER BY e.line_no').all(voucher.id);
+      assert.deepEqual(entries.filter((entry) => entry.direction === 'DEBIT').map((entry) => entry.subject_code), ['6408'],
+        '借方必须是委外加工费科目');
+      assert.deepEqual(entries.filter((entry) => entry.direction === 'CREDIT').map((entry) => entry.subject_code), ['2202'],
+        '贷方必须是 canonical 应付账款');
+      const evidence = fixture.db.prepare('SELECT * FROM outsourcing_cost_evidences WHERE outsourcing_receipt_id=?').get(receipt.data.id);
+      assert.equal(evidence.basis_status, 'FINAL', '过账后成本证据必须转 FINAL');
     });
   });
 });

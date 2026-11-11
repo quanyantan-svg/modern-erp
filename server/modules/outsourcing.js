@@ -4,10 +4,18 @@ import { audit, auditBusinessRejection } from '../lib/audit.js';
 import {
   HttpError, allow, allowAny, assertAllowedFields, readJson, send,
 } from '../lib/http.js';
-import { executeOutsourcingBackflush, executeOutsourcingMove } from './outsourcing-inventory.js';
+import {
+  executeOutsourcingBackflush, executeOutsourcingMove,
+  recordOpeningWipSupply, resolveOutsourcingIdentity,
+} from './outsourcing-inventory.js';
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 import { createPurchaseOrderDraftCanonical } from './procurement-orders.js';
 import { assertSupplierQualification } from './procurement-sourcing.js';
+import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
+import { assertSourceControl, assertSupplierCategoryAllows } from './procurement-policy.js';
+import { resolvePurchaseLinePricing } from './procurement-pricing.js';
+import { applyInventoryMutation } from '../lib/inventory-mutation.js';
+import { roundRational } from './commercial-golive.js';
 import { resolveEffectiveBomForCaller } from './engineering-bom.js';
 import {
   listOutsourcingOptions, listOutsourcingReceivingQueue, readOutsourcingReceiptQualityContext,
@@ -318,36 +326,50 @@ export async function createOutsourcingOrder(db, req, res, actor) {
   }
   const orderId = randomUUID(); const now = new Date().toISOString();
   const orderNo = 'OS-' + Date.now().toString().slice(-10);
-  transaction(db, () => {
-    // 委外供应商资格按**订单业务日期**与有效起止日判断，不按系统当前日；
-    // 复用采购域唯一资格原语，避免第二份不一致规则（Design §26.35.3）。
-    assertSupplierQualification(db, body.supplierId, 'OUTSOURCE', businessDate);
-    if (sourceType === 'PLANNING') {
-      consumePlanningHandoff(db, {
-        handoffId: body.planningHandoffId, actor,
-        supplierId: body.supplierId,
-        bodyOrderId: orderId, bodyOrderNo: orderNo,
-        bodyBusinessDate: body.businessDate, bodyExpectedCompletionDate: body.expectedCompletionDate,
-        bodyBomId: body.bomId, bodyBomVersion: body.bomVersion, bodyRemark: body.remark,
+  try {
+    transaction(db, () => {
+      // 委外供应商资格按**订单业务日期**与有效起止日判断，不按系统当前日；
+      // 复用采购域唯一资格原语，避免第二份不一致规则（Design §26.35.3）。
+      assertSupplierQualification(db, body.supplierId, 'OUTSOURCE', businessDate);
+      // PRC-02：委外类供应商才可承接委外业务；普通类供应商不得承接。
+      assertSupplierCategoryAllows(db, { supplierId: body.supplierId, businessType: 'OUTSOURCE' });
+      // OUT-02：委外订单必须消费**有效 OUTSOURCE 货源**。货源控制的采购参数
+      // 开关对委外同样生效（同一参数、同一判定），委外与采购共用同一份货源
+      // 解析实现，不存在第二套规则。
+      assertSourceControl(db, {
+        supplierId: body.supplierId, productId: body.productId, businessDate, sourceType: 'OUTSOURCE',
       });
-    } else {
-      // MANUAL source: canonical fields come from the client body.
-      try {
-        db.prepare(`INSERT INTO outsourcing_orders(id,order_no,supplier_id,product_id,order_quantity,required_quantity,unit,source_type,planning_handoff_id,status,business_date,expected_completion_date,bom_id,bom_version,remark,creator_id,created_at,updated_at)
-          VALUES(?,?,?,?,?,?,?,?,NULL,'DRAFT',?,?,?,?,?,?,?,?)`).run(
-          orderId, orderNo, body.supplierId, body.productId, Number(body.orderQuantity), Number(body.orderQuantity), body.unit || 'EA',
-          sourceType, body.businessDate || today, body.expectedCompletionDate || null,
-          body.bomId || null, body.bomVersion || null, body.remark || '', actor.id, now, now,
-        );
-      } catch (err) {
-        if (/UNIQUE constraint failed: outsourcing_orders.planning_handoff_id/i.test(String(err.message))) {
-          throw new HttpError(409, 'planning_handoff_id 已被消费，不得重复');
+      if (sourceType === 'PLANNING') {
+        consumePlanningHandoff(db, {
+          handoffId: body.planningHandoffId, actor,
+          supplierId: body.supplierId,
+          bodyOrderId: orderId, bodyOrderNo: orderNo,
+          bodyBusinessDate: body.businessDate, bodyExpectedCompletionDate: body.expectedCompletionDate,
+          bodyBomId: body.bomId, bodyBomVersion: body.bomVersion, bodyRemark: body.remark,
+        });
+      } else {
+        // MANUAL source: canonical fields come from the client body.
+        try {
+          db.prepare(`INSERT INTO outsourcing_orders(id,order_no,supplier_id,product_id,order_quantity,required_quantity,unit,source_type,planning_handoff_id,status,business_date,expected_completion_date,bom_id,bom_version,remark,creator_id,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,NULL,'DRAFT',?,?,?,?,?,?,?,?)`).run(
+            orderId, orderNo, body.supplierId, body.productId, Number(body.orderQuantity), Number(body.orderQuantity), body.unit || 'EA',
+            sourceType, body.businessDate || today, body.expectedCompletionDate || null,
+            body.bomId || null, body.bomVersion || null, body.remark || '', actor.id, now, now,
+          );
+        } catch (err) {
+          if (/UNIQUE constraint failed: outsourcing_orders.planning_handoff_id/i.test(String(err.message))) {
+            throw new HttpError(409, 'planning_handoff_id 已被消费，不得重复');
+          }
+          throw err;
         }
-        throw err;
+        audit(db, actor.id, 'CREATE', 'OUTSOURCING_ORDER', orderId, orderNo);
       }
-      audit(db, actor.id, 'CREATE', 'OUTSOURCING_ORDER', orderId, orderNo);
-    }
-  });
+    });
+  } catch (error) {
+    // 业务拒绝写恰好一条拒绝审计（事务已回滚，业务零副作用）。
+    auditRejectedBusinessRule(db, actor, 'OUTSOURCING_ORDER', null, '创建委外订单', error);
+    throw error;
+  }
   return send(res, 201, { id: orderId, orderNo });
 }
 
@@ -528,8 +550,199 @@ export async function cancelOutsourcingOrder(db, req, res, actor, orderId) {
   return send(res, 200, { ok: true });
 }
 
-const PROCESSING_PO_BUSINESS_FIELDS = ['unitPriceCents', 'orderDate', 'expectedDeliveryDate', 'paymentTerms',
+const PROCESSING_PO_BUSINESS_FIELDS = ['unitPriceCents', 'orderDate', 'expectedDeliveryDate', 'paymentTerms', 'paymentTermsDays',
   'supplierContactName', 'supplierContactPhone', 'supplierAddress', 'remark'];
+
+// ---------------------------------------------------------------------------
+// OUT-03 加工费价格来源（Requirement §31.3.3 OUT-03；Active Design §26.36.3）
+// ---------------------------------------------------------------------------
+//
+// 加工费是**委外加工对价**，不是成品全部材料成本，也不是普通采购价格。
+// 因此加工费 PO 的价格来源必须能被读出来，且来源只能是下列两者之一：
+//
+//   1. **委外价格表条目**（`purchase_price_list_entries.source_type='OUTSOURCE'`）：
+//      业务日期上有效的唯一 OUTSOURCE 条目即为权威价格。此时客户端传入的
+//      `unitPriceCents` **只作断言** —— 与权威单价不一致固定 409。
+//   2. **委外合同冻结来源**：没有有效 OUTSOURCE 价格条目时，金额来自已批准的
+//      委外合同。`price_entry_id` **保持 NULL**（不得为缺失的价格编造价格条目），
+//      但价格证据里必须能读出「来源 = 委外合同 + 委外订单号 + 金额」。
+//
+// **禁止**：普通 `PURCHASE` 价格表静默替换委外价格来源。
+// `resolvePurchaseLinePricing` 的 `sourceType` 是显式入参，调用方只传
+// `'OUTSOURCE'`，因此 PURCHASE 条目在解析层面根本不可见；`assertProcessingPoPriceSource`
+// 再做一次显式反例守卫，防止将来有人把 `sourceType` 改成 'PURCHASE'。
+//
+// 证据冻结形态（`purchase_order_items.pricing_evidence_json`）：
+//
+//   {
+//     "contractVersion": "OUTSOURCING_PROCESSING_PRICE_V1",
+//     "sourceKind": "OUTSOURCE_PRICE_LIST" | "OUTSOURCE_CONTRACT",
+//     "sourceType": "OUTSOURCE",
+//     "priceEntryId": "<id>" | null,
+//     "priceVersion": <n> | null,
+//     "unitPriceCents": <int>,
+//     "amountCents": <int>,
+//     "businessDate": "YYYY-MM-DD",
+//     "outsourcingOrderId": "...", "outsourcingOrderNo": "...",
+//     ...
+//   }
+//
+// `purchase_order_items.price_entry_id` 只在来源确实是价格条目时才写 ID；
+// 委外合同来源下它保持 NULL，`discount_source` 也保持 NULL。
+export const OUTSOURCING_PROCESSING_PRICE_CODES = Object.freeze({
+  PRICE_NOT_CONFIGURED: 'OUTSOURCING_PROCESSING_PRICE_NOT_CONFIGURED',
+  PRICE_ASSERTION_MISMATCH: 'OUTSOURCING_PROCESSING_PRICE_ASSERTION_MISMATCH',
+  PRICE_SOURCE_INVALID: 'OUTSOURCING_PROCESSING_PRICE_SOURCE_INVALID',
+});
+
+/**
+ * 该供应商 / 成品 / 业务日期上是否存在**有效**的 OUTSOURCE 价格条目。
+ *
+ * 只用于**分流**（走价格表还是走委外合同），不用于定价。定价本身由
+ * canonical `resolvePurchaseLinePricing(sourceType='OUTSOURCE')` 完成，
+ * 本函数不另立一套解析规则。
+ */
+function hasEffectiveOutsourcePriceEntry(db, { supplierId, productId, businessDate }) {
+  const row = db.prepare(`SELECT 1 FROM purchase_price_list_entries
+    WHERE supplier_id=? AND product_id=? AND source_type='OUTSOURCE' AND status='ACTIVE'
+      AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)
+    LIMIT 1`).get(supplierId, productId, businessDate, businessDate);
+  return Boolean(row);
+}
+
+/**
+ * OUT-03 加工费价格来源的**唯一**权威解析点。
+ *
+ * 在写事务内调用（权威重读价格表与委外订单）。
+ *
+ * 返回 `{ unitPriceCents, amountCents, pricingEvidence }`：
+ *   - `unitPriceCents` —— 加工费 PO 行的权威单价（安全整数分）；
+ *   - `amountCents` —— 按订单数量折算的行金额（安全整数分）；
+ *   - `pricingEvidence` —— 冻结到 `purchase_order_items.pricing_evidence_json` 的来源证据。
+ */
+export function resolveOutsourcingProcessingPrice(db, {
+  order, supplier, product, quantity, assertedUnitPriceCents, businessDate, documentUomCode,
+}) {
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    throw new HttpError(400, '委外数量必须大于 0');
+  }
+  if (!Number.isSafeInteger(assertedUnitPriceCents) || assertedUnitPriceCents < 0) {
+    throw new HttpError(400, '加工费单价必须为非负安全整数分');
+  }
+  const priceEntryAvailable = hasEffectiveOutsourcePriceEntry(db, {
+    supplierId: order.supplier_id, productId: order.product_id, businessDate,
+  });
+
+  if (priceEntryAvailable) {
+    // 权威单价来自委外价格表条目。客户端传入值**只作断言**。
+    const pricing = resolvePurchaseLinePricing(db, {
+      supplierId: order.supplier_id,
+      productId: order.product_id,
+      sourceType: 'OUTSOURCE',
+      businessDate,
+      documentUomCode,
+      documentQuantity: { num: quantity, den: 1 },
+      giftLine: false,
+    });
+    if (Number(pricing.unitPriceCents) !== Number(assertedUnitPriceCents)) {
+      throw businessConflict(OUTSOURCING_PROCESSING_PRICE_CODES.PRICE_ASSERTION_MISMATCH,
+        `客户端加工费单价 ${assertedUnitPriceCents} 与委外价格表权威单价 ${pricing.unitPriceCents} 不一致`);
+    }
+    // 行金额按**委外订单数量**与权威单价精确相乘（安全整数分）。
+    const amountCents = roundRational(BigInt(assertedUnitPriceCents) * BigInt(quantity), 1n);
+    if (!Number.isSafeInteger(amountCents) || amountCents < 0) {
+      throw new HttpError(400, '加工费金额无法用安全整数分精确表示');
+    }
+    return {
+      unitPriceCents: assertedUnitPriceCents,
+      amountCents,
+      priceEntryId: pricing.priceEntryId,
+      priceVersion: pricing.priceVersion ?? null,
+      pricingUomCode: pricing.pricingUomCode || null,
+      pricingEvidence: {
+        contractVersion: 'OUTSOURCING_PROCESSING_PRICE_V1',
+        sourceKind: 'OUTSOURCE_PRICE_LIST',
+        sourceType: 'OUTSOURCE',
+        priceEntryId: pricing.priceEntryId,
+        priceVersion: pricing.priceVersion ?? null,
+        pricingUomCode: pricing.pricingUomCode || null,
+        unitPriceCents: assertedUnitPriceCents,
+        amountCents,
+        quantity,
+        businessDate,
+        outsourcingOrderId: order.id,
+        outsourcingOrderNo: order.order_no,
+        supplierId: order.supplier_id,
+        productId: order.product_id,
+        appliedDiscount: pricing.appliedDiscount || null,
+        roundingContract: 'HALF_UP_CENT_V1',
+      },
+    };
+  }
+
+  // 没有有效 OUTSOURCE 价格条目：以**委外合同**冻结来源。
+  // `price_entry_id` 保持 NULL —— 不得为缺失的价格编造价格条目。
+  const amountCents = roundRational(BigInt(assertedUnitPriceCents) * BigInt(quantity), 1n);
+  if (!Number.isSafeInteger(amountCents) || amountCents < 0) {
+    throw new HttpError(400, '加工费金额无法用安全整数分精确表示');
+  }
+  return {
+    unitPriceCents: assertedUnitPriceCents,
+    amountCents,
+    priceEntryId: null,
+    priceVersion: null,
+    pricingUomCode: null,
+    pricingEvidence: {
+      contractVersion: 'OUTSOURCING_PROCESSING_PRICE_V1',
+      sourceKind: 'OUTSOURCE_CONTRACT',
+      sourceType: 'OUTSOURCE',
+      priceEntryId: null,
+      priceVersion: null,
+      pricingUomCode: null,
+      unitPriceCents: assertedUnitPriceCents,
+      amountCents,
+      quantity,
+      businessDate,
+      outsourcingOrderId: order.id,
+      outsourcingOrderNo: order.order_no,
+      supplierId: order.supplier_id,
+      productId: order.product_id,
+      supplierCode: supplier?.code || null,
+      contractRemark: order.remark || '',
+      roundingContract: 'HALF_UP_CENT_V1',
+    },
+  };
+}
+
+/**
+ * 反例守卫：加工费 PO **不得**被普通 `PURCHASE` 价格表静默替换
+ * （Active Design §26.36.3 的冻结边界）。
+ *
+ * 这是一次**读断言**，不新增第二套定价：它证明本行冻结的价格来源确实是
+ * OUTSOURCE（价格表条目或委外合同），且没有引用任何 PURCHASE 价格条目。
+ */
+export function assertProcessingPoPriceSource(db, purchaseOrderId) {
+  const po = db.prepare('SELECT id, business_type FROM purchase_orders WHERE id=?').get(purchaseOrderId);
+  if (!po) throw new HttpError(404, '采购订单不存在');
+  if (po.business_type !== 'OUTSOURCE_PROCESSING') return null;
+  const items = db.prepare('SELECT id, price_entry_id, pricing_evidence_json FROM purchase_order_items WHERE order_id=?').all(purchaseOrderId);
+  for (const item of items) {
+    let evidence = null;
+    try { evidence = item.pricing_evidence_json ? JSON.parse(item.pricing_evidence_json) : null; } catch { evidence = null; }
+    if (!evidence || evidence.sourceType !== 'OUTSOURCE') {
+      throw businessConflict(OUTSOURCING_PROCESSING_PRICE_CODES.PRICE_SOURCE_INVALID,
+        '加工费采购订单的价格来源必须是委外价格表条目或委外合同');
+    }
+    if (item.price_entry_id) {
+      const entry = db.prepare('SELECT source_type FROM purchase_price_list_entries WHERE id=?').get(item.price_entry_id);
+      if (!entry || entry.source_type !== 'OUTSOURCE') {
+        throw businessConflict(OUTSOURCING_PROCESSING_PRICE_CODES.PRICE_SOURCE_INVALID,
+          '加工费采购订单不得引用普通采购价格条目');
+      }
+    }
+  }
+  return true;
+}
 
 // 加工费 PO 创建的规范化 fingerprint（Active Design §6）：
 // 只含路由委外订单 ID 与规范化商业输入；可选文本 trim 后缺省为空，
@@ -592,30 +805,53 @@ export async function createOutsourcingProcessingPurchaseOrder(db, req, res, act
       } catch (error) {
         throw businessConflict('PROCESSING_PO_SUPPLIER_NOT_QUALIFIED', `委外供应商资质在订单业务日期 ${order.business_date} 无效`);
       }
+      // PRC-02：普通类供应商不得承接委外加工费采购订单。
+      assertSupplierCategoryAllows(db, { supplierId: order.supplier_id, businessType: 'OUTSOURCE_PROCESSING' });
+      // OUT-02：加工费 PO 同样消费有效 OUTSOURCE 货源（同一参数、同一判定）。
+      assertSourceControl(db, {
+        supplierId: order.supplier_id, productId: order.product_id,
+        businessDate: order.business_date, sourceType: 'OUTSOURCE',
+      });
       const product = db.prepare('SELECT * FROM products WHERE id=? AND active=1').get(order.product_id);
       if (!product) throw businessConflict('PROCESSING_PO_PRODUCT_INVALID', '委外成品不存在或已停用');
       const quantity = Number(order.order_quantity);
-      const amountCents = Math.round(quantity * unitPriceCents);
-      if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isSafeInteger(amountCents)) {
+      if (!Number.isFinite(quantity) || quantity <= 0) {
         throw new HttpError(400, '委外数量或加工费金额无法精确表示');
       }
       const unitCode = String(product.base_uom_code || product.unit || order.unit || 'EA').toUpperCase();
       const quantityNum = Number.isSafeInteger(quantity) ? quantity : null;
       if (quantityNum === null) throw businessConflict('PROCESSING_PO_QUANTITY_UNSUPPORTED', '首期加工费采购订单仅支持整数基础数量');
+      // OUT-03：加工费价格来源的权威解析（委外价格表条目 → 委外合同冻结）。
+      // 价格表条目存在时客户端单价只作断言；否则冻结为委外合同来源，
+      // `price_entry_id` 保持 NULL。普通 PURCHASE 价格表不参与。
+      const price = resolveOutsourcingProcessingPrice(db, {
+        order, supplier, product, quantity,
+        assertedUnitPriceCents: unitPriceCents,
+        businessDate: body.orderDate || today,
+        documentUomCode: unitCode,
+      });
+      const amountCents = price.amountCents;
       result = createPurchaseOrderDraftCanonical(db, actor, {
         supplierId: order.supplier_id, totalCents: amountCents, businessType: 'OUTSOURCE_PROCESSING',
         sourceOutsourcingOrderId: order.id, orderDate: body.orderDate || today,
         expectedDeliveryDate: body.expectedDeliveryDate || order.expected_completion_date || null,
-        paymentTerms: body.paymentTerms || '', paymentTermsDays: supplier.default_payment_terms_days ?? null,
+        // PRC-02：付款天数在客户端未指定时由供应商采购档案默认值驱动；此处
+        // 交给 canonical 采购订单写者解析（同一份实现），不在委外域重复规则。
+        paymentTerms: body.paymentTerms || '', paymentTermsDays: body.paymentTermsDays ?? null,
         supplierContactName: body.supplierContactName || supplier.contact || '',
         supplierContactPhone: body.supplierContactPhone || supplier.phone || '', supplierAddress: body.supplierAddress || supplier.address || '',
         supplierContactSnapshot: `${body.supplierContactName || supplier.contact || ''}|${body.supplierContactPhone || supplier.phone || ''}`,
         supplierAddressSnapshot: body.supplierAddress || supplier.address || '', paymentTermsSnapshot: body.paymentTerms || '',
         remark: body.remark || '', auditDetail: `由委外订单 ${order.order_no} 创建加工费采购订单草稿`,
-        items: [{ productId: order.product_id, quantity, unitPriceCents, amountCents, lineNo: 1,
+        items: [{ productId: order.product_id, quantity, unitPriceCents: price.unitPriceCents, amountCents, lineNo: 1,
+          pricingUomCode: price.pricingUomCode, priceEntryId: price.priceEntryId, priceVersion: price.priceVersion,
+          pricingEvidence: price.pricingEvidence,
           documentUomCode: unitCode, documentQuantityNumerator: quantityNum, documentQuantityDenominator: 1,
           conversionNumerator: 1, conversionDenominator: 1, baseQuantityNumerator: quantityNum, baseQuantityDenominator: 1 }],
       });
+      // 反例守卫：冻结后立即证明本行价格来源确实是 OUTSOURCE，
+      // 没有被普通 PURCHASE 价格表静默替换。
+      assertProcessingPoPriceSource(db, result.id);
       saveIdempotency(db, operation, orderId, idempotencyKey, fingerprint, result);
     });
   } catch (error) {
@@ -908,6 +1144,11 @@ export async function createOutsourcingReceipt(db, req, res, actor) {
   const order = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(body.orderId);
   if (!order) throw new HttpError(404, '委外订单不存在');
   if (!['RELEASED'].includes(order.status)) throw new HttpError(409, '只有下达状态可收货');
+  // OUT-23：委外收货登记的是**加工费金额基准**（收货生效时确认，§26.20
+  // C-P01），它是 AP 侧敞口的起点。因此它必须受既有 AP 业务关闭门禁约束：
+  // 复用 `assertFinanceBusinessDateOpen('AP', ...)`（canonical 单一实现），
+  // 不新建第二套关闭规则，也不新增 close_type。
+  assertFinanceBusinessDateOpen(db, 'AP', body.businessDate || body.receivedDate || new Date().toISOString().slice(0, 10));
   const quantity = Number(body.quantity);
   const itemQuantity = body.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
   if (!Number.isFinite(quantity) || quantity <= 0 || body.items.some((item) => !Number.isFinite(Number(item.quantity)) || Number(item.quantity) <= 0)) {
@@ -1065,6 +1306,247 @@ export function getOutsourcingReceiptQualityContext(db, res, actor, receiptId) {
   if (!context) throw new HttpError(404, '委外收货不存在');
   const qualityState = deriveQualityState(db, 'IQC', receiptId, 'OUTSOURCING_RECEIPT');
   return send(res, 200, { qualityContext: { ...context, qualityState } });
+}
+
+// ---------------------------------------------------------------------------
+// OUT-23 期初委外订单 / 期初委外 WIP
+// ---------------------------------------------------------------------------
+//
+// Requirement §31.3.3 OUT-23 要求覆盖「opening outsourcing order」与
+// 「opening outsourcing WIP」。本节是它们的**唯一** canonical 实现。
+//
+// **期初单据是什么**：一张已经存在于上线日之前、尚未在本系统内走完
+// 生命周期的委外订单，以及它在供应商 WIP **位置**上的材料结余。
+//
+// **期初单据不是什么**（Active Design §26.20：`opening records 标记 OPENING，
+// 不得虚构历史 voucher`）：
+//   - 不生成历史会计凭证；
+//   - 不生成历史应付 / 应收；
+//   - 不伪造业务单据（发料 / 补料 / 退料 / 倒冲）流水；
+//   - 不推定历史 BOM 快照（期初单据的 `bom_snapshot_json` 明确标记为
+//     `OPENING`，表示「无已批准 BOM 依据」，不得被当作已批准快照使用）。
+//
+// **数量口径**：数量用有理数（分子 / 分母），比较与折算一律走
+// `roundRational`（HALF_UP）。金额一律安全整数分。
+//
+// **身份口径**：期初 WIP 的 LOT / SERIAL 身份必须可证明：
+//   - LOT 物料必须给出已存在的批次 ID；
+//   - SERIAL 物料必须给出已存在的序列号 ID，且每行数量为 1；
+//   - 非跟踪物料不得携带 LOT / SERIAL。
+//   身份解析复用 `resolveOutsourcingIdentity`（§26.34.15.2 的唯一身份口径）。
+//
+// **WIP 余额**：期初结余写入**同一本** `outsourcing_wip_identity_balances`
+// 身份账（`event_type='OPENING'` 的 SUPPLY 事实），因此既有供应商 WIP
+// 余额读模型**不需要第二套 SQL**。
+//
+// **物理库存**：期初 WIP 的物料确实在供应商 WIP 仓，因此期初建账必须
+// 在该仓建立**物理库存事实**（`OPENING_INVENTORY` 来源），否则库存账与
+// WIP 身份账互相矛盾，期间关闭读模型会看见无法解释的差额。
+// 该物理事实**不带估值金额**（期初价值口径是会计政策，见报告中的裁定点）。
+export const OUTSOURCING_OPENING_CODES = Object.freeze({
+  SOURCE_INVALID: 'OUTSOURCING_OPENING_SOURCE_INVALID',
+  MATERIAL_REQUIRED: 'OUTSOURCING_OPENING_MATERIAL_REQUIRED',
+  IDENTITY_UNPROVEN: 'OUTSOURCING_OPENING_IDENTITY_UNPROVEN',
+  QUANTITY_INVALID: 'OUTSOURCING_OPENING_QUANTITY_INVALID',
+  WIP_WAREHOUSE_MISSING: 'OUTSOURCING_OPENING_WIP_WAREHOUSE_MISSING',
+});
+
+const OPENING_PO_BUSINESS_FIELDS = ['orderNo', 'supplierId', 'productId', 'orderQuantity', 'unit',
+  'businessDate', 'remark', 'openingSourceReference', 'items'];
+
+// 期初数量：正有理数。分子/分母均为安全整数，分母 > 0。
+function normalizeOpeningQuantity(raw, label) {
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new HttpError(400, `${label}必须是有限正数`, { code: OUTSOURCING_OPENING_CODES.QUANTITY_INVALID });
+  }
+  const scaled = value * 1e6;
+  if (!Number.isFinite(scaled) || Math.abs(scaled) > Number.MAX_SAFE_INTEGER) {
+    throw new HttpError(400, `${label}超出可表示范围`, { code: OUTSOURCING_OPENING_CODES.QUANTITY_INVALID });
+  }
+  const normalized = Math.round(scaled) / 1e6;
+  if (Math.abs(value - normalized) > 1e-9) {
+    throw new HttpError(400, `${label}精度超出允许的小数位`, { code: OUTSOURCING_OPENING_CODES.QUANTITY_INVALID });
+  }
+  return normalized;
+}
+
+/**
+ * OUT-23 期初委外订单的 canonical 写入器。
+ *
+ * 调用方负责权限与 HTTP 语义；本函数在**单一事务**内完成：
+ *   1. 权威重读供应商（委外资质 + 供应商 WIP 位置）与成品；
+ *   2. 写 `outsourcing_orders`（`is_opening=1`，`status='COMPLETED'`）；
+ *   3. 写 `outsourcing_opening_material_lines`（期初物料行头）；
+ *   4. 写 `outsourcing_material_list`（期初用料行，WIP 数量为**可证明**值）；
+ *   5. 写 WIP 身份账（`event_type='OPENING'` 的 SUPPLY + 身份余额）；
+ *   6. 在供应商 WIP 仓建立**物理库存事实**（`OPENING_INVENTORY`）。
+ *
+ * 失败时整笔回滚：业务零副作用。
+ */
+export function createOpeningOutsourcingOrderCanonical(db, actor, body) {
+  const orderNo = String(body.orderNo || '').trim() || ('OS-OPEN-' + Date.now().toString().slice(-10));
+  const supplierId = String(body.supplierId || '').trim();
+  const productId = String(body.productId || '').trim();
+  if (!supplierId) throw new HttpError(400, '期初委外订单必须指定供应商', { code: OUTSOURCING_OPENING_CODES.SOURCE_INVALID });
+  if (!productId) throw new HttpError(400, '期初委外订单必须指定委外成品', { code: OUTSOURCING_OPENING_CODES.SOURCE_INVALID });
+  const orderQuantity = normalizeOpeningQuantity(body.orderQuantity, '期初委外数量');
+  const businessDate = String(body.businessDate || '').trim() || new Date().toISOString().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(businessDate)) {
+    throw new HttpError(400, '期初业务日期格式应为 YYYY-MM-DD', { code: OUTSOURCING_OPENING_CODES.SOURCE_INVALID });
+  }
+  const items = Array.isArray(body.items) ? body.items : [];
+  // 期初物料行是**可选**的：期初单据可以是「只有订单、没有供应商 WIP 结余」
+  // 的历史事实（既有合同允许），也可以带物料行承载期初委外 WIP。
+  // 带物料行时，每行都必须可证明（物料 / 数量 / 身份 / 位置）。
+  if (items.some((item) => item === null || typeof item !== 'object')) {
+    throw new HttpError(400, '期初委外物料行格式不正确', { code: OUTSOURCING_OPENING_CODES.MATERIAL_REQUIRED });
+  }
+
+  const orderId = randomUUID();
+  const now = new Date().toISOString();
+  const created = { id: orderId, orderNo, materialLines: [] };
+
+  transaction(db, () => {
+    // ── 权威重读：供应商资质与 WIP 位置 ──
+    const supplier = db.prepare(`SELECT * FROM suppliers WHERE id=? AND active=1 AND outsourcing_enabled=1`).get(supplierId);
+    if (!supplier) {
+      throw new HttpError(409, '期初委外订单的供应商不存在、已停用或未开通委外', { code: OUTSOURCING_OPENING_CODES.SOURCE_INVALID });
+    }
+    try {
+      assertSupplierQualification(db, supplierId, 'OUTSOURCE', businessDate);
+    } catch (error) {
+      throw new HttpError(409, `期初委外订单的供应商在业务日期 ${businessDate} 不具备有效委外资质`, { code: OUTSOURCING_OPENING_CODES.SOURCE_INVALID });
+    }
+    const wipWarehouseId = supplier.supplier_wip_warehouse_id;
+    if (!wipWarehouseId || !db.prepare('SELECT 1 FROM warehouses WHERE id=? AND active=1').get(wipWarehouseId)) {
+      throw new HttpError(409, '期初委外订单的供应商未配置可用的委外 WIP 仓库', { code: OUTSOURCING_OPENING_CODES.WIP_WAREHOUSE_MISSING });
+    }
+    const product = db.prepare('SELECT * FROM products WHERE id=? AND active=1').get(productId);
+    if (!product) {
+      throw new HttpError(409, '期初委外订单的委外成品不存在或已停用', { code: OUTSOURCING_OPENING_CODES.SOURCE_INVALID });
+    }
+
+    // ── 写期初委外订单头 ──
+    const remark = body.remark
+      ? `OPENING: ${body.remark}`
+      : 'OPENING: 历史期初委外订单，不生成历史凭证';
+    db.prepare(`INSERT INTO outsourcing_orders(
+        id,order_no,supplier_id,product_id,order_quantity,required_quantity,unit,source_type,planning_handoff_id,status,
+        business_date,expected_completion_date,bom_id,bom_version,remark,creator_id,created_at,updated_at,
+        is_opening,opening_business_date,opening_source_reference)
+      VALUES(?,?,?,?,?,?,?,'MANUAL',NULL,'COMPLETED',?,NULL,NULL,NULL,?,?,?,?,1,?,?)`).run(
+      orderId, orderNo, supplierId, productId, orderQuantity, orderQuantity,
+      String(body.unit || product.base_uom_code || product.unit || 'EA').toUpperCase(),
+      businessDate, remark, actor.id, now, now, businessDate,
+      String(body.openingSourceReference || '').trim() || null,
+    );
+
+    const insertMaterial = db.prepare(`INSERT INTO outsourcing_material_list(
+        id,order_id,product_id,required_quantity,unit,issued_quantity,supplemented_quantity,returned_quantity,
+        backflushed_quantity,bom_snapshot_json,source_warehouse_id,legacy_unverified_wip_quantity,
+        identity_evidence_state,created_at,updated_at,opening_line_id,is_opening)
+      VALUES(?,?,?,?,?,0,0,0,0,?,?,?,'VERIFIED',?,?,?,1)`);
+    const insertOpeningLine = db.prepare(`INSERT INTO outsourcing_opening_material_lines(
+        id,order_id,product_id,quantity_num,quantity_den,unit,source_warehouse_id,supplier_wip_warehouse_id,
+        opening_business_date,identity_type,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`);
+
+    for (const [index, item] of items.entries()) {
+      assertAllowedFields(item, ['productId', 'quantity', 'sourceWarehouseId', 'lotId', 'serialId', 'unit']);
+      const materialProductId = String(item.productId || '').trim();
+      if (!materialProductId) {
+        throw new HttpError(400, `第 ${index + 1} 行必须指定物料`, { code: OUTSOURCING_OPENING_CODES.MATERIAL_REQUIRED });
+      }
+      const materialProduct = db.prepare('SELECT * FROM products WHERE id=? AND active=1').get(materialProductId);
+      if (!materialProduct) {
+        throw new HttpError(409, `第 ${index + 1} 行的物料不存在或已停用`, { code: OUTSOURCING_OPENING_CODES.SOURCE_INVALID });
+      }
+      const quantity = normalizeOpeningQuantity(item.quantity, `第 ${index + 1} 行期初数量`);
+      const sourceWarehouseId = String(item.sourceWarehouseId || '').trim() || null;
+      if (sourceWarehouseId && !db.prepare('SELECT 1 FROM warehouses WHERE id=? AND active=1').get(sourceWarehouseId)) {
+        throw new HttpError(409, `第 ${index + 1} 行的来源仓不存在或已停用`, { code: OUTSOURCING_OPENING_CODES.SOURCE_INVALID });
+      }
+      const unit = String(item.unit || materialProduct.base_uom_code || materialProduct.unit || 'EA').toUpperCase();
+      const baseUnit = String(materialProduct.base_uom_code || materialProduct.unit || 'EA').toUpperCase();
+      if (unit !== baseUnit) {
+        throw new HttpError(409, `第 ${index + 1} 行的单位与物料基础单位不一致`, { code: OUTSOURCING_OPENING_CODES.SOURCE_INVALID });
+      }
+
+      const lineId = randomUUID();
+      const materialListId = randomUUID();
+      // 期初 BOM 快照：明确标记为「无已批准 BOM 依据」。它**不是**已批准快照，
+      // 因此后续 `CONFIRM_PLAN` / `RELEASE` 的快照证明门禁对期初单据不成立
+      // （期初单据已经是 COMPLETED，不再走计划门禁）。
+      const snapshot = JSON.stringify({
+        opening: true, bomId: null, bomVersion: null, bomItemId: null,
+        per_unit_quantity: null, required_quantity: quantity,
+        opening_business_date: businessDate,
+      });
+      insertOpeningLine.run(
+        lineId, orderId, materialProductId, Math.round(quantity * 1e6), 1e6, unit,
+        sourceWarehouseId, wipWarehouseId, businessDate, 'NONE', now, now,
+      );
+      insertMaterial.run(
+        materialListId, orderId, materialProductId, quantity, unit, snapshot,
+        sourceWarehouseId, quantity, now, now, lineId,
+      );
+
+      // 身份事实：期初结余必须可证明（复用 canonical 身份解析）。
+      const identity = resolveOutsourcingIdentity(db, materialProductId, {
+        lotId: item.lotId || null, serialId: item.serialId || null,
+      });
+      db.prepare(`UPDATE outsourcing_opening_material_lines SET identity_type=? WHERE id=?`)
+        .run(identity.identityType, lineId);
+      recordOpeningWipSupply(db, {
+        material: { id: materialListId },
+        identity,
+        quantity,
+        openingOrderId: orderId,
+        openingLineId: lineId,
+        businessDate,
+        idempotencyKey: `OUTSOURCING_OPENING:${orderId}:${lineId}:${identity.identityKey}`,
+      });
+
+      // 物理库存事实：期初材料确实在供应商 WIP 位置。
+      // 不带估值金额（期初价值口径属会计政策，见报告裁定点）。
+      applyInventoryMutation({
+        db,
+        actor,
+        sourceType: 'OPENING_INVENTORY',
+        sourceId: orderId,
+        sourceItemId: lineId,
+        sourceNo: orderNo,
+        movementKind: 'IN',
+        quantity,
+        businessDate,
+        idempotencyKey: `OUTSOURCING_OPENING_INV:${orderId}:${lineId}:${identity.identityKey}`,
+        toPosition: {
+          productId: materialProductId,
+          warehouseId: wipWarehouseId,
+          ownerType: 'ENTERPRISE',
+          ownerId: null,
+          stockStatus: 'AVAILABLE',
+          lotId: identity.lotId,
+          serialId: identity.serialId,
+        },
+        trackingMode: 'EXTERNAL',
+        valuationMode: 'EXTERNAL',
+        remark: `期初委外 WIP ${orderNo}`,
+      });
+
+      created.materialLines.push({
+        id: lineId, materialListId, productId: materialProductId, quantity,
+        identityType: identity.identityType, lotId: identity.lotId, serialId: identity.serialId,
+        sourceWarehouseId, supplierWipWarehouseId: wipWarehouseId,
+      });
+    }
+
+    audit(db, actor.id, 'OPENING', 'OUTSOURCING_ORDER', orderId,
+      `期初委外订单 ${orderNo}：${created.materialLines.length} 条物料行`);
+  });
+
+  return created;
 }
 
 export {

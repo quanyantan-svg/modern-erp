@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource, releaseOutsourcingOrder, seedApprovedOutsourceBom } from './test-support/procurement-http-fixture.js';
+import { createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource, releaseOutsourcingOrder, seedApprovedOutsourceBom, seedOutsourceSource } from './test-support/procurement-http-fixture.js';
 
 describe('Procurement Wave F-H outsourcing foundation, material execution, receiving', () => {
   let fixture;
@@ -20,6 +20,8 @@ describe('Procurement Wave F-H outsourcing foundation, material execution, recei
       qualificationValidFrom: isoDate(-30), qualificationValidTo: isoDate(180), supplierWipWarehouseId: 'warehouse-002',
     });
     assert.equal(result.status, 200, result.data.error);
+    // OUT-02：委外订单必须消费有效 OUTSOURCE 货源（与采购共用同一货源控制）。
+    await seedOutsourceSource(fixture, [{ supplierId: 'supplier-001', productId: 'product-001', effectiveFrom: isoDate(-30) }]);
     const now = new Date().toISOString();
     for (const productId of ['product-001', 'product-002']) {
       fixture.db.prepare(`INSERT INTO inventory_valuation_balances(balance_key,valuation_method,product_id,warehouse_id,lot_id,serial_id,quantity,value_cents,updated_at)

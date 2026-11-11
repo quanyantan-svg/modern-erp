@@ -11,6 +11,7 @@ import { createApp } from './app.js';
 import { createDatabase } from './db.js';
 import {
   insertPurchasePrice, outsourcingReceiptBody, prepareOutsourcingReceiptSource, seedApprovedOutsourceBom,
+  seedOutsourceSource,
 } from './test-support/procurement-http-fixture.js';
 
 async function makeFixture() {
@@ -81,6 +82,8 @@ async function qualifyOutsourceSupplier(fix) {
     .run(`NONE:warehouse-002:product-001`, 'product-001', now);
   // 委外发料必须真实消耗企业仓库存，演示种子数量不足以覆盖本套件的用量。
   fix.db.prepare("UPDATE inventory SET quantity=1000 WHERE warehouse_id='warehouse-001' AND product_id='product-001'").run();
+  // OUT-02: 委外订单必须消费有效 OUTSOURCE 货源。
+  await seedOutsourceSource(fix, [{ supplierId: 'supplier-001', productId: 'product-001', effectiveFrom: '2026-09-01' }]);
 }
 
 /** M1C-WP-3：委外订单 + 已批准 OUTSOURCE BOM + 用料快照 + 发料。 */
@@ -187,13 +190,16 @@ describe('SEPARATE default runtime proof + Processing Fee AP execution + Wave H 
     });
     assert.equal(billD.status, 409, JSON.stringify(billD.data));
     assert.match(billD.data.error || '', /可计费|超出|exceeded|Billable/i);
-    // Post Bill A → 委外来源账单的正式过账被来源级业务策略拒绝（MC-REQ-15），且零 AP
+    // Post Bill A → 委外加工费的正式过账（C-P01 / C-P02，Requirement §31.19.3）：
+    // 金额上界按收货生效时确认的加工费份额执行，产生 canonical 应付与凭证。
     const post = await fix.request('POST', `/api/procurement/outsourcing/processing-fee-bills/${billA.data.id}/post`, fix.tokens.admin);
-    assert.equal(post.status, 409);
-    assert.equal(post.data.code, 'OUTSOURCING_GL_POLICY_NOT_APPROVED');
-    const ap = fix.db.prepare("SELECT COUNT(*) n FROM account_payables WHERE source_id=?").get(billA.data.id);
-    assert.equal(ap.n, 0, '委外加工费过账不得产生 AP open item');
-    assert.equal(fix.db.prepare('SELECT status FROM supplier_bills WHERE id=?').get(billA.data.id).status, 'DRAFT');
+    assert.equal(post.status, 200, JSON.stringify(post.data));
+    const ap = fix.db.prepare("SELECT * FROM account_payables WHERE source_type='SUPPLIER_BILL' AND source_id=?").get(billA.data.id);
+    assert.ok(ap, '委外加工费过账必须产生 canonical AP open item');
+    assert.equal(Number(ap.amount_cents), 3000, '应付金额等于本次开票行金额');
+    const voucher = fix.db.prepare("SELECT * FROM accounting_vouchers WHERE source_type='SUPPLIER_BILL' AND source_id=?").get(billA.data.id);
+    assert.ok(voucher, '委外加工费过账必须产生 canonical 凭证');
+    assert.equal(fix.db.prepare('SELECT status FROM supplier_bills WHERE id=?').get(billA.data.id).status, 'POSTED');
   });
 
   test('One bill → multiple Outsourcing Receipts (multi-receipt): commercial_source_type per item', async () => {

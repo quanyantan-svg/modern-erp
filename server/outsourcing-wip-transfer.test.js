@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { createProcurementFixture, seedApprovedOutsourceBom } from './test-support/procurement-http-fixture.js';
+import { createProcurementFixture, seedApprovedOutsourceBom, seedOutsourceSource } from './test-support/procurement-http-fixture.js';
 import { requestFingerprint } from './modules/financial-controls.js';
 
 // OUT-001（跨委外订单 WIP 数量归属转移）的 focused 证据。
@@ -34,6 +34,7 @@ describe('OUT-001 委外跨单 WIP 数量归属转移', () => {
       qualificationValidFrom: isoDate(-30), qualificationValidTo: isoDate(180), supplierWipWarehouseId: 'warehouse-002',
     });
     assert.equal(result.status, 200, result.data.error);
+    await seedOutsourceSource(fixture, [{ supplierId: 'supplier-001', productId: 'product-001', effectiveFrom: isoDate(-30) }]);
     // 委外发料需要权威估值余额；没有它 issue 会被估值门禁拒绝，测不到 WIP 事实。
     fixture.db.prepare(`INSERT INTO inventory_valuation_balances(balance_key,valuation_method,product_id,warehouse_id,lot_id,serial_id,quantity,value_cents,updated_at)
       VALUES('NONE:warehouse-001:product-001','MOVING_AVERAGE','product-001','warehouse-001',NULL,NULL,100,100000,?)

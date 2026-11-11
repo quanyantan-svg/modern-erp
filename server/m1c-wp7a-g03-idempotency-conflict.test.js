@@ -38,7 +38,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 
-import { createProcurementFixture } from './test-support/procurement-http-fixture.js';
+import { createProcurementFixture, seedOutsourceSource } from './test-support/procurement-http-fixture.js';
 import {
   G03_BUSINESS_FACT_TABLES, changedTables, snapshotTables,
 } from './test-support/m1-core-g03-g04-evidence.js';
@@ -108,6 +108,7 @@ describe('M1C-WP7A-R2 — G03 同外部幂等键异内容拒绝的审计', () =>
     assert.equal(qualified.status, 200, qualified.data.error);
 
     parentId = await createProduct(PARENT_CODE, 'NONE', 'FINISHED_GOOD');
+    await seedOutsourceSource(fixture, [{ supplierId: 'supplier-001', productId: parentId, effectiveFrom: isoDate(-30) }]);
     const materialProductId = await createProduct(MATERIAL_CODE, 'NONE');
     await receiveStock(materialProductId, 100);
     // 估值余额目前没有生产写入入口；沿用 G03 既有 L2 夹具，只为让合法动作抵达 Handler 目标分支。

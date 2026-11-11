@@ -7,7 +7,10 @@ import {
 import { roundRational } from './commercial-golive.js';
 import { resolvePurchaseLinePricing } from './procurement-pricing.js';
 import { assertSupplierQualification } from './procurement-sourcing.js';
-import { assertPoChangeEnabled, procurementParameters } from './procurement-policy.js';
+import {
+  assertPoChangeEnabled, assertSupplierCategoryAllows, procurementParameters,
+  resolvePaymentTermsDays,
+} from './procurement-policy.js';
 
 const VIEW_PERMISSIONS = ['PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_MANAGE'];
 const CHANGE_PERMISSIONS = ['PO_CHANGE_VIEW', 'PO_CHANGE_MANAGE'];
@@ -58,10 +61,21 @@ function resolveOrderLineCommercial(db, { businessType, supplierId, businessDate
       || !Number.isSafeInteger(item.amountCents) || item.amountCents < 0) {
       throw new HttpError(400, `第 ${index + 1} 行金额必须为安全整数分`);
     }
+    // 加工费行的价格来源由**委外域**解析并随 `pricingEvidence` 冻结
+    // （OUT-03；Active Design §26.36.3）。这里只落库，不重新定价：
+    // 调用方已证明来源是 OUTSOURCE 价格表条目或委外合同，条目 ID 因此
+    // 可以被引用；没有条目时保持 NULL（不得为缺失的价格编造价格条目）。
+    const priceEntryId = item.priceEntryId || null;
+    if (priceEntryId) {
+      const entry = db.prepare('SELECT id,source_type FROM purchase_price_list_entries WHERE id=?').get(priceEntryId);
+      if (!entry || entry.source_type !== 'OUTSOURCE') {
+        throw new HttpError(409, '加工费采购订单行不得引用非委外价格条目', { code: 'PROCESSING_PO_PRICE_SOURCE_INVALID' });
+      }
+    }
     return {
       unitPriceCents: item.unitPriceCents, amountCents: item.amountCents,
       pricingUomCode: item.pricingUomCode || null, pricingQuantityNum: null, pricingQuantityDen: null,
-      priceEntryId: null, priceVersion: null, evidence: item.pricingEvidence || null,
+      priceEntryId, priceVersion: item.priceVersion ?? null, evidence: item.pricingEvidence || null,
     };
   }
   const pricing = resolvePurchaseLinePricing(db, {
@@ -132,6 +146,12 @@ export function createPurchaseOrderDraftCanonical(db, actor, command) {
   const orderId = command.id || randomUUID();
   const orderNo = command.orderNo || `PO-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0, 6).toUpperCase()}`;
   const now = command.now || new Date().toISOString();
+  // PRC-02：供应商品类驱动单据。委外类供应商不得承接普通采购订单，普通类
+  // 供应商不得承接委外加工费采购订单。品类是供应商档案里的既有枚举，本处
+  // 只读取它的既有语义，不新增取值。
+  // 品类检查先于资质检查：品类决定「这类供应商能否承接这类单据」，是更靠
+  // 前的业务事实；先判品类，错误码才是确定的。
+  const supplierCategory = assertSupplierCategoryAllows(db, { supplierId: command.supplierId, businessType });
   // An ordinary purchase order needs an effective PURCHASE qualification of
   // the supplier at the order business date. The outsourcing processing-fee
   // order keeps its own OUTSOURCE qualification contract.
@@ -142,6 +162,16 @@ export function createPurchaseOrderDraftCanonical(db, actor, command) {
       throw new HttpError(409, '供应商在订单业务日期不具备有效采购资质', { code: 'PURCHASE_SUPPLIER_NOT_QUALIFIED' });
     }
   }
+  // PRC-02：付款天数在客户端未指定时由供应商采购档案的默认值驱动；客户端
+  // 显式指定时以其为准，并冻结来源以便追溯。
+  // `paymentTermsDaysClientSpecified` 由调用方给出「客户端是否明确说了付款
+  // 天数」的信号；缺失时以「非空即视为已指定」为保守口径。
+  const paymentTerms = resolvePurchaseOrderPaymentTerms(db, {
+    businessType,
+    supplierId: command.supplierId,
+    clientPaymentTermsDays: command.paymentTermsDays,
+    clientSpecified: command.paymentTermsDaysClientSpecified ?? null,
+  });
   const pricedItems = command.items.map((item, index) => ({
     item,
     commercial: resolveOrderLineCommercial(db, {
@@ -160,15 +190,17 @@ export function createPurchaseOrderDraftCanonical(db, actor, command) {
       id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at,
       order_date,expected_delivery_date,payment_terms,payment_terms_days,supplier_contact_name,supplier_contact_phone,supplier_address,
       business_type,source_outsourcing_order_id,supplier_contact_snapshot,supplier_address_snapshot,payment_terms_snapshot,purchase_requisition_id,
-      buyer_id,purchasing_group_id,prepayment_required,settlement_supplier_id,payee_supplier_id)
-    VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      buyer_id,purchasing_group_id,prepayment_required,settlement_supplier_id,payee_supplier_id,
+      payment_terms_days_source,supplier_category_snapshot)
+    VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     orderId, orderNo, command.supplierId, totalCents, command.remark || '', actor.id, now, now,
-    command.orderDate || null, command.expectedDeliveryDate || null, command.paymentTerms || '', command.paymentTermsDays ?? null,
+    command.orderDate || null, command.expectedDeliveryDate || null, command.paymentTerms || '', paymentTerms.paymentTermsDays ?? null,
     command.supplierContactName || '', command.supplierContactPhone || '', command.supplierAddress || '',
     businessType, sourceOutsourcingOrderId, command.supplierContactSnapshot || '', command.supplierAddressSnapshot || '',
     command.paymentTermsSnapshot || '', command.purchaseRequisitionId || null,
     assignment.buyerId, assignment.purchasingGroupId, prepaymentRequired,
     command.settlementSupplierId || command.supplierId, command.payeeSupplierId || command.settlementSupplierId || command.supplierId,
+    paymentTerms.source, supplierCategory,
   );
   for (const [index, entry] of pricedItems.entries()) {
     insertPurchaseOrderItem(db, {
@@ -182,11 +214,107 @@ export function createPurchaseOrderDraftCanonical(db, actor, command) {
 }
 
 /**
+ * 采购订单表头的商业口径解析（PRC-02）。
+ *
+ * 付款天数的权威来源是**供应商采购档案的默认值**；客户端显式给出时以客户端
+ * 为准，并把「天数 + 来源」一起冻结在单据上，档案后续变更不改写历史单据。
+ *
+ * 供应商采购档案的默认值只驱动**普通采购订单**：委外加工费采购订单的付款
+ * 条件由**已批准的委外合同**决定，采购档案的默认值对它没有业务含义，因此
+ * 该单据保持「客户端给出什么就是什么，没有就是空」的既有语义。
+ *
+ * `clientSpecified` 是权威的「客户端是否明确说了付款天数」信号；缺失时以
+ * 「非空且非零即视为已指定」的保守口径处理。
+ */
+export function resolvePurchaseOrderPaymentTerms(db, {
+  businessType, supplierId, clientPaymentTermsDays, clientSpecified = null,
+}) {
+  if (businessType !== 'STANDARD_PURCHASE') {
+    const stated = clientSpecified === null
+      ? (clientPaymentTermsDays !== undefined && clientPaymentTermsDays !== null
+        && clientPaymentTermsDays !== '' && Number(clientPaymentTermsDays) !== 0)
+      : clientSpecified;
+    const hasValue = stated && clientPaymentTermsDays !== undefined
+      && clientPaymentTermsDays !== null && clientPaymentTermsDays !== '';
+    return {
+      paymentTermsDays: hasValue ? Number(clientPaymentTermsDays) : null,
+      source: hasValue ? 'CLIENT' : 'NONE',
+    };
+  }
+  return resolvePaymentTermsDays(db, {
+    supplierId, clientPaymentTermsDays, clientSpecified,
+  });
+}
+
+/**
+ * 采购订单表头的**权威**口径（创建与整体改写共用同一份实现）。
+ *
+ * 返回供应商品类快照与解析后的付款天数及其来源。客户端给出的金额与天数都
+ * 不是权威：品类由供应商档案决定，付款天数在客户端未指定时由档案默认值决定。
+ */
+export function resolvePurchaseOrderHeaderCommercial(db, {
+  supplierId, businessType, clientPaymentTermsDays, clientSpecified = null,
+}) {
+  const supplierCategory = assertSupplierCategoryAllows(db, { supplierId, businessType });
+  const paymentTerms = resolvePurchaseOrderPaymentTerms(db, {
+    businessType, supplierId, clientPaymentTermsDays, clientSpecified,
+  });
+  return {
+    supplierCategory,
+    paymentTermsDays: paymentTerms.paymentTermsDays ?? null,
+    paymentTermsDaysSource: paymentTerms.source,
+  };
+}
+
+/**
+ * Update one purchase order line in place, keeping its identity.
+ *
+ * PRC-12：带有请购转换分配事实的行**不得**被删除重建 ——
+ * `pr_conversion_allocations.purchase_order_item_id` 是指向采购订单行的外键，
+ * 删除重建会让事实指向不存在的行（并触发外键失败）。保留行标识、原位更新
+ * 商业列，是既保住事实指针、又不放弃商业字段可编辑的唯一写法。
+ *
+ * `purchase_requisition_item_id` 不在本更新的列集合内：它是该行的来源身份，
+ * 由转换事实确定，不得由本次改写改写。
+ */
+function updatePurchaseOrderItemInPlace(db, { itemId, orderId, item, lineNo, pricing }) {
+  db.prepare(`UPDATE purchase_order_items SET
+      product_id=?,quantity=?,unit_price_cents=?,amount_cents=?,line_no=?,is_gift_line=?,
+      document_uom_code=?,document_quantity_num=?,document_quantity_den=?,
+      conversion_numerator=?,conversion_denominator=?,base_quantity_num=?,base_quantity_den=?,
+      pricing_uom_code=?,pricing_quantity_num=?,pricing_quantity_den=?,
+      price_entry_id=?,price_version=?,pricing_evidence_json=?,
+      pricing_discount_scheme_id=?,discount_source=?,version=version+1
+    WHERE id=? AND order_id=?`).run(
+    item.productId, Number(item.quantity), pricing.unitPriceCents, pricing.amountCents, lineNo,
+    item.isGiftLine ? 1 : 0,
+    item.documentUomCode || null,
+    item.documentQuantityNumerator ?? (Number.isSafeInteger(Number(item.quantity)) ? Number(item.quantity) : null),
+    item.documentQuantityDenominator ?? 1,
+    item.conversionNumerator ?? 1, item.conversionDenominator ?? 1,
+    item.baseQuantityNumerator ?? (Number.isSafeInteger(Number(item.quantity)) ? Number(item.quantity) : null),
+    item.baseQuantityDenominator ?? 1,
+    pricing.pricingUomCode || null,
+    pricing.pricingQuantityNum ?? null, pricing.pricingQuantityDen ?? null,
+    pricing.priceEntryId ?? null, pricing.priceVersion ?? null,
+    pricing.evidence ? JSON.stringify(pricing.evidence) : null,
+    pricing.evidence?.appliedDiscount?.id || null,
+    pricing.evidence?.appliedDiscount ? `PRICING_DISCOUNT:${pricing.evidence.appliedDiscount.id}` : (pricing.evidence ? 'PRICE_LIST' : null),
+    itemId, orderId,
+  );
+}
+
+/**
  * Canonical rewrite of the lines of a DRAFT purchase order.
  *
  * A draft line has no approved commercial history, so the rewrite is allowed
  * to replace the lines — but never a line that already carries an applied
  * change version, because that version is immutable history.
+ *
+ * PRC-12：携带请购转换分配事实的行**原位更新**（行标识不变），因此
+ * `pr_conversion_allocations` 这张只追加的事实表不需要任何 UPDATE，它的
+ * 外键指针原样有效。两道 fail-closed 门禁在任何写入之前生效：
+ * 分配事实的请购明细不得被改写删除，分配数量不得与改写后的行数量不一致。
  */
 export function replacePurchaseOrderItemsCanonical(db, { orderId, items, businessType, supplierId, businessDate }) {
   const versioned = db.prepare('SELECT COUNT(*) n FROM purchase_order_item_versions WHERE order_id=?').get(orderId).n;
@@ -199,12 +327,53 @@ export function replacePurchaseOrderItemsCanonical(db, { orderId, items, busines
       businessType, supplierId, businessDate, item, index,
     }),
   }));
-  db.prepare('DELETE FROM purchase_order_items WHERE order_id=?').run(orderId);
+  const allocations = db.prepare(`SELECT id,requisition_item_id,purchase_order_item_id,
+      allocated_quantity_num,allocated_quantity_den FROM pr_conversion_allocations
+    WHERE purchase_order_id=?`).all(orderId);
+  const allocationByRequisitionItem = new Map();
+  for (const allocation of allocations) {
+    const previous = allocationByRequisitionItem.get(allocation.requisition_item_id);
+    if (previous) {
+      throw new HttpError(409, `请购明细 ${allocation.requisition_item_id} 存在多条转换分配事实，不可整体改写`, {
+        code: 'PO_ITEM_ALLOCATION_DUPLICATE_FACT',
+      });
+    }
+    allocationByRequisitionItem.set(allocation.requisition_item_id, allocation);
+  }
+  for (const allocation of allocations) {
+    const line = pricedItems.find((entry) => entry.item.purchaseRequisitionItemId === allocation.requisition_item_id);
+    if (!line) {
+      throw new HttpError(409, `请购明细 ${allocation.requisition_item_id} 的转换分配事实不可被整体改写删除`, {
+        code: 'PO_ITEM_ALLOCATION_SOURCE_LOST',
+      });
+    }
+    const allocated = Number(allocation.allocated_quantity_num) / Number(allocation.allocated_quantity_den);
+    if (Math.abs(Number(line.item.quantity) - allocated) > 1e-9) {
+      throw new HttpError(409, `请购明细 ${allocation.requisition_item_id} 的转换分配数量 ${allocated} 与改写后的行数量 ${Number(line.item.quantity)} 不一致`, {
+        code: 'PO_ITEM_ALLOCATION_QUANTITY_MISMATCH',
+      });
+    }
+  }
+  const preservedItemIds = new Set(allocations.map((allocation) => allocation.purchase_order_item_id));
+  if (preservedItemIds.size) {
+    const placeholders = [...preservedItemIds].map(() => '?').join(',');
+    db.prepare(`DELETE FROM purchase_order_items WHERE order_id=? AND id NOT IN (${placeholders})`)
+      .run(orderId, ...preservedItemIds);
+  } else {
+    db.prepare('DELETE FROM purchase_order_items WHERE order_id=?').run(orderId);
+  }
   for (const [index, entry] of pricedItems.entries()) {
-    insertPurchaseOrderItem(db, {
-      id: entry.item.id || randomUUID(), orderId, item: entry.item, lineNo: entry.item.lineNo || index + 1,
-      pricing: entry.commercial,
-    });
+    const lineNo = entry.item.lineNo || index + 1;
+    const preservedId = allocationByRequisitionItem.get(entry.item.purchaseRequisitionItemId)?.purchase_order_item_id;
+    if (preservedId) {
+      updatePurchaseOrderItemInPlace(db, {
+        itemId: preservedId, orderId, item: entry.item, lineNo, pricing: entry.commercial,
+      });
+    } else {
+      insertPurchaseOrderItem(db, {
+        id: entry.item.id || randomUUID(), orderId, item: entry.item, lineNo, pricing: entry.commercial,
+      });
+    }
   }
   const totalCents = pricedItems.reduce((sum, entry) => sum + entry.commercial.amountCents, 0);
   if (!Number.isSafeInteger(totalCents) || totalCents < 0) throw new HttpError(400, '采购订单总额必须为安全整数分');
@@ -291,9 +460,15 @@ function rowToSchedule(row) {
     orderItemId: row.order_item_id,
     plannedQuantity: row.planned_quantity,
     plannedDate: row.planned_date,
+    plannedDateFrom: row.planned_date_from || null,
+    plannedDateTo: row.planned_date_to || null,
+    sequenceNo: row.sequence_no === null || row.sequence_no === undefined ? null : Number(row.sequence_no),
     receivedQuantity: row.received_quantity,
     upperTolerancePct: row.upper_tolerance_pct,
     lowerTolerancePct: row.lower_tolerance_pct,
+    status: row.status || 'OPEN',
+    closedAt: row.closed_at || null,
+    closedBy: row.closed_by || null,
   };
 }
 
@@ -626,6 +801,189 @@ export async function createDeliverySchedule(db, req, res, actor, orderId) {
     audit(db, actor.id, 'CREATE', 'PO_DELIVERY_SCHEDULE', scheduleId, `${orderId}:${body.orderItemId}`);
   });
   return send(res, 201, { id: scheduleId });
+}
+
+// ---------------------------------------------------------------------------
+// PRC-16 — lower-tolerance auto-close.
+// ---------------------------------------------------------------------------
+
+const EPSILON = 1e-9;
+
+/**
+ * The **single** lower-tolerance close judgement (PRC-16).
+ *
+ * This function is the one place where the "may this delivery schedule be
+ * closed with a tolerated short delivery?" question is answered. The explicit
+ * close endpoint and the receipt-confirm trigger both call it; there is no
+ * second copy of the formula anywhere.
+ *
+ * The decision uses only **real** data:
+ *   - the schedule's own `planned_quantity` / `lower_tolerance_pct`;
+ *   - the schedule's **confirmed** received quantity, read from the
+ *     authoritative CONFIRMED purchase receipt lines — never from the
+ *     delivery-schedule consumption ledger (which registers capacity at
+ *     *draft* creation and would let an unconfirmed receipt close a schedule)
+ *     and never from a mutable legacy column;
+ *   - the schedule's outstanding notice allocations (a notice that has been
+ *     created but not converted still holds capacity, so the schedule is not
+ *     "no longer receivable").
+ *
+ * The closeable condition is:
+ *   received >= planned_quantity * (1 - lower_tolerance_pct / 100)
+ *   AND the schedule holds no outstanding notice allocation
+ *       (nothing is still committed to arrive).
+ *
+ * The remaining `planned_quantity − received` is exactly the **tolerated
+ * short delivery** the lower tolerance allows; it is recorded, not ignored.
+ * If the condition cannot be decided from the available facts, the answer is
+ * "not closeable" — the function never guesses an "expected no longer to
+ * arrive".
+ */
+export function evaluateDeliveryScheduleClose(db, deliveryScheduleId) {
+  const schedule = db.prepare('SELECT * FROM purchase_order_delivery_schedules WHERE id=?').get(deliveryScheduleId);
+  if (!schedule) {
+    throw new HttpError(404, '交货计划不存在');
+  }
+  const status = String(schedule.status || 'OPEN').toUpperCase();
+  const plannedQuantity = Number(schedule.planned_quantity || 0);
+  const lowerTolerancePct = Number(schedule.lower_tolerance_pct || 0);
+  const upperTolerancePct = Number(schedule.upper_tolerance_pct || 0);
+  // 「累计已确认收货量」只统计 **CONFIRMED** 的采购入库单行。
+  //
+  // 交期消费台账（schedule_consumption_effects）在入库单**创建**时就登记了
+  // 容量占用 —— 那是草稿预留，不是已收货。把它当作已收货会让一份草稿入库单
+  // 凭空关掉交货计划，因此关单判定必须回到权威的已确认收货事实。
+  const receivedQuantity = Number(db.prepare(`SELECT COALESCE(SUM(pri.quantity),0) q
+    FROM purchase_receipts pr JOIN purchase_receipt_items pri ON pri.receipt_id = pr.id
+    WHERE pr.status='CONFIRMED' AND pri.delivery_schedule_id=?`).get(deliveryScheduleId)?.q || 0);
+  // 尚未转成入库单的完工通知分配仍然持有容量：该交货计划**仍可收货**。
+  const outstandingAllocatedQuantity = Number(db.prepare(`SELECT COALESCE(SUM(s.allocated_quantity
+      - CASE WHEN s.converted_quantity IS NULL THEN 0 ELSE s.converted_quantity END),0) q
+    FROM receipt_notice_item_sources s
+    JOIN receipt_notice_items i ON i.id = s.notice_item_id
+    JOIN receipt_notices n ON n.id = i.notice_id
+    WHERE s.delivery_schedule_id=? AND n.status<>'CANCELLED'`).get(deliveryScheduleId)?.q || 0);
+  const remainingReceivableQuantity = Math.max(0, plannedQuantity - receivedQuantity - outstandingAllocatedQuantity);
+  const toleratedShortQuantity = Math.max(0, plannedQuantity - receivedQuantity);
+  const minimumAcceptableQuantity = plannedQuantity * (1 - lowerTolerancePct / 100);
+  const maximumTolerableShortQuantity = plannedQuantity * (lowerTolerancePct / 100);
+  const overReceivedQuantity = Math.max(0, receivedQuantity - plannedQuantity * (1 + upperTolerancePct / 100));
+  const base = {
+    deliveryScheduleId: schedule.id,
+    orderId: schedule.order_id,
+    orderItemId: schedule.order_item_id,
+    status,
+    plannedQuantity,
+    lowerTolerancePct,
+    upperTolerancePct,
+    receivedQuantity,
+    outstandingAllocatedQuantity,
+    remainingReceivableQuantity,
+    toleratedShortQuantity,
+    minimumAcceptableQuantity,
+    maximumTolerableShortQuantity,
+    overReceivedQuantity,
+  };
+  if (status === 'CLOSED') {
+    return { ...base, closeable: false, reason: 'ALREADY_CLOSED', toleratedShortQuantity: 0 };
+  }
+  if (overReceivedQuantity > EPSILON) {
+    // 超收由既有的容量检查负责；这里不做关单判断。
+    return { ...base, closeable: false, reason: 'OVER_RECEIVED_BEYOND_UPPER_TOLERANCE' };
+  }
+  if (outstandingAllocatedQuantity > EPSILON) {
+    // 还有已创建但未转成入库单的完工通知分配：交货计划**仍可收货**，
+    // 不得关单。
+    return { ...base, closeable: false, reason: 'STILL_RECEIVABLE' };
+  }
+  if (receivedQuantity + EPSILON < minimumAcceptableQuantity) {
+    // 短交量超过下容差：不得以「预计不再到货」臆造关单。
+    return { ...base, closeable: false, reason: 'BELOW_LOWER_TOLERANCE' };
+  }
+  return { ...base, closeable: true, reason: 'LOWER_TOLERANCE_REACHED' };
+}
+
+/**
+ * Apply the lower-tolerance close to a delivery schedule.
+ *
+ * The caller owns the transaction. The decision is re-evaluated inside the
+ * caller's transaction so a concurrent receipt cannot slip between the
+ * judgement and the write.
+ */
+export function closeDeliveryScheduleByLowerTolerance(db, { deliveryScheduleId, actor, triggeredBy }) {
+  const evaluation = evaluateDeliveryScheduleClose(db, deliveryScheduleId);
+  if (!evaluation.closeable) {
+    throw new HttpError(409, `交货计划不满足下容差关单条件：${evaluation.reason}`, {
+      code: 'PO_DELIVERY_SCHEDULE_NOT_CLOSEABLE',
+    });
+  }
+  const now = new Date().toISOString();
+  const closeId = randomUUID();
+  const updated = db.prepare(`UPDATE purchase_order_delivery_schedules
+      SET status='CLOSED', closed_at=?, closed_by=?, updated_at=? WHERE id=? AND status='OPEN'`)
+    .run(now, actor.id, now, deliveryScheduleId);
+  if (Number(updated.changes || updated.affectedRows) !== 1) {
+    throw new HttpError(409, '交货计划状态已变化，请重新读取后再操作', { code: 'PO_DELIVERY_SCHEDULE_STATE_CHANGED' });
+  }
+  db.prepare(`INSERT INTO po_delivery_schedule_closes(
+      id,delivery_schedule_id,order_id,order_item_id,planned_quantity,received_quantity,
+      tolerated_short_quantity,lower_tolerance_pct,close_reason,triggered_by,created_by,created_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    closeId, deliveryScheduleId, evaluation.orderId, evaluation.orderItemId,
+    evaluation.plannedQuantity, evaluation.receivedQuantity,
+    evaluation.toleratedShortQuantity, evaluation.lowerTolerancePct,
+    evaluation.reason, triggeredBy, actor.id, now,
+  );
+  audit(db, actor.id, 'CLOSE', 'PO_DELIVERY_SCHEDULE', deliveryScheduleId, JSON.stringify({
+    triggeredBy, reason: evaluation.reason,
+    plannedQuantity: evaluation.plannedQuantity,
+    receivedQuantity: evaluation.receivedQuantity,
+    toleratedShortQuantity: evaluation.toleratedShortQuantity,
+  }));
+  return { closeId, ...evaluation };
+}
+
+/**
+ * 显式关单端点（PRC-16）。
+ *
+ * 与收货确认触发的判定共用 `evaluateDeliveryScheduleClose`，因此两处不会
+ * 出现两份公式。不满足条件时 fail closed，返回稳定错误码。
+ */
+export async function closeDeliverySchedule(db, req, res, actor, orderId, scheduleId) {
+  assertChangePermission(actor);
+  const schedule = db.prepare('SELECT * FROM purchase_order_delivery_schedules WHERE id=? AND order_id=?').get(scheduleId, orderId);
+  if (!schedule) throw new HttpError(404, '交货计划不存在');
+  let result;
+  try {
+    transaction(db, () => {
+      result = closeDeliveryScheduleByLowerTolerance(db, { deliveryScheduleId: scheduleId, actor, triggeredBy: 'EXPLICIT' });
+    });
+  } catch (error) {
+    auditBusinessRejection(db, actor, { entityType: 'PO_DELIVERY_SCHEDULE', entityId: scheduleId, action: '下容差关单' }, error);
+    throw error;
+  }
+  return send(res, 200, { ok: true, closed: true, close: result });
+}
+
+/**
+ * 收货确认后的下容差自动关单触发器（PRC-16）。
+ *
+ * 收货确认的 canonical 写者在确认成功后调用本函数；判定公式仍然只有
+ * `evaluateDeliveryScheduleClose` 一份。触发器是**尽力而为**的：某个交货
+ * 计划不满足关单条件时，收货确认**不得**因此失败——它只是保持 OPEN。
+ * 只有真正写关单事实时才会失败（并发状态变化），此时收货确认失败并回滚，
+ * 绝不留下半写状态。
+ */
+export function triggerLowerToleranceAutoClose(db, { deliveryScheduleIds, actor }) {
+  const ids = [...new Set((deliveryScheduleIds || []).filter(Boolean))];
+  const closed = [];
+  for (const deliveryScheduleId of ids) {
+    const evaluation = evaluateDeliveryScheduleClose(db, deliveryScheduleId);
+    if (!evaluation.closeable) continue;
+    const result = closeDeliveryScheduleByLowerTolerance(db, { deliveryScheduleId, actor, triggeredBy: 'RECEIPT_CONFIRM' });
+    closed.push(result);
+  }
+  return closed;
 }
 
 export function listDeliverySchedules(db, res, actor, orderId) {

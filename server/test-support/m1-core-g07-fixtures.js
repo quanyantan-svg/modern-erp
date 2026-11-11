@@ -198,6 +198,7 @@ export const M1_CORE_G07_FIXED_SCENARIOS = Object.freeze([
       step('finished', 'admin', 'POST', '/api/products', { body: { code: 'cr03-finished', name: 'CR03 finished', unit: 'EA', baseUomCode: 'EA', priceCents: 100, inventoryClassification: 'FINISHED_GOOD', trackingPolicy: 'NONE' } }),
       step('material', 'admin', 'POST', '/api/products', { body: { code: 'cr03-material', name: 'CR03 material', unit: 'EA', baseUomCode: 'EA', priceCents: 100, standardManufacturingCostCents: 100, inventoryClassification: 'RAW_MATERIAL', trackingPolicy: 'NONE' } }),
       step('qualify', 'admin', 'PATCH', '/api/suppliers/supplier-001/profile', { body: { outsourcingEnabled: true, category: 'OUTSOURCE', qualificationStatus: 'QUALIFIED', qualificationValidFrom: { $businessDate: -30 }, qualificationValidTo: { $businessDate: 365 }, supplierWipWarehouseId: 'warehouse-002' } }),
+      step('source', 'admin', 'POST', '/api/procurement/source-entries', { body: { supplierId: 'supplier-001', productId: { $ref: 'setup.finished.id' }, sourceType: 'OUTSOURCE', effectiveFrom: { $businessDate: -30 } } }),
       step('bom', 'admin', 'POST', '/api/engineering/boms', { body: { productId: { $ref: 'setup.finished.id' }, version: 'CR03', purpose: 'OUTSOURCE', approvalStatus: 'APPROVED', effectiveFrom: { $businessDate: -1 }, items: [{ productId: { $ref: 'setup.material.id' }, quantity: 1 }] } }),
       step('stock', 'warehouse', 'POST', '/api/inventory-adjustments', { body: { warehouseId: 'warehouse-001', adjustmentDate: { $businessDate: 0 }, reason: 'G07 CR03 source inventory', items: [{ productId: { $ref: 'setup.material.id' }, quantityDelta: 10 }] } }),
       step('stockConfirm', 'warehouse', 'POST', '/api/inventory-adjustments/{setup.stock.id}/confirm'),
@@ -238,6 +239,7 @@ export const M1_CORE_G07_FIXED_SCENARIOS = Object.freeze([
       step('finished', 'admin', 'POST', '/api/products', { body: { code: 'cr04-finished', name: 'CR04 finished', unit: 'EA', baseUomCode: 'EA', priceCents: 100, inventoryClassification: 'FINISHED_GOOD', trackingPolicy: 'NONE' } }),
       step('material', 'admin', 'POST', '/api/products', { body: { code: 'cr04-material', name: 'CR04 material', unit: 'EA', baseUomCode: 'EA', priceCents: 100, standardManufacturingCostCents: 100, inventoryClassification: 'RAW_MATERIAL', trackingPolicy: 'NONE' } }),
       step('qualify', 'admin', 'PATCH', '/api/suppliers/supplier-001/profile', { body: { outsourcingEnabled: true, category: 'OUTSOURCE', qualificationStatus: 'QUALIFIED', qualificationValidFrom: { $businessDate: -30 }, qualificationValidTo: { $businessDate: 365 }, supplierWipWarehouseId: 'warehouse-002' } }),
+      step('source', 'admin', 'POST', '/api/procurement/source-entries', { body: { supplierId: 'supplier-001', productId: { $ref: 'setup.finished.id' }, sourceType: 'OUTSOURCE', effectiveFrom: { $businessDate: -30 } } }),
       step('bom', 'admin', 'POST', '/api/engineering/boms', { body: { productId: { $ref: 'setup.finished.id' }, version: 'CR04', purpose: 'OUTSOURCE', approvalStatus: 'APPROVED', effectiveFrom: { $businessDate: -1 }, items: [{ productId: { $ref: 'setup.material.id' }, quantity: 1 }] } }),
       step('stock', 'warehouse', 'POST', '/api/inventory-adjustments', { body: { warehouseId: 'warehouse-001', adjustmentDate: { $businessDate: 0 }, reason: 'G07 CR04 source inventory', items: [{ productId: { $ref: 'setup.material.id' }, quantityDelta: 10 }] } }),
       step('stockConfirm', 'warehouse', 'POST', '/api/inventory-adjustments/{setup.stock.id}/confirm'),
@@ -260,6 +262,7 @@ export const M1_CORE_G07_FIXED_SCENARIOS = Object.freeze([
       step('finished', 'admin', 'POST', '/api/products', { body: { code: 'cr05-finished', name: 'CR05 finished', unit: 'EA', baseUomCode: 'EA', priceCents: 100, inventoryClassification: 'FINISHED_GOOD', trackingPolicy: 'NONE' } }),
       step('material', 'admin', 'POST', '/api/products', { body: { code: 'cr05-material', name: 'CR05 material', unit: 'EA', baseUomCode: 'EA', priceCents: 100, standardManufacturingCostCents: 100, inventoryClassification: 'RAW_MATERIAL', trackingPolicy: 'NONE' } }),
       step('qualify', 'admin', 'PATCH', '/api/suppliers/supplier-001/profile', { body: { outsourcingEnabled: true, category: 'OUTSOURCE', qualificationStatus: 'QUALIFIED', qualificationValidFrom: { $businessDate: -30 }, qualificationValidTo: { $businessDate: 365 }, supplierWipWarehouseId: 'warehouse-002' } }),
+      step('source', 'admin', 'POST', '/api/procurement/source-entries', { body: { supplierId: 'supplier-001', productId: { $ref: 'setup.finished.id' }, sourceType: 'OUTSOURCE', effectiveFrom: { $businessDate: -30 } } }),
       step('bom', 'admin', 'POST', '/api/engineering/boms', { body: { productId: { $ref: 'setup.finished.id' }, version: 'CR05', purpose: 'OUTSOURCE', approvalStatus: 'APPROVED', effectiveFrom: { $businessDate: -1 }, items: [{ productId: { $ref: 'setup.material.id' }, quantity: 1 }] } }),
       step('stock', 'warehouse', 'POST', '/api/inventory-adjustments', { body: { warehouseId: 'warehouse-001', adjustmentDate: { $businessDate: 0 }, reason: 'G07 CR05 source inventory', items: [{ productId: { $ref: 'setup.material.id' }, quantityDelta: 10 }] } }),
       step('stockConfirm', 'warehouse', 'POST', '/api/inventory-adjustments/{setup.stock.id}/confirm'),
@@ -282,6 +285,7 @@ export const M1_CORE_G07_FIXED_SCENARIOS = Object.freeze([
       step('finished', 'admin', 'POST', '/api/products', { body: { code: 'cr06-finished', name: 'CR06 finished', unit: 'EA', baseUomCode: 'EA', priceCents: 100, inventoryClassification: 'FINISHED_GOOD', trackingPolicy: 'NONE' } }),
       step('material', 'admin', 'POST', '/api/products', { body: { code: 'cr06-material', name: 'CR06 material', unit: 'EA', baseUomCode: 'EA', priceCents: 100, standardManufacturingCostCents: 100, inventoryClassification: 'RAW_MATERIAL', trackingPolicy: 'NONE' } }),
       step('qualify', 'admin', 'PATCH', '/api/suppliers/supplier-001/profile', { body: { outsourcingEnabled: true, category: 'OUTSOURCE', qualificationStatus: 'QUALIFIED', qualificationValidFrom: { $businessDate: -30 }, qualificationValidTo: { $businessDate: 365 }, supplierWipWarehouseId: 'warehouse-002' } }),
+      step('source', 'admin', 'POST', '/api/procurement/source-entries', { body: { supplierId: 'supplier-001', productId: { $ref: 'setup.finished.id' }, sourceType: 'OUTSOURCE', effectiveFrom: { $businessDate: -30 } } }),
       step('bom', 'admin', 'POST', '/api/engineering/boms', { body: { productId: { $ref: 'setup.finished.id' }, version: 'CR06', purpose: 'OUTSOURCE', approvalStatus: 'APPROVED', effectiveFrom: { $businessDate: -1 }, items: [{ productId: { $ref: 'setup.material.id' }, quantity: 1 }] } }),
       step('stock', 'warehouse', 'POST', '/api/inventory-adjustments', { body: { warehouseId: 'warehouse-001', adjustmentDate: { $businessDate: 0 }, reason: 'G07 CR06 source inventory', items: [{ productId: { $ref: 'setup.material.id' }, quantityDelta: 10 }] } }),
       step('stockConfirm', 'warehouse', 'POST', '/api/inventory-adjustments/{setup.stock.id}/confirm'),
@@ -305,6 +309,7 @@ export const M1_CORE_G07_FIXED_SCENARIOS = Object.freeze([
       step('finished', 'admin', 'POST', '/api/products', { body: { code: 'cr07-finished', name: 'CR07 finished', unit: 'EA', baseUomCode: 'EA', priceCents: 100, inventoryClassification: 'FINISHED_GOOD', trackingPolicy: 'NONE' } }),
       step('material', 'admin', 'POST', '/api/products', { body: { code: 'cr07-material', name: 'CR07 material', unit: 'EA', baseUomCode: 'EA', priceCents: 100, standardManufacturingCostCents: 100, inventoryClassification: 'RAW_MATERIAL', trackingPolicy: 'NONE' } }),
       step('qualify', 'admin', 'PATCH', '/api/suppliers/supplier-001/profile', { body: { outsourcingEnabled: true, category: 'OUTSOURCE', qualificationStatus: 'QUALIFIED', qualificationValidFrom: { $businessDate: -30 }, qualificationValidTo: { $businessDate: 365 }, supplierWipWarehouseId: 'warehouse-002' } }),
+      step('source', 'admin', 'POST', '/api/procurement/source-entries', { body: { supplierId: 'supplier-001', productId: { $ref: 'setup.finished.id' }, sourceType: 'OUTSOURCE', effectiveFrom: { $businessDate: -30 } } }),
       step('bom', 'admin', 'POST', '/api/engineering/boms', { body: { productId: { $ref: 'setup.finished.id' }, version: 'CR07', purpose: 'OUTSOURCE', approvalStatus: 'APPROVED', effectiveFrom: { $businessDate: -1 }, items: [{ productId: { $ref: 'setup.material.id' }, quantity: 1 }] } }),
       step('stock', 'warehouse', 'POST', '/api/inventory-adjustments', { body: { warehouseId: 'warehouse-001', adjustmentDate: { $businessDate: 0 }, reason: 'G07 CR07 source inventory', items: [{ productId: { $ref: 'setup.material.id' }, quantityDelta: 6 }] } }),
       step('stockConfirm', 'warehouse', 'POST', '/api/inventory-adjustments/{setup.stock.id}/confirm'),
@@ -344,6 +349,7 @@ export const M1_CORE_G07_FIXED_SCENARIOS = Object.freeze([
       step('finished', 'admin', 'POST', '/api/products', { body: { code: 'cr08-finished', name: 'CR08 finished', unit: 'EA', baseUomCode: 'EA', priceCents: 100, inventoryClassification: 'FINISHED_GOOD', trackingPolicy: 'NONE' } }),
       step('material', 'admin', 'POST', '/api/products', { body: { code: 'cr08-material', name: 'CR08 material', unit: 'EA', baseUomCode: 'EA', priceCents: 100, standardManufacturingCostCents: 100, inventoryClassification: 'RAW_MATERIAL', trackingPolicy: 'LOT' } }),
       step('qualify', 'admin', 'PATCH', '/api/suppliers/supplier-001/profile', { body: { outsourcingEnabled: true, category: 'OUTSOURCE', qualificationStatus: 'QUALIFIED', qualificationValidFrom: { $businessDate: -30 }, qualificationValidTo: { $businessDate: 365 }, supplierWipWarehouseId: 'warehouse-002' } }),
+      step('source', 'admin', 'POST', '/api/procurement/source-entries', { body: { supplierId: 'supplier-001', productId: { $ref: 'setup.finished.id' }, sourceType: 'OUTSOURCE', effectiveFrom: { $businessDate: -30 } } }),
       step('lot', 'warehouse', 'POST', '/api/inventory-lots', { body: { productId: { $ref: 'setup.material.id' }, lotCode: 'CR08-LOT-001' } }),
       step('stockDocument', 'warehouse', 'POST', '/api/inventory/native-documents', { body: { docKind: 'OTHER_RECEIPT', businessDate: { $businessDate: 0 }, reason: 'G07 CR08 LOT source inventory', items: [{ productId: { $ref: 'setup.material.id' }, warehouseId: 'warehouse-001', quantity: 1, lotId: { $ref: 'setup.lot.id' } }] } }),
       step('stockDocumentConfirm', 'warehouse', 'POST', '/api/inventory/native-documents/{setup.stockDocument.id}/confirm'),
@@ -379,6 +385,7 @@ export const M1_CORE_G07_FIXED_SCENARIOS = Object.freeze([
       step('finished', 'admin', 'POST', '/api/products', { body: { code: 'cr09-finished', name: 'CR09 finished', unit: 'EA', baseUomCode: 'EA', priceCents: 100, inventoryClassification: 'FINISHED_GOOD', trackingPolicy: 'NONE' } }),
       step('material', 'admin', 'POST', '/api/products', { body: { code: 'cr09-material', name: 'CR09 material', unit: 'EA', baseUomCode: 'EA', priceCents: 100, standardManufacturingCostCents: 100, inventoryClassification: 'RAW_MATERIAL', trackingPolicy: 'NONE' } }),
       step('qualify', 'admin', 'PATCH', '/api/suppliers/supplier-001/profile', { body: { outsourcingEnabled: true, category: 'OUTSOURCE', qualificationStatus: 'QUALIFIED', qualificationValidFrom: { $businessDate: -30 }, qualificationValidTo: { $businessDate: 365 }, supplierWipWarehouseId: 'warehouse-002' } }),
+      step('source', 'admin', 'POST', '/api/procurement/source-entries', { body: { supplierId: 'supplier-001', productId: { $ref: 'setup.finished.id' }, sourceType: 'OUTSOURCE', effectiveFrom: { $businessDate: -30 } } }),
       step('bom', 'admin', 'POST', '/api/engineering/boms', { body: { productId: { $ref: 'setup.finished.id' }, version: 'CR09', purpose: 'OUTSOURCE', approvalStatus: 'APPROVED', effectiveFrom: { $businessDate: -1 }, items: [{ productId: { $ref: 'setup.material.id' }, quantity: 1 }] } }),
       step('order', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders', { body: { supplierId: 'supplier-001', productId: { $ref: 'setup.finished.id' }, orderQuantity: 10, unit: 'EA', businessDate: { $businessDate: 0 }, bomId: { $ref: 'setup.bom.id' } } }),
       step('snapshot', 'outsourcing', 'POST', '/api/procurement/outsourcing/orders/{setup.order.id}/material-list', { body: { items: [{ productId: { $ref: 'setup.material.id' }, sourceWarehouseId: 'warehouse-001' }] } }),
@@ -429,7 +436,15 @@ export function computeM1CoreG07FixtureDigest(scenarios = M1_CORE_G07_FIXED_SCEN
 // 有效的采购价格条目，再创建采购订单。固定场景因此变更，冻结摘要随之重新
 // 计算。**该重新冻结同样待业务所有者显式确认**：在此之前，真实 MySQL Gate
 // 的既有验收结论不因本次变更自动延续。
-export const M1_CORE_G07_FIXED_FIXTURE_DIGEST = 'aa024bd56ae4eccd53242171f46bbd741bd1586f986d7d3ce92a8f5a53b8019f';
+// 变更记录（2026-11-11，Requirement §31.19 域级交付整改第四轮）：委外订单
+// 创建现在必须消费业务日期上有效的 OUTSOURCE 货源（OUT-02，委外与采购共用
+// 同一份货源控制实现与同一个参数开关）。固定场景必须先沿生产 HTTP 链建立
+// 一条有效的 OUTSOURCE 货源条目，再创建委外订单，否则门禁检验的是被拒绝的
+// 路径而不是真实链路。固定场景因此变更，冻结摘要随之重新计算。
+// **该重新冻结待业务所有者显式确认**：在此之前，真实 MySQL Gate 的既有
+// 验收结论不因本次变更自动延续。
+
+export const M1_CORE_G07_FIXED_FIXTURE_DIGEST = 'f112c88cb6d327f4885cf349de4a6c4efd6b4a4b1499e0547727e7103ccad33f';
 
 function lookup(context, reference) {
   const parts = String(reference).split('.');

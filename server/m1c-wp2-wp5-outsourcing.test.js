@@ -17,9 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDatabase } from './db.js';
 import { migrateProcurementOutsourcingSchema } from './migrations/procurement-outsourcing-schema.js';
-import {
-  createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource, seedApprovedOutsourceBom,
-} from './test-support/procurement-http-fixture.js';
+import { createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource, seedApprovedOutsourceBom, seedOutsourceSource } from './test-support/procurement-http-fixture.js';
 
 describe('M1C WP2-WP5 outsourcing core', () => {
   let fixture;
@@ -40,6 +38,7 @@ describe('M1C WP2-WP5 outsourcing core', () => {
       qualificationValidFrom: isoDate(-30), qualificationValidTo: isoDate(180), supplierWipWarehouseId: 'warehouse-002',
     });
     assert.equal(result.status, 200, result.data.error);
+    await seedOutsourceSource(fixture, [{ supplierId: 'supplier-001', productId: 'product-001', effectiveFrom: isoDate(-30) }]);
     const now = new Date().toISOString();
     for (const productId of ['product-001', 'product-002']) {
       fixture.db.prepare(`INSERT INTO inventory_valuation_balances(balance_key,valuation_method,product_id,warehouse_id,lot_id,serial_id,quantity,value_cents,updated_at)

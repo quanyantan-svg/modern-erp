@@ -4,12 +4,114 @@ import { audit, auditBusinessRejection } from '../lib/audit.js';
 import {
   HttpError, allow, allowAny, assertAllowedFields, readJson, send,
 } from '../lib/http.js';
-import { ensurePayableSource } from './settlement-core.js';
+import { ensurePayableSource, applyCreditAdjustment, openItemSnapshot } from './settlement-core.js';
 import { assertQualityGate } from './quality-gates.js';
-import { assertSupplierBillGlPostable } from './outsourcing-gl-policy.js';
+import { assertSupplierBillGlPostable, resolveProcessingFeeAccountingProfile } from './outsourcing-gl-policy.js';
 import { executeOutsourcingBackflush, receiveOutsourcingFinishedGoods, recordWipTransferIdentity } from './outsourcing-inventory.js';
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 import { assertInventoryPeriodOpen } from '../lib/inventory-mutation.js';
+import { assertFinancialPeriodsOpen, createSystemVoucher, reverseSystemVoucher } from './financial-inventory.js';
+import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
+import { recognizeFinanceExposure } from './finance-recognition.js';
+import { RECOGNITION_MODES } from './finance-recognition-policy.js';
+
+// ---------------------------------------------------------------------------
+// OUT-20 委外加工费正式过账 —— 会计口径（C-P01..C-P04）
+// ---------------------------------------------------------------------------
+//
+// **C-P01 金额确认时点**
+//
+// 委外加工费的**金额在收货生效时确认**，不在账单草稿时确认。
+//
+//   确认量 = 生效收货的数量 × 已约定的加工费单价
+//          = `outsourcing_receipts.processing_fee_cents`
+//            （收货生效时写入 `outsourcing_cost_evidences`
+//              `.processing_fee_basis_cents` / `.processing_fee_provisional_cents`）
+//
+// 该**权威确认金额**此后不被账单改写。它是：
+//   - 成本证据 `processing_fee_basis_cents` 的值；
+//   - 加工费账单的**开票金额上界**（按本次开票数量分摊，见下）。
+//
+// 因此：
+//   - 草稿账单**只是「待结算事实的登记」**：它记录供应商声称的单价，
+//     **不**冻结加工费金额，**不**写任何成本证据（MC-REQ-15：草稿零 AP /
+//     零凭证 / 零成本证据刷新）。草稿单价缺省时取收货生效确认的单位加工费，
+//     避免凭空定价。
+//   - **过账**时执行权威上界：账单行金额不得超过
+//     `确认金额 × 本行开票数量 / 生效收货数量`。少开票（部分开票）是合法的，
+//     差额进入 OUT-21 的 `variance_cents`；超开票一律 409 拒绝
+//     （`OUTSOURCING_PROCESSING_FEE_PRICE_MISMATCH`）——否则供应商可以凭一张
+//     草稿单把未经收货确认的加工费推进应付与总账。
+//   - 成本证据只在**过账**时按 canonical 账单实际金额刷新为 FINAL（OUT-21）。
+//
+// **C-P02 科目与税**
+//
+// 加工费过账**复用 canonical 财务原语**，不新建第二套：
+//   - 应付：`ensurePayableSource`（`settlement-core.js`）——同一张 `account_payables`。
+//   - 确认模式：`recognizeFinanceExposure`（`finance-recognition.js`），
+//     `sourceType='SUPPLIER_BILL'`，与普通采购账单同一套 INVOICE_DRIVEN 口径。
+//   - 凭证：`createSystemVoucher`（`financial-inventory.js`），角色码来自
+//     `outsourcing_processing_fee_accounting_profiles` 档案（见 `outsourcing-gl-policy.js`）。
+//   - 期间：`assertFinancialPeriodsOpen` + `assertFinanceBusinessDateOpen('AP', ...)`。
+//   - 税额：沿用 `calculateLineTax` 的 `NO_TAX / EXCLUSIVE / INCLUSIVE` 三种模式，
+//     税率取 `supplier_bill_items.tax_rate_numerator/denominator`，**不自写税额算法**。
+//
+// **禁止照搬普通采购的 `Dr GRNI / Cr AP`**（MC-REQ-15 / M1-D-16）：
+// 委外成品在收货生效时直接按「消耗材料价值 + 加工费」入账，**没有在途物资腿**。
+// 加工费借方走档案指定的 `OUTSOURCING_PROCESSING_FEE` 角色（6408 委外加工费）。
+//
+// **C-P03 红冲**
+//
+// 已 POSTED 的加工费账单可按行红冲。语义与既有 canonical 红冲一致：
+//   - 数量守恒：累计红冲数量不得超过该行已开票数量。
+//   - 金额反向：`reverseSystemVoucher` 生成方向相反的等额凭证；
+//     `applyCreditAdjustment` 生成与原金额反向的 AP 贷项调整。
+//   - 审计 + 幂等：同一 Idempotency-Key 的精确重放只返回已记录结果。
+//
+// **C-P04 跨域边界**
+//
+// 委外加工费**不新建第二套 GL**。它只接入 canonical `createSystemVoucher` 的
+// 既有接口，角色码来自档案；来源级 Business Policy Guard
+// （`outsourcing-gl-policy.js`）继续在**共享入口**上区分委外来源与普通采购来源，
+// 普通采购账单的既有行为**不受影响**。
+//
+// ---------------------------------------------------------------------------
+
+// 加工费过账的稳定错误码（全部 409，除字段校验用 400）。
+//
+// `POLICY` 是**来源证据不成立**时的对外错误码：委外加工费的正式过账要求
+// 「来源收货已生效 + 收货生效时已确认加工费金额」，该政策前提不成立时一律
+// 返回 `OUTSOURCING_GL_POLICY_NOT_APPROVED`（与共享入口的来源级拒绝同码），
+// 精确原因放在错误的 `reason` 字段里，便于诊断而不新增对外错误码族。
+export const OUTSOURCING_PROCESSING_FEE_CODES = Object.freeze({
+  POLICY: 'OUTSOURCING_GL_POLICY_NOT_APPROVED',
+  PROFILE: 'OUTSOURCING_GL_PROFILE_NOT_APPROVED',
+  ALREADY_POSTED: 'OUTSOURCING_PROCESSING_FEE_ALREADY_POSTED',
+  NOT_POSTED: 'OUTSOURCING_PROCESSING_FEE_NOT_POSTED',
+  PRICE_MISMATCH: 'OUTSOURCING_PROCESSING_FEE_PRICE_MISMATCH',
+  INVALID_QUANTITY: 'OUTSOURCING_PROCESSING_FEE_INVALID_QUANTITY',
+  INVALID_AMOUNT: 'OUTSOURCING_PROCESSING_FEE_INVALID_AMOUNT',
+  REVERSAL_EXCEEDS: 'OUTSOURCING_PROCESSING_FEE_REVERSAL_EXCEEDS',
+  REVERSAL_NOT_REVERSIBLE: 'OUTSOURCING_PROCESSING_FEE_NOT_REVERSIBLE',
+});
+
+const OUTSOURCING_SOURCE_TYPE = 'OUTSOURCING_RECEIPT_ITEM';
+// 数量比较容差（与既有委外收货 / 账单守恒判定一致）。
+const OUTSOURCING_QTY_EPS = 1e-9;
+
+/**
+ * 来源级政策前提不成立时的拒绝（C-P01 / C-P04）。
+ *
+ * 对外错误码统一为 `OUTSOURCING_GL_POLICY_NOT_APPROVED`（与共享入口的
+ * 来源级拒绝同码，便于调用方按同一族处理），精确原因放在 `reason` 字段。
+ * 409 必须写恰好一条 Domain 拒绝审计（MC-REQ-11）。
+ */
+function processingFeePolicyConflict(message, reason) {
+  return new HttpError(409, message, {
+    code: OUTSOURCING_PROCESSING_FEE_CODES.POLICY,
+    reason,
+  });
+}
 
 // 收货域动作只认收货管理权限：委外业务操作权限不得代行收货职责
 // （MC-REQ-10；Active Design §8.1.2 收紧项）。
@@ -50,6 +152,19 @@ function rejectReceiptConfirm(db, actor, receiptId, error) {
   return error;
 }
 
+/**
+ * OUT-21 委外成本证据刷新（C-P01 口径）。
+ *
+ * 金额确认时点（C-P01）：加工费的**基准金额**在**收货生效时**确定并写入
+ * `processing_fee_basis_cents` / `processing_fee_provisional_cents`。过账只把
+ * **canonical 账单实际金额**写进 `processing_fee_actual_cents`，并据此计算
+ * `variance_cents = actual - basis`。任何地方都不得手算金额。
+ *
+ * `basis_status` 由 `PROVISIONAL` 变为 `FINAL` 的条件：**该收货的应付数量已被
+ * 完整开票**（累计已过账开票数量 + 已红冲数量 >= 保留加工数量）。
+ *
+ * 已红冲的行必须从实际金额与开票数量中扣除，否则红冲后证据会被重复计入。
+ */
 function refreshOutsourcingCostEvidence(db, receiptId, calculatedAt = new Date().toISOString()) {
   const receipt = db.prepare('SELECT * FROM outsourcing_receipts WHERE id=?').get(receiptId);
   if (!receipt) throw new HttpError(404, 'Outsourcing receipt not found');
@@ -66,16 +181,27 @@ function refreshOutsourcingCostEvidence(db, receiptId, calculatedAt = new Date()
     FROM outsourcing_finished_return_credits c
     JOIN outsourcing_finished_returns r ON r.id=c.return_id
     WHERE r.outsourcing_receipt_id=? AND r.business_status='CONFIRMED'`).get(receiptId);
-  const netBilledQuantity = Number(billed.billed_quantity) - Number(credits.credited_quantity);
-  const netActualCents = Number(billed.actual_cents) - Number(credits.credit_cents);
+  // 已过账但已被红冲的行：红冲记录持有反向数量与反向金额，必须从实际口径中扣除。
+  const reversed = db.prepare(`SELECT COALESCE(SUM(r.reversal_quantity),0) reversed_quantity,
+    COALESCE(SUM(r.reversal_amount_cents),0) reversed_cents
+    FROM outsourcing_processing_fee_reversals r
+    WHERE r.outsourcing_receipt_id=? AND r.status='CONFIRMED'`).get(receiptId);
+  const netBilledQuantity = Number(billed.billed_quantity) - Number(credits.credited_quantity) - Number(reversed.reversed_quantity);
+  const netActualCents = Number(billed.actual_cents) - Number(credits.credit_cents) - Number(reversed.reversed_cents);
   const retainedQuantity = Math.max(0, Number(receipt.quantity) - returned);
-  const basisStatus = netBilledQuantity + 1e-9 >= retainedQuantity ? 'FINAL' : 'PROVISIONAL';
-  const actualCents = Number(billed.billed_quantity) > 0 ? netActualCents : null;
-  const varianceCents = actualCents === null ? null : actualCents - Number(receipt.processing_fee_cents);
+  // 加工费基准金额：C-P01 —— 收货生效时确认的加工费金额。
+  const basisCents = Number(receipt.processing_fee_cents);
+  // 「是否曾被开票」看**已过账账单行**是否存在，而不是净额：全额红冲后净额为 0，
+  // 但 canonical 账单实际金额仍然是已确定的 0（而不是「未开票」的 NULL）。
+  const everBilled = Number(billed.billed_quantity) > 0;
+  const basisStatus = netBilledQuantity + OUTSOURCING_QTY_EPS >= retainedQuantity ? 'FINAL' : 'PROVISIONAL';
+  const actualCents = everBilled ? netActualCents : null;
+  const varianceCents = actualCents === null ? null : actualCents - basisCents;
   db.prepare(`INSERT INTO outsourcing_cost_evidences(
     id,outsourcing_receipt_id,processing_po_id,material_consumed_value_cents,
-    processing_fee_provisional_cents,processing_fee_actual_cents,variance_cents,basis_status,calculated_at
-  ) VALUES(?,?,?,?,?,?,?,?,?)
+    processing_fee_provisional_cents,processing_fee_actual_cents,variance_cents,basis_status,calculated_at,
+    processing_fee_basis_cents,finalized_bill_id,finalized_at
+  ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
   ON CONFLICT(outsourcing_receipt_id) DO UPDATE SET
     processing_po_id=excluded.processing_po_id,
     material_consumed_value_cents=excluded.material_consumed_value_cents,
@@ -83,13 +209,18 @@ function refreshOutsourcingCostEvidence(db, receiptId, calculatedAt = new Date()
     processing_fee_actual_cents=excluded.processing_fee_actual_cents,
     variance_cents=excluded.variance_cents,
     basis_status=excluded.basis_status,
-    calculated_at=excluded.calculated_at`).run(
+    calculated_at=excluded.calculated_at,
+    processing_fee_basis_cents=excluded.processing_fee_basis_cents,
+    finalized_bill_id=excluded.finalized_bill_id,
+    finalized_at=excluded.finalized_at`).run(
     randomUUID(), receiptId, receipt.processing_po_id,
-    Number(receipt.backflush_material_value_cents), Number(receipt.processing_fee_cents),
+    Number(receipt.backflush_material_value_cents), basisCents,
     actualCents, varianceCents, basisStatus, calculatedAt,
+    basisCents, null, null,
   );
   return db.prepare('SELECT * FROM outsourcing_cost_evidences WHERE outsourcing_receipt_id=?').get(receiptId);
 }
+
 
 /**
  * OUT-17 / OUT-19 atomic outsourcing receipt confirm.
@@ -235,15 +366,20 @@ export async function confirmOutsourcingReceipt(db, req, res, actor, receiptId) 
     db.prepare(`UPDATE outsourcing_receipts SET business_status='EFFECTED', backflush_material_value_cents=?, total_cost_cents=?, version=version+1, updated_at=? WHERE id=? AND business_status='PENDING_INSPECTION'`).run(totalMaterialValue, totalFinishedValue, now, receiptId);
     db.prepare(`INSERT INTO outsourcing_cost_evidences(
       id,outsourcing_receipt_id,processing_po_id,material_consumed_value_cents,
-      processing_fee_provisional_cents,processing_fee_actual_cents,variance_cents,basis_status,calculated_at
-    ) VALUES(?,?,?,?,?,NULL,NULL,'PROVISIONAL',?)
+      processing_fee_provisional_cents,processing_fee_actual_cents,variance_cents,basis_status,calculated_at,
+      processing_fee_basis_cents,finalized_bill_id,finalized_at
+    ) VALUES(?,?,?,?,?,NULL,NULL,'PROVISIONAL',?,?,NULL,NULL)
     ON CONFLICT(outsourcing_receipt_id) DO UPDATE SET
       processing_po_id=excluded.processing_po_id,
       material_consumed_value_cents=excluded.material_consumed_value_cents,
       processing_fee_provisional_cents=excluded.processing_fee_provisional_cents,
+      processing_fee_basis_cents=excluded.processing_fee_basis_cents,
       calculated_at=excluded.calculated_at`).run(
       randomUUID(), receiptId, lockedReceipt.processing_po_id, totalMaterialValue,
       Number(lockedReceipt.processing_fee_cents), now,
+      // C-P01：金额确认发生在收货生效时 —— 生效收货的数量 × 已约定的加工费单价。
+      // 该基准金额此后**不再**被账单改写；账单只提供 actual 与 variance。
+      Number(lockedReceipt.processing_fee_cents),
     );
     audit(db, actor.id, 'CONFIRM', 'OUTSOURCING_RECEIPT', receiptId, `material_value=${totalMaterialValue}; processing_fee=${lockedReceipt.processing_fee_cents}`);
     saveIdempotency(db, operation, receiptId, idempotencyKey, fingerprint, {
@@ -291,7 +427,7 @@ export async function createProcessingFeeBill(db, req, res, actor) {
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     for (let i = 0; i < body.lines.length; i += 1) {
       const line = body.lines[i];
-      const item = db.prepare(`SELECT ori.*, orr.received_date, orr.processing_fee_cents, orr.supplier_id FROM outsourcing_receipt_items ori JOIN outsourcing_receipts orr ON orr.id=ori.receipt_id WHERE ori.id=?`).get(line.outsourcingReceiptItemId);
+      const item = db.prepare(`SELECT ori.*, orr.received_date, orr.processing_fee_cents, orr.supplier_id, orr.business_status, orr.quantity receipt_quantity FROM outsourcing_receipt_items ori JOIN outsourcing_receipts orr ON orr.id=ori.receipt_id WHERE ori.id=?`).get(line.outsourcingReceiptItemId);
       // Row lock via UPDATE; SQLite serializes via BEGIN IMMEDIATE.
       const returnedQty = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) q FROM outsourcing_finished_returns
         WHERE outsourcing_receipt_id=? AND business_status='CONFIRMED'`).get(item.receipt_id).q);
@@ -306,8 +442,38 @@ export async function createProcessingFeeBill(db, req, res, actor) {
       if (Number(line.quantity) > remainingBillable + 1e-9) {
         throw new HttpError(409, `Billable quantity exceeded: 剩余可计费 ${remainingBillable}`);
       }
-      const unitPrice = Number(line.unitPriceCents || Math.floor(Number(item.processing_fee_cents) / eligibleQty));
-      const netCents = unitPrice * Number(line.quantity);
+      // C-P01：金额确认发生在**收货生效时**，不在账单草稿时。
+      //
+      // 草稿只是「待结算事实的登记」：它记录供应商**声称**的单价，但**不**冻结
+      // 加工费金额，也**不**写任何成本证据（MC-REQ-15：草稿零 AP / 零凭证 /
+      // 零成本证据刷新）。收货生效时确认的金额（收货数量 × 已约定加工费单价）
+      // 已经写入 `outsourcing_cost_evidences.processing_fee_basis_cents`，
+      // 它才是加工费的**权威确认金额**。
+      //
+      // 因此草稿阶段的单价只做两件事：
+      //   1. 必须是合法数值（非负安全整数分）；
+      //   2. 缺省时取收货生效时确认的单位加工费，避免凭空定价。
+      //
+      // 「草稿声称金额 ≤ 收货生效确认金额」这条上界在**过账**时执行
+      // （见 `readProcessingFeeBillLines`），因为过账才是产生应付与凭证的时刻；
+      // 草稿阶段拒绝会破坏「草稿登记待裁定事实」这一既有合同。
+      const receiptQuantity = Number(item.receipt_quantity || 0);
+      const basisCents = Number(item.processing_fee_cents || 0);
+      const itemUnitPrice = Number(item.unit_price_cents || 0);
+      const effectiveUnitPrice = itemUnitPrice > 0
+        ? itemUnitPrice
+        : (receiptQuantity > 0 ? basisCents / receiptQuantity : 0);
+      const requestedPrice = line.unitPriceCents === undefined || line.unitPriceCents === null
+        ? effectiveUnitPrice
+        : Number(line.unitPriceCents);
+      if (!Number.isSafeInteger(requestedPrice) || requestedPrice < 0) {
+        throw new HttpError(400, '加工费单价必须为非负整数分', { code: OUTSOURCING_PROCESSING_FEE_CODES.INVALID_AMOUNT });
+      }
+      const unitPrice = requestedPrice;
+      const netCents = Math.round(unitPrice * Number(line.quantity));
+      if (!Number.isSafeInteger(netCents) || netCents <= 0) {
+        throw new HttpError(409, '加工费账单行金额必须为正整数分', { code: OUTSOURCING_PROCESSING_FEE_CODES.INVALID_AMOUNT });
+      }
       const taxCents = 0; const grossCents = netCents;
       insertItem.run(randomUUID(), billId,
         'OUTSOURCING_RECEIPT_ITEM', item.receipt_id, item.id,
@@ -324,29 +490,362 @@ export async function createProcessingFeeBill(db, req, res, actor) {
   return send(res, 201, { id: billId, billNo, totalNet, totalGross });
 }
 
+/**
+ * 加工费账单行的权威重读（C-P01）。
+ *
+ * 返回每一行的：来源收货、来源收货明细、收货生效状态、收货生效时确认的
+ * 单位加工费、以及该行已开票 / 已红冲的数量。任何一行缺权威来源即 fail closed。
+ */
+function readProcessingFeeBillLines(db, billId) {
+  const rows = db.prepare(`SELECT * FROM supplier_bill_items WHERE bill_id=? ORDER BY line_no, id`).all(billId);
+  const lines = [];
+  for (const row of rows) {
+    if (row.commercial_source_type !== OUTSOURCING_SOURCE_TYPE) {
+      throw processingFeePolicyConflict('委外加工费账单不得混存非委外来源行', 'MIXED_SOURCE_TYPE');
+    }
+    const receipt = db.prepare('SELECT * FROM outsourcing_receipts WHERE id=?').get(row.commercial_source_id);
+    const receiptItem = db.prepare('SELECT * FROM outsourcing_receipt_items WHERE id=?').get(row.commercial_source_item_id);
+    if (!receipt || !receiptItem || receiptItem.receipt_id !== receipt.id) {
+      throw processingFeePolicyConflict('委外加工费账单的来源收货明细不存在', 'SOURCE_RECEIPT_ITEM_MISSING');
+    }
+    if (receipt.business_status !== 'EFFECTED') {
+      throw processingFeePolicyConflict('委外收货尚未生效，不得过账加工费', 'SOURCE_RECEIPT_NOT_EFFECTED');
+    }
+    const evidence = db.prepare('SELECT * FROM outsourcing_cost_evidences WHERE outsourcing_receipt_id=?').get(receipt.id);
+    if (!evidence) {
+      throw processingFeePolicyConflict('委外收货缺少生效时确认的加工费成本证据', 'SOURCE_COST_EVIDENCE_MISSING');
+    }
+    const basisCents = Number(evidence.processing_fee_basis_cents ?? evidence.processing_fee_provisional_cents ?? receipt.processing_fee_cents);
+    const quantity = Number(row.base_quantity_num) / Number(row.base_quantity_den || 1);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw new HttpError(400, '加工费账单行数量必须为正', { code: OUTSOURCING_PROCESSING_FEE_CODES.INVALID_QUANTITY });
+    }
+    const netCents = Number(row.net_cents);
+    if (!Number.isSafeInteger(netCents) || netCents <= 0) {
+      throw new HttpError(409, '加工费账单行金额必须为正整数分', { code: OUTSOURCING_PROCESSING_FEE_CODES.INVALID_AMOUNT });
+    }
+    const unitPriceCents = Number(row.unit_price_cents);
+    if (!Number.isSafeInteger(unitPriceCents) || unitPriceCents < 0) {
+      throw new HttpError(409, '加工费账单行单价必须为非负整数分', { code: OUTSOURCING_PROCESSING_FEE_CODES.INVALID_AMOUNT });
+    }
+    // C-P01（过账时执行）：收货生效时确认的加工费金额是**权威确认金额**，
+    // 草稿声称的金额不得超过它按本次开票数量分摊的份额。
+    //
+    //   权威确认金额 = `outsourcing_cost_evidences.processing_fee_basis_cents`
+    //                 （收货生效时写入，生效收货数量 × 已约定加工费单价）
+    //   分摊上限     = 权威确认金额 × 本行开票数量 / 生效收货数量
+    //
+    // 少开票（部分开票）是合法的，差额进入 OUT-21 的 `variance_cents`；
+    // 超开票（超过权威确认金额）一律拒绝 —— 否则供应商可以凭一张草稿单
+    // 把未经收货确认的加工费推进应付与总账。
+    const receiptQuantity = Number(receipt.quantity || 0);
+    if (basisCents > 0 && receiptQuantity > 0) {
+      const allowedCents = Math.round(basisCents * quantity / receiptQuantity);
+      if (netCents > allowedCents + OUTSOURCING_QTY_EPS * Math.max(1, allowedCents)) {
+        throw new HttpError(409,
+          `加工费账单金额超过收货生效时确认的加工费份额（账单 ${netCents} 分，上限 ${allowedCents} 分）`,
+          { code: OUTSOURCING_PROCESSING_FEE_CODES.PRICE_MISMATCH });
+      }
+    }
+    const reversedQuantity = Number(db.prepare(`SELECT COALESCE(SUM(reversal_quantity),0) q
+      FROM outsourcing_processing_fee_reversals WHERE supplier_bill_item_id=? AND status='CONFIRMED'`).get(row.id).q);
+    lines.push({ row, receipt, receiptItem, evidence, basisCents, quantity, netCents, unitPriceCents, reversedQuantity });
+  }
+  return lines;
+}
+
+/**
+ * 计算加工费账单的凭证分录（C-P02）。
+ *
+ * 借方：档案的 `processing_fee_role`（委外加工费）——**不**是普通采购的 GRNI。
+ * 进项税：档案的 `input_tax_role` 与 `tax_mode` 一致时才产生。
+ * 贷方：`ACCOUNTS_PAYABLE`（canonical 应付科目）。
+ *
+ * 加工费与暂估的差异（variance）走档案的 `variance_role`；档案未指定差异科目时，
+ * 差异不得被静默吞掉 —— 它必须与加工费一起进入借方总额（净额法），
+ * 因此本函数返回的是**净额**分录，variance 由档案角色单独表达。
+ */
+function buildProcessingFeeVoucherEntries(bill, lines, profile) {
+  const netCents = lines.reduce((sum, line) => sum + line.netCents, 0);
+  const taxCents = Number(bill.tax_cents || 0);
+  const grossCents = Number(bill.gross_cents || 0);
+  if (!Number.isSafeInteger(grossCents) || grossCents <= 0) {
+    throw new HttpError(409, '加工费账单总额必须为正整数分', { code: OUTSOURCING_PROCESSING_FEE_CODES.INVALID_AMOUNT });
+  }
+  if (grossCents !== netCents + taxCents) {
+    throw new HttpError(409, '加工费账单金额与税额不一致', { code: OUTSOURCING_PROCESSING_FEE_CODES.INVALID_AMOUNT });
+  }
+  const entries = [];
+  // 借方：加工费本体（净额）。
+  entries.push({
+    role: profile.processing_fee_role, direction: 'DEBIT', amountCents: netCents,
+    summary: `委外加工费 ${bill.bill_no}`,
+  });
+  // 进项税：只在档案声明了进项税角色、且税额为正时产生。
+  if (taxCents > 0) {
+    if (!profile.input_tax_role) {
+      throw new HttpError(409, '会计档案未批准加工费进项税科目', { code: OUTSOURCING_PROCESSING_FEE_CODES.PROFILE });
+    }
+    entries.push({
+      role: profile.input_tax_role, direction: 'DEBIT', amountCents: taxCents,
+      summary: `委外加工费进项税 ${bill.bill_no}`,
+    });
+  }
+  // 贷方：应付账款（canonical）。
+  entries.push({
+    role: 'ACCOUNTS_PAYABLE', direction: 'CREDIT', amountCents: grossCents,
+    summary: `委外加工费应付 ${bill.bill_no}`,
+  });
+  return entries;
+}
+
+/**
+ * OUT-20 委外加工费正式过账。
+ *
+ * 与普通采购账单**共用同一套 canonical 财务原语**：
+ *   `recognizeFinanceExposure`（应付确认）→ `createSystemVoucher`（凭证）
+ *   → `assertFinancialPeriodsOpen` / `assertFinanceBusinessDateOpen`（期间）
+ *   → `refreshOutsourcingCostEvidence`（OUT-21 FINAL 口径）。
+ *
+ * 委外来源的科目角色码来自已批准的会计档案（C-P02），不在业务代码里硬编码。
+ */
 export async function postProcessingFeeBill(db, req, res, actor, billId) {
   assertPostingPermission(actor);
   const bill = db.prepare('SELECT * FROM supplier_bills WHERE id=?').get(billId);
   if (!bill) throw new HttpError(404, '账单不存在');
   // 来源级 Business Policy Guard（MC-REQ-15 / Active Design §9.4）：委外来源
-  // 账单的正式过账一律拒绝，且拒绝发生在任何状态、AP、凭证与成本证据写入之前。
+  // 账单必须先通过来源级判定与会计档案判定，拒绝发生在任何状态、AP、凭证与
+  // 成本证据写入之前。
+  //
+  // 同一个来源级 Guard 按入口区分放行条件：共享入口对委外来源一律拒绝，
+  // 委外专属入口额外要求已批准的会计档案（C-P02）。
+  // 见 `outsourcing-gl-policy.js::assertSupplierBillGlPostable`。
   assertSupplierBillGlPostable(db, billId, actor.id, 'POST_PROCESSING_FEE_BILL');
-  if (bill.status !== 'DRAFT') throw new HttpError(409, '只有草稿可过账');
   const now = new Date().toISOString();
-  transaction(db, () => {
-    db.prepare("UPDATE supplier_bills SET status='POSTED', posted_by=?, posted_at=? WHERE id=?").run(actor.id, now, billId);
-    ensurePayableSource(db, {
-      id: billId, sourceType: 'SUPPLIER_BILL', sourceNo: bill.bill_no,
-      partyId: bill.supplier_id, businessDate: bill.bill_date,
-      effectCents: Number(bill.gross_cents), creatorId: bill.creator_id, createdAt: bill.created_at,
+  try {
+    if (bill.status === 'POSTED') {
+      throw new HttpError(409, '加工费账单已过账，不得重复过账', { code: OUTSOURCING_PROCESSING_FEE_CODES.ALREADY_POSTED });
+    }
+    if (bill.status !== 'DRAFT') {
+      throw new HttpError(409, '只有草稿可过账', { code: OUTSOURCING_PROCESSING_FEE_CODES.NOT_POSTED });
+    }
+    const profile = resolveProcessingFeeAccountingProfile(db, bill);
+    if (!profile) {
+      throw new HttpError(409, '委外加工费会计档案未获批', { code: OUTSOURCING_PROCESSING_FEE_CODES.PROFILE });
+    }
+    transaction(db, () => {
+      // ── 事务内权威重读（AGENTS.md §6：核心 mutation 必须在事务中重读权威状态）──
+      const lockedBill = db.prepare('SELECT * FROM supplier_bills WHERE id=?').get(billId);
+      if (!lockedBill) throw new HttpError(404, '账单不存在');
+      if (lockedBill.status === 'POSTED') {
+        throw new HttpError(409, '加工费账单已过账，不得重复过账', { code: OUTSOURCING_PROCESSING_FEE_CODES.ALREADY_POSTED });
+      }
+      if (lockedBill.status !== 'DRAFT') {
+        throw new HttpError(409, '只有草稿可过账', { code: OUTSOURCING_PROCESSING_FEE_CODES.NOT_POSTED });
+      }
+      const lines = readProcessingFeeBillLines(db, billId);
+      if (!lines.length) {
+        throw processingFeePolicyConflict('加工费账单缺少委外来源明细', 'NO_OUTSOURCING_SOURCE_LINES');
+      }
+      // 期间与关期门禁（canonical，与普通采购账单同一套）。
+      assertFinanceBusinessDateOpen(db, 'AP', lockedBill.bill_date);
+      assertFinancialPeriodsOpen(db, lockedBill.bill_date);
+      // 应付确认：与普通供应商账单**同一个** sourceType / 同一个 canonical 路径。
+      const sources = lines.map((line) => ({
+        sourceType: 'SUPPLIER_BILL', sourceId: billId, sourceNo: lockedBill.bill_no,
+        sourceLineId: line.row.id, invoicedQuantity: line.quantity,
+        invoicedAmountCents: line.netCents, fullyInvoiced: true,
+      }));
+      const recognition = recognizeFinanceExposure(db, {
+        side: 'AP', source: sources[0], sources,
+        invoice: { id: billId, no: lockedBill.bill_no, type: 'SUPPLIER_BILL' },
+        amountCents: Number(lockedBill.gross_cents), businessDate: lockedBill.bill_date,
+        partyId: lockedBill.supplier_id, actorId: actor.id, createdAt: lockedBill.created_at,
+      });
+      if (recognition.recognitionMode !== RECOGNITION_MODES.DIRECT) {
+        createSystemVoucher(db, {
+          sourceType: 'SUPPLIER_BILL', sourceId: billId, businessDate: lockedBill.bill_date,
+          actorId: actor.id, entries: buildProcessingFeeVoucherEntries(lockedBill, lines, profile),
+        });
+      }
+      db.prepare("UPDATE supplier_bills SET status='POSTED', posted_by=?, posted_at=?, processing_fee_posting_state='POSTED', processing_fee_profile_id=? WHERE id=?")
+        .run(actor.id, now, profile.id, billId);
+      // OUT-21：过账后刷新成本证据 —— actual 取 canonical 账单实际金额。
+      const receiptIds = db.prepare(`SELECT DISTINCT commercial_source_id receipt_id FROM supplier_bill_items
+        WHERE bill_id=? AND commercial_source_type='OUTSOURCING_RECEIPT_ITEM'`).all(billId);
+      for (const row of receiptIds) {
+        refreshOutsourcingCostEvidence(db, row.receipt_id, now);
+        db.prepare('UPDATE outsourcing_cost_evidences SET finalized_bill_id=?, finalized_at=? WHERE outsourcing_receipt_id=?')
+          .run(billId, now, row.receipt_id);
+      }
+      audit(db, actor.id, 'POST', 'SUPPLIER_BILL', billId, `${lockedBill.bill_no} 委外加工费过账`);
     });
-    const receiptIds = db.prepare(`SELECT DISTINCT commercial_source_id receipt_id FROM supplier_bill_items
-      WHERE bill_id=? AND commercial_source_type='OUTSOURCING_RECEIPT_ITEM'`).all(billId);
-    for (const row of receiptIds) refreshOutsourcingCostEvidence(db, row.receipt_id, now);
-    audit(db, actor.id, 'POST', 'SUPPLIER_BILL', billId, bill.bill_no);
-  });
-  return send(res, 200, { ok: true });
+  } catch (error) {
+    // 业务门禁拒绝：事务已回滚，零业务副作用；拒绝审计在事务外落一条。
+    throw rejectProcessingFeePost(db, actor, billId, error);
+  }
+  return send(res, 200, { ok: true, billId, processingFee: true });
 }
+
+/**
+ * 加工费过账的业务门禁拒绝（MC-REQ-11）：
+ * 409 写恰好一条 Domain 拒绝审计（含业务单据标识与精确 error code）；
+ * 400 字段校验失败不写 Domain 审计。
+ */
+function rejectProcessingFeePost(db, actor, billId, error) {
+  if (db?.dialect === 'mysql') releaseMySqlIdempotencyLocks(db);
+  auditBusinessRejection(db, actor, {
+    entityType: 'SUPPLIER_BILL', entityId: billId, action: '委外加工费过账',
+  }, error);
+  return error;
+}
+
+/**
+ * C-P03 委外加工费账单红冲。
+ *
+ * 语义与既有 canonical 红冲一致：
+ *   - 数量守恒：累计红冲数量不得超过该行已开票数量（减去已红冲数量）。
+ *   - 金额反向：`reverseSystemVoucher` 生成方向相反的等额凭证；
+ *     `applyCreditAdjustment` 生成与原金额反向的 AP 贷项调整。
+ *   - 审计 + 幂等：同一 Idempotency-Key 的精确重放只返回已记录结果。
+ *
+ * 红冲只允许对**已过账**的加工费账单；来源收货必须仍然生效。
+ */
+export async function reverseProcessingFeeBill(db, req, res, actor, billId) {
+  assertPostingPermission(actor);
+  const body = await readJson(req);
+  assertAllowedFields(body, ['items', 'businessDate', 'reason', 'idempotencyKey']);
+  const reason = String(body.reason || '').trim();
+  if (!reason) throw new HttpError(400, '红冲原因必填');
+  const items = Array.isArray(body.items) ? body.items : [];
+  if (!items.length) throw new HttpError(400, '请选择需要红冲的账单明细');
+  const idempotencyKey = String(body.idempotencyKey || req.headers['idempotency-key'] || '').trim();
+  if (!idempotencyKey) throw new HttpError(400, 'Idempotency-Key 必填');
+  const operation = 'OUTSOURCING_PROCESSING_FEE_REVERSAL';
+  const fingerprint = requestFingerprint({ billId, items, reason, businessDate: body.businessDate || null });
+  let replay = null;
+  try {
+    replay = idempotencyReplay(db, operation, billId, idempotencyKey, fingerprint);
+  } catch (error) {
+    if (error?.status !== 409) throw error;
+    throw new HttpError(409, error.message, { code: 'OUTSOURCING_PROCESSING_FEE_IDEMPOTENCY_CONFLICT' });
+  }
+  if (replay) return send(res, 200, { ...replay, replayed: true });
+
+  const bill = db.prepare('SELECT * FROM supplier_bills WHERE id=?').get(billId);
+  if (!bill) throw new HttpError(404, '账单不存在');
+  const businessDate = String(body.businessDate || bill.bill_date || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(businessDate)) {
+    throw new HttpError(400, '红冲业务日期格式必须为 YYYY-MM-DD');
+  }
+  const reversalNo = `PFREV-${businessDate.replace(/-/g, '')}-${randomUUID().replace(/-/g, '').slice(0, 10).toUpperCase()}`;
+  let totalAmount = 0;
+  let totalQuantity = 0;
+  try {
+    transaction(db, () => {
+      const lockedBill = db.prepare('SELECT * FROM supplier_bills WHERE id=?').get(billId);
+      if (!lockedBill) throw new HttpError(404, '账单不存在');
+      if (lockedBill.status !== 'POSTED') {
+        throw new HttpError(409, '只有已过账的加工费账单可以红冲', { code: OUTSOURCING_PROCESSING_FEE_CODES.NOT_POSTED });
+      }
+      if (lockedBill.processing_fee_posting_state === 'REVERSED') {
+        throw new HttpError(409, '加工费账单已被红冲，不可重复红冲', { code: OUTSOURCING_PROCESSING_FEE_CODES.REVERSAL_NOT_REVERSIBLE });
+      }
+      assertFinanceBusinessDateOpen(db, 'AP', businessDate);
+      assertFinancialPeriodsOpen(db, businessDate);
+      const touchedBills = new Set();
+      for (const item of items) {
+        const line = db.prepare('SELECT * FROM supplier_bill_items WHERE id=? AND bill_id=?').get(item.billItemId, billId);
+        if (!line) throw new HttpError(404, '原加工费账单明细不存在');
+        if (line.commercial_source_type !== OUTSOURCING_SOURCE_TYPE) {
+          throw new HttpError(409, '红冲只适用于委外加工费账单明细', { code: OUTSOURCING_PROCESSING_FEE_CODES.REVERSAL_NOT_REVERSIBLE });
+        }
+        const receipt = db.prepare('SELECT * FROM outsourcing_receipts WHERE id=?').get(line.commercial_source_id);
+        if (!receipt || receipt.business_status !== 'EFFECTED') {
+          throw processingFeePolicyConflict('来源委外收货未生效，不得红冲', 'SOURCE_RECEIPT_NOT_EFFECTED');
+        }
+        const billedQuantity = Number(line.base_quantity_num) / Number(line.base_quantity_den || 1);
+        const reversedQuantity = Number(db.prepare(`SELECT COALESCE(SUM(reversal_quantity),0) q
+          FROM outsourcing_processing_fee_reversals WHERE supplier_bill_item_id=? AND status='CONFIRMED'`).get(line.id).q);
+        const requested = Number(item.quantity ?? billedQuantity - reversedQuantity);
+        if (!Number.isFinite(requested) || requested <= 0) {
+          throw new HttpError(400, '红冲数量必须为正', { code: OUTSOURCING_PROCESSING_FEE_CODES.INVALID_QUANTITY });
+        }
+        const remaining = billedQuantity - reversedQuantity;
+        if (requested > remaining + OUTSOURCING_QTY_EPS) {
+          throw new HttpError(409, '累计红冲数量超过该行已开票数量', { code: OUTSOURCING_PROCESSING_FEE_CODES.REVERSAL_EXCEEDS });
+        }
+        const unitPrice = Number(line.unit_price_cents);
+        const amountCents = Math.round(unitPrice * requested);
+        if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
+          throw new HttpError(409, '红冲金额必须为正整数分', { code: OUTSOURCING_PROCESSING_FEE_CODES.INVALID_AMOUNT });
+        }
+        // 金额反向：生成与原凭证方向相反的等额凭证（canonical reverseSystemVoucher）。
+        reverseSystemVoucher(db, {
+          originalSourceType: 'SUPPLIER_BILL', originalSourceId: billId,
+          reversalSourceType: 'SUPPLIER_BILL_PROCESSING_FEE_REVERSAL', reversalSourceId: billId,
+          businessDate, actorId: actor.id, reason,
+        });
+        // AP 侧：与原金额反向的贷项调整（canonical applyCreditAdjustment）。
+        const openItems = db.prepare(`SELECT id FROM account_payables WHERE source_type='SUPPLIER_BILL' AND source_id=?`).all(billId);
+        if (!openItems.length) {
+          throw new HttpError(409, '加工费账单缺少可红冲的应付 open item', { code: OUTSOURCING_PROCESSING_FEE_CODES.NOT_POSTED });
+        }
+        let unapplied = amountCents;
+        for (const openItem of openItems) {
+          if (unapplied <= 0) break;
+          const snapshot = openItemSnapshot(db, 'AP', openItem.id);
+          if (!snapshot || snapshot.row.item_kind !== 'FINAL') continue;
+          const available = Math.min(unapplied, snapshot.openCents);
+          if (available <= 0) continue;
+          applyCreditAdjustment(db, {
+            side: 'AP', adjustmentType: 'RETURN', sourceType: 'SUPPLIER_BILL_PROCESSING_FEE_REVERSAL',
+            sourceId: `${billId}:${line.id}:${randomUUID()}`, sourceNo: reversalNo,
+            targetOpenItemId: openItem.id, partyId: lockedBill.supplier_id,
+            businessDate, amountCents: available, actorId: actor.id, createdAt: new Date().toISOString(),
+          });
+          unapplied -= available;
+        }
+        if (unapplied > 0) {
+          throw new HttpError(409, '红冲金额超过应付 open item 可用余额', { code: OUTSOURCING_PROCESSING_FEE_CODES.REVERSAL_EXCEEDS });
+        }
+        db.prepare(`INSERT INTO outsourcing_processing_fee_reversals(
+          id,reversal_no,supplier_bill_id,supplier_bill_item_id,outsourcing_receipt_id,outsourcing_receipt_item_id,
+          reversal_quantity,reversal_amount_cents,business_date,reason,status,creator_id,created_at)
+          VALUES(?,?,?,?,?,?,?,?,?,?,'CONFIRMED',?,?)`).run(
+          randomUUID(), reversalNo, billId, line.id, line.commercial_source_id, line.commercial_source_item_id,
+          requested, amountCents, businessDate, reason, actor.id, new Date().toISOString(),
+        );
+        totalAmount += amountCents;
+        totalQuantity += requested;
+        touchedBills.add(line.commercial_source_id);
+      }
+      // 账单级红冲状态：全部行都已被红冲后才置 REVERSED。
+      const remainingRows = db.prepare(`SELECT i.id FROM supplier_bill_items i WHERE i.bill_id=?
+        AND i.commercial_source_type='OUTSOURCING_RECEIPT_ITEM'`).all(billId);
+      let fullyReversed = true;
+      for (const row of remainingRows) {
+        const billedQuantity = Number(db.prepare('SELECT base_quantity_num, base_quantity_den FROM supplier_bill_items WHERE id=?').get(row.id).base_quantity_num)
+          / Number(db.prepare('SELECT base_quantity_num, base_quantity_den FROM supplier_bill_items WHERE id=?').get(row.id).base_quantity_den || 1);
+        const reversedQuantity = Number(db.prepare(`SELECT COALESCE(SUM(reversal_quantity),0) q
+          FROM outsourcing_processing_fee_reversals WHERE supplier_bill_item_id=? AND status='CONFIRMED'`).get(row.id).q);
+        if (reversedQuantity + OUTSOURCING_QTY_EPS < billedQuantity) { fullyReversed = false; break; }
+      }
+      db.prepare('UPDATE supplier_bills SET processing_fee_posting_state=?, processing_fee_reversed_cents=processing_fee_reversed_cents+? WHERE id=?')
+        .run(fullyReversed ? 'REVERSED' : 'POSTED', totalAmount, billId);
+      // OUT-21：红冲后成本证据回到与实际开票一致的口径。
+      for (const receiptId of touchedBills) refreshOutsourcingCostEvidence(db, receiptId, new Date().toISOString());
+      saveIdempotency(db, operation, billId, idempotencyKey, fingerprint, {
+        reversalNo, amountCents: totalAmount, quantity: totalQuantity, fullyReversed,
+      });
+      audit(db, actor.id, 'REVERSE', 'SUPPLIER_BILL', billId, `${reversalNo} ${reason} 金额=${totalAmount}`);
+    });
+  } catch (error) {
+    throw rejectProcessingFeePost(db, actor, billId, error);
+  }
+  return send(res, 200, { ok: true, reversalNo, amountCents: totalAmount });
+}
+
 
 /**
  * OUT-22 Finished Return: source-trace confirmed outsourcing receipt, finish inventory reversal,

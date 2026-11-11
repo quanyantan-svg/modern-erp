@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { createProcurementFixture, seedApprovedOutsourceBom } from './test-support/procurement-http-fixture.js';
+import { createProcurementFixture, seedApprovedOutsourceBom, seedOutsourceSource } from './test-support/procurement-http-fixture.js';
 
 describe('Procurement Wave I period/WIP/opening/analytics reports', () => {
   let fixture;
@@ -19,6 +19,7 @@ describe('Procurement Wave I period/WIP/opening/analytics reports', () => {
       qualificationValidFrom: isoDate(-30), qualificationValidTo: isoDate(180), supplierWipWarehouseId: 'warehouse-002',
     });
     assert.equal(result.status, 200);
+    await seedOutsourceSource(fixture, [{ supplierId: 'supplier-001', productId: 'product-001', effectiveFrom: isoDate(-30) }]);
     // M1C-WP-3：委外材料必须经 canonical 估值写入，权威估值余额是前置事实。
     const now = new Date().toISOString();
     for (const productId of ['product-001', 'product-002']) {

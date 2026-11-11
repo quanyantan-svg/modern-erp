@@ -27,7 +27,36 @@ const SOURCE_DATES = Object.freeze({
   PRODUCTION_MATERIAL_RETURN: ['production_material_returns', 'return_date'],
   PRODUCTION_RECEIPT: ['production_receipts', 'receipt_date'],
   PRODUCTION_RECEIPT_REVERSAL: ['production_receipt_reversals', 'reversal_date'],
+  // OUT-23：委外来源接入既有期间关闭读模型（**复用**本表，不另建一套）。
+  //
+  // 委外的库存腿有五个来源类型，它们的权威业务日期来自委外域的单据：
+  //   OUTSOURCING_ISSUE       → outsourcing_issues.issued_date
+  //   OUTSOURCING_SUPPLEMENT  → outsourcing_supplements.supplement_date
+  //   OUTSOURCING_RETURN      → outsourcing_returns.return_date
+  //   OUTSOURCING_BACKFLUSH   → outsourcing_receipts.business_date（倒冲发生于收货生效）
+  //   OUTSOURCING_RECEIPT     → outsourcing_receipts.business_date
+  //
+  // `OPENING_INVENTORY` 有两个权威来源：通用期初单据
+  // （`opening_inventory_documents.business_date`）与**期初委外订单**
+  // （`outsourcing_orders.opening_business_date`）。因此该条目的权威表是
+  // 一个**候选列表**：命中任一候选即视为可追溯。解析顺序不影响结论，
+  // 因为两个来源的 `source_id` 空间互不相交。
+  OPENING_INVENTORY: [
+    ['opening_inventory_documents', 'business_date'],
+    ['outsourcing_orders', 'opening_business_date'],
+  ],
+  OUTSOURCING_ISSUE: ['outsourcing_issues', 'issued_date'],
+  OUTSOURCING_SUPPLEMENT: ['outsourcing_supplements', 'supplement_date'],
+  OUTSOURCING_RETURN: ['outsourcing_returns', 'return_date'],
+  OUTSOURCING_BACKFLUSH: ['outsourcing_receipts', 'business_date'],
+  OUTSOURCING_RECEIPT: ['outsourcing_receipts', 'business_date'],
 });
+
+// `SOURCE_DATES` 的条目既可能是 `[表, 日期列]`，也可能是 `[[表, 日期列], ...]`
+// 的候选列表。归一化成候选列表后，解析逻辑只有一套。
+function sourceDateCandidates(spec) {
+  return (Array.isArray(spec[0]) ? spec : [spec]);
+}
 
 function periodRange(period) {
   if (!PERIOD_RE.test(String(period || ''))) throw new HttpError(400, '期间格式应为 YYYY-MM');
@@ -75,10 +104,95 @@ function pendingDocumentRecords(db, endDate) {
     ['MATERIAL_RETURN', 'production_material_returns', 'return_date', "status='DRAFT'", 'return_no'],
     ['PRODUCTION_RECEIPT', 'production_receipts', 'receipt_date', "status='DRAFT'", 'receipt_no'],
     ['RECEIPT_REVERSAL', 'production_receipt_reversals', 'reversal_date', "status='DRAFT'", 'reversal_no'],
+    // OUT-23：委外来源的未完成单据进入**同一个**未完成单据检查。
+    //   - 待检委外收货（`PENDING_INSPECTION`）尚未形成已生效库存事实；
+    //   - 未完成委外完工通知尚未产生收货；
+    //   - 未审批的加工费 PO 尚未形成权威委外供给。
+    // 委外单据未完成之前，委外供给与委外成品库存就无法被证明为定稿。
+    ['OUTSOURCING_RECEIPT', 'outsourcing_receipts', 'business_date', "business_status='PENDING_INSPECTION'", 'receipt_no'],
+    ['OUTSOURCING_NOTICE', 'receipt_notices', 'notice_date', "business_type='OUTSOURCE' AND status IN ('DRAFT','CONFIRMED')", 'notice_no'],
+    ['OUTSOURCING_PROCESSING_PO', 'purchase_orders', 'order_date', "business_type='OUTSOURCE_PROCESSING' AND status IN ('DRAFT','SUBMITTED','APPROVED')", 'order_no'],
   ];
   return specs.flatMap(([type, table, date, predicate, number]) => db.prepare(
     `SELECT id,${number} documentNo,${date} businessDate FROM ${table} WHERE ${predicate} AND (${date} IS NULL OR ${date}='' OR ${date}<=?) ORDER BY ${date},id LIMIT 20`,
   ).all(endDate).map((row) => ({ type, ...row })));
+}
+
+// ---------------------------------------------------------------------------
+// OUT-23：委外供给接入既有期间关闭读模型
+// ---------------------------------------------------------------------------
+//
+// 期间关闭必须能证明**委外供给**是定稿的。委外供给由两部分构成：
+//
+//   1. **供应商 WIP 位置**：企业已发料到供应商、尚未耗用或退回的材料。
+//      权威口径 = `outsourcing_wip_identity_balances.available_quantity`
+//      （**同一本**身份账，§26.34.15.2）。
+//   2. **委外成品库存**：已生效委外收货进入企业成品仓。
+//      权威口径 = `outsourcing_receipts.business_status='EFFECTED'` 与
+//      `inventory` 中对应仓位的数量。
+//
+// 检查内容（**复用**既有读模型，不另建一套账）：
+//   - 委外 WIP 身份余额与供应商 WIP 仓的**物理库存**逐物料行一致；
+//     不一致说明身份账与库存账互相矛盾，期间不得关闭。
+//   - 存在**未完成委外单据**时（草稿通知 / 待检收货 / 未审批加工费 PO），
+//     委外供给无法被证明为定稿 → 阻断。
+//
+// 严重级别：BLOCKING。委外供给与普通采购/生产的库存口径互不影响 ——
+// 本检查只读取委外表与委外位置上的库存，**不**改变普通采购/生产的口径。
+const OUTSOURCING_SUPPLY_CHECK_CODE = 'OUTSOURCING_SUPPLY_CONSISTENCY';
+
+function outsourcingSupplyRecords(db, endDate) {
+  // 委外物料行 → 供应商 WIP 位置 → 身份余额可用量。
+  // 逐物料行比较；不跨物料汇总（不同物料/单位不得合并）。
+  const rows = db.prepare(`SELECT oml.id material_list_id, oml.product_id, oml.order_id,
+      o.supplier_id, s.supplier_wip_warehouse_id wip_warehouse_id, oml.unit,
+      COALESCE((SELECT SUM(available_quantity) FROM outsourcing_wip_identity_balances b
+        WHERE b.material_list_id=oml.id),0) identity_available
+    FROM outsourcing_material_list oml
+    JOIN outsourcing_orders o ON o.id=oml.order_id
+    LEFT JOIN suppliers s ON s.id=o.supplier_id
+    WHERE o.status<>'CANCELLED'`).all();
+  const mismatches = [];
+  for (const row of rows) {
+    if (!row.wip_warehouse_id) {
+      mismatches.push({
+        materialListId: row.material_list_id, productId: row.product_id,
+        reason: 'SUPPLIER_WIP_WAREHOUSE_UNPROVEN',
+      });
+      continue;
+    }
+    const identityAvailable = Number(row.identity_available || 0);
+    // 物理库存：供应商 WIP 仓上该物料的**委外来源**数量。
+    // 身份账只覆盖委外来源的材料；同一仓上其他来源的库存不参与比较。
+    const physicalOutsourcing = Number(db.prepare(`SELECT COALESCE(SUM(CASE WHEN direction='OUT' THEN -quantity_change ELSE quantity_change END),0) q
+      FROM inventory_transactions
+      WHERE warehouse_id=? AND product_id=?
+        AND source_type IN ('OUTSOURCING_ISSUE','OUTSOURCING_SUPPLEMENT','OUTSOURCING_RETURN','OUTSOURCING_BACKFLUSH','OPENING_INVENTORY')
+        AND business_date<=?`).get(row.wip_warehouse_id, row.product_id, endDate)?.q || 0);
+    if (Math.abs(identityAvailable - physicalOutsourcing) > 1e-6) {
+      mismatches.push({
+        materialListId: row.material_list_id, productId: row.product_id,
+        orderId: row.order_id, supplierId: row.supplier_id,
+        wipWarehouseId: row.wip_warehouse_id,
+        identityAvailable, physicalOutsourcing,
+        reason: 'WIP_IDENTITY_VS_PHYSICAL_MISMATCH',
+      });
+    }
+  }
+  return mismatches.slice(0, 50);
+}
+
+function outsourcingSupplyCheck(db, endDate) {
+  const mismatches = outsourcingSupplyRecords(db, endDate);
+  return result(
+    OUTSOURCING_SUPPLY_CHECK_CODE,
+    '委外供给（供应商 WIP 位置与委外成品库存）一致',
+    'BLOCKING',
+    mismatches.length > 0,
+    mismatches.length,
+    mismatches,
+    '核对委外物料行的 WIP 身份余额与供应商 WIP 仓物理库存，并完成所有未完成的委外单据。',
+  );
 }
 
 function legacyBusinessDateRecords(db, endDate) {
@@ -95,10 +209,24 @@ function legacyBusinessDateRecords(db, endDate) {
       unknown.push({ id: row.id, sourceType: row.source_type, reason: 'UNREGISTERED_SOURCE_DATE' });
       continue;
     }
-    const [table, dateColumn] = source;
-    const authoritative = db.prepare(`SELECT ${dateColumn} businessDate FROM ${table} WHERE id=?`).get(row.source_id);
-    if (!authoritative || authoritative.businessDate !== row.business_date) {
-      unknown.push({ id: row.id, sourceType: row.source_type, reason: authoritative ? 'SOURCE_DATE_MISMATCH' : 'SOURCE_NOT_FOUND' });
+    // 权威日期表可能是**候选列表**（例如 `OPENING_INVENTORY` 同时可由通用
+    // 期初单据与期初委外订单提供）。命中任一候选且日期一致即视为可追溯；
+    // 全部候选都未命中才判为不可追溯。候选之间不会同时命中（source_id
+    // 空间互不相交），因此不存在「哪一份更权威」的裁量问题。
+    const candidates = sourceDateCandidates(source);
+    let matched = false;
+    let found = false;
+    for (const [table, dateColumn] of candidates) {
+      const authoritative = db.prepare(`SELECT ${dateColumn} businessDate FROM ${table} WHERE id=?`).get(row.source_id);
+      if (!authoritative) continue;
+      found = true;
+      if (authoritative.businessDate === row.business_date) { matched = true; break; }
+    }
+    if (!matched) {
+      unknown.push({
+        id: row.id, sourceType: row.source_type,
+        reason: found ? 'SOURCE_DATE_MISMATCH' : 'SOURCE_NOT_FOUND',
+      });
     }
   }
   return unknown.slice(0, 50);
@@ -140,6 +268,10 @@ export function runInventoryCloseChecks(db, period, _actor, { today = new Date()
 
   const legacy = legacyBusinessDateRecords(db, endDate);
   checks.push(result('LEGACY_BUSINESS_DATE_UNKNOWN', '业务日期来源可追溯', 'BLOCKING', legacy.length > 0, legacy.length, legacy, '为遗留流水补充可验证的权威来源日期；系统不会使用创建时间替代。'));
+
+  // OUT-23：委外供给一致性进入**同一个**期间关闭预检查集合。
+  // 它只读取委外表与委外位置上的库存，不改变普通采购/生产的口径。
+  checks.push(outsourcingSupplyCheck(db, endDate));
 
   const health = systemHealth(db, { asOfDate: endDate });
   const failedHealth = health.checks.filter((check) => check.severity === 'BLOCKING' && check.status === 'FAIL');

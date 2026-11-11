@@ -27,7 +27,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 
-import { createProcurementFixture } from './test-support/procurement-http-fixture.js';
+import { createProcurementFixture, seedOutsourceSource } from './test-support/procurement-http-fixture.js';
 import {
   G03_BUSINESS_FACT_TABLES, changedTables, snapshotTables,
 } from './test-support/m1-core-g03-g04-evidence.js';
@@ -216,6 +216,7 @@ describe('M1C-WP7A-R1 — G03 多物料行与 SERIAL 身份物理腿数', () => 
     assert.equal(qualified.status, 200, qualified.data.error);
 
     parentId = await createProduct(PARENT_CODE, 'NONE', 'FINISHED_GOOD');
+    await seedOutsourceSource(fixture, [{ supplierId: 'supplier-001', productId: parentId, effectiveFrom: isoDate(-30) }]);
     lotProductId = await createProduct(LOT_CODE, 'LOT');
     noneProductId = await createProduct(NONE_CODE, 'NONE');
     serialProductId = await createProduct(SERIAL_CODE, 'SERIAL');

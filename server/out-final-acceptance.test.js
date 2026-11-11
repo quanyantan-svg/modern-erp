@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import {
   createApprovedProcessingPo, createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource,
-  seedApprovedOutsourceBom,
+  seedApprovedOutsourceBom, seedOutsourceSource,
 } from './test-support/procurement-http-fixture.js';
 
 describe('OUT-05/17/18 final acceptance — Planning Handoff / Completion Receipt Notice / Quality source', () => {
@@ -22,6 +22,9 @@ describe('OUT-05/17/18 final acceptance — Planning Handoff / Completion Receip
       qualificationValidFrom: isoDate(-30), qualificationValidTo: isoDate(180),
     });
     assert.equal(r.status, 200, r.data.error);
+    // OUT-02: 委外订单必须消费有效 OUTSOURCE 货源（货源控制的采购参数开关对
+    // 委外同样生效）。
+    await seedOutsourceSource(fixture, [{ supplierId: 'supplier-001', productId: 'product-001', effectiveFrom: isoDate(-30) }]);
   }
 
   /**

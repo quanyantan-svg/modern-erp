@@ -18,9 +18,7 @@
 
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import {
-  createApprovedProcessingPo, createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource, seedApprovedOutsourceBom, seedPurchasePrice,
-} from './test-support/procurement-http-fixture.js';
+import { createApprovedProcessingPo, createProcurementFixture, outsourcingReceiptBody, prepareOutsourcingReceiptSource, seedApprovedOutsourceBom, seedPurchasePrice, seedOutsourceSource } from './test-support/procurement-http-fixture.js';
 
 describe('M1C-WP1-R2 — outsourcing historical receipt effect evidence fails closed', () => {
   let fixture;
@@ -42,6 +40,7 @@ describe('M1C-WP1-R2 — outsourcing historical receipt effect evidence fails cl
       qualificationValidFrom: isoDate(-30), qualificationValidTo: isoDate(180),
     });
     assert.equal(result.status, 200, result.data.error);
+    await seedOutsourceSource(fixture, [{ supplierId: 'supplier-001', productId: 'product-001', effectiveFrom: isoDate(-30) }]);
   }
 
   async function createReleasedOutsourcingOrder(orderQuantity) {

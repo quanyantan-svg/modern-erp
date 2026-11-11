@@ -310,6 +310,8 @@ import {
   disableSourceEntry,
   listSourcingSourceEntries,
   listSourcingQuotas,
+  listSourceOverrides,
+  overrideSourceEntry,
   resolveSourcingDecision,
   upsertQuota,
 } from './modules/procurement-sourcing.js';
@@ -326,7 +328,9 @@ import {
   approvePurchaseOrderChange,
   createPurchaseOrderDraftCanonical,
   replacePurchaseOrderItemsCanonical,
+  resolvePurchaseOrderHeaderCommercial,
   updateOutsourcingProcessingPurchaseOrderCommercialFields,
+  closeDeliverySchedule,
   createDeliverySchedule,
   createPurchaseOrderChange,
   getPurchaseOrderCommercialSnapshot,
@@ -343,6 +347,14 @@ import {
 } from './modules/procurement-receiving.js';
 import { convertReceiptNoticeToReceipts } from './modules/procurement-notice-conversion.js';
 import { assertReturnRequestPolicy } from './modules/procurement-policy.js';
+import {
+  cancelProcurementPrepaymentRequirement,
+  createProcurementPrepaymentRequirement,
+  getProcurementPrepaymentRequirement,
+  listProcurementPrepaymentRequirements,
+  postProcurementPrepaymentRequirement,
+  setPrepaymentVoucherGenerator,
+} from './modules/procurement-prepayment.js';
 import {
   createPurchaseReturnDraftCanonical,
   createReturnRequest,
@@ -395,6 +407,7 @@ import {
   postProcessingFeeBill,
   previewOutsourcingDifference,
   procurementScan,
+  reverseProcessingFeeBill,
 } from './modules/outsourcing-finance.js';
 import {
   createRole,
@@ -863,6 +876,18 @@ ownedRouteTable.register({
   owner: 'server/modules/procurement-sourcing.js',
 });
 ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/source-entries/override',
+  handler: ({ db, req, res, actor }) => overrideSourceEntry(db, req, res, actor),
+  owner: 'server/modules/procurement-sourcing.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/procurement/source-overrides',
+  handler: ({ db, res, actor, url }) => listSourceOverrides(db, res, actor, url),
+  owner: 'server/modules/procurement-sourcing.js',
+});
+ownedRouteTable.register({
   method: 'GET',
   path: '/api/procurement/quotas',
   handler: ({ db, res, actor, url }) => listSourcingQuotas(db, res, actor, url),
@@ -926,6 +951,12 @@ ownedRouteTable.register({
   method: 'GET',
   path: /^\/api\/purchase-orders\/([^/]+)\/delivery-schedules$/,
   handler: ({ db, res, actor, params }) => listDeliverySchedules(db, res, actor, params[0]),
+  owner: 'server/modules/procurement-orders.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/purchase-orders\/([^/]+)\/delivery-schedules\/([^/]+)\/close$/,
+  handler: ({ db, req, res, actor, params }) => closeDeliverySchedule(db, req, res, actor, params[0], params[1]),
   owner: 'server/modules/procurement-orders.js',
 });
 ownedRouteTable.register({
@@ -999,6 +1030,36 @@ ownedRouteTable.register({
   path: /^\/api\/receipt-notices\/([^/]+)\/convert$/,
   handler: ({ db, req, res, actor, params }) => convertReceiptNoticeToReceipts(db, req, res, actor, params[0]),
   owner: 'server/modules/procurement-notice-conversion.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/procurement/prepayment-requirements',
+  handler: ({ db, res, actor, url }) => listProcurementPrepaymentRequirements(db, res, actor, url),
+  owner: 'server/modules/procurement-prepayment.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/prepayment-requirements',
+  handler: ({ db, req, res, actor }) => createProcurementPrepaymentRequirement(db, req, res, actor),
+  owner: 'server/modules/procurement-prepayment.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/procurement\/prepayment-requirements\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getProcurementPrepaymentRequirement(db, res, actor, params[0]),
+  owner: 'server/modules/procurement-prepayment.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/prepayment-requirements\/([^/]+)\/post$/,
+  handler: ({ db, req, res, actor, params }) => postProcurementPrepaymentRequirement(db, req, res, actor, params[0]),
+  owner: 'server/modules/procurement-prepayment.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/prepayment-requirements\/([^/]+)\/cancel$/,
+  handler: ({ db, res, actor, params }) => cancelProcurementPrepaymentRequirement(db, res, actor, params[0]),
+  owner: 'server/modules/procurement-prepayment.js',
 });
 ownedRouteTable.register({
   method: 'GET',
@@ -1228,6 +1289,12 @@ ownedRouteTable.register({
   method: 'POST',
   path: /^\/api\/procurement\/outsourcing\/processing-fee-bills\/([^/]+)\/post$/,
   handler: ({ db, req, res, actor, params }) => postProcessingFeeBill(db, req, res, actor, params[0]),
+  owner: 'server/modules/outsourcing-finance.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/outsourcing\/processing-fee-bills\/([^/]+)\/reverse$/,
+  handler: ({ db, req, res, actor, params }) => reverseProcessingFeeBill(db, req, res, actor, params[0]),
   owner: 'server/modules/outsourcing-finance.js',
 });
 ownedRouteTable.register({
@@ -2366,6 +2433,8 @@ const STATUS_LABELS = { DRAFT: '草稿', SUBMITTED: '待审核', APPROVED: '已�
 const PURCHASE_STATUS_LABELS = STATUS_LABELS;
 
 export function createApp(db, options = {}) {
+  // 预付款过账复用 canonical 凭证生成器（PRC-17 / Design §26.9）。
+  setPrepaymentVoucherGenerator(generateVoucher);
   const distDir = options.distDir;
   const logger = options.logger === undefined ? null : options.logger;
   const slowRequestMs = boundedInteger(options.slowRequestMs ?? process.env.SLOW_REQUEST_MS, 1_000, 10, 300_000);
@@ -3703,15 +3772,26 @@ async function updatePurchaseOrder(db, req, res, actor, orderId) {
     });
   }
   transaction(db, () => {
+    // PRC-02：整体改写与创建共用同一份表头口径 —— 品类门禁在改写时同样成立
+    // （改写可以换供应商），付款天数与来源一起重新冻结。客户端给出的天数
+    // 不是权威。
+    const header = resolvePurchaseOrderHeaderCommercial(db, {
+      supplierId: input.supplierId,
+      businessType: 'STANDARD_PURCHASE',
+      clientPaymentTermsDays: input.paymentTermsDays,
+      clientSpecified: input.paymentTermsDaysClientSpecified,
+    });
     const rewritten = replacePurchaseOrderItemsCanonical(db, {
       orderId, items: input.items, businessType: 'STANDARD_PURCHASE',
       supplierId: input.supplierId, businessDate: input.orderDate,
     });
     db.prepare(`UPDATE purchase_orders SET supplier_id=?,total_cents=?,remark=?,status='DRAFT',rejection_reason='',updated_at=?,
-        order_date=?,expected_delivery_date=?,payment_terms=?,payment_terms_days=?,supplier_contact_name=?,supplier_contact_phone=?,supplier_address=?
+        order_date=?,expected_delivery_date=?,payment_terms=?,payment_terms_days=?,payment_terms_days_source=?,supplier_category_snapshot=?,
+        supplier_contact_name=?,supplier_contact_phone=?,supplier_address=?
       WHERE id=?`).run(
       input.supplierId, rewritten.totalCents, input.remark, now,
-      input.orderDate, input.expectedDeliveryDate, input.paymentTerms, input.paymentTermsDays,
+      input.orderDate, input.expectedDeliveryDate, input.paymentTerms, header.paymentTermsDays,
+      header.paymentTermsDaysSource, header.supplierCategory,
       input.supplierContactName, input.supplierContactPhone, input.supplierAddress, orderId,
     );
     audit(db, actor.id, 'UPDATE', 'PURCHASE_ORDER', orderId, `修改采购订单 ${current.order_no}`);
@@ -3851,6 +3931,11 @@ function purchaseOrderInput(db, body, { pricingMode = 'STANDARD' } = {}) {
   const supplierAddress = readSnapshotText(body.supplierAddress ?? body.supplier_address, '供应商地址', 200) || (supplier.address || '');
   const paymentTerms = readSnapshotText(body.paymentTerms ?? body.payment_terms, '付款条件', 200);
   const termsDays = paymentTermsDays(body.paymentTermsDays ?? body.payment_terms_days ?? supplier.payment_terms_days);
+  // PRC-02：付款天数的**权威来源**是供应商采购档案默认值；「客户端是否明确
+  // 给出天数」必须与「补齐后的天数」分开传递，否则档案默认值会被误记成
+  // 客户端声明（来源列会说谎）。
+  const clientPaymentTermsSpecified = (body.paymentTermsDays !== undefined && body.paymentTermsDays !== null && body.paymentTermsDays !== '')
+    || (body.payment_terms_days !== undefined && body.payment_terms_days !== null && body.payment_terms_days !== '');
   const items = body.items.map((item, index) => {
     const product = db.prepare('SELECT id,price_cents,base_uom_code,purchase_uom_code FROM products WHERE id=? AND active=1').get(item.productId);
     if (!product) throw new HttpError(400, `第 ${index + 1} 行货品不存在或已停用`);
@@ -3888,6 +3973,7 @@ function purchaseOrderInput(db, body, { pricingMode = 'STANDARD' } = {}) {
     supplierId, remark: optionalText(body.remark, 500), items,
     totalCents: items.reduce((sum, item) => sum + (item.amountCents ?? 0), 0),
     orderDate, expectedDeliveryDate, paymentTerms, paymentTermsDays: termsDays, supplierContactName, supplierContactPhone, supplierAddress,
+    paymentTermsDaysClientSpecified: clientPaymentTermsSpecified,
   };
 }
 

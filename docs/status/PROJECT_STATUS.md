@@ -3937,3 +3937,74 @@ M0 验收后，**后续业务包的启动仍需各自的显式授权**；W11-A �
   （**不得**凭本次审计或合同建立改为 `COVERED`，正式覆盖状态只按可执行证据登记）。
 - 本轮**未**修改任何实现代码、schema、migration、前端或 route；**未**运行测试套件；
   **未**连接真实 MySQL；**未**执行 migration；**未** push / merge / tag / 发布 / 部署。
+
+## 50. 采购与委外域级交付整改第四轮：残余能力闭合与域级验收候签（2026-11-11）
+
+### 50.1 授权、范围与状态
+
+- **授权来源**：业务所有者指示「我昨晚在进行采购委外业务域的收尾工作……请你完成最后的收尾，最终目标是域级 Acceptance 和能力 Freeze」；延续 §31.17 / §31.18 的授权基础。
+- **本轮范围**：闭合 2026-11-10 域级逐项复核登记的 **9 项 `PARTIAL` 与 1 项 `MISSING`**（PRC-02 / PRC-04 / PRC-12 / PRC-16 / PRC-17 / OUT-02 / OUT-03 / OUT-20 / OUT-21 / OUT-23），并建立第四轮合同层 Requirement §31.19 / Design §26.39。
+- **本轮状态**：Requirement §31.19 与 Design §26.39 生命周期状态为 `IMPLEMENTED`——**已按批准合同实施并通过本地 Gate，尚未通过域级 Acceptance**。
+- **未获授权、因而未执行**：真实环境 migration、业务数据库写入、真实 MySQL Gate（ACK-4 清单与 RunId 需业务所有者签发）、push / merge / tag / 发布 / 部署。
+
+### 50.2 第四轮闭合结果
+
+| 能力 | 原判定 | 本轮判定 | 依据 |
+|---|---|---|---|
+| PRC-02 供应商采购档案 | `PARTIAL` | `COVERED` | 付款天数按档案默认值驱动并冻结来源；品类单向门禁委外业务 |
+| PRC-04 货源列表 | `PARTIAL` | `COVERED` | 手工 override：权限 + 原因 + 有界区间 + 审计 + 区间内放行 |
+| PRC-12 请购拆并与分配 | `PARTIAL` | `COVERED` | canonical 分配事实 + 专用审计 + 累计守恒 |
+| PRC-16 交货计划 | `PARTIAL` | `COVERED` | `lower_tolerance_pct` 自动关单 + 关单事实 |
+| PRC-17 预付款要求 | `MISSING` | `COVERED` | 整条能力：业务意图层 + canonical 财务交接 + 单向状态机 + SOD |
+| OUT-02 委外货源 | `PARTIAL` | `COVERED` | 必须消费有效 OUTSOURCE 货源，与采购共用同一实现与同一开关 |
+| OUT-03 委外加工价 | `PARTIAL` | `COVERED` | OUTSOURCE 价格条目优先，否则委外合同来源；普通采购价不得替换 |
+| OUT-20 加工费应付 | `PARTIAL` | `COVERED` | 正式过账按 `C-P01`～`C-P04`：金额上界、档案科目守卫、红冲守恒、共享入口边界 |
+| OUT-21 委外成本证据 | `PARTIAL` | `COVERED` | 过账后转 `FINAL`，给出 actual 与 variance |
+| OUT-23 期末 / WIP / 期初 / 报表 | `PARTIAL` | `COVERED` | 期初委外进入同一本 WIP 身份账；委外供给接入期间关闭与财务业务关闭读模型 |
+
+**54 项能力合计：`COVERED` 50 项、`PARTIAL` 0 项、`MISSING` 0 项、按已批准决定排除在本域范围外 3 项**（PRC-06 寻源决策写入口、VMI-05 结算与物权释放、OUT-22 成品退货）。逐行依据见 [`docs/audits/b3121-domain-acceptance-audit-20261110.md`](../audits/b3121-domain-acceptance-audit-20261110.md)。
+
+### 50.3 本轮修复的真实缺陷（此前未登记）
+
+1. **采购订单草稿整体改写返回 500**：PRC-12 的分配事实以外键引用采购订单行，原「删除全部行再重建」的改写方式触发外键失败。改为**原位更新**带分配事实的行（行标识不变），事实表不做任何 UPDATE；分配来源被删或分配数量被改时 fail closed（409 `PO_ITEM_ALLOCATION_SOURCE_LOST` / `PO_ITEM_ALLOCATION_QUANTITY_MISMATCH`）。
+2. **委外加工费红冲端点未注册**：`reverseProcessingFeeBill` 已实现但路由缺失（HTTP 404）。已补注册 `POST /api/procurement/outsourcing/processing-fee-bills/:id/reverse`。
+3. **采购订单整体改写未复用权威表头口径**：改写路径未执行品类门禁、未维护 `payment_terms_days_source`、且把「档案默认值补齐后的天数」误当作「客户端声明」。已改为创建与改写共用 `resolvePurchaseOrderHeaderCommercial`，并把「客户端是否声明」与「补齐后的天数」分开传递。
+4. **供应商品类门禁与既有场景冲突**：原实现把品类做成互斥开关，导致「既是物料供应商、又是委外加工商」的供应商无法存在，且与本域既有委外场景冲突。已改为**单向门禁**（品类只门禁委外业务，普通采购由采购资质门禁把关），并在 §31.19.2 登记理由。
+
+### 50.4 Gate 结果（本地，2026-11-11）
+
+| Gate | 结果 |
+|---|---|
+| `pnpm test`（FULL） | **3547/3548 PASS**，1 项失败（§50.5.1，已登记） |
+| `pnpm test:fast` | **631/632 PASS**，同上 1 项失败 |
+| `pnpm test:heavy` | **67/67 PASS** |
+| `pnpm build` | PASS |
+| `git diff --check` | PASS |
+| focused（新增三个套件） | `procurement-sourcing-capabilities` **11/11**、`procurement-prepayment` **15/15**、`out-03-out-23` **16/16** |
+| 文档一致性 `current` | N1、N3～N6、N8、N9 **PASS**；N2 `RETIRED`；**N7 FAIL**（既存历史提交 `a40e356`、`59eccd5`、`171ade5`、`4403a80` 的追溯债务，与本轮无关） |
+| 文档一致性 `migration` | C1～C6 全 PASS |
+| 离线 MySQL DDL 探针 | 第四轮 7 张新表与新列的**生产实际发出**的 MySQL DDL 已逐条核对 |
+| 真实 MySQL Gate（M1C-G07） | **未运行** —— ACK-4 清单与 RunId 需业务所有者签发 |
+
+### 50.5 必须随验收一并接受的事实
+
+1. **G07 离线对等回放 1 项失败**：期初 WIP 使 `outsourcing_wip_identity_effects.event_type` 的 CHECK 增加 `'OPENING'`，G07 的真实 MySQL 目录捕获条款随之失效。该断言只能在受保护真实 MySQL Gate 复跑并**重新观测捕获**后恢复；在此之前 G07 的真实 MySQL 验收结论不自动延续。
+2. **G07 固定场景重新冻结待显式确认**：固定场景新增「建立有效 OUTSOURCE 货源」步骤，冻结摘要由 `aa024bd5…` 重新计算为 `f112c88cb6d327f4885cf349de4a6c4efd6b4a4b1499e0547727e7103ccad33f` 并写回三处断言。摘要链：`60f7888f…`（§45.34）→ `aa024bd5…`（第一轮）→ `f112c88c…`（第四轮）；前两次重新冻结均未见业务所有者显式确认，一并提请确认。
+3. **M1-Core G06 的既有断言被取代**：共享入口仍一律 409，**专用**入口按 `C-P02` 档案放行。2026-11-07 首期包级 Acceptance 覆盖的 G06 证据在该条断言上被本轮合同取代，必须随域级 Acceptance 重新确认。
+4. **界面可达性未取证**：第四轮新增的子能力只有 API 层，没有新增前端工作面；§31.8 F 的五条 operator workflow 的既有浏览器闭环证据不变。
+5. **委外加工费会计档案没有产品内维护入口**：当前只有迁移预置的全局默认档案；缺档案时过账 fail closed。
+6. **跨域影响**：新增会计科目 `6408 委外加工费`，试算平衡科目集合由 21 变 22；既有损益表与资产负债表口径不变。
+
+### 50.6 文档与状态登记
+
+- 新增 `docs/acceptance/procurement-outsourcing-domain-acceptance-candidate-20261111.md`：域级 Acceptance 与 Capability Freeze **候签**材料，含 Gate 证据、披露限制与待裁定事项。
+- 更新 `docs/requirements/procurement-outsourcing.md` §31.19（Requirement）与 `docs/design/procurement-outsourcing.md` §26.39（Design）。
+- 更新 `docs/audits/b3121-domain-acceptance-audit-20261110.md`：54 项逐项判定更新为 50 `COVERED`，保留被取代的旧判定与变更记录。
+- 更新 `docs/status/CAPABILITY_MATRIX.md` B3101 / B3121 两行的 Requirement / Design / 证据列。
+- 追加 `log/2026-11-11.md`。
+
+### 50.7 未解决事项与暂停点
+
+- **域级 Acceptance 与 Capability Freeze 尚未签发**：本节只登记证据与残余，不代替业务所有者签字；候签材料见 §50.6 第一项。
+- 真实 MySQL Gate（ACK-4 清单与 RunId）、G07 固定场景重新冻结的显式确认、G06 被取代断言的重新确认、供应商品类单向门禁口径的确认、委外加工费会计档案维护端点与新增子能力界面可达性的处置 —— 均待业务所有者裁定。
+- 本轮**未**执行真实环境 migration、业务数据库写入、真实 MySQL Gate、push / merge / tag / 发布 / 部署；**未**把任何 `PARTIAL` / `MISSING` 宣称为已覆盖（第四轮已按实现闭合）；**未**代替业务所有者签发 Acceptance 或 Freeze。

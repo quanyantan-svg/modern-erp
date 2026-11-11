@@ -2,8 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import {
-  HttpError, allowAny, readJson, send,
+  HttpError, allowAny, assertAllowedFields, readJson, send,
 } from '../lib/http.js';
+import { createOpeningOutsourcingOrderCanonical } from './outsourcing.js';
 
 const VIEW_PERMISSIONS = ['REPORT_VIEW', 'PURCHASE_ORDERS_VIEW', 'OUTSOURCING_VIEW', 'VMI_VIEW'];
 
@@ -124,21 +125,18 @@ export function getOutsourcingMaterialPositionReport(db, res, actor, url) {
 /**
  * Opening support: opening outsourcing order and supplier-WIP position are stored as
  * documented business records. No fabricated historical voucher.
+ *
+ * 写入逻辑由 `server/modules/outsourcing.js` 的
+ * `createOpeningOutsourcingOrderCanonical` 独占（OUT-23）。本函数只保留
+ * HTTP 语义（权限 / 字段白名单 / 响应），避免出现第二份期初写入口。
  */
 export async function createOpeningOutsourcingOrder(db, req, res, actor) {
   allowAny(actor, ['OUTSOURCING_MANAGE', 'OUTSOURCING_RELEASE']);
   const body = await readJson(req);
-  const id = randomUUID();
-  const now = new Date().toISOString();
-  transaction(db, () => {
-    db.prepare(`INSERT INTO outsourcing_orders(id,order_no,supplier_id,product_id,order_quantity,required_quantity,unit,source_type,status,business_date,remark,creator_id,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,'MANUAL','COMPLETED',?,?,?,?,?)`).run(
-      id, body.orderNo || ('OS-OPEN-' + Date.now().toString().slice(-10)),
-      body.supplierId, body.productId, Number(body.orderQuantity), Number(body.orderQuantity),
-      body.unit || 'EA', body.businessDate || now.slice(0, 10),
-      'OPENING: 历史期初委外订单，不生成历史凭证', actor.id, now, now,
-    );
-    audit(db, actor.id, 'OPENING', 'OUTSOURCING_ORDER', id, '期初历史');
-  });
-  return send(res, 201, { id });
+  assertAllowedFields(body, [
+    'orderNo', 'supplierId', 'productId', 'orderQuantity', 'unit',
+    'businessDate', 'remark', 'openingSourceReference', 'items',
+  ]);
+  const created = createOpeningOutsourcingOrderCanonical(db, actor, body);
+  return send(res, 201, created);
 }
