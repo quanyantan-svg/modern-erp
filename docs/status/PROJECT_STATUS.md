@@ -4048,9 +4048,9 @@ M0 验收后，**后续业务包的启动仍需各自的显式授权**；W11-A �
 | `git diff --check` | PASS |
 | 文档一致性 `current` | N1、N3～N6、N8、N9 **PASS**（N2 `RETIRED`）；**N7 FAIL** 仍为既存历史提交（`a40e356`、`59eccd5`、`171ade5`、`4403a80`）的追溯债务，与本域无关 |
 | 文档一致性 `migration` | C1～C6 全 PASS |
-| `pnpm test`（FULL） | 见本节末「FULL 回归的跨域说明」 |
+| `pnpm test`（FULL） | **3589/3605 PASS**；14 个失败套件全部失败于**同一类**登记权限计数断言（`247 !== 227`、`61 !== 42`），见本节末「FULL 回归的跨域说明」 |
 
-**FULL 回归的跨域说明**：本轮在**干净工作树**（linked worktree，检出 `b4ff57d`）上执行 FULL 回归时，除本域外的失败来自**并行的 Accounting & Analytics 域 AA-W3 工作**：其提交（`943414c`）新增了 20 项权限，`server/m11-planning.test.js` 与 `server/m4-blocker-source-lookup-hotfix.test.js` 的**固定权限计数断言**（227）因此不成立（当前 247）。该失败**不属于**采购与委外域，且该域的工作仍在进行中；本域相关套件全部通过。
+**FULL 回归的跨域说明**：本轮在**干净工作树**（linked worktree，检出 `b4ff57d`）上执行 FULL 回归：**3589/3605 PASS**，14 个失败套件全部失败于**同一类**登记权限计数断言（`247 !== 227`、`61 !== 42`）。根因是并行的 Accounting & Analytics 域 AA-W1 迁移 `server/migrations/accounting-events-schema.js`（提交 `3876bd3`）新增了 **20 项权限**，而 `server/m11-planning.test.js`、`server/m4-blocker-source-lookup-hotfix.test.js`、`server/period.test.js`、`server/v12-release-acceptance.test.js` 等共享套件仍断言旧的固定数量。该失败**不属于**采购与委外域（本域相关套件在同一次运行中全部通过），且该域的工作仍在进行中；本轮**未**代其修改该共享断言，也**未**把该失败写成通过。
 
 ### 51.5 未解决事项与下一阶段
 

@@ -41,8 +41,7 @@ PROCUREMENT_OUTSOURCING_CAPABILITY_FREEZE
 |---|---|
 | 真实 MySQL Gate（M1C-G07，受保护 disposable MySQL 8.0.37） | **PASS**：schema parity + CR-01..CR-09 全部通过；`state=FINISHED`、清理由 root 独立 post-flight 证明；目标 `modern_erp_domain_test` @ `127.0.0.1:3306`，server uuid `256c7a4e-d275-11f1-885b-b025aa71d167` |
 | G07 离线对等回放 | **55/55 PASS**（真实 MySQL 目录捕获条款已按 run `b9023437` 的实测值更新，见 [`docs/evidence/procurement-outsourcing-domain-acceptance-20261111/`](../evidence/procurement-outsourcing-domain-acceptance-20261111/README.md)） |
-| `pnpm test`（FULL） | 见 §7 登记 |
-| `pnpm test:fast` | 见 §7 登记 |
+| `pnpm test`（FULL） | **3589/3605 PASS**；14 个失败套件**全部**是并行 Accounting & Analytics 域 AA-W1 新增 20 项权限导致的**固定权限计数断言**（227 → 247），采购与委外域套件全部通过（见 §2.1） |
 | `pnpm test:heavy` | **67/67 PASS** |
 | `pnpm build` | PASS |
 | `git diff --check` | PASS |
@@ -50,6 +49,18 @@ PROCUREMENT_OUTSOURCING_CAPABILITY_FREEZE
 | focused（第五轮新增） | `outsourcing-gl-profile-maintenance` **6/6** |
 | 浏览器 UAT | `procurement-outsourcing-functional-uat.mjs` **36/36 PASS**（含第四轮新增子能力的 7 条与三个工作面 390 px 可达性闭环） |
 | 文档一致性 | `current` 模式 N1、N3～N6、N8、N9 **PASS**（N2 `RETIRED`；N7 为既有历史提交追溯债务）；`migration` 模式 C1～C6 全 PASS |
+
+### 2.1 FULL 回归的跨域失败说明
+
+FULL 回归在**干净工作树**（linked worktree）上执行，14 个失败套件全部失败于**同一类断言**：
+登记权限数量 `247 !== 227`（以及 `61 !== 42`）。根因是并行的 Accounting & Analytics 域
+AA-W1 迁移 `server/migrations/accounting-events-schema.js`（提交 `3876bd3`）新增了 **20 项权限**，
+而若干共享套件（`server/m11-planning.test.js`、`server/m4-blocker-source-lookup-hotfix.test.js`、
+`server/period.test.js`、`server/v12-release-acceptance.test.js` 等）仍断言旧的固定数量。
+
+这 14 个失败**不来自**采购与委外域：本域相关套件在同一次运行中全部通过。该计数断言属共享合同，
+应由 Accounting & Analytics 域随其 AA-W3 工作一并更新；本记录**未**代其修改，也**未**把该失败
+写成通过。
 
 ## 3. 本次验收同时确认的三项裁定
 
