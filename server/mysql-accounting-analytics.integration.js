@@ -26,8 +26,12 @@ import { assertM1CoreInformationSchemaParity } from './test-utils/m1-core-schema
 import { openM1CoreG07ExistingAdapter } from './test-utils/m1-core-g07-existing-adapter.js';
 import { consumePortableChildLease } from '../scripts/gates/ack4/ack4-runtime.mjs';
 
-const PERIOD = '2027-03';
+// The depreciation policy books the **cumulative** amount through the run
+// period minus what is already booked, so the first run must be in the asset's
+// own purchase month; a later month books the catch-up too.
+const PERIOD = '2027-02';
 const RECEIPT_DATE = '2027-02-15';
+const FIXTURE_BUSINESS_DATE = '2027-02-20';
 const RECEIPT_AMOUNT_CENTS = 120000;
 
 // 本域七个 migration 声明的 45 张新表，加上 AA-W5 加列的两张既有表。
@@ -87,6 +91,26 @@ function seedReceipt(db, { receiptId, itemId, amountCents = RECEIPT_AMOUNT_CENTS
      VALUES(?,?,'product-001',1,?,?,1)`,
   ).run(itemId, receiptId, amountCents, amountCents);
   return { receiptId, itemId };
+}
+
+/**
+ * Write one POSTED voucher as the fact basis of the report and collection
+ * assertions. The report reads by business date, so the fixture carries a
+ * business date inside the report period.
+ */
+function seedPostedVoucher(db, { id, subjectCode = '1403', debitCents = 50000, counterSubjectCode = '2202' }) {
+  const now = new Date().toISOString();
+  const subject = db.prepare('SELECT id FROM accounting_subjects WHERE code=?').get(subjectCode);
+  assert.ok(subject, `会计科目 ${subjectCode} 必须存在`);
+  const counter = db.prepare('SELECT id FROM accounting_subjects WHERE code=?').get(counterSubjectCode);
+  assert.ok(counter, `对方科目 ${counterSubjectCode} 必须存在`);
+  db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,business_date,remark,creator_id,created_at,updated_at,status,voucher_origin,period)
+    VALUES(?,?,'AA_MYSQL_FIXTURE',?,?,?,'AA MySQL fixture','user-accounting',?,?,'POSTED','MANUAL',?)`)
+    .run(id, 'V-' + id, id, FIXTURE_BUSINESS_DATE, FIXTURE_BUSINESS_DATE, now, now, PERIOD);
+  db.prepare('INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary,line_no) VALUES(?,?,?,?,?,?,?)')
+    .run(`${id}-e1`, id, subject.id, 'DEBIT', debitCents, 'AA MySQL fixture', 1);
+  db.prepare('INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary,line_no) VALUES(?,?,?,?,?,?,?)')
+    .run(`${id}-e2`, id, counter.id, 'CREDIT', debitCents, 'AA MySQL fixture', 2);
 }
 
 function subjectBalance(db, code, period) {
@@ -247,9 +271,10 @@ describe('Accounting & Analytics — 真实 MySQL 8 域级验收', () => {
   });
 
   test('AA-W4 报表生命周期在真实 MySQL 上成立', async () => {
+    seedPostedVoucher(db, { id: 'aa-my-report-voucher-1' });
     const template = await fixture.request('POST', '/api/accounting/report-templates', subjectTokens.accounting, {
       templateCode: 'AA-MY-RPT', name: '真实 MySQL 报表',
-      items: [{ itemCode: 'BAL', name: '期末余额', levelNo: 1, sortNo: 1, sourceKind: 'GL_BALANCE', sourceJson: { subjectCode: '6602', measure: 'CLOSING' } }],
+      items: [{ itemCode: 'BAL', name: '期末余额', levelNo: 1, sortNo: 1, sourceKind: 'GL_BALANCE', sourceJson: { subjectCode: '1403', measure: 'CLOSING' } }],
     });
     assert.equal(template.status, 201, JSON.stringify(template.data));
     assert.equal(db.prepare('SELECT COUNT(*) n FROM report_template_items WHERE template_id=?').get(template.data.id).n, 1);
@@ -322,7 +347,9 @@ describe('Accounting & Analytics — 真实 MySQL 8 域级验收', () => {
     assert.equal(center.status, 201, JSON.stringify(center.data));
     assert.ok(db.prepare('SELECT * FROM profit_centers WHERE id=?').get(center.data.profitCenter.id));
 
-    const collected = await fixture.request('POST', '/api/management/collect', subjectTokens.accounting, { managementBookId: bookId, period: PERIOD });
+    const collected = await fixture.request('POST', '/api/management/collect', subjectTokens.accounting, {
+      managementBookId: bookId, period: PERIOD, source: { kind: 'GL', accountCode: '1403' },
+    });
     assert.equal(collected.status, 201, JSON.stringify(collected.data));
     const ledger = db.prepare('SELECT * FROM operating_ledger_entries WHERE management_book_id=? AND period=?').all(bookId, PERIOD);
     assert.ok(Array.isArray(ledger));
@@ -343,7 +370,7 @@ describe('Accounting & Analytics — 真实 MySQL 8 域级验收', () => {
       { method: 'POST', path: '/api/accounting/subjects', token: subjectTokens.accounting, body },
     );
     const statuses = [a.status, b.status].sort();
-    assert.deepEqual(statuses, [201, 409], `并发创建必须一个成功一个拒绝，实际 ${JSON.stringify(statuses)}`);
+    assert.deepEqual(statuses, [201, 409], `并发创建必须一个成功一个拒绝，实际 ${JSON.stringify(statuses)} A=${JSON.stringify(a.data)} B=${JSON.stringify(b.data)}`);
     assert.equal(Number(db.prepare('SELECT COUNT(*) n FROM accounting_subjects WHERE code=?').get(code).n), 1,
       '真实 MySQL 的 UNIQUE 约束必须保证只落一条');
   });
@@ -360,7 +387,7 @@ describe('Accounting & Analytics — 真实 MySQL 8 域级验收', () => {
       { method: 'POST', path: '/api/accounting/voucher-templates', token: subjectTokens.accounting, body },
     );
     const statuses = [a.status, b.status].sort();
-    assert.deepEqual(statuses, [201, 409], `并发创建必须一个成功一个拒绝，实际 ${JSON.stringify(statuses)}`);
+    assert.deepEqual(statuses, [201, 409], `并发创建必须一个成功一个拒绝，实际 ${JSON.stringify(statuses)} A=${JSON.stringify(a.data)} B=${JSON.stringify(b.data)}`);
     assert.equal(Number(db.prepare('SELECT COUNT(*) n FROM voucher_templates WHERE template_code=?').get(templateCode).n), 1);
   });
 
@@ -373,7 +400,7 @@ describe('Accounting & Analytics — 真实 MySQL 8 域级验收', () => {
       { method: 'POST', path: '/api/accounting/scopes', token: subjectTokens.accounting, body },
     );
     const statuses = [a.status, b.status].sort();
-    assert.deepEqual(statuses, [201, 409], `并发建立必须一个成功一个拒绝，实际 ${JSON.stringify(statuses)}`);
+    assert.deepEqual(statuses, [201, 409], `并发建立必须一个成功一个拒绝，实际 ${JSON.stringify(statuses)} A=${JSON.stringify(a.data)} B=${JSON.stringify(b.data)}`);
     assert.equal(Number(db.prepare('SELECT COUNT(*) n FROM accounting_scopes WHERE code=?').get(code).n), 1);
   });
 

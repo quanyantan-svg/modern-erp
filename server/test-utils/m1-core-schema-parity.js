@@ -71,22 +71,44 @@ function unwrapOuterParentheses(value) {
 // values and must never normalise to the same token.
 function readLiteralToken(text, start, dialect) {
   const catalogue = dialect === M1_CORE_SQL_LITERAL_DIALECT.MYSQL_CATALOG;
-  const escaped = text.startsWith(MYSQL_CATALOG_LITERAL_QUOTE, start);
-  const quote = catalogue
-    ? (escaped ? MYSQL_CATALOG_LITERAL_QUOTE : SQL_STANDARD_LITERAL_QUOTE)
-    : SQL_STANDARD_LITERAL_QUOTE;
+  if (catalogue) {
+    // The catalogue renders a string literal with MySQL's own escaping applied
+    // to the literal text: the opening and closing delimiters each carry a
+    // run of backslashes (one, or two when the value itself contains an
+    // escaped backslash). A run is therefore the delimiter, not a refusal.
+    const opening = /^(\\*)'/.exec(text.slice(start));
+    if (!opening) return { token: `REFUSED_LITERAL:${JSON.stringify(text.slice(start))}`, next: text.length };
+    const openRun = opening[1];
+    let cursor = start + openRun.length + 1;
+    let content = '';
+    let closed = false;
+    while (cursor < text.length) {
+      const closing = /^(\\*)'/.exec(text.slice(cursor));
+      if (closing) { cursor += closing[0].length; closed = true; break; }
+      const escapedBackslashes = /^(\\+)/.exec(text.slice(cursor));
+      if (escapedBackslashes) {
+        // Each escaped pair inside the literal is one literal backslash.
+        content += '\\'.repeat(Math.floor(escapedBackslashes[0].length / 2));
+        cursor += escapedBackslashes[0].length;
+        continue;
+      }
+      content += text[cursor]; cursor += 1;
+    }
+    return {
+      token: closed ? `STRING:${JSON.stringify(content)}` : `UNTERMINATED_STRING:${JSON.stringify(content)}`,
+      next: cursor,
+    };
+  }
+  const quote = SQL_STANDARD_LITERAL_QUOTE;
   let cursor = start + quote.length;
   let content = '';
   let closed = false;
   let refused = false;
   while (cursor < text.length) {
-    if (!catalogue && text.startsWith("''", cursor)) { content += "'"; cursor += 2; continue; }
+    if (text.startsWith("''", cursor)) { content += "'"; cursor += 2; continue; }
     if (text.startsWith(quote, cursor)) { cursor += quote.length; closed = true; break; }
     const character = text[cursor];
     if (character === '\\') { refused = true; cursor += 1; continue; }
-    if (catalogue && escaped && (character === "'" || character === '"' || character === '`')) {
-      refused = true; cursor += 1; continue;
-    }
     content += character; cursor += 1;
   }
   if (refused) {
@@ -114,9 +136,9 @@ function sqlExpressionTokenList(value, {
     if (whitespace) { index += whitespace[0].length; continue; }
     // The catalogue renders a literal as `_utf8mb4\'value\'`: the introducer
     // precedes the (possibly escaped) delimiter.
-    const charsetIntroducer = rest.match(/^_(?:utf8mb4|utf8|binary)\s*(?=(?:\\)?')/i);
+    const charsetIntroducer = rest.match(/^_(?:utf8mb4|utf8|binary)\s*(?=(?:\\)*')/i);
     if (charsetIntroducer) { index += charsetIntroducer[0].length; continue; }
-    if (text[index] === "'" || (catalogue && text.startsWith(MYSQL_CATALOG_LITERAL_QUOTE, index))) {
+    if (text[index] === "'" || (catalogue && /^(\\*)'/.test(text.slice(index)))) {
       const literal = readLiteralToken(text, index, dialect);
       tokens.push(literal.token);
       index = literal.next;
