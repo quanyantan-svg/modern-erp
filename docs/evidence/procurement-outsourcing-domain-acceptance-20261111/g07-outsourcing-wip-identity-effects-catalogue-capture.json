@@ -1,0 +1,40 @@
+{
+  "table": "outsourcing_wip_identity_effects",
+  "capturedAt": "2026-11-11T11:02:23.775Z",
+  "attempts": 216,
+  "checks": [
+    {
+      "check_clause": "(`identity_type` in (_utf8mb4\\'LOT\\',_utf8mb4\\'SERIAL\\',_utf8mb4\\'NONE\\'))",
+      "enforced": "YES",
+      "constraint_name": "outsourcing_wip_identity_effects_chk_1"
+    },
+    {
+      "check_clause": "(`effect_direction` in (_utf8mb4\\'SUPPLY\\',_utf8mb4\\'CONSUME\\'))",
+      "enforced": "YES",
+      "constraint_name": "outsourcing_wip_identity_effects_chk_2"
+    },
+    {
+      "check_clause": "(`event_type` in (_utf8mb4\\'ISSUE\\',_utf8mb4\\'SUPPLEMENT\\',_utf8mb4\\'TRANSFER_IN\\',_utf8mb4\\'RETURN\\',_utf8mb4\\'BACKFLUSH\\',_utf8mb4\\'TRANSFER_OUT\\',_utf8mb4\\'OPENING\\'))",
+      "enforced": "YES",
+      "constraint_name": "outsourcing_wip_identity_effects_chk_3"
+    },
+    {
+      "check_clause": "(((`identity_type` = _utf8mb4\\'LOT\\') and (`lot_id` is not null) and (`serial_id` is null)) or ((`identity_type` = _utf8mb4\\'SERIAL\\') and (`serial_id` is not null) and (`lot_id` is null)) or ((`identity_type` = _utf8mb4\\'NONE\\') and (`lot_id` is null) and (`serial_id` is null)))",
+      "enforced": "YES",
+      "constraint_name": "outsourcing_wip_identity_effects_chk_4"
+    },
+    {
+      "check_clause": "(((`effect_direction` = _utf8mb4\\'SUPPLY\\') and (`signed_quantity` > 0)) or ((`effect_direction` = _utf8mb4\\'CONSUME\\') and (`signed_quantity` < 0)))",
+      "enforced": "YES",
+      "constraint_name": "outsourcing_wip_identity_effects_chk_5"
+    }
+  ],
+  "provenance": {
+    "runId": "b9023437-4030-46f2-b469-0a08396bd7f6",
+    "commitSha": "9a4ccbb",
+    "target": "mysql://modern_erp_test@127.0.0.1:3306/modern_erp_domain_test",
+    "serverVersion": "8.0.37",
+    "observation": "受保护 disposable MySQL 上对 information_schema.CHECK_CONSTRAINTS 的只读观测（随 G07 Gate 运行窗口进行）",
+    "capturedAt": "2026-11-11T11:02:23.775Z"
+  }
+}

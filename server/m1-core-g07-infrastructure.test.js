@@ -921,7 +921,7 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
       sqlite: [
         "identity_type IN ('LOT','SERIAL','NONE')",
         "effect_direction IN ('SUPPLY','CONSUME')",
-        "event_type IN ('ISSUE','SUPPLEMENT','TRANSFER_IN','RETURN','BACKFLUSH','TRANSFER_OUT')",
+        "event_type IN ('ISSUE','SUPPLEMENT','TRANSFER_IN','RETURN','BACKFLUSH','TRANSFER_OUT','OPENING')",
         "(identity_type='LOT' AND lot_id IS NOT NULL AND serial_id IS NULL)"
           + " OR (identity_type='SERIAL' AND serial_id IS NOT NULL AND lot_id IS NULL)"
           + " OR (identity_type='NONE' AND lot_id IS NULL AND serial_id IS NULL)",
@@ -930,7 +930,7 @@ describe('M1C-G07 dedicated offline infrastructure', () => {
       mysql: [
         "(`identity_type` in (_utf8mb4\\'LOT\\',_utf8mb4\\'SERIAL\\',_utf8mb4\\'NONE\\'))",
         "(`effect_direction` in (_utf8mb4\\'SUPPLY\\',_utf8mb4\\'CONSUME\\'))",
-        "(`event_type` in (_utf8mb4\\'ISSUE\\',_utf8mb4\\'SUPPLEMENT\\',_utf8mb4\\'TRANSFER_IN\\',_utf8mb4\\'RETURN\\',_utf8mb4\\'BACKFLUSH\\',_utf8mb4\\'TRANSFER_OUT\\'))",
+        "(`event_type` in (_utf8mb4\\'ISSUE\\',_utf8mb4\\'SUPPLEMENT\\',_utf8mb4\\'TRANSFER_IN\\',_utf8mb4\\'RETURN\\',_utf8mb4\\'BACKFLUSH\\',_utf8mb4\\'TRANSFER_OUT\\',_utf8mb4\\'OPENING\\'))",
         "(((`identity_type` = _utf8mb4\\'LOT\\') and (`lot_id` is not null) and (`serial_id` is null))"
           + " or ((`identity_type` = _utf8mb4\\'SERIAL\\') and (`serial_id` is not null) and (`lot_id` is null))"
           + " or ((`identity_type` = _utf8mb4\\'NONE\\') and (`lot_id` is null) and (`serial_id` is null)))",
