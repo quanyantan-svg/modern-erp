@@ -4008,3 +4008,54 @@ M0 验收后，**后续业务包的启动仍需各自的显式授权**；W11-A �
 - **域级 Acceptance 与 Capability Freeze 尚未签发**：本节只登记证据与残余，不代替业务所有者签字；候签材料见 §50.6 第一项。
 - 真实 MySQL Gate（ACK-4 清单与 RunId）、G07 固定场景重新冻结的显式确认、G06 被取代断言的重新确认、供应商品类单向门禁口径的确认、委外加工费会计档案维护端点与新增子能力界面可达性的处置 —— 均待业务所有者裁定。
 - 本轮**未**执行真实环境 migration、业务数据库写入、真实 MySQL Gate、push / merge / tag / 发布 / 部署；**未**把任何 `PARTIAL` / `MISSING` 宣称为已覆盖（第四轮已按实现闭合）；**未**代替业务所有者签发 Acceptance 或 Freeze。
+## 51. 采购与委外域级 Acceptance 与 Capability Freeze 签发（2026-11-11）
+
+### 51.1 授权、决定与状态
+
+- **授权来源**：业务所有者指示「这几个为解决矛盾需解决，解决后签发 acceptance 和 freeze」。
+- **决定**：**域级 Acceptance 通过**（`PROCUREMENT_OUTSOURCING_DOMAIN_ACCEPTANCE_PASS`）与 **Capability Freeze 签发**（`PROCUREMENT_OUTSOURCING_CAPABILITY_FREEZE`，冻结 50 项 `COVERED` 能力）。
+- **签发记录**：[`docs/acceptance/procurement-outsourcing-domain-acceptance-20261111.md`](../acceptance/procurement-outsourcing-domain-acceptance-20261111.md)。同日的候签材料（`…-candidate-20261111.md`）标记为 `SUPERSEDED`，保留为决定过程的证据。
+- **不签发**：Manual Closure（B3101 / B3121 手册级关闭）、Release Readiness、发布、部署。
+
+### 51.2 本轮闭合的矛盾
+
+| 原矛盾 | 闭合方式 |
+|---|---|
+| 真实 MySQL Gate 的 ACK-4 清单与 RunId | 业务所有者在本轮指示中授权；已签发并执行 run `b9023437-4030-46f2-b469-0a08396bd7f6`（commit `9a4ccbb`）→ `state=FINISHED`、`testsPassed=true`、`cleanupProven=true`、`childrenExited=true` |
+| G07 固定场景重新冻结 | 确认摘要 `f112c88cb6d327f4885cf349de4a6c4efd6b4a1499e0547727e7103ccad33f`（摘要链 `60f7888f…` → `aa024bd5…` → `f112c88c…`） |
+| G07 目录条款重新捕获 | 以该次真实 MySQL 8.0.37 运行的**只读观测**（`information_schema.CHECK_CONSTRAINTS`）写回冻结捕获值；离线对等回放恢复 55/55 PASS；证据 [`docs/evidence/procurement-outsourcing-domain-acceptance-20261111/`](../evidence/procurement-outsourcing-domain-acceptance-20261111/) |
+| M1-Core G06 被取代断言的重新确认 | 随本次域级 Acceptance 重新确认（共享入口仍一律 409，专用入口按 `C-P02` 档案放行） |
+| 供应商品类的单向门禁口径 | 确认为域级合同（Requirement §31.19.2 / §31.20.3） |
+| 委外加工费会计档案无产品内维护入口 | 实现维护面（Requirement §31.20.1 / Design §26.40.1）：列出 / 建立 / 暂停 / 重新批准；建立时校验角色码解析到启用科目、同范围窗口不重叠；维护权限属财务侧 |
+| 新增子能力界面可达性未取证 | 补齐五个工作面（Requirement §31.20.2 / Design §26.40.2）并由浏览器 UAT-30..UAT-36 取证 |
+| OUT-22 成品退货缺正式延期决策 ID | 补登 `MC-REQ-16`（Requirement §31.20.4） |
+
+### 51.3 能力判定与证据
+
+- **54 项能力**：`COVERED` **50**、`PARTIAL` **0**、`MISSING` **0**、按已批准决定排除在本域范围外 **3** 项（PRC-06 `SAFE_CLOSE`、VMI-05 `D-P01/D-P02`、OUT-22 `MC-REQ-16`）。逐行依据见 [`docs/audits/b3121-domain-acceptance-audit-20261110.md`](../audits/b3121-domain-acceptance-audit-20261110.md)。
+- 真实 MySQL Gate PASS、HEAVY 67/67、浏览器 UAT 36/36、focused 四个新套件 48/48、离线 G07 回放 55/55；FULL 结果见 §51.4。
+
+### 51.4 Gate 结果（2026-11-11）
+
+| Gate | 结果 |
+|---|---|
+| 真实 MySQL Gate（M1C-G07，受保护 disposable MySQL 8.0.37） | **PASS**：run `b9023437-4030-46f2-b469-0a08396bd7f6`、commit `9a4ccbb`；schema parity 与 CR-01..CR-09 全部通过；清理由 root 独立 post-flight 证明；目标 `modern_erp_domain_test` @ `127.0.0.1:3306`，server uuid `256c7a4e-d275-11f1-885b-b025aa71d167` |
+| G07 离线对等回放 | **55/55 PASS**（目录条款按实测重新捕获） |
+| `pnpm test:heavy` | **67/67 PASS** |
+| 浏览器 UAT | **36/36 PASS**（第四轮新增子能力 7 条 + 三工作面 390 px 可达性） |
+| focused（第四轮 + 第五轮新增四套件） | **48/48 PASS** |
+| `pnpm build` | PASS |
+| `git diff --check` | PASS |
+| 文档一致性 `current` | N1、N3～N6、N8、N9 **PASS**（N2 `RETIRED`）；**N7 FAIL** 仍为既存历史提交（`a40e356`、`59eccd5`、`171ade5`、`4403a80`）的追溯债务，与本域无关 |
+| 文档一致性 `migration` | C1～C6 全 PASS |
+| `pnpm test`（FULL） | 见本节末「FULL 回归的跨域说明」 |
+
+**FULL 回归的跨域说明**：本轮在**干净工作树**（linked worktree，检出 `b4ff57d`）上执行 FULL 回归时，除本域外的失败来自**并行的 Accounting & Analytics 域 AA-W3 工作**：其提交（`943414c`）新增了 20 项权限，`server/m11-planning.test.js` 与 `server/m4-blocker-source-lookup-hotfix.test.js` 的**固定权限计数断言**（227）因此不成立（当前 247）。该失败**不属于**采购与委外域，且该域的工作仍在进行中；本域相关套件全部通过。
+
+### 51.5 未解决事项与下一阶段
+
+- **Manual Closure 未签发**：B3101 / B3121 手册级关闭是独立决定，本记录只冻结 50 项 `COVERED` 能力。
+- **Release Readiness 未签发**：本域的 Acceptance 与 Freeze **不**构成任何 Domain 的发布授权。
+- **跨域事实登记**：本轮新增会计科目 `6408 委外加工费`（委外加工费借方角色）；试算平衡科目集合由 21 变为 22（既有损益表与资产负债表口径不变）。该科目属 Accounting & Analytics 域的会计政策范畴，本域只登记角色，不取得该域的任何结论。
+- **保留边界**：`B-P01`（跨单成本携带）与 `B-P02`（委外差异生效）仍按既有延期；`VMI-05`、`PRC-06`、`OUT-22` 三项仍按已批准决定排除在本域范围外。
+- 本轮**未**执行真实环境 migration、业务数据库写入、真实 MySQL 之外的破坏性操作、push / merge / tag / 发布 / 部署。

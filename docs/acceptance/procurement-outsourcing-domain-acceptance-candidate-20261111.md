@@ -4,7 +4,7 @@
 >
 > **Owner**：Procurement & Outsourcing Domain Owner（Acceptance 与 Freeze 的唯一签字人）；Platform / QA（证据维护）。
 >
-> **状态**：`PENDING_OWNER_DECISION` —— 本文件**不是** Acceptance 记录，**不是** Freeze 记录，**不是** Release Readiness。AGENTS.md §4.5：实现方自报 PASS 不替代业务所有者确认。
+> **状态**：`SUPERSEDED` —— 本文件是候签材料（决定过程的证据），**已被** [`procurement-outsourcing-domain-acceptance-20261111.md`](./procurement-outsourcing-domain-acceptance-20261111.md) 取代；该签发记录才是 Acceptance 与 Freeze 的正式证据。本文件**不是** Release Readiness 证据。
 >
 > **权威来源**：Requirement [`docs/requirements/procurement-outsourcing.md`](../requirements/procurement-outsourcing.md) §31.1～§31.19；Design [`docs/design/procurement-outsourcing.md`](../design/procurement-outsourcing.md) §26.1～§26.39；唯一项目状态登记表 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §50；能力覆盖矩阵 [`docs/status/CAPABILITY_MATRIX.md`](../status/CAPABILITY_MATRIX.md)。
 >
@@ -12,6 +12,7 @@
 
 ```text
 PROCUREMENT_OUTSOURCING_DOMAIN_ACCEPTANCE_CANDIDATE_READY_FOR_OWNER_DECISION
+（已于 2026-11-11 签发：PROCUREMENT_OUTSOURCING_DOMAIN_ACCEPTANCE_PASS / PROCUREMENT_OUTSOURCING_CAPABILITY_FREEZE）
 ```
 
 ## 1. 候签范围

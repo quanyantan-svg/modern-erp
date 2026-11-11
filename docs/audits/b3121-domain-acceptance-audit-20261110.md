@@ -1,10 +1,10 @@
 # B3121 委外管理 / 采购与委外域级验收 — 当前状态复核（2026-11-10；2026-11-11 更新）
 
-> **用途 / Owner / 状态 / 权威关系**：本文件是 §31.16 `PRC-DLV-12` 要求的**域级逐项复核**证据，覆盖 PRC-01..26、VMI-01..05、OUT-01..23 共 54 项能力，以及 2026-11-07 静态审计台账的 14 条 Issue 的当前处置。Owner 为 Procurement & Outsourcing Domain Owner；状态为 `IMPLEMENTED`（已完成复核并按裁定实施，**尚未通过域级 Acceptance**）。它**不改写** `docs/audits/b3101-b3121-code-audit-20261107.md` 的历史结论——那份文件是 2026-11-07 的时点证据；本文件是当前状态。`docs/status/CAPABILITY_MATRIX.md` 仍是能力覆盖矩阵的权威登记表。
+> **用途 / Owner / 状态 / 权威关系**：本文件是 §31.16 `PRC-DLV-12` 要求的**域级逐项复核**证据，覆盖 PRC-01..26、VMI-01..05、OUT-01..23 共 54 项能力，以及 2026-11-07 静态审计台账的 14 条 Issue 的当前处置。Owner 为 Procurement & Outsourcing Domain Owner；状态为 `IMPLEMENTED`（已完成复核并按裁定实施；**域级 Acceptance 与 Capability Freeze 已于 2026-11-11 签发**，见 `docs/acceptance/procurement-outsourcing-domain-acceptance-20261111.md`）。它**不改写** `docs/audits/b3101-b3121-code-audit-20261107.md` 的历史结论——那份文件是 2026-11-07 的时点证据；本文件是当前状态。`docs/status/CAPABILITY_MATRIX.md` 仍是能力覆盖矩阵的权威登记表。
 >
 > **复核方法**：逐项定位 Requirement、Design、生产写入口（route + canonical owner）、可执行测试（文件 + 测试名）与明确延期。不凭文件存在宣称 `COVERED`：判 `COVERED` 需同时成立——有生产写入口、有服务端来源/状态/权限/事务约束、有可执行测试覆盖正例与至少一个反例。
 >
-> **2026-11-11 更新**：第四轮整改（Requirement §31.19 / Design §26.39）闭合了原 9 项 `PARTIAL` 与 1 项 `MISSING`。本次更新逐行改写受影响条目的判定、实现与测试证据，并保留被取代的 2026-11-10 判定（见 §8 变更记录）。
+> **2026-11-11 更新**：第四轮整改（Requirement §31.19 / Design §26.39）闭合了原 9 项 `PARTIAL` 与 1 项 `MISSING`；第五轮补齐（Requirement §31.20 / Design §26.40）落定维护面、界面可达性与三项裁定，并取得**真实 MySQL Gate PASS** 与域级 Acceptance / Capability Freeze 签发。本次更新逐行改写受影响条目的判定、实现与测试证据，并保留被取代的 2026-11-10 判定（见 §8 变更记录）。
 
 ## 1. 复核结论摘要
 
@@ -19,8 +19,8 @@
 - `AUD-PRC-007`、`AUD-PRC-009`、`AUD-VMI-001/002/003` 六条按 §31.17 的受托裁定**实现闭合**；`AUD-PRC-002` 按裁定**关闭为登记事项**。
 - `AUD-PRC-001`（寻源决策写入口）维持 §31.14.1 的已批准 SAFE_CLOSE；`AUD-OUT-001/002` 维持既有状态。
 - **原 9 项 `PARTIAL`（PRC-02、PRC-04、PRC-12、PRC-16、OUT-02、OUT-03、OUT-20、OUT-21、OUT-23）与 1 项 `MISSING`（PRC-17）已在第四轮整改中实现闭合**，逐行依据见 §2～§4；被取代的旧判定见 §8。
-- **仍有 3 项按已批准决定排除在本域范围外**：PRC-06（寻源决策写入口，`SAFE_CLOSE`）、VMI-05（结算与物权释放，`D-P01/D-P02`）、OUT-22（成品退货，§31.15.1 范围排除）。这三项**不是**实现缺口，不得被描述为已覆盖；OUT-22 仍缺正式延期决策 ID，见 §6。
-- **仍未闭合的实现前提**：`outsourcing_wip_identity_effects.event_type` 的 CHECK 因期初 WIP 增加 `'OPENING'` 而变化，G07 离线对等回放使用的真实 MySQL 目录条款捕获值随之失效；该断言必须在受保护真实 MySQL Gate 复跑并重新捕获后恢复（见 §7.2）。
+- **仍有 3 项按已批准决定排除在本域范围外**：PRC-06（寻源决策写入口，`SAFE_CLOSE`）、VMI-05（结算与物权释放，`D-P01/D-P02`）、OUT-22（成品退货，正式延期决策 `MC-REQ-16`，见 §31.20.4）。这三项**不是**实现缺口，不得被描述为已覆盖。
+- **原未闭合的实现前提已闭合**：`outsourcing_wip_identity_effects.event_type` 的 CHECK 因期初 WIP 增加 `'OPENING'` 而变化，G07 离线对等回放使用的真实 MySQL 目录条款捕获值随之失效；该值已于 2026-11-11 受保护 disposable MySQL 8.0.37 运行（run `b9023437-4030-46f2-b469-0a08396bd7f6`，commit `9a4ccbb`）中**重新观测捕获**并写回；该 Gate 本身 `state=FINISHED`、`testsPassed=true`、清理已证明（见 §7.2）。
 
 ## 2. PRC-01..26 逐项复核
 
@@ -110,17 +110,17 @@
 | AUD-OUT-001 | TESTED | TESTED（未验收） | `OUT_001_MYSQL_CHILD_TIMEOUT` 等真实 MySQL 证据见 `docs/acceptance/out001-real-mysql-acceptance-20261109.md`；本轮未重跑 |
 | AUD-OUT-002 | TESTED | TESTED | 报表仅 `EFFECTED` 计正式指标 |
 
-## 6. 仍未闭合、必须由业务所有者裁定或确认的事项
+## 6. 业务所有者裁定登记（2026-11-11 已闭合）
 
-| # | 事项 | 当前状态与为什么 Agent 不能自行决定 |
+| # | 事项 | 裁定结果 |
 |---|---|---|
-| 1 | 真实 MySQL Gate 的执行授权（ACK-4 清单与 RunId） | 受保护 disposable 环境的逐次授权；Agent 不得签发批准或自行发明夹具 |
-| 2 | G07 固定场景重新冻结的显式确认 | 固定场景新增「建立有效 OUTSOURCE 货源」步骤，冻结摘要已重新计算并写回三处断言；**重新冻结待业务所有者显式确认**，在此之前既有真实 MySQL Gate 验收结论不自动延续 |
-| 3 | `outsourcing_wip_identity_effects` CHECK 变化后的真实 MySQL 目录条款重新捕获 | 该捕获值来自真实 MySQL 8 运行，只能由新一轮受保护 Gate 复跑后重新观察；**不得**以削弱断言或改写检查器的方式通过 |
-| 4 | OUT-22 正式延期决策 ID | 当前只有 §31.15.1 的范围排除，没有 `MC-REQ-15` 类条目 |
-| 5 | M1-Core G06 断言被 §31.19 取代后的重新确认 | 2026-11-07 首期包级 Acceptance 覆盖的 G06 证据在「专用入口一律 409」这条断言上被本轮合同取代，必须随域级 Acceptance 重新确认 |
-| 6 | 供应商品类的单向门禁口径 | 本轮按「品类只门禁委外业务、普通采购由资质门禁把关」实现（§31.19.2）；若业务所有者要求品类互斥，需追加裁定并同步改动既有委外场景 |
-| 7 | 委外加工费会计档案的维护入口 | 当前只有迁移预置的全局默认档案，没有产品内的档案维护端点；供应商级档案与税务政策变更暂需直接数据手段 |
+| 1 | 真实 MySQL Gate 的执行授权（ACK-4 清单与 RunId） | **已签发并执行**：run `b9023437-4030-46f2-b469-0a08396bd7f6`（commit `9a4ccbb`）→ `state=FINISHED`、`testsPassed=true`、`cleanupProven=true` |
+| 2 | G07 固定场景重新冻结的显式确认 | **已确认**：摘要 `f112c88cb6d327f4885cf349de4a6c4efd6b4a1499e0547727e7103ccad33f`（摘要链 `60f7888f…` → `aa024bd5…` → `f112c88c…`） |
+| 3 | `outsourcing_wip_identity_effects` CHECK 变化后的真实 MySQL 目录条款重新捕获 | **已重新观测捕获**并写回；离线回放恢复通过（55/55），断言未被削弱、检查器未被修改（见 §7.2） |
+| 4 | OUT-22 正式延期决策 ID | **已补登**：`MC-REQ-16`（Requirement §31.20.4）；既有稳定拒绝边界与回归不变 |
+| 5 | M1-Core G06 断言被 §31.19 取代后的重新确认 | **随域级 Acceptance 重新确认**（Requirement §31.20.3；Acceptance 记录 §3） |
+| 6 | 供应商品类的单向门禁口径 | **确认为域级合同**：品类只门禁委外业务，普通采购由采购资质门禁把关（§31.19.2 / §31.20.3） |
+| 7 | 委外加工费会计档案的维护入口 | **已实现产品内维护面**：列出 / 建立 / 暂停 / 重新批准（Requirement §31.20.1 / Design §26.40.1） |
 
 ## 7. 本轮披露的限制与边界
 
@@ -128,17 +128,42 @@
 
 2026-11-10 的复核判定中，PRC-02 / PRC-04 / PRC-12 / PRC-16 / PRC-17 / OUT-02 / OUT-03 / OUT-20 / OUT-21 / OUT-23 的 `PARTIAL` / `MISSING` 结论已被 §31.19 / §26.39 的实现取代。取代关系见 §2～§4 逐行「实现」与「测试」列；本文件不删除历史结论的引用位置，`docs/status/PROJECT_STATUS.md` §37～§48 与 `log/2026-11-10.md` 仍保留当时的判定与证据。
 
-### 7.2 G07 对等回放的已知未闭合项
+### 7.2 G07 对等回放：目录条款已按真实 MySQL 观测重新捕获
 
-期初 WIP 使 `outsourcing_wip_identity_effects.event_type` 的 CHECK 增加 `'OPENING'`（SQLite 重建表、MySQL `MODIFY COLUMN`）。G07 离线基础设施套件的 `R4` 对等回放把该表与**真实 MySQL 目录捕获条款**逐条比对，捕获值来自 2026-11-07 的真实 MySQL 8 运行，因此该条断言在重新捕获前失败。这是**已知且已登记**的未闭合项，不是被忽略的回归。
+期初 WIP 使 `outsourcing_wip_identity_effects.event_type` 的 CHECK 增加 `'OPENING'`（SQLite 重建表、MySQL `MODIFY COLUMN`）。G07 离线基础设施套件的 `R4` 对等回放把该表与**真实 MySQL 目录捕获条款**逐条比对；捕获值来自 2026-11-07 的真实 MySQL 8 运行，因此一度失效。
 
-### 7.3 委外加工费会计档案的维护面
+**闭合事实（2026-11-11）**：
 
-C-P02 的档案表 `outsourcing_processing_fee_accounting_profiles` 当前只有迁移预置的一套全局默认档案（借方 6408 委外加工费，`tax_mode=NO_TAX`）。档案缺位时过账 fail closed，因此该缺口**不会**产生错误过账；但供应商级档案与税务政策变更暂不具备产品内维护路径。
+| 项 | 值 |
+|---|---|
+| 真实 MySQL Gate | run `b9023437-4030-46f2-b469-0a08396bd7f6`，commit `9a4ccbb`，目标 `modern_erp_domain_test` @ `127.0.0.1:3306`（MySQL 8.0.37，server uuid `256c7a4e-d275-11f1-885b-b025aa71d167`） |
+| 结果 | `state=FINISHED`、`testsPassed=true`、`cleanupProven=true`、`childrenExited=true`；schema parity 与 CR-01..CR-09 全部通过 |
+| 目录条款观测 | 受保护 disposable MySQL 上对 `information_schema.CHECK_CONSTRAINTS` 的**只读**观测（随 Gate 运行窗口进行）；证据见 [`docs/evidence/procurement-outsourcing-domain-acceptance-20261111/`](../evidence/procurement-outsourcing-domain-acceptance-20261111/) |
+| 捕获值 | ``(`event_type` in (_utf8mb4\'ISSUE\',…,_utf8mb4\'TRANSFER_OUT\',_utf8mb4\'OPENING\'))`` |
+| 离线回放 | 恢复通过（`m1-core-g07-infrastructure.test.js` + `m1c-g07-sqlite-smoke.test.js` 合计 **55/55 PASS**） |
 
-### 7.4 界面可达性
+该断言**没有**被削弱，**没有**被改写，检查器**未**被修改。
 
-第四轮新增的**子能力**（预付款要求、货源 override、交货计划关单、加工费过账与红冲、期初委外）目前只有 API 层，没有新增前端工作面。既有 §31.8 F 列举的五条 operator workflow 由既有页面承担，其浏览器闭环证据不变；新增子能力的界面可达性**未**在本轮取证，域级 Acceptance 时必须作为已知限制披露，不得被描述为「已完成」。
+### 7.3 委外加工费会计档案的维护面（已闭合）
+
+第五轮实现了产品内维护面（Requirement §31.20.1 / Design §26.40.1）：`GET/POST /api/procurement/outsourcing/processing-fee-accounting-profiles` 与 `POST …/:id/approval`。维护面只做「列出 / 建立 / 改变批准状态」三件事，不改写既有档案的科目、税率与有效期；建立时校验角色码必须解析到**启用**科目（否则 409 `OUTSOURCING_GL_PROFILE_ROLE_UNRESOLVED`），同范围窗口重叠被拒（409 `OUTSOURCING_GL_PROFILE_OVERLAP`），重新批准前重读权威科目。维护权限属财务侧过账权限，委外业务侧不得定义科目。证据：`server/outsourcing-gl-profile-maintenance.test.js`（6 条）与浏览器 UAT-35。
+
+**保留限制**：档案引用的角色码必须已存在于启用科目；档案不是业务单据，不得被用来绕过科目治理。
+
+### 7.4 界面可达性（已闭合）
+
+第四轮新增的**子能力**（预付款要求、货源 override、交货计划关单、加工费过账与红冲、期初委外）原先只有 API 层。第五轮补齐了对应工作面（Requirement §31.20.2 / Design §26.40.2）：
+
+| 子能力 | 工作面 |
+|---|---|
+| PRC-17 预付款要求 | 采购订单详情「预付款要求」 |
+| PRC-04 货源 override | 寻源与定价「货源 override」 |
+| PRC-16 交货计划关单 | 采购订单详情「交货计划」 |
+| OUT-20 加工费过账与红冲 | 委外加工「加工费账单」 |
+| OUT-23 期初委外订单 | 委外加工「新建期初委外订单」 |
+| OUT-20 会计档案维护 | 委外加工「加工费会计档案」 |
+
+浏览器 UAT `scripts/acceptance/procurement-outsourcing-functional-uat.mjs` 扩展到 **36/36 PASS**（新增 UAT-30..UAT-36），其中 UAT-36 在 390 CSS px 下断言三个工作面**实际渲染**新增面板且无整页横向滚动。前端不计算权威金额、不放宽权限。
 
 ### 7.5 未发生事项
 
@@ -150,3 +175,4 @@ C-P02 的档案表 `outsourcing_processing_fee_accounting_profiles` 当前只有
 |---|---|
 | 2026-11-10 | 首次域级逐项复核：54 项中 40 项 `COVERED`、9 项 `PARTIAL`、1 项 `MISSING`（PRC-17）、4 项已批准延期或移出范围。 |
 | 2026-11-11 | 第四轮整改后复核：54 项中 **50 项 `COVERED`**、0 项 `PARTIAL`、0 项 `MISSING`；3 项按已批准决定排除在本域范围外（PRC-06 / VMI-05 / OUT-22）。10 项原残余的逐行依据见 §2～§4；新披露的限制见 §7。 |
+| 2026-11-11（第五轮） | 会计档案维护面与第四轮新增子能力的界面可达性闭合（§7.3、§7.4）；业务所有者七项裁定全部落定（§6）；真实 MySQL Gate PASS 且目录条款按实测重新捕获（§7.2）；**域级 Acceptance 与 Capability Freeze 已签发**（`docs/acceptance/procurement-outsourcing-domain-acceptance-20261111.md`）。本文件的判定结论自此与该签发记录一致。 |
