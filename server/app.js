@@ -200,6 +200,10 @@ import {
   listCleanupEventsHandler, listLifecycleRecordsHandler, restoreLifecycleRecord,
 } from './modules/lifecycle-engine.js';
 import { createRouteTable } from './lib/route-table.js';
+import { accountingEventsHandlers } from './modules/accounting-events.js';
+import { accountingRulesHandlers } from './modules/accounting-rules.js';
+import { accountingReconciliationHandlers } from './modules/accounting-reconciliation.js';
+import { generateEventVoucher } from './modules/accounting-rules.js';
 import { paymentTermsDays } from './lib/payment-terms.js';
 import {
   createWarehouse,
@@ -1653,6 +1657,173 @@ ownedRouteTable.register({
   path: '/api/voucher-templates',
   handler: ({ db, res, actor, url }) => listVoucherTemplates(db, res, actor, url),
   owner: 'server/modules/accounting-config.js',
+});
+
+// Accounting & Analytics Domain Closure — AA-W1 / AA-W2.
+//
+// Canonical owners:
+//   server/modules/accounting-events.js         会计事件台账 / 科目维护
+//   server/modules/accounting-rules.js          凭证模板与规则平台
+//   server/modules/accounting-reconciliation.js 业务↔GL 对账与期末检查
+//
+// The existing `GET /api/voucher-templates` route above stays owned by
+// `server/modules/accounting-config.js`; the domain's own template endpoints
+// live under `/api/accounting/...` so there is exactly one path per
+// capability and no second write entry point for templates.
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/accounting/events',
+  handler: ({ db, res, actor, url }) => accountingEventsHandlers.listEvents(db, res, actor, url),
+  owner: 'server/modules/accounting-events.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/accounting/events/ungenerated',
+  handler: ({ db, res, actor, url }) => accountingEventsHandlers.listUngeneratedEvents(db, res, actor, url),
+  owner: 'server/modules/accounting-events.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/accounting/events/batch-generate',
+  handler: ({ db, req, res, actor }) => accountingRulesHandlers.batchGenerate(db, req, res, actor),
+  owner: 'server/modules/accounting-rules.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/accounting/reconciliation',
+  handler: ({ db, res, actor, url }) => accountingReconciliationHandlers.listReconciliation(db, res, actor, url),
+  owner: 'server/modules/accounting-reconciliation.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/accounting/reconciliation/run',
+  handler: ({ db, req, res, actor }) => accountingReconciliationHandlers.triggerReconciliation(db, req, res, actor),
+  owner: 'server/modules/accounting-reconciliation.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/accounting/reconciliation/runs',
+  handler: ({ db, res, actor, url }) => accountingReconciliationHandlers.listReconciliationRuns(db, res, actor, url),
+  owner: 'server/modules/accounting-reconciliation.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/accounting/close-checklist',
+  handler: ({ db, res, actor, url }) => accountingReconciliationHandlers.getCloseChecklist(db, res, actor, url),
+  owner: 'server/modules/accounting-reconciliation.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/accounting/voucher-templates',
+  handler: ({ db, res, actor, url }) => accountingRulesHandlers.listTemplates(db, res, actor, url),
+  owner: 'server/modules/accounting-rules.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/accounting/voucher-templates',
+  handler: ({ db, req, res, actor }) => accountingRulesHandlers.createTemplate(db, req, res, actor),
+  owner: 'server/modules/accounting-rules.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/accounting/generation-runs',
+  handler: ({ db, res, actor, url }) => accountingRulesHandlers.listGenerationRuns(db, res, actor, url),
+  owner: 'server/modules/accounting-rules.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/accounting/rules',
+  handler: ({ db, res, actor, url }) => accountingRulesHandlers.listRules(db, res, actor, url),
+  owner: 'server/modules/accounting-rules.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/accounting/rules',
+  handler: ({ db, req, res, actor }) => accountingRulesHandlers.createRule(db, req, res, actor),
+  owner: 'server/modules/accounting-rules.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/accounting/subjects',
+  handler: ({ db, res, actor }) => send(res, 200, {
+    subjects: db.prepare('SELECT id,code,name,type,direction,parent_id,active FROM accounting_subjects WHERE active=1 ORDER BY code').all(),
+  }),
+  owner: 'server/modules/accounting-events.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/accounting/subjects',
+  handler: ({ db, req, res, actor }) => accountingEventsHandlers.createSubject(db, req, res, actor),
+  owner: 'server/modules/accounting-events.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/accounting\/events\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => accountingEventsHandlers.getEvent(db, res, actor, params[0]),
+  owner: 'server/modules/accounting-events.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/accounting\/events\/([^/]+)\/retry$/,
+  handler: ({ db, req, res, actor, params }) => accountingEventsHandlers.retryEvent(
+    db, req, res, actor, params[0],
+    ({ db: scopedDb, event, actor: scopedActor }) => generateEventVoucher(scopedDb, { event, actor: scopedActor }),
+  ),
+  owner: 'server/modules/accounting-events.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/accounting\/events\/([^/]+)\/skip$/,
+  handler: ({ db, req, res, actor, params }) => accountingEventsHandlers.skipEvent(db, req, res, actor, params[0]),
+  owner: 'server/modules/accounting-events.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/accounting\/events\/([^/]+)\/resume$/,
+  handler: ({ db, req, res, actor, params }) => accountingEventsHandlers.resumeEvent(db, req, res, actor, params[0]),
+  owner: 'server/modules/accounting-events.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/accounting\/subjects\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => accountingEventsHandlers.updateSubject(db, req, res, actor, params[0]),
+  owner: 'server/modules/accounting-events.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/accounting\/subjects\/([^/]+)\/deactivate$/,
+  handler: ({ db, req, res, actor, params }) => accountingEventsHandlers.deactivateSubject(db, req, res, actor, params[0]),
+  owner: 'server/modules/accounting-events.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/accounting\/voucher-templates\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => accountingRulesHandlers.updateTemplate(db, req, res, actor, params[0]),
+  owner: 'server/modules/accounting-rules.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/accounting\/voucher-templates\/([^/]+)\/deactivate$/,
+  handler: ({ db, req, res, actor, params }) => accountingRulesHandlers.deactivateTemplate(db, req, res, actor, params[0]),
+  owner: 'server/modules/accounting-rules.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/accounting\/voucher-templates\/([^/]+)\/preview$/,
+  handler: ({ db, res, actor, url, params }) => accountingRulesHandlers.previewTemplate(db, res, actor, url, params[0]),
+  owner: 'server/modules/accounting-rules.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/accounting\/rules\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => accountingRulesHandlers.updateRule(db, req, res, actor, params[0]),
+  owner: 'server/modules/accounting-rules.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/accounting\/rules\/([^/]+)\/deactivate$/,
+  handler: ({ db, req, res, actor, params }) => accountingRulesHandlers.deactivateRule(db, req, res, actor, params[0]),
+  owner: 'server/modules/accounting-rules.js',
 });
 
 // Wave 5B — Manufacturing Reference Data Decomposition. Canonical

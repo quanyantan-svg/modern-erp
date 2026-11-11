@@ -41,6 +41,9 @@ import { migrateProcurementSourcingSchema } from './migrations/procurement-sourc
 import { migrateProcurementPrepaymentSchema } from './migrations/procurement-prepayment-schema.js';
 import { migrateProcurementOutsourcingFinanceSchema } from './migrations/procurement-outsourcing-finance-schema.js';
 import { migrateProcurementOutsourcingOpeningSchema } from './migrations/procurement-outsourcing-opening-schema.js';
+import { migrateAccountingEventsSchema } from './migrations/accounting-events-schema.js';
+import { migrateAccountingRulesSchema } from './migrations/accounting-rules-schema.js';
+import { migrateAccountingPeriodEndSchema } from './migrations/accounting-period-end-schema.js';
 import { migrateInventoryPositionSchema } from './migrations/inventory-position-schema.js';
 import { migrateSalesCustomerDomain } from './migrations/sales-customer-domain.js';
 import { migrateW11ASelectorSearchKey } from './migrations/sales-customer-wave11-a-selector-search-key.js';
@@ -112,6 +115,26 @@ export const PERMISSIONS = [
   ['PRODUCTION_ORDERS_START', '开始生产'],
   ['PRODUCTION_ORDERS_COMPLETE', '完成生产'],
   ['ACCOUNTING_VIEW', '查看财务凭证'],
+  ['ACCOUNTING_SUBJECTS_VIEW', '查看会计科目'],
+  ['ACCOUNTING_SUBJECTS_MANAGE', '维护会计科目'],
+  ['ACCOUNTING_EVENTS_VIEW', '查看会计事件与未生成清单'],
+  ['ACCOUNTING_EVENTS_REPAIR', '修复会计事件（重试/跳过/恢复）'],
+  ['ACCOUNTING_RECONCILIATION_VIEW', '查看业务财务对账'],
+  ['VOUCHER_CASHIER_REVIEW', '出纳复核'],
+  ['ACCOUNTING_PERIOD_END_MANAGE', '执行期末转账/摊销/计提/损益结转'],
+  ['CASH_FLOW_VIEW', '查看现金流量表'],
+  ['REPORT_TEMPLATE_VIEW', '查看报表模板'],
+  ['REPORT_TEMPLATE_MANAGE', '维护报表模板'],
+  ['REPORT_INSTANCE_VIEW', '查看报表实例'],
+  ['REPORT_INSTANCE_SUBMIT', '提交报表实例'],
+  ['REPORT_INSTANCE_APPROVE', '审核报表实例'],
+  ['ACCOUNTING_RULE_RUN', '执行凭证批量/调度生成'],
+  ['FIXED_ASSET_DEPRECIATE', '计提固定资产折旧'],
+  ['FIXED_ASSET_DISPOSE', '处置固定资产'],
+  ['INVENTORY_COST_VIEW', '查看存货核算'],
+  ['INVENTORY_COST_MANAGE', '维护存货核算'],
+  ['MANAGEMENT_ACCOUNTING_VIEW', '查看经营会计'],
+  ['MANAGEMENT_ACCOUNTING_MANAGE', '维护经营会计'],
   ['AR_VIEW', '查看应收账款与客户对账单'],
   ['COLLECTION_MANAGE', '管理并确认收款单'],
   ['AP_VIEW', '查看应付账款与供应商对账单'],
@@ -523,6 +546,13 @@ function createSqliteDatabase(filename) {
   migrateV13Phase6ECommercialGoLive(db);
   migrateProcurementOutsourcingFinanceSchema(db);
   migrateProcurementOutsourcingOpeningSchema(db);
+  // Accounting & Analytics Domain Closure — AA-W1 / AA-W2 schema.
+  // The events migration also seeds the AA-W1 permissions into the canonical
+  // `permissions` / `role_permissions` tables so existing databases and
+  // freshly created databases converge on the same RBAC contract.
+  migrateAccountingEventsSchema(db);
+  migrateAccountingRulesSchema(db);
+  migrateAccountingPeriodEndSchema(db);
   migrateInventoryPositionSchema(db);
   migrateV13Phase7cPerformance(db);
   migrateManufacturingQualitySchema(db);
@@ -1773,7 +1803,7 @@ function seedSchema(db) {
     'role-admin': all,
     'role-outsourcing': ['OUTSOURCING_MANAGE', 'OUTSOURCING_MATERIAL_EXECUTE'],
     'role-outsourcing-receiving': ['OUTSOURCING_RECEIVING_MANAGE'],
-    'role-accounting': ['DASHBOARD_VIEW', 'ACCOUNTING_VIEW', 'VOUCHER_SUBMIT', 'REPORT_VIEW', 'ORDERS_VIEW', 'PURCHASE_ORDERS_VIEW', 'CASH_JOURNALS_VIEW', 'CASH_JOURNALS_MANAGE', 'BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE', 'BILLS_VIEW', 'BILLS_MANAGE', 'FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE', 'AR_VIEW', 'COLLECTION_MANAGE', 'AP_VIEW', 'PAYMENT_MANAGE', 'SALES_DISCOUNT_MANAGE', 'PURCHASE_DISCOUNT_MANAGE', 'SUPPLIER_BILL_MANAGE', 'FINANCE_RECOGNITION_POLICY_VIEW', 'FINANCE_RECOGNITION_POLICY_MANAGE', 'FINANCE_AR_VIEW', 'FINANCE_AP_VIEW', 'FINANCE_INVOICE_VIEW', 'FINANCE_INVOICE_MANAGE', 'FINANCE_TREASURY_VIEW', 'FINANCE_TREASURY_MANAGE', 'FINANCE_SETTLEMENT_ACCOUNT_VIEW', 'FINANCE_SETTLEMENT_ACCOUNT_MANAGE', 'FINANCE_TRANSFER_MANAGE', 'FINANCE_WRITE_OFF_MANAGE', 'FINANCE_BAD_DEBT_MANAGE', 'FINANCE_NOTES_MANAGE', 'FINANCE_PAYMENT_REQUEST_MANAGE', 'FINANCE_CASH_COUNT_MANAGE', 'FINANCE_BANK_STATEMENT_IMPORT', 'FINANCE_RECONCILE_MANAGE', 'FINANCE_CLOSE_VIEW', 'FINANCE_CLOSE_MANAGE', 'CREDIT_VIEW'],
+    'role-accounting': ['DASHBOARD_VIEW', 'ACCOUNTING_VIEW', 'VOUCHER_SUBMIT', 'REPORT_VIEW', 'ORDERS_VIEW', 'PURCHASE_ORDERS_VIEW', 'CASH_JOURNALS_VIEW', 'CASH_JOURNALS_MANAGE', 'BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE', 'BILLS_VIEW', 'BILLS_MANAGE', 'FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE', 'AR_VIEW', 'COLLECTION_MANAGE', 'AP_VIEW', 'PAYMENT_MANAGE', 'SALES_DISCOUNT_MANAGE', 'PURCHASE_DISCOUNT_MANAGE', 'SUPPLIER_BILL_MANAGE', 'FINANCE_RECOGNITION_POLICY_VIEW', 'FINANCE_RECOGNITION_POLICY_MANAGE', 'FINANCE_AR_VIEW', 'FINANCE_AP_VIEW', 'FINANCE_INVOICE_VIEW', 'FINANCE_INVOICE_MANAGE', 'FINANCE_TREASURY_VIEW', 'FINANCE_TREASURY_MANAGE', 'FINANCE_SETTLEMENT_ACCOUNT_VIEW', 'FINANCE_SETTLEMENT_ACCOUNT_MANAGE', 'FINANCE_TRANSFER_MANAGE', 'FINANCE_WRITE_OFF_MANAGE', 'FINANCE_BAD_DEBT_MANAGE', 'FINANCE_NOTES_MANAGE', 'FINANCE_PAYMENT_REQUEST_MANAGE', 'FINANCE_CASH_COUNT_MANAGE', 'FINANCE_BANK_STATEMENT_IMPORT', 'FINANCE_RECONCILE_MANAGE', 'FINANCE_CLOSE_VIEW', 'FINANCE_CLOSE_MANAGE', 'CREDIT_VIEW', 'ACCOUNTING_SUBJECTS_VIEW', 'ACCOUNTING_SUBJECTS_MANAGE', 'ACCOUNTING_EVENTS_VIEW', 'ACCOUNTING_EVENTS_REPAIR', 'ACCOUNTING_RECONCILIATION_VIEW', 'VOUCHER_CASHIER_REVIEW', 'ACCOUNTING_PERIOD_END_MANAGE', 'CASH_FLOW_VIEW', 'REPORT_TEMPLATE_VIEW', 'REPORT_TEMPLATE_MANAGE', 'REPORT_INSTANCE_VIEW', 'REPORT_INSTANCE_SUBMIT', 'REPORT_INSTANCE_APPROVE', 'ACCOUNTING_RULE_RUN', 'FIXED_ASSET_DEPRECIATE', 'INVENTORY_COST_VIEW', 'INVENTORY_COST_MANAGE', 'MANAGEMENT_ACCOUNTING_VIEW', 'MANAGEMENT_ACCOUNTING_MANAGE'],
     // V1.3 Phase 1: SALES owns commercial entry (customers, suppliers, SO/PO/PR
     // create/submit) and CRM. SALES does NOT execute warehouse stock, material
     // issue, production receipt, inventory transfer, inventory check, or

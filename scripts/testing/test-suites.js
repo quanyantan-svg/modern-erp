@@ -587,6 +587,12 @@ const FULL = [
   'server/m8-settlement.test.js',
   'server/m9-final-polish.test.js',
 
+  // ----- Accounting & Analytics Domain Closure (AA-W1 / AA-W2) -----
+  // AA-W1 accounting event ledger / reconciliation workbench / subject
+  // maintenance, and AA-W2 voucher template & rule platform. Every case has
+  // a positive and a negative assertion.
+  'server/accounting-analytics-w1-w2.test.js',
+
   // ----- User / Auth / RBAC / SOD / Account-bootstrap -----
   'server/uat-r2-user-payload.test.js',
 
