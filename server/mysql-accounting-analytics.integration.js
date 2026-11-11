@@ -159,7 +159,7 @@ describe('Accounting & Analytics — 真实 MySQL 8 域级验收', () => {
 
   after(() => db?.close());
 
-  test('AA 域 47 张表在真实 MySQL 8 目录上与 canonical SQLite 结构一致', () => {
+  test('AA 域 47 张表在真实 MySQL 8 目录上与 canonical SQLite 结构一致', async () => {
     const snapshot = captureSqliteSnapshot((path) => createSqliteDatabase(path), false);
     // ASCII-only observation of the live catalogue default, so the evidence
     // survives a lossy diagnostic writer.
@@ -169,6 +169,14 @@ describe('Accounting & Analytics — 真实 MySQL 8 域级验收', () => {
     console.log('AA_PARITY_RAW_MYSQL_DEFAULT', JSON.stringify(observedText), [...observedText].map((c) => c.codePointAt(0).toString(16)).join(' '));
     console.log('AA_PARITY_RAW_SQLITE_DEFAULT', JSON.stringify(String(sqliteUnit?.dflt_value ?? '')), [...String(sqliteUnit?.dflt_value ?? '')].map((c) => c.codePointAt(0).toString(16)).join(' '));
     console.log('AA_PARITY_MYSQL_EXTRA', JSON.stringify(String(observed?.e ?? '')));
+    const { readMySqlInformationSchemaContract } = await import('./test-utils/m1-core-schema-parity.js');
+    const contract = readMySqlInformationSchemaContract(db, 'fixed_assets');
+    const contractUnit = contract.columns.find((item) => item.column_name === 'unit');
+    const contractText = String(contractUnit?.column_default ?? '');
+    console.log('AA_PARITY_CONTRACT_DEFAULT', JSON.stringify(contractText), [...contractText].map((c) => c.codePointAt(0).toString(16)).join(' '));
+    const literalQuery = db.prepare("SELECT COLUMN_DEFAULT column_default FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='fixed_assets' AND COLUMN_NAME='unit'").get();
+    const literalText = String(literalQuery?.column_default ?? '');
+    console.log('AA_PARITY_LITERAL_DEFAULT', JSON.stringify(literalText), [...literalText].map((c) => c.codePointAt(0).toString(16)).join(' '));
     const result = assertM1CoreInformationSchemaParity(db, snapshot, AA_PARITY_TABLES);
     assert.equal(result.source, 'information_schema');
     assert.equal(result.status, 'MATCHED');
@@ -313,7 +321,8 @@ describe('Accounting & Analytics — 真实 MySQL 8 域级验收', () => {
 
     // SOD: the submitter must not approve the same instance.
     const selfApprove = await fixture.request('POST', `/api/accounting/report-instances/${instanceId}/approve`, subjectTokens.accounting, { approved: true });
-    assert.equal(selfApprove.status, 409, JSON.stringify(selfApprove.data));
+    assert.equal(selfApprove.status, 403, JSON.stringify(selfApprove.data));
+    assert.equal(selfApprove.data.code, 'REPORT_INSTANCE_SOD_VIOLATION');
     assert.equal(db.prepare('SELECT status FROM report_instances WHERE id=?').get(instanceId).status, 'SUBMITTED');
 
     const approved = await fixture.request('POST', `/api/accounting/report-instances/${instanceId}/approve`, subjectTokens.admin, { approved: true });
