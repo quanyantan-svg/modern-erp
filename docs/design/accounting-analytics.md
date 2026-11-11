@@ -858,6 +858,13 @@ CREATE TABLE production_cost_closings (
 - **核算关账检查清单**（AA-W6.15）：估值 ↔ GL 差异、未估值历史移动（`LEGACY_UNVALUED`）、
   负库存 / 残值、暂估未结转、成本调整未过账 —— 全部为 `BLOCKING` 或 `WARNING`，
   与 `systemHealth` 现有检查**合并展示**而非重复实现。
+- **委外成本口径**（AA-W6.17～AA-W6.19，业务所有者 2026-11-11 裁定选项 A）：
+  委外成本 = 材料成本 + 加工费，其 canonical 实现由 **Procurement & Outsourcing 域**承担
+  （材料成本读 `inventory_valuation_movements` 的倒冲材料价值；加工费读
+  `outsourcing-gl-policy.js::resolveProcessingFeeAccountingProfile` 解析的会计档案）。
+  本域**只读引用**该结果，**不新增**委外成本事实表、口径常量或第二条过账路径；
+  `server/modules/accounting-inventory-cost.js` 不含任何 `OUTSOURCE` 取数规则，
+  也不得在后续迭代中引入 —— 这条边界由审计台账 §7.3 的逐项复核固定。
 
 #### 31.6.3 端点
 

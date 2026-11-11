@@ -222,16 +222,16 @@
 
 | 手册 | Capability 数 | COVERED | PARTIAL | MISSING | OUT_OF_SCOPE |
 |---|---|---|---|---|---|
-| B3106 存货核算 | 9 | 8 | 1 | 0 | 0 |
+| B3106 存货核算 | 9 | 9 | 0 | 0 | 0 |
 | B3107 固定资产 | 8 | 8 | 0 | 0 | 0 |
 | B3114 智能会计平台 | 7 | 7 | 0 | 0 | 0 |
 | B3115 总账 | 8 | 7 | 0 | 0 | 1 |
 | B3116 报表 | 6 | 6 | 0 | 0 | 0 |
 | B3117 经营会计 | 6 | 6 | 0 | 0 | 0 |
-| **合计** | **44** | **42** | **1** | **0** | **1** |
+| **合计** | **44** | **43** | **0** | **0** | **1** |
 
-对比 §35.3 的目标判定（43 `COVERED` + 1 `OUT_OF_SCOPE`）：**AA-07 委外成本** 未能在本域闭合，
-是本轮唯一的未解决矛盾（见 §7.3）。
+与 §35.3 的目标判定（43 `COVERED` + 1 `OUT_OF_SCOPE`）**一致**：AA-07 委外成本的合同缺位已由
+业务所有者 2026-11-11 的裁定（选项 A）闭合，见 §7.3。
 
 ### 7.2 逐项复核结论
 
@@ -243,7 +243,7 @@
 | AA-04 采购费用分配 | `MISSING` | `COVERED` | `purchase_expenses` / `purchase_expense_allocation_rules` / `purchase_expense_allocations`；「AA-W6.8/9/10 采购费用分摊：可重算、进入权威价值流水并生成凭证」 |
 | AA-05 暂估成本 | `PARTIAL` | `COVERED` | 「AA-W6.5/6 暂估入库单与差异调整：差异走调整凭证，暂估金额不被改写」 |
 | AA-06 生产入库成本 | `PARTIAL` | `COVERED` | `production_cost_closings`（`product_cost_cents + variance_cents == wip_cents`，`variance_target` 显式）；「AA-W6.11/12 完工成本结转：金额守恒、差异去向显式并与 GL 一致」 |
-| **AA-07 委外成本** | `PARTIAL` | **`PARTIAL`（未闭合）** | **本域无实现**：§35.4.6 的 AA-W6 条款未包含 AA-07，本域模块无任何 `OUTSOURCE` 取数规则；委外成本口径当前由采购委外域 canonical 实现承担（`server/modules/outsourcing-finance.js` 读取 `backflush.valuation.issuedValueCents` + `outsourcing-gl-policy.js::resolveProcessingFeeAccountingProfile`，2026-11-11 域级 Acceptance 已冻结）。详见 §7.3 |
+| **AA-07 委外成本** | `PARTIAL` | `COVERED` | 委外成本口径 = 材料成本 + 加工费，由 **Procurement & Outsourcing 域**已冻结的 canonical 实现承担（材料成本读 `outsourcing-finance.js` 的 `backflush.valuation.issuedValueCents`；加工费读 `outsourcing-gl-policy.js::resolveProcessingFeeAccountingProfile`），本域按 §35.4.6 AA-W6.17～AA-W6.19 **只做权威事实引用**，不新增事实表、口径常量或第二条过账路径。业务所有者 2026-11-11 裁定选项 A，见 §7.3 |
 | AA-08 出库核算 / 成本调整 | `PARTIAL` | `COVERED` | `cost_adjustments` + 调整凭证 + 原因与授权人可追溯；「AA-W6.13/14 成本调整：生成凭证并可追溯原因与授权人」 |
 | AA-09 存货关账 | `PARTIAL` | `COVERED` | `GET /api/accounting/costing-close-checklist` 五类异常清单（估值↔GL 差异、`LEGACY_UNVALUED`、负库存/残值、暂估未结转、成本调整未过账）+ `systemHealth` 合并展示；「AA-W6.15/16」 |
 | AA-10 资产基础资料 | `PARTIAL` | `COVERED` | 资产类别 / 位置 / 折旧政策为独立实体，卡片引用而非内嵌文本；「AA-W5 · 资产类别、资产位置与折旧政策是独立实体，卡片引用而非内嵌文本」 |
@@ -282,12 +282,12 @@
 | AA-43 经营损益 | `MISSING` | `COVERED` | 经营损益与法定损益勾稽，差额显式列出（未分配 / 内部交易抵消 / 口径差异三段）；「AA-W7.9/10」 |
 | AA-44 经营会计关账 | `MISSING` | `COVERED` | 经营关账要求归集与分摊完成、法定期间先行、受控反结账；「AA-W7.11/12」 |
 
-### 7.3 唯一未解决矛盾：AA-07 委外成本
+### 7.3 已解决矛盾：AA-07 委外成本（业务所有者 2026-11-11 裁定选项 A）
 
 **事实**：
 
 1. `docs/requirements/accounting-analytics.md` §35.3 把 AA-07 的目标判定记为 `COVERED`，归属范围包 AA-W6；
-2. 但同一份 Requirement 的 §35.4.6（AA-W6 的可验收条款）**不含任何 AA-07 条款** —— AA-07 没有可实施、可测试的合同条款；
+2. 但同一份 Requirement 的 §35.4.6（AA-W6 的可验收条款）**原本不含任何 AA-07 条款** —— AA-07 没有可实施、可测试的合同条款；
 3. 本域 6 个后端模块与 7 个 migration 中**没有任何 `OUTSOURCE` 取数规则**；
 4. 委外成本口径当前由采购与委外域的 canonical 实现承担：材料成本取本域权威估值流水
    （`outsourcing-finance.js` 的 `backflush.valuation.issuedValueCents`），加工费取自
@@ -299,14 +299,20 @@
 按 AGENTS.md §4.4，实施阶段**不得**自行新增业务规则；按 §35.9 第 4 项，这属于
 「Capability 编号与真实业务关系不一致」的 Hard Stop。
 
-**待业务所有者裁定的两个选项**（**本轮未自行选择**）：
+**业务所有者裁定（2026-11-11）：选项 A** —— 委外成本口径由采购与委外域已冻结的 canonical 实现承担，
+本域只做权威事实引用。据此：
 
-| 选项 | 内容 | 影响 |
-|---|---|---|
-| **A** | 裁定 AA-07 由采购与委外域已冻结的 canonical 实现承担，本域只做**权威事实引用**；据此在 §35.4.6 补一条明示条款 | 复核结论变为 **43 `COVERED` + 1 `OUT_OF_SCOPE`**，与 §35.3 目标一致；不改代码 |
-| **B** | 在 §35.4.6 补一条条款，要求本域提供**只读**的委外成本构成投影（材料成本 + 加工费），事实来源仍是采购与委外域 | 需新增一条只读端点与测试；不新增业务事实、不改他域实现；复核结论同样变为 43 `COVERED` |
+- Requirement §35.4.6 补入 **AA-W6.17～AA-W6.19**，把该口径、只读边界与变更归属写成可验收条款；
+- Design §31.6.2 补入对应的**委外成本口径**不变量，并明确本域模块**不得**引入 `OUTSOURCE` 取数规则；
+- §35.3 的 AA-07 行改写为「由 Procurement & Outsourcing 域的 canonical 实现承担，本域只做权威事实引用」；
+- **不新增任何实现代码**：本域既无委外成本事实表，也无第二条委外加工费过账路径。
 
-无论选 A 或 B，**AA-07 的合同条款都必须先在 Requirement 层落定**，再进入 Implementation。
+**复核结论**：AA-07 由 `PARTIAL` 转为 **`COVERED`**，全域复核结论随之由
+「42 `COVERED` / 1 `PARTIAL` / 1 `OUT_OF_SCOPE`」变为 **「43 `COVERED` / 0 `PARTIAL` / 1 `OUT_OF_SCOPE`」**，
+与 §35.3 的目标判定一致。
+
+**未选择选项 B**：选项 B（由本域提供只读的委外成本构成投影）**未被采用**，因此本域**没有**新增
+委外成本只读端点。
 
 ---
 
@@ -315,4 +321,4 @@
 | 版本 | 日期 | 变更 | 基准 SHA |
 |---|---|---|---|
 | `v0.1` | 2026-11-10 | 首次域级审计：44 项 Capability 逐项取证与判定；登记 7 条领域级结构缺口；提出 7 个范围包建议 | `eee92c21751b9e6fa224125611750a4af4988591` |
-| `v0.2` | 2026-11-11 | AA-W1..AA-W7 实施后逐项复核：42 `COVERED` / 1 `PARTIAL`（AA-07）/ 1 `OUT_OF_SCOPE`；登记唯一未解决矛盾 AA-07 与两个待裁定选项；§2 实施前判定保留不变 | `d9e7319`（AA-W7 提交） |
+| `v0.2` | 2026-11-11 | AA-W1..AA-W7 实施后逐项复核：**43 `COVERED` / 0 `PARTIAL` / 1 `OUT_OF_SCOPE`**；AA-07 委外成本的合同缺位由业务所有者裁定（选项 A）闭合，补入 Requirement §35.4.6 AA-W6.17～AA-W6.19 与 Design §31.6.2；§2 实施前判定保留不变 | `d9e7319`（AA-W7 提交） |

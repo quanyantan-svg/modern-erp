@@ -12,7 +12,7 @@
 
 ```text
 ACCOUNTING_ANALYTICS_DOMAIN_ACCEPTANCE_CANDIDATE_READY_FOR_OWNER_DECISION
-（等待业务所有者对 §6 的 AA-07 裁定与 §7 的真实 MySQL Gate 授权作出决定）
+（AA-07 已由业务所有者 2026-11-11 裁定闭合；等待业务所有者签发域级 Acceptance 与 Capability Freeze）
 ```
 
 ## 1. 候签范围
@@ -22,7 +22,7 @@ ACCOUNTING_ANALYTICS_DOMAIN_ACCEPTANCE_CANDIDATE_READY_FOR_OWNER_DECISION
 | Domain | Accounting & Analytics（产品架构第 8 个业务域） |
 | 手册对标 | B3106 存货核算、B3107 固定资产、B3114 智能会计平台、B3115 总账、B3116 报表、B3117 经营会计 |
 | 能力集合 | AA-01..AA-44，共 **44 项** |
-| 覆盖判定 | `COVERED` **42** 项；`PARTIAL` **1** 项（**AA-07 委外成本**）；`MISSING` **0** 项；`OUT_OF_SCOPE` **1** 项（AA-31 汇兑损益 / 多币种，业务所有者 2026-11-10 裁定） |
+| 覆盖判定 | `COVERED` **43** 项；`PARTIAL` **0** 项；`MISSING` **0** 项；`OUT_OF_SCOPE` **1** 项（AA-31 汇兑损益 / 多币种，业务所有者 2026-11-10 裁定） |
 | 合同基线 | Requirement §35.1～§35.10；Design §31.0～§31.15 |
 | 实施批次 | AA-W1 + AA-W2（`3876bd3`）、AA-W5（`e40a015`）、AA-W3（`943414c`）、AA-W6（`5e6739d`）、AA-W4（`bc2035d`）、AA-W7（`d9e7319`）、前端工作面与共享断言收口（`9e1ddd4`、`7dc7766`） |
 | **不在本次范围** | Release Readiness、发布、部署、真实环境 migration、业务数据库写入、远端 Git 操作、手册级 Manual Closure、其他域的 Acceptance |
@@ -60,15 +60,16 @@ launcher 的「会计与分析」组由 8 项扩展为 **13 项**（新增上述
 
 | 手册 | Capability 数 | `COVERED` | `PARTIAL` | `MISSING` | `OUT_OF_SCOPE` |
 |---|---|---|---|---|---|
-| B3106 存货核算 | 9 | 8 | **1（AA-07）** | 0 | 0 |
+| B3106 存货核算 | 9 | 9 | 0 | 0 | 0 |
 | B3107 固定资产 | 8 | 8 | 0 | 0 | 0 |
 | B3114 智能会计平台 | 7 | 7 | 0 | 0 | 0 |
 | B3115 总账 | 8 | 7 | 0 | 0 | 1（AA-31） |
 | B3116 报表 | 6 | 6 | 0 | 0 | 0 |
 | B3117 经营会计 | 6 | 6 | 0 | 0 | 0 |
-| **合计** | **44** | **42** | **1** | **0** | **1** |
+| **合计** | **44** | **43** | **0** | **0** | **1** |
 
-**与 Requirement §35.3 目标判定的差异**：§35.3 记的目标是「43 `COVERED` + 1 `OUT_OF_SCOPE`」；实测为「**42 `COVERED` + 1 `PARTIAL` + 1 `OUT_OF_SCOPE`**」。唯一差额是 **AA-07**，处置见 §6。
+**与 Requirement §35.3 目标判定一致**：§35.3 记的目标是「43 `COVERED` + 1 `OUT_OF_SCOPE`」，实测与之相同。
+AA-07 的合同缺位已由业务所有者 2026-11-11 的裁定闭合（见 §6）。
 
 ## 4. Gate 证据
 
@@ -99,7 +100,7 @@ Requirement §35.8.1 第 6 项要求「真实 MySQL 8 路径完成 parity / conc
 
 **已披露限制**：在此之前，**不得**声称本域已通过真实 MySQL parity / concurrency 验收；`docs/status/CAPABILITY_MATRIX.md` 中本域五本手册的 `VERIFIED` 状态只依据本地可执行证据，不构成 MySQL 运行期验收结论。
 
-### 5.2 AA-07 委外成本未闭合（唯一 `PARTIAL`）
+### 5.2 AA-07 委外成本：已由业务所有者裁定闭合
 
 见 §6。
 
@@ -115,30 +116,35 @@ AA-W1..AA-W7 新增 20 项权限（227 → 247）、新增 5 个 route（74 → 
 
 Design §31.0.3 约定 5 个新 route 由单一页面承载；`accounting`（既有 `src/pages/accounting.jsx`）与 `decision-reports` 保持不变。**本轮未改造既有 `accounting.jsx`**：其中「未结转损益（虚拟行，不持久化）」的资产负债表展示行仍保留，尽管 AA-W3 已实现真实损益结转并从结转链移除虚拟权益行补偿。该展示行与真实结转事实的一致性未在本轮取得浏览器取证，登记为**残余事实**。
 
-### 5.6 委外成本口径的跨域归属未在本域固化
+### 5.6 委外成本口径的跨域归属（已裁定，符合合同）
 
-AA-07 的实现位于采购与委外域（该域已于 2026-11-11 签发域级 Acceptance 与 Capability Freeze）。本域**未**新增第二套委外成本事实表或第二套过账路径，符合 Requirement §35.2 第 2 条「不夺取他域的业务事实」。
+AA-07 的实现位于采购与委外域（该域已于 2026-11-11 签发域级 Acceptance 与 Capability Freeze）。本域**未**新增第二套委外成本事实表、口径常量或第二套过账路径，符合 Requirement §35.2 第 2 条「不夺取他域的业务事实」与 §35.4.6 AA-W6.18～AA-W6.19 的禁止条款。该边界已由 §31.6.2 的 Design 不变量与审计台账 §7.3 固定。
 
-## 6. 待业务所有者裁定：AA-07 委外成本
+## 6. 已裁定：AA-07 委外成本（业务所有者 2026-11-11，选项 A）
 
-**事实**：
+**发现的问题**：
 
 1. Requirement §35.3 把 AA-07 目标判定记为 `COVERED`，归属范围包 AA-W6；
-2. 但 §35.4.6（AA-W6 的可验收条款）**不含任何 AA-07 条款** —— AA-07 没有可实施、可测试的合同条款；
+2. 但 §35.4.6（AA-W6 的可验收条款）**原本不含任何 AA-07 条款** —— AA-07 没有可实施、可测试的合同条款；
 3. 本域 6 个后端模块与 7 个 migration 中**没有任何 `OUTSOURCE` 取数规则**；
 4. 委外成本口径当前由采购与委外域承担：材料成本取自本域权威估值流水（`outsourcing-finance.js` 的 `backflush.valuation.issuedValueCents`），加工费取自 `outsourcing-gl-policy.js::resolveProcessingFeeAccountingProfile` 解析的会计档案；
 5. §35.2 第 2 条同时要求本域的委外成本来源必须是采购与委外域的**权威事实引用**。
 
 **矛盾**：§35.3 要求「在本域固化取数规则」，§35.4.6 没有该规则，§35.2 又禁止本域另立事实。这属 AGENTS.md §35.9 第 4 项 Hard Stop（Capability 编号与真实业务关系不一致）。
 
-**两个选项**（**本轮未自行选择**）：
+**业务所有者裁定（2026-11-11）：选项 A** —— 委外成本口径由采购与委外域已冻结的 canonical 实现承担，
+本域只做权威事实引用。落地：
 
-| 选项 | 内容 | 后果 |
-|---|---|---|
-| **A** | 裁定 AA-07 由采购与委外域已冻结的 canonical 实现承担，本域只做权威事实引用；在 §35.4.6 补一条明示条款 | 复核结论变为 **43 `COVERED` + 1 `OUT_OF_SCOPE`**，与 §35.3 目标一致；**不改任何代码**；B3106 状态由 `BLOCKED` 转为 `VERIFIED` |
-| **B** | 在 §35.4.6 补一条条款，要求本域提供**只读**的委外成本构成投影（材料成本 + 加工费），事实来源仍是采购与委外域 | 需新增一条只读端点与测试；不新增业务事实、不改他域实现；复核结论同样变为 43 `COVERED`；B3106 状态转为 `VERIFIED` |
+| 项 | 落地内容 |
+|---|---|
+| Requirement §35.4.6 | 补入 **AA-W6.17～AA-W6.19**：口径归属、只读边界、变更归属与禁止条款 |
+| Design §31.6.2 | 补入**委外成本口径**不变量，明确本域模块**不得**引入 `OUTSOURCE` 取数规则 |
+| Requirement §35.3 | AA-07 行改写为「由 Procurement & Outsourcing 域的 canonical 实现承担，本域只做权威事实引用」 |
+| 实现代码 | **未新增任何代码** —— 本域既无委外成本事实表，也无第二条委外加工费过账路径 |
+| 选项 B | **未被采用**：本域**没有**新增委外成本只读端点 |
 
-无论选 A 或 B，**AA-07 的合同条款都必须先在 Requirement 层落定**，再进入 Implementation。
+**后果**：AA-07 由 `PARTIAL` 转为 `COVERED`，全域复核结论为 **43 `COVERED` / 0 `PARTIAL` / 1 `OUT_OF_SCOPE`**，
+与 §35.3 目标一致；`docs/status/CAPABILITY_MATRIX.md` 中 B3106 由 `BLOCKED` 转为 `VERIFIED`。
 
 ## 7. 待业务所有者授权：真实 MySQL Gate
 

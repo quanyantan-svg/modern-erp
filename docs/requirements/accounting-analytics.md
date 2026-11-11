@@ -82,7 +82,7 @@
 | AA-04 | 采购费用分配 | MISSING | COVERED | AA-W6 | 运费等采购费用必须可归集、按规则分摊到存货价值，并形成可审计的分摊结果 |
 | AA-05 | 暂估成本 | PARTIAL | COVERED | AA-W6 | 暂估入库必须有独立单据与暂估→正式差异调整凭证，形成完整闭环 |
 | AA-06 | 生产入库成本 | PARTIAL | COVERED | AA-W6 | WIP→成品成本结转必须含差异分配（损耗 / 良率），并与 GL 一致 |
-| AA-07 | 委外成本 | PARTIAL | COVERED | AA-W6 | 委外成本口径 = 材料成本 + 加工费必须在本域固化取数规则，且不与采购域争夺业务事实所有权 |
+| AA-07 | 委外成本 | PARTIAL | COVERED | AA-W6 | 委外成本口径 = 材料成本 + 加工费由 Procurement & Outsourcing 域的 canonical 实现承担，本域只做**权威事实引用**（§35.4.6 AA-W6.17～AA-W6.19；业务所有者 2026-11-11 裁定选项 A） |
 | AA-08 | 出库核算 / 成本调整 | PARTIAL | COVERED | AA-W6 | 必须存在受控的成本调整机制（重估 / 差异调整 / 盘盈亏成本回冲）并生成会计凭证 |
 | AA-09 | 存货关账 | PARTIAL | COVERED | AA-W6 | 核算关闭必须有完整异常检查清单与差异解释，且与库存月结保持既定先后顺序 |
 | AA-10 | 资产基础资料 | PARTIAL | COVERED | AA-W5 | 资产类别 / 位置 / 状态 / 折旧政策必须是字典与政策实体，不得为自由文本 |
@@ -356,6 +356,19 @@
 - AA-W6.11 WIP → 成品成本结转必须包含差异分配（损耗 / 良率差异），差异去向必须显式。
 - AA-W6.12 结转后成品成本与 GL 存货科目必须一致。
 
+**AA-07 委外成本**（业务所有者 2026-11-11 裁定：**选项 A**）
+
+- AA-W6.17 委外成本口径 = **材料成本 + 加工费**，其 canonical 实现由 **Procurement & Outsourcing 域**承担
+  （材料成本取本域权威估值流水 `inventory_valuation_movements` 的倒冲材料价值，加工费取
+  `outsourcing-gl-policy.js::resolveProcessingFeeAccountingProfile` 解析的会计档案）；
+  该域已于 2026-11-11 签发域级 Acceptance 与 Capability Freeze。
+- AA-W6.18 本域**只做权威事实引用**（§35.2 第 2 条）：不得新增第二套委外成本事实表、委外成本口径常量
+  或第二条委外加工费过账路径；本域的取数只能读采购与委外域的 canonical 结果。
+- AA-W6.19 本域**不得**改写委外成本口径；口径变更属于 Procurement & Outsourcing 域的合同变更，
+  须先走该域的 Requirement / Design 层。
+- **禁止**：不得以「本域固化取数规则」为由在 Accounting & Analytics 域复制委外成本口径；
+  §35.3 对 AA-07 的目标判定 `COVERED` 即由本组条款以**跨域权威引用**方式满足。
+
 **AA-08 出库核算 / 成本调整**
 
 - AA-W6.13 必须存在受控成本调整机制：重估、差异调整、盘盈亏成本回冲。
@@ -536,11 +549,15 @@ Accounting & Analytics 域级 Acceptance 必须同时满足：
 | Manual Closure | 未闭合 |
 | Release Readiness | 未就绪 |
 
-**未解决矛盾（须随验收一并处置）**：`AA-07 委外成本` 在 §35.3 记为目标 `COVERED` 并归属 AA-W6，
-但 §35.4.6 的 AA-W6 条款**不含 AA-07**，本域亦无 `OUTSOURCE` 取数规则 —— 属 AGENTS.md §35.9 第 4 项
-Hard Stop。逐项复核结论因此为 **42 `COVERED` / 1 `PARTIAL`（AA-07）/ 1 `OUT_OF_SCOPE`（AA-31）**，
-而非 §35.3 的 43 + 1。裁定选项见
+**已解决的矛盾**：`AA-07 委外成本` 原在 §35.3 记为目标 `COVERED` 并归属 AA-W6，但 §35.4.6 缺 AA-07 条款
+（AGENTS.md §35.9 第 4 项 Hard Stop）。业务所有者 **2026-11-11 裁定选项 A**：委外成本口径由
+Procurement & Outsourcing 域已冻结的 canonical 实现承担，本域只做权威事实引用；据此已在
+**§35.4.6 补 AA-W6.17～AA-W6.19**。逐项复核结论随之为 **43 `COVERED` / 0 `PARTIAL` /
+1 `OUT_OF_SCOPE`（AA-31）**，与 §35.3 目标一致。裁定过程见
 [`docs/audits/accounting-analytics-capability-audit-20261110.md`](../audits/accounting-analytics-capability-audit-20261110.md) §7.3。
+
+**仍未闭合**：Requirement §35.8.1 第 6 项的真实 MySQL 8 parity / concurrency 尚未运行
+（见 `docs/acceptance/accounting-analytics-domain-acceptance-candidate-20261111.md` §7）。
 
 ---
 

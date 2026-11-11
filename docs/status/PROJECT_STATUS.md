@@ -4098,12 +4098,13 @@ M0 验收后，**后续业务包的启动仍需各自的显式授权**；W11-A �
 
 对比 Requirement §35.3 的目标判定（43 `COVERED` + 1 `OUT_OF_SCOPE`），唯一差额是 **AA-07 委外成本**。
 
-### 52.4 唯一未解决矛盾：AA-07 委外成本
+### 52.4 已解决的矛盾：AA-07 委外成本（业务所有者 2026-11-11 裁定选项 A）
 
-- §35.3 把 AA-07 记为目标 `COVERED` 并归属 AA-W6；但 §35.4.6（AA-W6 的可验收条款）**不含任何 AA-07 条款**，本域 6 个后端模块与 7 个 migration 中**没有任何 `OUTSOURCE` 取数规则**；
-- 委外成本口径当前由采购与委外域的 canonical 实现承担（材料成本取本域权威估值流水 `outsourcing-finance.js` 的 `backflush.valuation.issuedValueCents`；加工费取 `outsourcing-gl-policy.js::resolveProcessingFeeAccountingProfile` 解析的会计档案），该域已于 2026-11-11 签发域级 Acceptance 与 Capability Freeze；
-- §35.2 第 2 条同时要求本域的委外成本来源必须是采购与委外域的**权威事实引用**；
-- 判定：属 AGENTS.md §35.9 第 4 项 Hard Stop（Capability 编号与真实业务关系不一致），**本轮未自行裁定、未自行实现**。两个待裁定选项（A：裁定由采购与委外域已冻结实现承担并补明示条款；B：补条款要求本域提供只读委外成本构成投影）见候签材料 §6。
+- §35.3 把 AA-07 记为目标 `COVERED` 并归属 AA-W6；但 §35.4.6（AA-W6 的可验收条款）**原本不含任何 AA-07 条款**，本域 6 个后端模块与 7 个 migration 中**没有任何 `OUTSOURCE` 取数规则** —— 属 AGENTS.md §35.9 第 4 项 Hard Stop；
+- 委外成本口径实际由采购与委外域的 canonical 实现承担（材料成本取本域权威估值流水 `outsourcing-finance.js` 的 `backflush.valuation.issuedValueCents`；加工费取 `outsourcing-gl-policy.js::resolveProcessingFeeAccountingProfile` 解析的会计档案），该域已于 2026-11-11 签发域级 Acceptance 与 Capability Freeze；§35.2 第 2 条要求本域只做权威事实引用；
+- **业务所有者裁定（选项 A）**：委外成本口径由采购与委外域已冻结的 canonical 实现承担，本域只做权威事实引用；
+- 落地：Requirement §35.4.6 补入 **AA-W6.17～AA-W6.19**（口径归属 / 只读边界 / 变更归属 / 禁止条款），Design §31.6.2 补入**委外成本口径**不变量，§35.3 的 AA-07 行改写为跨域权威引用口径；
+- **未新增任何实现代码**：本域既无委外成本事实表，也无委外成本口径常量或第二条委外加工费过账路径；选项 B（只读投影）未被采用。
 
 ### 52.5 Gate 结果（本地，2026-11-11）
 
@@ -4126,23 +4127,24 @@ M0 验收后，**后续业务包的启动仍需各自的显式授权**；W11-A �
 ### 52.6 必须随验收一并接受的残余
 
 1. **真实 MySQL Gate 未运行**：Requirement §35.8.1 第 6 项未闭合。离线 DDL 对等**不等于**真实 MySQL 验收——不连接 MySQL、不执行 MySQL migration、不覆盖并发行为。
-2. **AA-07 未闭合**：见 §52.4。
+2. **AA-07 已闭合**：业务所有者 2026-11-11 裁定选项 A，Requirement §35.4.6 补入 AA-W6.17～AA-W6.19、Design §31.6.2 补入口径不变量；**未新增实现代码**。见 §52.4。
 3. **试算平衡科目集合由 21 增至 27**：AA-W3 的 `4103` 与 AA-W5 的 `1601` / `1602` / `6602` / `6603` 入列；既有损益表与资产负债表口径不变。
 4. **既有 `accounting.jsx` 未改造**：其中「未结转损益（虚拟行，不持久化）」的资产负债表展示行仍保留，尽管 AA-W3 已实现真实损益结转并从结转链移除虚拟权益行补偿；该展示行与真实结转事实的一致性**未取得浏览器取证**。
 5. **冻结的 V1.6 历史证据未改写**：`docs/v1.6-sitewide-rollout-matrix.md` 保持不变，新增 route 按既有 `laterSalesRoutes` 机制登记。
 
 ### 52.7 文档与状态登记
 
-- 新增 `docs/acceptance/accounting-analytics-domain-acceptance-candidate-20261111.md`：域级 Acceptance 与 Capability Freeze **候签**材料，含 Gate 证据、披露限制与两项待裁定事项。
-- 更新 `docs/requirements/accounting-analytics.md` §35.10 与 `docs/design/accounting-analytics.md` §31.15：生命周期状态推进到 `IMPLEMENTED`，登记 AA-07 矛盾与实施偏离。
-- 更新 `docs/audits/accounting-analytics-capability-audit-20261110.md`：新增 §7 实施后逐项复核（42 `COVERED` / 1 `PARTIAL` / 1 `OUT_OF_SCOPE`）与 §7.3 AA-07 矛盾；§2 实施前判定保留不变。
-- 更新 `docs/status/CAPABILITY_MATRIX.md`：B3107 / B3114 / B3115 / B3116 / B3117 记 `VERIFIED`；**B3106 记 `BLOCKED`**（AA-07 未闭合）。
+- 新增 `docs/acceptance/accounting-analytics-domain-acceptance-candidate-20261111.md`：域级 Acceptance 与 Capability Freeze **候签**材料，含 Gate 证据、披露限制与剩余待办。
+- 更新 `docs/requirements/accounting-analytics.md`：§35.3 的 AA-07 行改写为跨域权威引用口径；**§35.4.6 补入 AA-W6.17～AA-W6.19**；§35.10 登记 AA-07 已闭合与真实 MySQL Gate 仍未闭合。
+- 更新 `docs/design/accounting-analytics.md`：§31.6.2 补入**委外成本口径**不变量；§31.15 登记已实施状态与实施偏离。
+- 更新 `docs/audits/accounting-analytics-capability-audit-20261110.md`：新增 §7 实施后逐项复核（**43 `COVERED` / 0 `PARTIAL` / 1 `OUT_OF_SCOPE`**）与 §7.3 AA-07 裁定记录；§2 实施前判定保留不变。
+- 更新 `docs/status/CAPABILITY_MATRIX.md`：B3106 / B3107 / B3114 / B3115 / B3116 / B3117 **六本手册全部记 `VERIFIED`**。
 - 追加 `log/2026-11-11.md`。
 
 ### 52.8 未解决事项与暂停点
 
 - **域级 Acceptance 与 Capability Freeze 尚未签发**：本节只登记证据与残余，不代替业务所有者签字。
-- 待业务所有者裁定：**AA-07**（选项 A / B）；**真实 MySQL Gate**（授权本域 ACK-4 campaign，或接受离线对等证据并把真实 MySQL Gate 登记为域级 Acceptance 的后续条件）。
+- **真实 MySQL Gate 未运行**（Requirement §35.8.1 第 6 项）：业务所有者已于 2026-11-11 授权本域 ACK-4 campaign，本轮正在建立该 campaign 的 ACK-4 清单与 gate 脚本；在真实运行与清理证明产出前，该项**不得**记为已通过。
 - **Manual Closure 未签发**：B3106 / B3107 / B3114–B3117 手册级关闭是独立决定。
 - **Release Readiness 未签发**：本域的 Acceptance 与 Freeze **不**构成任何 Domain 的发布授权。
-- 本轮**未**执行真实环境 migration、业务数据库写入、真实 MySQL Gate、push / merge / tag / 发布 / 部署；**未**把 AA-07 宣称为已覆盖；**未**代替业务所有者签发 Acceptance 或 Freeze。
+- 本轮**未**执行真实环境 migration、业务数据库写入、真实 MySQL Gate、push / merge / tag / 发布 / 部署；**未**代替业务所有者签发 Acceptance 或 Freeze。

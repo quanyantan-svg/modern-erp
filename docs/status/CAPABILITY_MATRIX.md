@@ -32,7 +32,7 @@
 | B3103 | 信用管理 | Sales & Customer | [`sales-customer/01-domain-closure.md` §34.8](../requirements/sales-customer/01-domain-closure.md) + [`03-wave-9-amendments.md`](../requirements/sales-customer/03-wave-9-amendments.md)（SC82–SC107）· CAP-28..36 | [`sales-customer/04-wave-9-credit-baseline.md` §36](../design/sales-customer/04-wave-9-credit-baseline.md) + [`05-wave-11-stage-c.md` §37.54](../design/sales-customer/05-wave-11-stage-c.md) | Wave 9 / Gate A / Wave 10 已冻结；W11-SEC-01 与 W11-A U1/U2/U3 单元级已冻结；**W11-A 整包未签发** | `HISTORICAL_EVIDENCE` |
 | B3104 | 库存管理 | Inventory & Warehouse | [`inventory-warehouse.md` §32.3](../requirements/inventory-warehouse.md) · INV-01..38 | [`inventory-warehouse.md` §27](../design/inventory-warehouse.md) | 实现 Partial；**未见独立 Domain-Level Acceptance** | `HISTORICAL_EVIDENCE` |
 | B3105 | 条码管理 | Inventory & Warehouse / Manufacturing & Quality | [`inventory-warehouse.md` §32.3](../requirements/inventory-warehouse.md) · INV-39..44 | [`inventory-warehouse.md` §27](../design/inventory-warehouse.md) | 解析/校验/规则与绑定 CRUD 已有；生成、标签打印与 PDA 执行层 `NOT_STARTED` | `PARTIAL / UNVERIFIED` |
-| B3106 | 存货核算 | Accounting & Analytics | [`accounting-analytics.md` §35](../requirements/accounting-analytics.md) · AA-01..AA-09 | [`accounting-analytics.md` §31.6](../design/accounting-analytics.md) | AA-W6 已实施：`accounting_scopes` / `product_costing_profiles` / `provisional_receipts` / `purchase_expenses` / `cost_adjustments` / `production_cost_closings` + 核算关账异常清单；`AA-W6` 专项测试 **PASS**。**逐项复核 8 `COVERED` + 1 `PARTIAL`** —— **AA-07 委外成本未闭合**：§35.4.6 无 AA-07 条款、本域无 `OUTSOURCE` 取数规则，口径现由采购与委外域已冻结实现承担，待业务所有者裁定（[审计台账 §7.3](../audits/accounting-analytics-capability-audit-20261110.md)） | `BLOCKED` |
+| B3106 | 存货核算 | Accounting & Analytics | [`accounting-analytics.md` §35](../requirements/accounting-analytics.md) · AA-01..AA-09 | [`accounting-analytics.md` §31.6](../design/accounting-analytics.md) | AA-W6 已实施：`accounting_scopes` / `product_costing_profiles` / `provisional_receipts` / `purchase_expenses` / `cost_adjustments` / `production_cost_closings` + 核算关账异常清单；`AA-W6` 专项测试 **PASS**。**逐项复核 9 `COVERED` / 0 `PARTIAL`** —— AA-07 委外成本的口径由采购与委外域已冻结的 canonical 实现承担，本域按 §35.4.6 AA-W6.17～AA-W6.19 只做权威事实引用（业务所有者 2026-11-11 裁定选项 A，见[审计台账 §7.3](../audits/accounting-analytics-capability-audit-20261110.md)） | `VERIFIED` |
 | B3107 | 固定资产 | Accounting & Analytics | [`accounting-analytics.md` §35](../requirements/accounting-analytics.md) · AA-10..AA-17 | [`accounting-analytics.md` §31.5](../design/accounting-analytics.md) | AA-W5 已实施：资产类型 / 位置 / 折旧政策独立实体、资产卡片生命周期、采购转固、受控变更单、拆分合并、借用盘点、**按政策自动计提折旧并生成凭证**、受控处置；route `fixed-assets` 已 enabled 并进入 launcher；`AA-W5` 专项测试 **PASS**。**逐项复核 8 `COVERED` / 0 `PARTIAL`** | `VERIFIED` |
 | B3108 | 应付款-业务应付 | Finance Operations | [`finance-operations.md` §33.5 + §33.2](../requirements/finance-operations.md) · FO01..FO58 | [`finance-operations.md` §28](../design/finance-operations.md) | 实现完成；**未见独立 Domain-Level Acceptance** | `HISTORICAL_EVIDENCE` |
 | B3109 | 应付款-暂估应付 | Finance Operations | 同上 | 同上 | 同上 | `HISTORICAL_EVIDENCE` |
@@ -115,10 +115,10 @@
 1. **Accounting & Analytics（B3106、B3107、B3114–B3117）** 已于 2026-11-10 建立 Domain Closure
    Requirement（[`accounting-analytics.md` §35](../requirements/accounting-analytics.md)）与 Domain Technical
    Design（[`accounting-analytics.md` §31](../design/accounting-analytics.md)），并于 2026-11-11 完成
-   AA-W1..AA-W7 全部七个范围包的实施与逐项复核：六本手册共 44 项 Capability，**42 `COVERED`**、
-   **1 `PARTIAL`（AA-07 委外成本）**、**1 `OUT_OF_SCOPE`（AA-31 汇兑损益 / 多币种）**。
-   B3107 / B3114 / B3115 / B3116 / B3117 据此记 `VERIFIED`；**B3106 记 `BLOCKED`** —— AA-07 的
-   合同条款缺位且本域无实现，属 AGENTS.md §35.9 第 4 项 Hard Stop，待业务所有者裁定。
+   AA-W1..AA-W7 全部七个范围包的实施与逐项复核：六本手册共 44 项 Capability，**43 `COVERED`**、
+   **0 `PARTIAL`**、**1 `OUT_OF_SCOPE`（AA-31 汇兑损益 / 多币种）**。
+   六本手册据此全部记 `VERIFIED`（AA-07 委外成本的口径由采购与委外域已冻结的 canonical 实现承担，
+   本域按 §35.4.6 AA-W6.17～AA-W6.19 只做权威事实引用 —— 业务所有者 2026-11-11 裁定选项 A）。
    域级 Acceptance 与 Capability Freeze **尚未签发**，详见
    [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) 与
    [审计台账 §7](../audits/accounting-analytics-capability-audit-20261110.md)。
