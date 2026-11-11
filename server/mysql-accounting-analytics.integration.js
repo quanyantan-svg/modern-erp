@@ -177,6 +177,13 @@ describe('Accounting & Analytics — 真实 MySQL 8 域级验收', () => {
     const literalQuery = db.prepare("SELECT COLUMN_DEFAULT column_default FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='fixed_assets' AND COLUMN_NAME='unit'").get();
     const literalText = String(literalQuery?.column_default ?? '');
     console.log('AA_PARITY_LITERAL_DEFAULT', JSON.stringify(literalText), [...literalText].map((c) => c.codePointAt(0).toString(16)).join(' '));
+    const { canonicalDefault, canonicalSqliteDefault } = await import('./test-utils/m1-core-schema-parity.js');
+    const sqliteUnitColumn = snapshot.tables.find((t) => t.name === 'fixed_assets').columns.find((c) => c.name === 'unit');
+    const sqliteCanonical = canonicalSqliteDefault(sqliteUnitColumn?.dflt_value);
+    const mysqlCanonical = canonicalDefault(contractUnit?.column_default, { catalogue: true, extra: contractUnit?.extra, numeric: false });
+    console.log('AA_PARITY_CANON_SQLITE', JSON.stringify(sqliteCanonical), [...sqliteCanonical].map((c) => c.codePointAt(0).toString(16)).join(' '));
+    console.log('AA_PARITY_CANON_MYSQL', JSON.stringify(mysqlCanonical), [...mysqlCanonical].map((c) => c.codePointAt(0).toString(16)).join(' '));
+    console.log('AA_PARITY_CANON_EQUAL', sqliteCanonical === mysqlCanonical);
     const result = assertM1CoreInformationSchemaParity(db, snapshot, AA_PARITY_TABLES);
     assert.equal(result.source, 'information_schema');
     assert.equal(result.status, 'MATCHED');
