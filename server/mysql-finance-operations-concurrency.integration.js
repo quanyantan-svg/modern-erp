@@ -24,6 +24,23 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createTempDb } from './test-utils/temp-db.js';
+
+// The lifecycle used when the suite runs inside the Finance Operations ACK-4
+// campaign: the disposable target is already bootstrapped and the schema drop
+// belongs to the Root's CLEANUP_SCHEMA_POST_RUN child.
+const financeGateLifecycle = {
+  beforeCreate(config) {
+    if (!/(?:test|phase7|disposable)/i.test(String(config?.database || ''))) {
+      throw new Error(`FINANCE RACE SUITE REFUSED: ${config?.database} is not a disposable target`);
+    }
+  },
+  verify(db) {
+    if (db.dialect !== 'mysql') throw new Error(`FINANCE RACE SUITE REFUSED: dialect=${db.dialect}`);
+  },
+  reset() {
+    // The Root's CLEANUP_SCHEMA_POST_RUN child owns the schema drop.
+  },
+};
 import { MySqlSyncAdapter } from './database/mysql-adapter.js';
 import { resolveDatabaseConfig } from './database/config.js';
 import { applyTreasuryMovement } from './modules/finance-treasury-movement.js';
@@ -185,7 +202,15 @@ describe('V22 Finance Operations real MySQL race matrix (15 races)', () => {
   }
 
   before(() => {
-    mysql = createTempDb({ label: 'mysql-finance-operations-races', production: true });
+    // Inside a protected ACK-4 campaign the schema is already bootstrapped by
+    // the Root's BOOTSTRAP_CURRENT_SCHEMA child, and the schema drop belongs
+    // to the Root's CLEANUP_SCHEMA_POST_RUN child. The suite therefore runs
+    // with a lifecycle that does not drop the schema itself.
+    mysql = createTempDb({
+      label: 'mysql-finance-operations-races',
+      production: true,
+      mysqlLifecycle: process.env.ERP_FINANCE_MYSQL_GATE === '1' ? financeGateLifecycle : null,
+    });
     db = mysql.db;
     if (db.dialect !== 'mysql') {
       throw new Error(

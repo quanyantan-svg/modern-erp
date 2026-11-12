@@ -11,10 +11,11 @@
 // 真实 MySQL 上实证；SQLite-only evidence 不计入）。
 
 import { existsSync, readFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
+import { run } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { consumePortableChildLease } from './ack4/ack4-runtime.mjs';
+import { emitNodeTestTap } from './m1-core-g07-suite-reporter.mjs';
 
 const RACE_SUITE = 'server/mysql-finance-operations-concurrency.integration.js';
 
@@ -93,12 +94,13 @@ async function databaseOperation(operation) {
  */
 async function raceProcess() {
   await consume('RUN_FINANCE_RACES');
-  const child = spawnSync(process.execPath, ['--test', '--test-concurrency=1', RACE_SUITE], {
-    cwd: resolve('.'), env: { ...process.env }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  if (child.stdout) process.stdout.write(child.stdout);
-  if (child.stderr) process.stderr.write(child.stderr);
-  process.exitCode = child.status === 0 ? 0 : (child.status ?? 1);
+  // The suite must run INSIDE this process: the ACK-4 portable child lease
+  // is bound to this pid, and the suite's MySQL writes are only permitted
+  // under that lease.
+  process.env.ERP_FINANCE_MYSQL_GATE = '1';
+  const stream = run({ files: [resolve(RACE_SUITE)], isolation: 'none' });
+  const { failed } = await emitNodeTestTap(stream);
+  if (failed) process.exitCode = 1;
 }
 
 /**
