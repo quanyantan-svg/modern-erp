@@ -136,7 +136,7 @@ describe('V23 Manufacturing & Quality real MySQL concurrency matrix (4 races)', 
     db.prepare(`INSERT INTO suppliers(id,code,name,contact,phone,address,email,active,payment_terms_days,created_at,updated_at)
       VALUES(?,?,?,'','','','',1,0,?,?)`).run(supplierId, `MQR-S-${suffix}`, '竞态供应商', stamp, stamp);
     db.prepare(`INSERT INTO boms(id,product_id,version,status,purpose,approval_status,remark,creator_id,created_at,updated_at)
-      VALUES(?,?,?,'ACTIVE','SELF_MAKE','APPROVED','',ACTOR_ID,?,?)`).run(`mq-race-bom-${suffix}`, productId, '1.0', stamp, stamp);
+      VALUES(?,?,?,'ACTIVE','SELF_MAKE','APPROVED','${ACTOR_ID}',?,?)`).run(`mq-race-bom-${suffix}`, productId, '1.0', stamp, stamp);
     db.prepare(`INSERT INTO bom_items(id,bom_id,product_id,quantity,scrap_rate,line_no,uom_code_snapshot,conversion_numerator,conversion_denominator)
       VALUES(?,?,?,?,0,1,'件',1,1)`).run(`mq-race-bomi-${suffix}`, `mq-race-bom-${suffix}`, componentId, 2);
     db.prepare(`INSERT INTO product_routings(id,product_id,routing_code,routing_name,version,status,notes,created_at,updated_at)
@@ -155,7 +155,7 @@ describe('V23 Manufacturing & Quality real MySQL concurrency matrix (4 races)', 
     const stamp = now();
     const orderId = `mq-race-order-${scenario.suffix}`;
     db.prepare(`INSERT INTO production_orders(id,order_no,product_id,quantity,status,remark,creator_id,created_at,updated_at,source_type,material_list_status)
-      VALUES(?,?,?,10,?,'',ACTOR_ID,?,?,'MANUAL',?)`)
+      VALUES(?,?,?,10,?,'','${ACTOR_ID}',?,?,'MANUAL',?)`)
       .run(orderId, `MO-MQR-${scenario.suffix}`, scenario.productId, status, stamp, stamp, 'CONTROLLED_EDIT');
     const itemId = `mq-race-item-${scenario.suffix}`;
     db.prepare(`INSERT INTO production_order_items(id,order_id,product_id,quantity,consumed_quantity,line_no,bom_item_id,quantity_per_unit,scrap_rate_snapshot,material_list_status)
@@ -290,7 +290,7 @@ describe('V23 Manufacturing & Quality real MySQL concurrency matrix (4 races)', 
     // The source operation has released exactly one unit.
     const reportId = `mq-race-report-${scenario.suffix}`;
     db.prepare(`INSERT INTO production_operation_reports(id,report_no,production_order_id,production_operation_id,business_date,good_quantity,scrap_quantity,labor_seconds,machine_seconds,status,released_quantity,operator_id,created_at,updated_at)
-      VALUES(?,?,?,?,'2026-11-01',1,0,0,0,'CONFIRMED',1,ACTOR_ID,?,?)`)
+      VALUES(?,?,?,?,'2026-11-01',1,0,0,0,'CONFIRMED',1,'${ACTOR_ID}',?,?)`)
       .run(reportId, `MQR-OR-${scenario.suffix}`, orderId, sourceId, stamp, stamp);
 
     const results = await raceTwo([
