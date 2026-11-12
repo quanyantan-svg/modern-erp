@@ -276,7 +276,11 @@
 
   .v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .table-wrap tr {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    /* The second track was `auto`, which is sized by max-content: a single
+       long document code took the whole row and collapsed the other column
+       to zero width, so the document number was in the text but unreadable.
+       Two flexible tracks let the content wrap instead. */
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 6px var(--v16-space-3);
     width: 100%;
     min-width: 0;

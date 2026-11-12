@@ -149,7 +149,9 @@ describe('V23 Manufacturing & Quality real MySQL concurrency matrix (4 races)', 
     db.prepare(`INSERT INTO product_routing_operations(id,routing_id,sequence_no,operation_code,operation_name,work_center,setup_minutes,run_minutes_per_unit,notes,created_at,updated_at,active,is_outsource,quality_policy,topology)
       VALUES(?,?,2,'OP20','检验工序','WC1',0,1,'',?,?,1,0,'NONE','LINEAR')`).run(`mq-race-op2-${suffix}`, routingId, stamp, stamp);
     db.prepare(`INSERT INTO inventory(warehouse_id,product_id,quantity,updated_at) VALUES(?,?,100,?)`).run(warehouseId, componentId, stamp);
-    return { suffix, productId, componentId, warehouseId, supplierId };
+    db.prepare(`INSERT INTO production_order_routing_snapshots(id,production_order_id,routing_id,sequence_no,operation_code,operation_name,work_center,setup_minutes,run_minutes_per_unit,notes,created_at)
+      VALUES(?,?,?,1,'OP10','装配工序','WC1',0,1,'',?)`).run(`mq-race-snapshot-${suffix}`, `mq-race-unused-${suffix}`, routingId, stamp);
+    return { suffix, productId, componentId, warehouseId, supplierId, routingId, snapshotId: `mq-race-snapshot-${suffix}` };
   }
 
   /** A production order in the state the scenario needs, with its items. */
@@ -253,7 +255,7 @@ describe('V23 Manufacturing & Quality real MySQL concurrency matrix (4 races)', 
     const operationId = `mq-race-operation-${scenario.suffix}`;
     db.prepare(`INSERT INTO production_order_operations(id,production_order_id,routing_snapshot_id,sequence_no,operation_code,operation_name,work_center_code,work_center_name,setup_seconds,run_seconds_per_unit,expected_yield_bps,labor_rate_cents_per_hour,overhead_rate_cents_per_hour,daily_capacity_minutes,planned_input_quantity,status,created_at,updated_at,plan_status,control_code,control_participates_scheduling,control_reporting_method,control_inspection_method,is_outsource,quality_policy,topology,topology_meta)
       VALUES(?,?,?,1,'OP10','装配工序','WC1','竞态工作中心',0,1,10000,0,0,480,10,'NOT_STARTED',?,?,'NOT_STARTED','',1,'MANUAL','NONE',1,'NONE','LINEAR','{}')`)
-      .run(operationId, orderId, `mq-race-snapshot-${scenario.suffix}`, stamp, stamp);
+      .run(operationId, orderId, scenario.snapshotId, stamp, stamp);
     const results = await raceTwo([
       { action: 'outsource-handoff', payload: { operationId, supplierId: scenario.supplierId } },
       { action: 'outsource-handoff', payload: { operationId, supplierId: scenario.supplierId } },
@@ -275,8 +277,7 @@ describe('V23 Manufacturing & Quality real MySQL concurrency matrix (4 races)', 
     const { orderId } = seedOrder(scenario, { status: 'IN_PROGRESS' });
     const stamp = now();
     const snapshotId = `mq-race-snapshot-${scenario.suffix}`;
-    db.prepare(`INSERT INTO production_order_routing_snapshots(id,production_order_id,routing_id,sequence_no,operation_code,operation_name,work_center,setup_minutes,run_minutes_per_unit,notes,created_at)
-      VALUES(?,?,?,1,'OP10','装配工序','WC1',0,1,'',?)`).run(snapshotId, orderId, `mq-race-routing-${scenario.suffix}`, stamp);
+    db.prepare(`UPDATE production_order_routing_snapshots SET production_order_id=? WHERE id=?`).run(orderId, snapshotId);
     const sourceId = `mq-race-source-${scenario.suffix}`;
     const targetId = `mq-race-target-${scenario.suffix}`;
     const insertOperation = db.prepare(`INSERT INTO production_order_operations(id,production_order_id,routing_snapshot_id,sequence_no,operation_code,operation_name,work_center_code,work_center_name,setup_seconds,run_seconds_per_unit,expected_yield_bps,labor_rate_cents_per_hour,overhead_rate_cents_per_hour,daily_capacity_minutes,planned_input_quantity,status,created_at,updated_at,plan_status,control_code,control_participates_scheduling,control_reporting_method,control_inspection_method,is_outsource,quality_policy,topology,topology_meta)

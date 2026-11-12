@@ -433,7 +433,8 @@ tfoot td {
 .tabs button {
   background: transparent; color: var(--text-tertiary); font-size: 13px;
   font-weight: 500; border: none; border-bottom: 2px solid transparent;
-  border-radius: 0; height: 36px; padding: 0 12px;
+  border-radius: 0; min-height: 44px; min-width: 44px; padding: 4px 12px;
+  flex: 0 0 auto;
   transition: color 0.15s ease, border-color 0.15s ease;
 }
 .tabs button:hover { color: var(--text-secondary); }
@@ -2308,7 +2309,10 @@ tfoot td {
   .mobile-application-view .table-wrap thead { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); clip-path:inset(50%); white-space:nowrap; }
   .mobile-application-view .table-wrap tbody { display:grid; gap:12px; width:100%; }
   .mobile-application-view .table-wrap tbody tr { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px 12px; width:100%; padding:14px; border:1px solid var(--border-subtle); border-radius:var(--radius-lg); background:var(--bg-surface); }
-  .mobile-application-view .table-wrap tbody td { display:block; min-width:0; padding:0; border:0; background:transparent; color:var(--text-secondary); font-size:14px; overflow-wrap:anywhere; }
+  .mobile-application-view .table-wrap tbody td { display:block; min-width:0; max-width:100%; padding:0; border:0; background:transparent; color:var(--text-secondary); font-size:14px; overflow-wrap:anywhere; word-break:break-word; }
+  /* A single unbreakable cell could starve its sibling column down to zero
+     width and make the document number unreadable at 320px. */
+  .mobile-application-view .table-wrap tbody td > * { min-width:0; max-width:100%; overflow-wrap:anywhere; word-break:break-word; }
   .mobile-application-view .table-wrap tbody td:first-child { grid-column:1 / -1; color:var(--text-primary); font-size:16px; font-weight:600; }
   .mobile-application-view .table-wrap tbody td.number { text-align:left; font-variant-numeric:tabular-nums; }
   .mobile-application-view .table-wrap tbody td.actions,
@@ -4003,6 +4007,18 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
   min-height: 44px;
 }
 .mq-workspace .segmented-control button { min-height: 44px; }
+/* The production order and receipt surfaces live outside .mq-workspace, so
+   their inline document links had no touch target floor: a 65x17px link is
+   not tappable on a phone. */
+.production-orders-v15 .link-button,
+.production-receipts-v15 .link-button,
+.material-issues-v15 .link-button,
+.manufacturing-analytics-v15 .link-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  min-width: 44px;
+}
 .mq-workspace input[type="checkbox"],
 .mq-workspace input[type="radio"] { min-height: 0; height: 16px; width: 16px; padding: 0; }
 .mq-workspace label:has(> input[type="checkbox"]),

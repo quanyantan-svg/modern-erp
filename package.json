@@ -39,6 +39,8 @@
     "test:finance:uat": "node scripts/acceptance/finance-operations-final-uat.mjs",
     "test:sales:wave2-responsive": "node scripts/acceptance/sales-customer-wave2-responsive.mjs",
     "test:accounting:responsive": "node scripts/acceptance/accounting-analytics-responsive-uat.mjs",
+    "test:manufacturing:quality:responsive": "node scripts/acceptance/v18-manufacturing-quality-frontend.mjs",
+    "test:manufacturing:quality:uat": "node scripts/acceptance/v18-manufacturing-quality-final-acceptance.mjs",
     "reset-data": "node server/reset-data.js",
     "backup-db": "node scripts/admin/backup-db.mjs",
     "restore-db": "node scripts/admin/restore-db.mjs",
