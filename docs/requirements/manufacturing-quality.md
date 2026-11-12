@@ -100,15 +100,16 @@
 | Topology | `COVERED` (LINEAR) + `PARTIAL` (NETWORK) | NETWORK 必须 fail closed |
 | Operation Report | `COVERED` | 复用现有 verification |
 | Internal Handoff | `COVERED` | `availableInput()` 自动流转 |
+| Operation Transfer Scan | `COVERED` | PDA：source / destination operation + qty → 工序转移；内部自动流转仍走 `availableInput()` |
 | Outsourced Boundary | `COVERED` | snapshot + OUTSOURCING_HANDOFF_REQUIRED |
 | Inspection Item / Detection Value / Instrument Master | `COVERED` | CRUD + lifecycle |
 | Inspection Plan | `COVERED` | 与 QCP 形成 when / what |
 | Sampling 复用 | `COVERED` | 复用 `calculateSampleQuantity` |
 | Operation Inspection | `COVERED` | `released_quantity` 与 `reported_quantity` 区分 |
-| Product Inspection | `COVERED` | 按 policy gate |
-| Production Receipt Quality Gate | `COVERED` | `assertProductionReceiptQualityGate` + `quality_state` 字段 |
-| Nonconforming | `PARTIAL — INVENTORY_STATUS_DEPENDENCY` | LOT/SERIAL HOLD；untracked = OUT_OF_SCOPE |
-| Production Scan | `COVERED` | Material + Operation 工作面；scanner wedge input |
+| Product Inspection | `COVERED` | 按 policy gate；检验类型词表受控并由服务端校验 |
+| Production Receipt Quality Gate | `COVERED` | `assertProductionReceiptQualityGate` + `quality_state` 字段；REQUIRED 等待 PASS，WAIVED 放行并留审计 |
+| Nonconforming | `COVERED`（本轮） | LOT/SERIAL HOLD 隔离 + `nonconforming` 标记 + 处置入口；untracked status 仍为 Inventory 依赖 |
+| Production Scan | `COVERED` | Material + Operation + Transfer 三个动作；scanner wedge input |
 | Analytics | `COVERED` | Execution Summary + Material Issue Summary；保留 WIP / Yield / Capacity / Cost |
 
 ### 29.5 Permission 约束
@@ -132,7 +133,10 @@
 
 ### 29.6 Compatibility / 不变性约束
 
-- 不删除或重命名原有 50 enabled + 5 disabled route key；本轮新增 `production-quality` / `production-scan` / `quality-configuration` 三条 Manufacturing canonical route，最终为 53 enabled + 5 disabled；
+- 不删除或重命名原有 route key；本轮新增 `production-quality` / `production-scan` / `quality-configuration` 三条 Manufacturing canonical route。
+  **（2026-11-12 整改轮按实现事实更正）**：本条原记「50 enabled + 5 disabled → 53 enabled + 5 disabled」，
+  但当前 `src/navigation/applicationRegistry.js` 的实际登记为 **79 enabled + 4 disabled**；
+  数量口径以 registry 实况为准，本条不再复述易过期的具体数字。
 - Production Order 状态机：`DRAFT → SUBMITTED → APPROVED → RELEASED → IN_PROGRESS → COMPLETED`；每个转移需要同时检查权限、来源、累计执行量、业务不变量；不支持从 SUBMITTED 直接跳到 IN_PROGRESS 等；
 - Production Order `bom_id / bom_version_snapshot / routing_id_snapshot / production_order_items.*` 不可写回修改；
 - 既有 IQC / OQC / QCP 不破坏；
@@ -173,6 +177,39 @@
 - Production Scan 工作面 Material + Operation；
 - Analytics Execution Summary + Material Issue Summary + 既有 WIP / Yield / Capacity / Cost。
 
+#### A.1 强制执行点（2026-11-12 整改轮补入）
+
+本节把上列能力中**「服务端必须在哪里拒绝」**写死，避免能力只在某个写入口被声明而未被执行：
+
+- **拓扑与委外边界的 fail closed 必须在三个写入口同时成立**：`报工草稿创建`、`报工确认`、`工序完工`。
+  只在草稿创建时拒绝是不够的 —— 工序在草稿创建之后被改为委外或非 LINEAR 拓扑时，
+  报工确认与工序完工同样必须拒绝（`409`）。
+- **委外工序不得内部自动完成**：委外工序的完工必须经 `OUTSOURCING_HANDOFF_REQUIRED` 交接，
+  不得由普通工序完工路径直接置为 `COMPLETED`。
+- **检验类型词表由服务端校验**：客户端提交的 `inspection_type` / `source_type` 必须落在受控词表内，
+  越界返回 `400`，不得以自由文本入库。
+- **收货质量门禁的 WAIVED 分支**：质量策略为 `REQUIRED` 时等待 `PASS`；`WAIVED` 放行必须
+  记录放行原因与放行人并写审计，且不掩盖 `FAIL`。
+- **不合格收货**：不合格品以 LOT/SERIAL `HOLD` 隔离并写 `nonconforming` 标记；
+  未跟踪库存状态仍是 Inventory 域依赖。
+- **工序转移扫码**：source / destination operation + 数量 → 工序转移；转移数量不得超过源工序已释放良品。
+
+#### A.2 前端工作面覆盖（2026-11-12 整改轮补入）
+
+下列能力**必须有真实移动工作面**（list → detail → editor/workflow），不得只有 API：
+
+补料 / 退料（含业务原因）/ 合并领料（批拣）/ 用料清单受控编辑与审核 / Operation Plan
+提交·审核·下达 / 正排·倒排 / 工序派工 / 生产执行分析（Execution Summary 与
+Material Issue Summary）/ 副产品维护 / 检验方案与检验项目明细编辑 / 检测值维护。
+
+工作面判定标准（缺一即不得判 `COVERED`）：
+
+1. 列表面必须显示**真实数据**；不得以裸 ID 文本框作为唯一录入入口，来源对象必须可选；
+2. 触控目标不小于 **44px**；
+3. 在 320 / 390 / 430 / 680 四档宽度下无横向溢出、无 runtime error；
+4. 浏览器验收脚本必须断言**真实数据已渲染**与**触控目标尺寸**；仅断言「元素存在」或
+   「body 文本非空」视为空洞证据，不计入验收。
+
 #### B. Data / Schema
 
 - 新增表 / column 全部 additive；既有表 / 字段无破坏；
@@ -200,6 +237,12 @@
 - 全部 focused tests 纳入 `scripts/testing/test-suites.js`；
 - canonical gate：`pnpm test:fast` / `pnpm test` / `pnpm test:heavy` / `pnpm build` / `git diff --check` 全 PASS；
 - 若变更触及 MySQL 敏感路径且具备受保护 disposable MySQL 环境，运行 `pnpm test:mysql` + `pnpm test:mysql:concurrency`。
+- **真实 MySQL 域级证据（2026-11-12 整改轮补入）**：本域并发与状态机合同必须在受保护的 ACK-4
+  campaign `MANUFACTURING_QUALITY_MYSQL_V1` 上于真实 MySQL 8 实证 —— schema 对等由该 campaign 的
+  `BOOTSTRAP_CURRENT_SCHEMA` 证明，并发行为等价由该 campaign 的竞态套件证明。
+  **仅 SQLite 证据不计入本条**；入口为 `pnpm test:mysql:manufacturing-quality`。
+- **浏览器证据（2026-11-12 整改轮补入）**：§29.8 A.2 列出的每个工作面必须有浏览器验收断言，
+  且断言必须覆盖**真实数据渲染**与**触控目标尺寸**；脚本必须接入 `package.json` 的 canonical 入口。
 
 #### E. UI / Mobile
 
@@ -208,7 +251,8 @@
 - Production Scan 工作面按扫描器主流入口；
 - Quality Master 与 Quality Execution 分离；
 - 320 / 390 / 430 / 680 CSS px 验证；
-- 仅 UI 任务显式加载 `.claude/skills/erp-mobile-taste/SKILL.md`。
+- 仅 UI 任务显式加载 `.claude/skills/erp-mobile-taste/SKILL.md`；
+- **（2026-11-12 整改轮补入）** §29.8 A.2 列出的每个工作面都必须可达、可操作、且有非空洞的浏览器证据。
 
 #### F. Documentation / Log
 
