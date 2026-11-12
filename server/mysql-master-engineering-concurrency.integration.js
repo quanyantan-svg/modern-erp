@@ -79,7 +79,13 @@ describe('V17 Master & Engineering real MySQL concurrency matrix (4 races)', () 
       let stdout = ''; let stderr = '';
       child.stdout.on('data', (chunk) => { stdout += chunk; });
       child.stderr.on('data', (chunk) => { stderr += chunk; });
-      return { child, readyFile, stdout: () => stdout, stderr: () => stderr };
+      // The exit promise is captured at spawn time. Attaching the listener
+      // after the gate is released would miss the 'exit' event of a worker
+      // that finishes first, and the await would then never settle.
+      const exited = new Promise((resolveExit) => {
+        child.on('exit', (code) => resolveExit(code));
+      });
+      return { child, readyFile, exited, stdout: () => stdout, stderr: () => stderr };
     });
 
     const deadline = Date.now() + 60_000;
@@ -94,7 +100,14 @@ describe('V17 Master & Engineering real MySQL concurrency matrix (4 races)', () 
     writeFileSync(gate, 'go\n');
     const results = [];
     for (const entry of children) {
-      const code = await new Promise((resolveExit) => entry.child.on('exit', resolveExit));
+      const code = await Promise.race([
+        entry.exited,
+        new Promise((resolveTimeout) => setTimeout(() => resolveTimeout('TIMEOUT'), 60_000)),
+      ]);
+      if (code === 'TIMEOUT') {
+        entry.child.kill('SIGKILL');
+        throw new Error(`ENGINEERING RACE WORKER_TIMEOUT: ${entry.stderr()}`);
+      }
       const raw = entry.stdout().trim().split(/\r?\n/).filter(Boolean).findLast((line) => line.startsWith('{'));
       let parsed = null;
       try { parsed = raw ? JSON.parse(raw) : null; } catch { parsed = null; }
