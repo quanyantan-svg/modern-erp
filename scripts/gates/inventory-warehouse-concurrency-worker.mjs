@@ -95,7 +95,7 @@ try {
     body = res.body;
   } else if (action === 'inventory-lock') {
     const res = mockResponse();
-    await createInventoryLock(db, mockRequest({
+    await createInventoryLock(db, await mockRequest({
       productId: payload.productId, warehouseId: payload.warehouseId,
       positionKey: payload.positionKey, quantity: payload.quantity, reason: payload.reason || 'race',
     }), res, ACTOR);
