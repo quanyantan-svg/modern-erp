@@ -136,7 +136,7 @@ describe('V23 Manufacturing & Quality real MySQL concurrency matrix (4 races)', 
     db.prepare(`INSERT INTO suppliers(id,code,name,contact,phone,address,email,active,payment_terms_days,created_at,updated_at)
       VALUES(?,?,?,'','','','',1,0,?,?)`).run(supplierId, `MQR-S-${suffix}`, '竞态供应商', stamp, stamp);
     db.prepare(`INSERT INTO boms(id,product_id,version,status,purpose,approval_status,remark,creator_id,created_at,updated_at)
-      VALUES(?,?,?,'ACTIVE','SELF_MAKE','APPROVED','${ACTOR_ID}',?,?)`).run(`mq-race-bom-${suffix}`, productId, '1.0', stamp, stamp);
+      VALUES(?,?,?,'ACTIVE','SELF_MAKE','APPROVED','','${ACTOR_ID}',?,?)`).run(`mq-race-bom-${suffix}`, productId, '1.0', stamp, stamp);
     db.prepare(`INSERT INTO bom_items(id,bom_id,product_id,quantity,scrap_rate,line_no,uom_code_snapshot,conversion_numerator,conversion_denominator)
       VALUES(?,?,?,?,0,1,'件',1,1)`).run(`mq-race-bomi-${suffix}`, `mq-race-bom-${suffix}`, componentId, 2);
     db.prepare(`INSERT INTO product_routings(id,product_id,routing_code,routing_name,version,status,notes,created_at,updated_at)
