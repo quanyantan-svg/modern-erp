@@ -25,7 +25,7 @@ export function approvalActionRequest(item, action, reason = '') {
     return { path: `/api/production-orders/${id}/state`, options: { method: 'POST', body: { target: action === 'approve' ? 'APPROVED' : 'REJECTED', ...(action === 'reject' ? { reason } : {}) } } };
   }
   if (item.documentType === 'INVENTORY_CHECK' && action === 'approve') {
-    return { path: `/api/inventory-checks/${id}`, options: { method: 'PATCH', body: { action: 'APPROVE' } } };
+    return { path: `/api/inventory-stocktakes/${id}/approve`, options: { method: 'POST' } };
   }
   if (item.documentType === 'ACCOUNTING_VOUCHER') {
     return { path: `/api/accounting-vouchers/${id}/${action}`, options: { method: 'POST', ...(action === 'reject' ? { body: { rejectionReason: reason } } : {}) } };

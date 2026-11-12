@@ -194,10 +194,9 @@ describe('W11-A U3 D/E/F — inventory check approval against the canonical posi
     const before = fixture.db.prepare('SELECT id, quantity FROM inventory WHERE position_key=?').get(positionKey);
     assert.equal(Number(before.quantity), 20);
 
-    const response = await fetch(`${baseUrl}/api/inventory-checks/demo-seed-check`, {
-      method: 'PATCH',
+    const response = await fetch(`${baseUrl}/api/inventory-stocktakes/demo-seed-check/approve`, {
+      method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ action: 'APPROVE' }),
     });
     const body = await response.json().catch(() => ({}));
     assert.equal(response.status, 200, JSON.stringify(body));
@@ -239,7 +238,7 @@ describe('W11-A U3 D/E/F — inventory check approval against the canonical posi
 
   test('F the approval writes its inventory transaction, audit record, valuation movement and system voucher', () => {
     const transactions = fixture.db.prepare(
-      `SELECT * FROM inventory_transactions WHERE source_type='INVENTORY_CHECK' AND source_id='demo-seed-check'`,
+      `SELECT * FROM inventory_transactions WHERE source_type='INVENTORY_STOCKTAKE_DIFF' AND source_id='demo-seed-check'`,
     ).all();
     assert.equal(transactions.length, 1, 'exactly one inventory transaction');
     assert.equal(Number(transactions[0].quantity_change), 2);
@@ -282,10 +281,17 @@ describe('W11-A U3 D/E/F — inventory check approval against the canonical posi
     assert.equal(check.reviewer_id, 'user-admin');
     assert.ok(check.reviewed_at);
 
-    // The approval is the only actor: it wrote no second inventory
-    // transaction and no canonical inventory mutation log entry.
-    const mutationLog = fixture.db.prepare('SELECT COUNT(*) c FROM inventory_mutation_log').get();
-    assert.equal(Number(mutationLog.c), 0);
+    // The approval is the only actor: the canonical mutation contract
+    // recorded exactly one movement for this stocktake difference and no
+    // second canonical movement.
+    const mutationLog = fixture.db.prepare(
+      'SELECT * FROM inventory_mutation_log WHERE source_type=? AND source_id=?',
+    ).all('INVENTORY_STOCKTAKE_DIFF', 'demo-seed-check');
+    assert.equal(mutationLog.length, 1, 'the canonical mutation contract recorded exactly one movement');
+    assert.equal(mutationLog[0].movement_kind, 'ADJUSTMENT');
+    assert.equal(Number(mutationLog[0].quantity), 2);
+    const allMutationLogs = fixture.db.prepare('SELECT COUNT(*) c FROM inventory_mutation_log').get();
+    assert.equal(Number(allMutationLogs.c), 1, 'the approval wrote no second canonical movement');
   });
 });
 

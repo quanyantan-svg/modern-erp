@@ -28,6 +28,10 @@ import { applicationRouteFor } from '../src/navigation/applicationRegistry.js';
 const readSrc = (rel) => readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8');
 const app = readSrc('src/App.jsx');
 const masterData = readSrc('src/pages/master-data.jsx');
+// V24 (2026-11-12) — the inventory work surface moved to
+// src/pages/inventory-work.jsx when the domain consolidated onto one
+// canonical work face.
+const inventoryWork = readSrc('src/pages/inventory-work.jsx');
 const decisionReports = readSrc('src/pages/decision-reports.jsx');
 const inventoryExtensions = readSrc('src/pages/inventory-extensions.jsx');
 const mobileApprovalCenter = readSrc('src/components/MobileApprovalCenter.jsx');
@@ -281,17 +285,18 @@ test('P8 MobileApprovalCenter handles only the 6 canonical document types', () =
 });
 
 test('P8 transfer UI: current-action labels use 确认调拨 / 取消调拨 and not 审批 / 审核 / 批准 调拨', () => {
-  // master-data.jsx has the V1.6 P6 detail labels; allow transferStatusLabel
-  // exception for legacy historical compatibility per OD-V14C-17.
-  assert.match(masterData, />确认调拨</);
-  assert.match(masterData, />取消调拨</);
+  // V24 (2026-11-12): the transfer detail labels live on the canonical
+  // Inventory & Warehouse work surface. The transferStatusLabel exception
+  // for legacy historical compatibility stays per OD-V14C-17.
+  assert.match(inventoryWork, />确认调拨</);
+  assert.match(inventoryWork, />取消调拨</);
   // No "审批调拨" / "审核调拨" / "批准调拨" labels in current-action paths.
-  assert.doesNotMatch(masterData, />审批调拨</);
-  assert.doesNotMatch(masterData, />审核调拨</);
-  assert.doesNotMatch(masterData, />批准调拨</);
+  assert.doesNotMatch(inventoryWork, />审批调拨</);
+  assert.doesNotMatch(inventoryWork, />审核调拨</);
+  assert.doesNotMatch(inventoryWork, />批准调拨</);
   // Historical compatibility labels remain acceptable.
-  assert.match(masterData, /历史待审核/);
-  assert.match(masterData, /历史已审核/);
+  assert.match(inventoryWork, /历史待审核/);
+  assert.match(inventoryWork, /历史已审核/);
 });
 
 // ----- 6. Decision reports consistency -----
@@ -383,9 +388,9 @@ test('P8 prototype: purchasing receipt and production execution routes remain di
   }
 });
 
-test('P8 prototype: inventory four-tab model in master-data inventory section is preserved', () => {
+test('P8 prototype: inventory work surface is registered on the canonical module', () => {
   // P6 inventory routes retain their distinct source modules and exports.
-  assertRouteScreen('inventory', '../pages/master-data.jsx', 'Inventory');
+  assertRouteScreen('inventory', '../pages/inventory-work.jsx', 'InventoryWork');
   assertRouteScreen('inventory-scraps', '../pages/inventory-extensions.jsx', 'InventoryScraps');
   assertRouteScreen('inventory-month-end', '../pages/inventory-extensions.jsx', 'InventoryMonthEnd');
   assertRouteScreen('inventory-transactions', '../pages/logistics-finance.jsx', 'InventoryTransactions');
@@ -406,23 +411,25 @@ test('P8-CONS-001: confirm-button class exists with same visual rules as approve
 });
 
 test('P8-CONS-001: transfer confirmation no longer uses approve-button class', () => {
-  // P8-CONS-001 anchors on the V1.1 transfer LIST row button (after `transfers.map`).
-  const anchor = masterData.indexOf('transfers.map((t)');
-  assert.ok(anchor > -1, 'transfers.map list anchor must exist');
-  const nextIdx = masterData.indexOf('确认调拨</button>', anchor);
-  assert.ok(nextIdx > -1, 'transfer list 确认调拨 button must be discoverable after transfers.map');
-  const window = masterData.slice(anchor, nextIdx + 30);
+  // V24 (2026-11-12): the anchor moved from the retired V1.1 transfer list to
+  // the canonical transfer detail of the Inventory & Warehouse work surface.
+  const anchor = inventoryWork.indexOf('function InventoryTransferDetailV16');
+  assert.ok(anchor > -1, 'canonical transfer detail anchor must exist');
+  const nextIdx = inventoryWork.indexOf('确认调拨</button>', anchor);
+  assert.ok(nextIdx > -1, 'transfer 确认调拨 button must be discoverable after the canonical detail');
+  const window = inventoryWork.slice(anchor, nextIdx + 30);
   assert.match(window, /className="confirm-button"/);
   assert.doesNotMatch(window, /className="approve-button"/);
 });
 
 test('P8-CONS-001: adjustment confirmation no longer uses approve-button class', () => {
-  // P8-CONS-001 anchors on the adjustment form-actions block.
-  const anchor = masterData.indexOf('form-actions');
-  assert.ok(anchor > -1, 'form-actions anchor must exist');
-  const nextIdx = masterData.indexOf('确认调整</button>', anchor);
-  assert.ok(nextIdx > -1, 'adjustment 确认调整 button must be discoverable after form-actions');
-  const window = masterData.slice(anchor, nextIdx + 30);
+  // V24 (2026-11-12): the anchor moved from the retired form-actions block
+  // to the canonical adjustment detail of the work surface.
+  const anchor = inventoryWork.indexOf('function InventoryAdjustmentDetailV16');
+  assert.ok(anchor > -1, 'canonical adjustment detail anchor must exist');
+  const nextIdx = inventoryWork.indexOf('确认调整</button>', anchor);
+  assert.ok(nextIdx > -1, 'adjustment 确认调整 button must be discoverable after the canonical detail');
+  const window = inventoryWork.slice(anchor, nextIdx + 30);
   assert.match(window, /className="confirm-button"/);
   assert.doesNotMatch(window, /className="approve-button"/);
 });
@@ -432,13 +439,14 @@ test('P8-CONS-001: real approval buttons keep approve-button (sales order approv
   const approvalMatch = masterData.match(/ConfirmAction className="approve-button" buttonLabel="审批通过"[\s\S]{0,400}/);
   assert.ok(approvalMatch, 'sales order 审批通过 ConfirmAction must remain on approve-button');
   // Stocktake 提交审批 (submits to INVENTORY_CHECK approval family) must stay on approve-button.
-  // Anchor on the changeState(c, 'SUBMIT') submit call (list row action).
-  const submitAnchor = masterData.indexOf("changeState(c, 'SUBMIT')");
-  assert.ok(submitAnchor > -1, 'changeState(c, SUBMIT) anchor must exist');
-  const submitStart = masterData.lastIndexOf('<button', submitAnchor);
-  const submitEnd = masterData.indexOf('</button>', submitAnchor);
+  // V24 (2026-11-12): the anchor moved to the canonical stocktake list row
+  // action of the Inventory & Warehouse work surface.
+  const submitAnchor = inventoryWork.indexOf('onClick={() => submit(row)}');
+  assert.ok(submitAnchor > -1, 'canonical stocktake submit anchor must exist');
+  const submitStart = inventoryWork.lastIndexOf('<button', submitAnchor);
+  const submitEnd = inventoryWork.indexOf('</button>', submitAnchor);
   assert.ok(submitStart > -1 && submitEnd > submitStart, 'stocktake submit button bounds must exist');
-  const submitWindow = masterData.slice(submitStart, submitEnd + 10);
+  const submitWindow = inventoryWork.slice(submitStart, submitEnd + 10);
   assert.match(submitWindow, /className="approve-button"/);
   assert.match(submitWindow, /提交审批<\/button>/);
 });

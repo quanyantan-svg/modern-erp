@@ -1,0 +1,264 @@
+/* V24 — Inventory & Warehouse work surfaces.
+ *
+ * Contract: docs/requirements/inventory-warehouse.md §32.3 (INV-01..INV-44)
+ *          docs/design/inventory-warehouse.md §27.47 (UI Information Architecture)
+ *          docs/requirements/manufacturing-quality.md §29.8 A.2 (touch target
+ *          ≥ 44px, no horizontal overflow at 320 / 390 / 430 / 680).
+ *
+ * The pattern mirrors `.mq-workspace` in src/styles.css: one scope, an explicit
+ * ≥44px floor on every interactive control, and an anti-overflow guard so a
+ * long 单号 / 编码 wraps instead of forcing horizontal page scroll. */
+
+.inv-work {
+  --inv-work-line: color-mix(in srgb, var(--text, #17202a) 13%, transparent);
+  width: min(100%, 680px);
+  min-width: 0;
+  margin-inline: auto;
+  padding-bottom: calc(96px + env(safe-area-inset-bottom));
+}
+.inv-work *, .inv-work *::before, .inv-work *::after { box-sizing: border-box; min-width: 0; }
+
+/* ---- tabs -------------------------------------------------------------- */
+.inv-work-tabs {
+  display: grid;
+  grid-auto-flow: row;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 6px;
+  margin: 0 0 18px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-grouped);
+}
+.inv-work-tabs button {
+  min-height: 44px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.inv-work-tabs button.is-active {
+  background: var(--surface);
+  color: var(--text-primary);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+
+/* ---- sections ---------------------------------------------------------- */
+.inv-work-section { margin-top: 8px; min-width: 0; }
+.inv-work-section__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--inv-work-line);
+}
+.inv-work-section__head h3,
+.inv-work-section__head h4 { margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
+.inv-work-section__head p { margin: 6px 0 0; color: var(--text-secondary); font-size: .86rem; overflow-wrap: anywhere; }
+.inv-work-subsection { margin-top: 20px; min-width: 0; }
+.inv-work-subsection > h4 { margin: 0 0 10px; font-size: .95rem; }
+.inv-work-hint { margin: 4px 0 0; color: var(--text-secondary); overflow-wrap: anywhere; }
+
+/* ---- tools ------------------------------------------------------------- */
+.inv-work-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.inv-work-tools .search-field { flex: 1 1 180px; }
+
+/* ---- rows -------------------------------------------------------------- */
+.inv-work-list { border-top: 1px solid var(--inv-work-line); min-width: 0; }
+.inv-work-row {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--inv-work-line);
+  min-width: 0;
+}
+.inv-work-row__main {
+  flex: 1 1 200px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.inv-work-row__body { flex: 1; display: grid; gap: 4px; min-width: 0; }
+.inv-work-row__body > strong,
+.inv-work-row__body small,
+.inv-work-row__top b { overflow-wrap: anywhere; word-break: break-word; }
+.inv-work-row__body small { color: var(--text-secondary); }
+.inv-work-row__top { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.inv-work-row__metric { margin-top: 4px; font-size: 1.08rem; color: var(--text-primary); overflow-wrap: anywhere; }
+.inv-work-row__actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.inv-work-row__buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.inv-work-inline-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--inv-work-line);
+  min-width: 0;
+}
+.inv-work-inline-action > span { overflow-wrap: anywhere; }
+
+/* ---- facts ------------------------------------------------------------- */
+.inv-work-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0 0 16px; border-bottom: 1px solid var(--inv-work-line); }
+.inv-work-facts > div { padding: 12px 10px 12px 0; border-bottom: 1px solid var(--inv-work-line); min-width: 0; }
+.inv-work-facts dt { color: var(--text-secondary); font-size: .78rem; }
+.inv-work-facts dd { margin: 5px 0 0; font-weight: 750; overflow-wrap: anywhere; word-break: break-word; }
+
+/* ---- forms ------------------------------------------------------------- */
+.inv-work-form { display: grid; gap: 14px; min-width: 0; }
+.inv-work-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; min-width: 0; }
+.inv-work-field { display: grid; gap: 6px; min-width: 0; }
+.inv-work-field > span { color: var(--text-secondary); font-size: .82rem; overflow-wrap: anywhere; }
+.inv-work-field input,
+.inv-work-field select,
+.inv-work-field textarea { width: 100%; min-width: 0; min-height: 46px; }
+.inv-work-field textarea { min-height: 84px; resize: vertical; }
+.inv-work-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  min-width: 0;
+}
+.inv-work-check > span { overflow-wrap: anywhere; }
+.inv-work-line {
+  display: grid;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--inv-work-line);
+  min-width: 0;
+}
+.inv-work-line > header { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+
+/* ---- lookup / scan ----------------------------------------------------- */
+.inv-work-lookup { margin-top: 16px; min-width: 0; }
+.inv-work-lookup__form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 12px;
+  min-width: 0;
+}
+.inv-work-lookup__form .inv-work-field { grid-column: 1 / -1; }
+
+/* ---- barcode label ----------------------------------------------------- */
+.inv-work-label { display: grid; gap: 14px; min-width: 0; }
+.inv-work-label__lines { display: grid; gap: 6px; min-width: 0; }
+.inv-work-label__lines > div { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--inv-work-line); min-width: 0; }
+.inv-work-label__lines > div > span { color: var(--text-secondary); }
+.inv-work-label__lines > div > b { overflow-wrap: anywhere; word-break: break-all; text-align: right; min-width: 0; }
+.inv-work-label__svg { max-width: 100%; overflow-x: auto; }
+.inv-work-label__svg svg { max-width: 100%; height: auto; }
+
+/* ---- transfer ---------------------------------------------------------- */
+.inv-work-transfer { display: grid; gap: 8px; margin-top: 12px; }
+
+/* ---- Requirement §29.8 A.2 — touch targets ≥ 44px inside the inventory
+ * work surfaces. Checkbox / radio are excluded from the floor because they
+ * render as 16px boxes inside their own 44px label row. */
+.inv-work button,
+.inv-work input:not([type="checkbox"]):not([type="radio"]),
+.inv-work select,
+.inv-work textarea,
+.inv-work .record-card,
+.inv-work .compact-record,
+.inv-work .link-button,
+.inv-work .filter-button {
+  min-height: 44px;
+}
+.inv-work input[type="checkbox"],
+.inv-work input[type="radio"] { min-height: 0; height: 16px; width: 16px; padding: 0; }
+.inv-work label:has(> input[type="checkbox"]),
+.inv-work label:has(> input[type="radio"]) { min-height: 44px; display: flex; align-items: center; gap: 8px; }
+
+/* The canonical inventory shell shares the same floor — the surface that
+ * already existed must not regress below the new standard. */
+.v16-inventory-shell button,
+.v16-inventory-shell input:not([type="checkbox"]):not([type="radio"]),
+.v16-inventory-shell select,
+.v16-inventory-shell textarea,
+.v16-inventory-shell .record-card,
+.v16-inventory-shell .compact-record,
+.v16-inventory-shell .link-button,
+.v16-inventory-shell .filter-button {
+  min-height: 44px;
+}
+.v16-inventory-shell input[type="checkbox"],
+.v16-inventory-shell input[type="radio"] { min-height: 0; height: 16px; width: 16px; padding: 0; }
+.v16-inventory-shell label:has(> input[type="checkbox"]),
+.v16-inventory-shell label:has(> input[type="radio"]) { min-height: 44px; display: flex; align-items: center; gap: 8px; }
+
+/* ---- anti-overflow guard (long 单号 / 编码 must wrap, not scroll) ------ */
+.inv-work,
+.inv-work .inv-work-section,
+.inv-work .inv-work-section__head,
+.inv-work .inv-work-subsection,
+.inv-work .inv-work-list,
+.inv-work .inv-work-row,
+.inv-work .inv-work-row__body,
+.inv-work .inv-work-tools,
+.inv-work .inv-work-form,
+.inv-work .inv-work-form-grid,
+.inv-work .inv-work-line,
+.inv-work .inv-work-lookup,
+.inv-work .inv-work-lookup__form,
+.inv-work .inv-work-facts,
+.inv-work .inv-work-label,
+.v16-inventory-shell,
+.v16-inventory-shell .v16-inventory-list,
+.v16-inventory-shell .v16-inventory-row,
+.v16-inventory-shell .v16-inventory-row__body,
+.v16-inventory-shell .v16-inventory-facts {
+  min-width: 0;
+}
+.inv-work .mono,
+.v16-inventory-shell .mono { overflow-wrap: anywhere; word-break: break-word; }
+.inv-work .table-wrap,
+.v16-inventory-shell .table-wrap { max-width: 100%; overflow-x: auto; }
+
+/* ---- narrow viewports -------------------------------------------------- */
+@media (max-width: 430px) {
+  .inv-work-tabs { grid-auto-flow: row; }
+  .inv-work-facts { grid-template-columns: 1fr 1fr; }
+  .inv-work-lookup__form { grid-template-columns: minmax(0, 1fr); }
+  .inv-work-lookup__form button { width: 100%; }
+  .inv-work .bottom-action-bar {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    margin-inline: -16px;
+    padding: 12px 16px max(12px, env(safe-area-inset-bottom));
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+  }
+}
+@media (max-width: 340px) {
+  .inv-work-tabs button { font-size: .84rem; padding-inline: 6px; }
+  .inv-work-form-grid { grid-template-columns: minmax(0, 1fr); }
+  .inv-work-facts { grid-template-columns: minmax(0, 1fr); }
+}

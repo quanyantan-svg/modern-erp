@@ -65,7 +65,10 @@ test('decision reports preserve structured error guidance and canonical states',
 });
 
 test('transfer and reviewer language remain within the approved V1.4 vocabulary', () => {
-  const transfers = source('src/pages/master-data.jsx');
+  // V24 (2026-11-12) — the transfer surface moved to
+  // src/pages/inventory-work.jsx when the domain consolidated onto one
+  // canonical work face.
+  const transfers = source('src/pages/inventory-work.jsx');
   const copy = source('src/lib/copy.js');
   assert.match(transfers, />确认调拨<\/button>/);
   assert.doesNotMatch(transfers, /批准调拨|审批调拨|确认审批/);

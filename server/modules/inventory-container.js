@@ -79,6 +79,26 @@ export function inventoryOfContainer(db, res, actor, containerId) {
   return send(res, 200, { items });
 }
 
+// INV-44 — unpacking releases the container membership. The physical balance
+// never left the warehouse when the container was packed, so unpacking must
+// not create quantity: the container is a packing relation, never a second
+// inventory balance.
+export function unpackContainer(db, res, actor, containerId) {
+  allow(actor, 'INVENTORY_CONTAINER_MANAGE');
+  const container = db.prepare(`SELECT * FROM inventory_containers WHERE id=?`).get(containerId);
+  if (!container) throw new HttpError(404, '容器不存在');
+  if (container.status !== 'OPEN') throw new HttpError(409, `容器状态 ${container.status} 不可 unpack`);
+  const now = nowIso();
+  transaction(db, () => {
+    ensureTable(db);
+    const items = db.prepare('SELECT id FROM inventory_container_items WHERE container_id=?').all(containerId);
+    db.prepare('DELETE FROM inventory_container_items WHERE container_id=?').run(containerId);
+    db.prepare("UPDATE inventory_containers SET status='UNPACKED', updated_at=? WHERE id=? AND status='OPEN'").run(now, containerId);
+    audit(db, actor.id, 'UNPACK', 'INVENTORY_CONTAINER', containerId, `解包 ${items.length} 项`);
+  });
+  return send(res, 200, { ok: true, status: 'UNPACKED' });
+}
+
 export function transferContainer(db, res, actor, containerId, toWarehouseId) {
   allow(actor, 'INVENTORY_CONTAINER_MANAGE');
   const container = db.prepare(`SELECT * FROM inventory_containers WHERE id=?`).get(containerId);

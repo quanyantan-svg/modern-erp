@@ -79,7 +79,7 @@ test('P0-A stable screen diagnostics preserve important route-to-component mappi
   const expected = {
     orders: ['../pages/master-data.jsx','Orders'], 'purchase-orders': ['../pages/master-data.jsx','PurchaseOrders'],
     'purchase-receipts': ['../pages/logistics-finance.jsx','PurchaseReceipts'], 'sales-deliveries': ['../pages/logistics-finance.jsx','SalesDeliveries'],
-    inventory: ['../pages/master-data.jsx','Inventory'], 'inventory-scraps': ['../pages/inventory-extensions.jsx','InventoryScraps'],
+    inventory: ['../pages/inventory-work.jsx','InventoryWork'], 'inventory-scraps': ['../pages/inventory-extensions.jsx','InventoryScraps'],
     'inventory-month-end': ['../pages/inventory-extensions.jsx','InventoryMonthEnd'], 'inventory-transactions': ['../pages/logistics-finance.jsx','InventoryTransactions'],
     'production-orders': ['../pages/manufacturing.jsx','ProductionOrders'], 'material-issues': ['../pages/manufacturing.jsx','MaterialIssues'],
     'production-receipts': ['../pages/manufacturing.jsx','ProductionReceipts'], 'decision-reports': ['../pages/decision-reports.jsx','default'],

@@ -2653,88 +2653,16 @@ function WarehouseModal({ value, onClose, onSaved, notify }) {
   </form></Modal>;
 }
 
-export function Inventory({ user, notify }) {
-  const navigation = useAppNavigation();
-  const [warehouses, setWarehouses] = useState([]); const [products, setProducts] = useState([]);
-  const [tab, setTab] = useState('stock'); const [screen, setScreen] = useState(null);
-  useEffect(() => { Promise.all([api('/api/warehouses'), api('/api/products')]).then(([w, p]) => { setWarehouses((w.warehouses || []).filter((x) => x.active)); setProducts((p.products || []).filter((x) => x.active)); }).catch((e) => notify(e.message, 'error')); }, []);
-  useEffect(() => { const handler = screen ? () => setScreen(null) : null; navigation.setHeaderBackAction?.(handler); return () => navigation.setHeaderBackAction?.(null); }, [screen, navigation.setHeaderBackAction]);
-  const openDetail = (kind, value) => setScreen({ mode: 'detail', kind, value });
-  const openEditor = (kind, value = {}) => setScreen({ mode: 'editor', kind, value });
-  if (screen?.kind === 'stock') return <InventoryStockDetailV16 value={screen.value} notify={notify}/>;
-  if (screen?.kind === 'transfer') return screen.mode === 'editor' ? <InventoryTransferEditorV16 warehouses={warehouses} products={products} notify={notify} onSaved={(value) => setScreen({ mode: 'detail', kind: 'transfer', value })}/> : <InventoryTransferDetailV16 user={user} value={screen.value} notify={notify} onEdit={() => openEditor('transfer', screen.value)} onChanged={() => setScreen(null)}/>;
-  if (screen?.kind === 'check') return screen.mode === 'editor' ? <InventoryCheckEditorV16 value={screen.value} warehouses={warehouses} products={products} notify={notify} onSaved={() => setScreen(null)}/> : <InventoryCheckDetailV16 user={user} value={screen.value} notify={notify} onEdit={() => openEditor('check', screen.value)} onChanged={() => setScreen(null)}/>;
-  if (screen?.kind === 'adjustment') return screen.mode === 'editor' ? <InventoryAdjustmentEditorV16 value={screen.value} warehouses={warehouses} products={products} notify={notify} onSaved={() => setScreen(null)}/> : <InventoryAdjustmentDetailV16 value={screen.value} notify={notify} onEdit={() => openEditor('adjustment', screen.value)} onChanged={() => setScreen(null)}/>;
-  return <BusinessPageShell className="v16-inventory-shell" width="rail">
-    <nav className="v16-inventory-tabs" aria-label="库存控制"><button className={tab === 'stock' ? 'is-active' : ''} onClick={() => setTab('stock')}>库存</button><button className={tab === 'transfer' ? 'is-active' : ''} onClick={() => setTab('transfer')}>调拨</button><button className={tab === 'check' ? 'is-active' : ''} onClick={() => setTab('check')}>盘点</button><button className={tab === 'adjustment' ? 'is-active' : ''} onClick={() => setTab('adjustment')}>调整</button></nav>
-    {tab === 'stock' && <InventoryStockListV16 warehouses={warehouses} products={products} notify={notify} onOpen={(value) => openDetail('stock', value)}/>}
-    {tab === 'transfer' && <InventoryTransferListV16 user={user} notify={notify} onOpen={(value) => openDetail('transfer', value)} onCreate={() => openEditor('transfer')}/>}
-    {tab === 'check' && <InventoryCheckListV16 user={user} notify={notify} onOpen={(value) => openDetail('check', value)} onCreate={() => openEditor('check')}/>}
-    {tab === 'adjustment' && <InventoryAdjustmentListV16 user={user} notify={notify} onOpen={(value) => openDetail('adjustment', value)} onCreate={() => openEditor('adjustment')}/>}
-  </BusinessPageShell>;
-}
 
-const INVENTORY_STATUS = {
-  DRAFT: '草稿', TRANSFERRED: '已调拨', CANCELLED: '已取消', SUBMITTED: '审批中', APPROVED: '已审核', CONFIRMED: '已确认',
-};
-const transferStatusLabel = (status) => status === 'SUBMITTED' ? '历史待审核' : status === 'APPROVED' ? '历史已审核' : INVENTORY_STATUS[status] || '未知状态';
-const businessDate = (value) => value || '业务日期缺失';
-const InventoryState = ({ loading, error, empty, filtered, onRetry, children }) => loading ? <Loading/> : error ? <EmptyState title="加载失败" description={error} action={<button className="secondary" onClick={onRetry}>重试</button>}/> : empty ? <EmptyState title={filtered ? '没有匹配结果' : '暂无记录'} description={filtered ? '请调整搜索或筛选条件。' : undefined}/> : children;
-function InventoryRowV16({ code, title, status, lines, metric, onClick }) { return <button type="button" className="v16-inventory-row" onClick={onClick}><span className="v16-inventory-row__body"><span className="v16-inventory-row__top"><b className="mono">{code || '—'}</b>{status}</span><strong>{title}</strong>{lines.map((line, index) => <small key={index}>{line}</small>)}{metric && <b className="v16-inventory-row__metric">{metric}</b>}</span><Icon name="chevron" size={18}/></button>; }
-function InventoryIdentityV16({ code, title, status, subtitle }) { return <header className="v16-inventory-identity"><div><span className="mono">{code}</span><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>{status}</header>; }
-function InventoryFactsV16({ facts }) { return <dl className="v16-inventory-facts">{facts.map((fact) => <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value ?? '—'}</dd></div>)}</dl>; }
+// INV-27 — 即时库存. Uses the canonical instant-query endpoint with the FULL
+// identity filter set (warehouse / product / bin / owner / stock status /
+// lot / serial) and renders BOTH the summary rows and the position rows.
 
-function InventoryStockListV16({ warehouses, products, notify, onOpen }) {
-  const [rows, setRows] = useState([]); const [search, setSearch] = useState(''); const [filters, setFilters] = useState({ warehouse: '', product: '' }); const [draft, setDraft] = useState(filters); const [filterOpen, setFilterOpen] = useState(false); const [loading, setLoading] = useState(true); const [error, setError] = useState('');
-  const load = () => { setLoading(true); setError(''); const params = new URLSearchParams(); if (filters.warehouse) params.set('warehouse', filters.warehouse); if (filters.product) params.set('product', filters.product); api('/api/inventory?' + params).then((r) => setRows(r.inventory || [])).catch((e) => { setError(e.message); notify(e.message, 'error'); }).finally(() => setLoading(false)); };
-  useEffect(() => { void load(); }, [filters.warehouse, filters.product]);
-  const visible = rows.filter((row) => `${row.productCode} ${row.productName} ${row.warehouseName}`.toLowerCase().includes(search.trim().toLowerCase()));
-  return <><div className="v16-inventory-tools"><SearchField value={search} onChange={setSearch} placeholder="搜索货品或仓库"/><FilterButton activeCount={Number(Boolean(filters.warehouse)) + Number(Boolean(filters.product))} onClick={() => { setDraft(filters); setFilterOpen(true); }}>筛选</FilterButton></div><InventoryState loading={loading} error={error} empty={!visible.length} filtered={Boolean(search || filters.warehouse || filters.product)} onRetry={load}><div className="v16-inventory-list">{visible.map((row) => <InventoryRowV16 key={`${row.warehouse_id}-${row.product_id}`} code={row.productCode} title={row.productName} lines={[row.warehouseName, row.recentMovementAt ? `最近异动 ${dateTime(row.recentMovementAt)}` : '暂无异动']} metric={`${quantity(row.quantity)} ${row.unit || ''}`} onClick={() => onOpen(row)}/>)}</div></InventoryState>{filterOpen && <FilterSheet title="筛选当前库存" onClose={() => setFilterOpen(false)} onReset={() => setDraft({ warehouse: '', product: '' })} onApply={() => { setFilters(draft); setFilterOpen(false); }}><label>货品<select value={draft.product} onChange={(e) => setDraft({ ...draft, product: e.target.value })}><option value="">全部货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select></label><label>仓库<select value={draft.warehouse} onChange={(e) => setDraft({ ...draft, warehouse: e.target.value })}><option value="">全部仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></label></FilterSheet>}</>;
-}
-function InventoryStockDetailV16({ value, notify }) {
-  const [detail, setDetail] = useState(null); const [error, setError] = useState('');
-  const load = () => api(`/api/inventory/${value.warehouse_id}/${value.product_id}`).then(setDetail).catch((e) => { setError(e.message); notify(e.message, 'error'); });
-  useEffect(() => { void load(); }, []);
-  const labels = { PURCHASE_RECEIPT: '采购入库', SALES_DELIVERY: '销售出库', SALES_RETURN: '销售退货', PURCHASE_RETURN: '采购退货', INVENTORY_TRANSFER: '库存调拨', INVENTORY_CHECK: '库存盘点', INVENTORY_ADJUSTMENT: '库存调整', INVENTORY_SCRAP: '存货报废' };
-  return <BusinessPageShell className="v16-inventory-shell v16-inventory-detail" width="rail"><InventoryState loading={!detail && !error} error={error} onRetry={load}>{detail && <><InventoryIdentityV16 code={detail.stock.productCode} title={detail.stock.productName} subtitle={detail.stock.warehouseName}/><InventoryFactsV16 facts={[{ label: '当前库存', value: `${quantity(detail.stock.quantity)} ${detail.stock.unit || ''}` }, { label: '仓库', value: detail.stock.warehouseName }]}/><section className="v16-inventory-section"><h3>最近库存异动</h3>{detail.transactions.length ? <div className="v16-inventory-list">{detail.transactions.map((tx) => <div className="v16-inventory-movement" key={tx.id}><div><b>{labels[tx.sourceType] || '库存异动'}</b><small className="mono">{tx.sourceNo || '—'}</small><small>记录时间 {dateTime(tx.createdAt)}</small></div><div className={tx.direction === 'IN' ? 'positive' : 'negative'}><b>{tx.direction === 'IN' ? '入库' : '出库'} {quantity(tx.quantityChange)}</b><small>变动后 {quantity(tx.balanceAfter)}</small></div></div>)}</div> : <EmptyState title="暂无库存异动"/>}</section><div className="v16-inventory-inline-link"><AppLink page="inventory-transactions">查看库存异动明细</AppLink></div></>}</InventoryState></BusinessPageShell>;
-}
 
-function useInventoryDocuments(endpoint, key, status, notify) {
-  const [rows, setRows] = useState([]); const [loading, setLoading] = useState(true); const [error, setError] = useState('');
-  const load = () => { setLoading(true); setError(''); api(`${endpoint}${status ? `?status=${status}` : ''}`).then((r) => setRows(r[key] || [])).catch((e) => { setError(e.message); notify(e.message, 'error'); }).finally(() => setLoading(false)); };
-  useEffect(() => { void load(); }, [status]); return { rows, loading, error, load };
-}
-function InventoryDocumentToolbarV16({ options, status, setStatus, canCreate, createLabel, onCreate }) { return <div className="v16-inventory-document-tools"><SegmentedControl options={options} value={status} onChange={setStatus}/>{canCreate && <button className="primary" onClick={onCreate} aria-label={createLabel}>新建</button>}</div>; }
-function InventoryTransferListV16({ user, notify, onOpen, onCreate }) {
-  const [status, setStatus] = useState(''); const state = useInventoryDocuments('/api/inventory-transfers', 'inventoryTransfers', status, notify);
-  return <><InventoryDocumentToolbarV16 options={[['','全部'],['DRAFT','草稿'],['TRANSFERRED','已调拨'],['CANCELLED','已取消']].map(([value,label]) => ({ value, label }))} status={status} setStatus={setStatus} canCreate={can(user, 'INVENTORY_TRANSFER_CREATE')} createLabel="新建库存调拨" onCreate={onCreate}/><InventoryState {...state} empty={!state.rows.length} filtered={Boolean(status)} onRetry={state.load}><div className="v16-inventory-list">{state.rows.map((row) => <InventoryRowV16 key={row.id} code={row.transfer_no} title={`${row.fromWarehouseName} → ${row.toWarehouseName}`} status={<StatusChip status={row.status}>{transferStatusLabel(row.status)}</StatusChip>} lines={[businessDate(row.business_date), `${row.itemCount || 0} 项 · ${row.creatorName}`]} onClick={() => onOpen(row)}/>)}</div></InventoryState></>;
-}
-function InventoryTransferDetailV16({ user, value, notify, onChanged }) {
-  const [detail, setDetail] = useState(null); const [confirm, setConfirm] = useState(null); const load = () => api(`/api/inventory-transfers/${value.id}`).then((r) => setDetail(r.transfer)).catch((e) => notify(e.message, 'error')); useEffect(() => { void load(); }, []);
-  const canConfirmTransfer = can(user, 'INVENTORY_TRANSFER_CONFIRM') || can(user, 'INVENTORY_TRANSFER_APPROVE'); const canCancelTransfer = can(user, 'INVENTORY_TRANSFER_CREATE');
-  const changeState = async (action) => { try { await api(`/api/inventory-transfers/${value.id}/${action}`, { method: 'POST' }); notify(action === 'transfer' ? '调拨已确认' : '调拨已取消'); onChanged(); } catch (e) { notify(e.message, 'error'); } };
-  if (!detail) return <BusinessPageShell className="v16-inventory-shell" width="rail"><Loading/></BusinessPageShell>;
-  const legacy = ['SUBMITTED','APPROVED'].includes(detail.status);
-  return <BusinessPageShell className="v16-inventory-shell v16-inventory-detail" width="rail"><InventoryIdentityV16 code={detail.transfer_no} title={`${detail.fromWarehouseName} → ${detail.toWarehouseName}`} status={<StatusChip status={detail.status}>{transferStatusLabel(detail.status)}</StatusChip>}/><InventoryFactsV16 facts={[{ label: '业务日期', value: businessDate(detail.business_date) }, { label: '制单人', value: detail.creatorName }, { label: '执行人', value: detail.reviewerName || '—' }, { label: '备注', value: detail.remark || '—' }]}/><InventoryLineSectionV16 items={detail.items} quantityKey="quantity"/>{legacy && <InlineAlert tone="info">历史状态只读，不提供确认或取消动作。</InlineAlert>}{detail.status === 'DRAFT' && <BottomActionBar>{canCancelTransfer && <button className="danger-button" onClick={() => setConfirm('cancel')}>取消调拨</button>}{canConfirmTransfer && <button className="primary" onClick={() => setConfirm('transfer')}>确认调拨</button>}</BottomActionBar>}{confirm === 'transfer' && <ConfirmSheet title="确认调拨？" message="确认后将按本单明细执行仓库间库存移动。" confirmLabel="确认调拨" onClose={() => setConfirm(null)} onConfirm={() => void changeState('transfer')}/>} {confirm === 'cancel' && <DangerSheet title="取消调拨？" message="取消后该草稿不再执行库存移动。" confirmLabel="取消调拨" onClose={() => setConfirm(null)} onConfirm={() => void changeState('cancel')}/>}</BusinessPageShell>;
-}
-function InventoryTransferEditorV16({ warehouses, products, notify, onSaved }) {
-  const [form, setForm] = useState({ fromWarehouseId: '', toWarehouseId: '', businessDate: todayIso(), remark: '', items: [{ productId: '', quantity: 1, trackingAllocations: [] }] });
-  const update = (i, patch) => setForm({ ...form, items: form.items.map((row, index) => index === i ? { ...row, ...patch } : row) });
-  const save = async (event) => { event.preventDefault(); if (form.fromWarehouseId === form.toWarehouseId) return notify('调出仓库和调入仓库不能相同', 'error'); try { const result = await api('/api/inventory-transfers', { method: 'POST', body: form }); notify('调拨草稿已保存'); onSaved({ id: result.id }); } catch (e) { notify(e.message, 'error'); } };
-  return <InventoryEditorShellV16 title="新建调拨" onSubmit={save}><div className="v16-inventory-form-grid"><label>业务日期<input type="date" required value={form.businessDate} onChange={(e) => setForm({ ...form, businessDate: e.target.value })}/></label><label>调出仓库<select required value={form.fromWarehouseId} onChange={(e) => setForm({ ...form, fromWarehouseId: e.target.value })}><option value="">请选择</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></label><label>调入仓库<select required value={form.toWarehouseId} onChange={(e) => setForm({ ...form, toWarehouseId: e.target.value })}><option value="">请选择</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></label><label>备注<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })}/></label></div><InventoryLinesEditorV16 items={form.items} products={products} onAdd={() => setForm({ ...form, items: [...form.items, { productId: '', quantity: 1, trackingAllocations: [] }] })} onRemove={(i) => setForm({ ...form, items: form.items.filter((_, index) => index !== i) })} render={(row, i) => <><select required value={row.productId} onChange={(e) => update(i, withProductTracking(row, e.target.value))}><option value="">选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><input aria-label="调拨数量" type="number" min="0.01" step="0.01" required value={row.quantity} onChange={(e) => update(i, { quantity: e.target.value, trackingAllocations: [] })}/><TrackingAllocationEditor product={products.find((p) => p.id === row.productId)} warehouseId={form.fromWarehouseId} quantity={row.quantity} businessDate={form.businessDate} direction="OUT" value={row.trackingAllocations || []} onChange={(trackingAllocations) => update(i, { trackingAllocations })} notify={notify}/></>}/></InventoryEditorShellV16>;
-}
 
-function InventoryCheckListV16({ user, notify, onOpen, onCreate }) { const [status, setStatus] = useState(''); const state = useInventoryDocuments('/api/inventory-checks', 'inventoryChecks', status, notify); return <><InventoryDocumentToolbarV16 options={[['','全部'],['DRAFT','草稿'],['SUBMITTED','审批中'],['APPROVED','已审核']].map(([value,label]) => ({ value, label }))} status={status} setStatus={setStatus} canCreate={can(user, 'INVENTORY_CHECK_CREATE')} createLabel="新建库存盘点" onCreate={onCreate}/><InventoryState {...state} empty={!state.rows.length} filtered={Boolean(status)} onRetry={state.load}><div className="v16-inventory-list">{state.rows.map((row) => <InventoryRowV16 key={row.id} code={row.check_no} title={`${row.productCode} · ${row.productName}`} status={<StatusChip status={row.status}>{INVENTORY_STATUS[row.status]}</StatusChip>} lines={[row.warehouseName, businessDate(row.business_date)]} metric={`${row.difference > 0 ? '+' : ''}${quantity(row.difference)}`} onClick={() => onOpen(row)}/>)}</div></InventoryState></>; }
-function InventoryCheckDetailV16({ user, value, notify, onEdit, onChanged }) { const submit = async () => { try { await api(`/api/inventory-checks/${value.id}`, { method: 'PATCH', body: { action: 'SUBMIT' } }); notify('盘点已提交审批'); onChanged(); } catch (e) { notify(e.message, 'error'); } }; return <BusinessPageShell className="v16-inventory-shell v16-inventory-detail" width="rail"><InventoryIdentityV16 code={value.check_no} title={value.productName} subtitle={`${value.productCode} · ${value.warehouseName}`} status={<StatusChip status={value.status}>{INVENTORY_STATUS[value.status]}</StatusChip>}/><InventoryFactsV16 facts={[{ label: '业务日期', value: businessDate(value.business_date) }, { label: '账面数量', value: quantity(value.system_quantity) }, { label: '实盘数量', value: quantity(value.actual_quantity) }, { label: '差异数量', value: `${value.difference > 0 ? '+' : ''}${quantity(value.difference)}` }, { label: '盘点原因', value: value.reason || '—' }, { label: '制单人', value: value.creatorName }]}/>{value.status === 'SUBMITTED' && <div className="v16-inventory-inline-link"><AppLink page="approvals">前往审批中心</AppLink></div>}{value.status === 'DRAFT' && can(user, 'INVENTORY_CHECK_CREATE') && <BottomActionBar><button className="secondary" onClick={onEdit}>编辑草稿</button><ConfirmAction title="提交盘点审批？" message="提交后请前往审批中心处理。" confirmLabel="提交审批" onConfirm={submit}/></BottomActionBar>}</BusinessPageShell>; }
-function InventoryCheckEditorV16({ value, warehouses, products, notify, onSaved }) { const [form, setForm] = useState({ warehouseId: value.warehouse_id || '', productId: value.product_id || '', businessDate: value.business_date || todayIso(), actualQuantity: value.actual_quantity ?? '', reason: value.reason || '', trackingAllocations: value.trackingAllocations || [] }); const [systemQuantity, setSystemQuantity] = useState(Number(value.system_quantity || 0)); useEffect(() => { if (form.warehouseId && form.productId) api(`/api/inventory?warehouse=${encodeURIComponent(form.warehouseId)}&product=${encodeURIComponent(form.productId)}`).then((r) => setSystemQuantity(Number(r.inventory?.[0]?.quantity || 0))).catch((e) => notify(e.message, 'error')); }, [form.warehouseId, form.productId]); const difference = (Number(form.actualQuantity) || 0) - systemQuantity; const save = async (event) => { event.preventDefault(); try { await api(value.id ? `/api/inventory-checks/${value.id}` : '/api/inventory-checks', { method: value.id ? 'PATCH' : 'POST', body: value.id ? { action: 'UPDATE', ...form } : form }); notify('盘点草稿已保存'); onSaved(); } catch (e) { notify(e.message, 'error'); } }; return <InventoryEditorShellV16 title={value.id ? '编辑盘点' : '新建盘点'} onSubmit={save}><div className="v16-inventory-form-grid"><label>业务日期<input type="date" required value={form.businessDate} onChange={(e) => setForm({ ...form, businessDate: e.target.value })}/></label><label>仓库<select required value={form.warehouseId} onChange={(e) => setForm({ ...form, warehouseId: e.target.value, trackingAllocations: [] })}><option value="">请选择</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></label><label>货品<select required value={form.productId} onChange={(e) => setForm({ ...form, productId: e.target.value, trackingAllocations: [] })}><option value="">请选择</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select></label><label>账面数量<output>{quantity(systemQuantity)}</output></label><label>实盘数量<input type="number" min="0" step="0.01" required value={form.actualQuantity} onChange={(e) => setForm({ ...form, actualQuantity: e.target.value, trackingAllocations: [] })}/></label><label>盘点原因<input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })}/></label></div><TrackingAllocationEditor product={products.find((p) => p.id === form.productId)} warehouseId={form.warehouseId} quantity={Math.abs(difference)} businessDate={form.businessDate} direction={difference >= 0 ? 'IN' : 'OUT'} value={form.trackingAllocations} onChange={(trackingAllocations) => setForm({ ...form, trackingAllocations })} notify={notify}/></InventoryEditorShellV16>; }
 
-function InventoryAdjustmentListV16({ user, notify, onOpen, onCreate }) { const [status, setStatus] = useState(''); const state = useInventoryDocuments('/api/inventory-adjustments', 'inventoryAdjustments', status, notify); if (!can(user, 'INVENTORY_ADJUSTMENT_MANAGE')) return <EmptyState title="暂无调整权限"/>; return <><InventoryDocumentToolbarV16 options={[['','全部'],['DRAFT','草稿'],['CONFIRMED','已确认'],['CANCELLED','已取消']].map(([value,label]) => ({ value, label }))} status={status} setStatus={setStatus} canCreate onCreate={onCreate} createLabel="新建库存调整"/><InventoryState {...state} empty={!state.rows.length} filtered={Boolean(status)} onRetry={state.load}><div className="v16-inventory-list">{state.rows.map((row) => <InventoryRowV16 key={row.id} code={row.adjustment_no} title={row.warehouseName} status={<StatusChip status={row.status}>{INVENTORY_STATUS[row.status]}</StatusChip>} lines={[businessDate(row.adjustment_date), `${row.itemCount} 项 · ${row.reason}`]} onClick={() => onOpen(row)}/>)}</div></InventoryState></>; }
-function InventoryAdjustmentDetailV16({ value, notify, onEdit, onChanged }) { const [detail, setDetail] = useState(null); const [action, setAction] = useState(null); const load = () => api(`/api/inventory-adjustments/${value.id}`).then((r) => setDetail(r.inventoryAdjustment)).catch((e) => notify(e.message, 'error')); useEffect(() => { void load(); }, []); const change = async (name) => { try { await api(`/api/inventory-adjustments/${value.id}/${name}`, { method: 'POST' }); notify(name === 'confirm' ? '库存调整已确认' : '库存调整已取消'); onChanged(); } catch (e) { notify(e.message, 'error'); } }; if (!detail) return <BusinessPageShell className="v16-inventory-shell" width="rail"><Loading/></BusinessPageShell>; return <BusinessPageShell className="v16-inventory-shell v16-inventory-detail" width="rail"><InventoryIdentityV16 code={detail.adjustment_no} title={detail.warehouseName} status={<StatusChip status={detail.status}>{INVENTORY_STATUS[detail.status]}</StatusChip>}/><InventoryFactsV16 facts={[{ label: '调整日期', value: businessDate(detail.adjustment_date) }, { label: '调整原因', value: detail.reason }, { label: '制单人', value: detail.creatorName }, { label: '确认人', value: detail.confirmedByName || '—' }]}/><InventoryLineSectionV16 items={detail.items} quantityKey="quantityDelta" signed/>{detail.status === 'DRAFT' && <BottomActionBar><button className="secondary" onClick={onEdit}>编辑草稿</button><ConfirmDelete label="库存调整单" onConfirm={async () => { await api(`/api/inventory-adjustments/${detail.id}`, { method: 'DELETE' }); notify('库存调整草稿已删除'); onChanged(); }}/><button className="danger-button" onClick={() => setAction('cancel')}>取消调整</button><button className="primary" onClick={() => setAction('confirm')}>确认调整</button></BottomActionBar>}{action === 'confirm' && <ConfirmSheet title="确认库存调整？" message="确认后将按有符号调整数量更新库存。" confirmLabel="确认调整" onClose={() => setAction(null)} onConfirm={() => void change('confirm')}/>} {action === 'cancel' && <DangerSheet title="取消库存调整？" message="取消后草稿不可再执行。" confirmLabel="取消调整" onClose={() => setAction(null)} onConfirm={() => void change('cancel')}/>}</BusinessPageShell>; }
-function InventoryAdjustmentEditorV16({ value, warehouses, products, notify, onSaved }) { const initial = value.items?.map((item) => ({ productId: item.productId, quantityDelta: item.quantityDelta, trackingAllocations: item.trackingAllocations || [] })) || [{ productId: '', quantityDelta: '', trackingAllocations: [] }]; const [form, setForm] = useState({ warehouseId: value.warehouse_id || '', adjustmentDate: value.adjustment_date || todayIso(), reason: value.reason || '', items: initial }); const update = (i, patch) => setForm({ ...form, items: form.items.map((row, index) => index === i ? { ...row, ...patch } : row) }); const save = async (event) => { event.preventDefault(); try { await api(value.id ? `/api/inventory-adjustments/${value.id}` : '/api/inventory-adjustments', { method: value.id ? 'PATCH' : 'POST', body: form }); notify('库存调整草稿已保存'); onSaved(); } catch (e) { notify(e.message, 'error'); } }; return <InventoryEditorShellV16 title={value.id ? '编辑库存调整' : '新建库存调整'} onSubmit={save}><div className="v16-inventory-form-grid"><label>调整日期<input type="date" required value={form.adjustmentDate} onChange={(e) => setForm({ ...form, adjustmentDate: e.target.value })}/></label><label>仓库<select required value={form.warehouseId} onChange={(e) => setForm({ ...form, warehouseId: e.target.value })}><option value="">请选择</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></label><label>调整原因<input required value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })}/></label></div><InventoryLinesEditorV16 items={form.items} products={products} onAdd={() => setForm({ ...form, items: [...form.items, { productId: '', quantityDelta: '', trackingAllocations: [] }] })} onRemove={(i) => setForm({ ...form, items: form.items.filter((_, index) => index !== i) })} render={(row, i) => <><select required value={row.productId} onChange={(e) => update(i, withProductTracking(row, e.target.value))}><option value="">选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><input aria-label="有符号调整数量" type="number" step="0.01" required value={row.quantityDelta} onChange={(e) => update(i, { quantityDelta: e.target.value, trackingAllocations: [] })}/><TrackingAllocationEditor product={products.find((p) => p.id === row.productId)} warehouseId={form.warehouseId} quantity={Math.abs(Number(row.quantityDelta) || 0)} businessDate={form.adjustmentDate} direction={Number(row.quantityDelta) >= 0 ? 'IN' : 'OUT'} value={row.trackingAllocations || []} onChange={(trackingAllocations) => update(i, { trackingAllocations })} notify={notify}/></>}/></InventoryEditorShellV16>; }
 
-function InventoryEditorShellV16({ title, onSubmit, children }) { return <BusinessPageShell className="v16-inventory-shell v16-inventory-editor" width="rail"><form onSubmit={onSubmit}><h2>{title}</h2>{children}<BottomActionBar><button className="primary">保存草稿</button></BottomActionBar></form></BusinessPageShell>; }
-function InventoryLinesEditorV16({ items, products, onAdd, onRemove, render }) { return <section className="v16-inventory-section"><header><h3>明细</h3><button type="button" className="secondary" onClick={onAdd}>添加一行</button></header><div className="v16-inventory-lines">{items.map((row, index) => <article key={index}><div className="v16-inventory-line-head"><b>第 {index + 1} 行</b><button type="button" className="ghost" disabled={items.length === 1} onClick={() => onRemove(index)}>移除</button></div>{render(row, index, products)}</article>)}</div></section>; }
-function InventoryLineSectionV16({ items = [], quantityKey, signed = false }) { return <section className="v16-inventory-section"><h3>明细</h3><div className="v16-inventory-list">{items.map((item, index) => { const amount = Number(item[quantityKey] || 0); return <div className="v16-inventory-line" key={item.id || index}><div><b>{item.productName}</b><small className="mono">{item.productCode}</small></div><strong className={amount < 0 ? 'negative' : amount > 0 && signed ? 'positive' : ''}>{signed && amount > 0 ? '+' : ''}{quantity(amount)} {item.unit || ''}</strong></div>; })}</div></section>; }
+
 
 function InventoryStockDetail({ value, onClose, notify }) {
   const [detail, setDetail] = useState(null);
@@ -2743,47 +2671,7 @@ function InventoryStockDetail({ value, onClose, notify }) {
   return <Modal title="库存详情" onClose={onClose} wide>{!detail ? <Loading/> : <><div className="detail-head"><div><span className="mono">{detail.stock.productCode}</span><h3>{detail.stock.productName}</h3><p>{detail.stock.warehouseName}</p></div><strong>{detail.stock.quantity} {detail.stock.unit}</strong></div><h4>最近库存异动</h4><div className="table-wrap"><table><thead><tr><th>时间</th><th>来源</th><th>方向</th><th>数量</th><th>变动后</th></tr></thead><tbody>{detail.transactions.map((tx) => <tr key={tx.id}><td>{dateTime(tx.createdAt)}</td><td>{labels[tx.sourceType] || tx.sourceType}<small className="block mono">{tx.sourceNo || '—'}</small></td><td>{tx.direction}</td><td>{tx.quantityChange}</td><td>{tx.balanceAfter}</td></tr>)}</tbody></table>{!detail.transactions.length && <Empty text="暂无库存异动"/>}</div></>}</Modal>;
 }
 
-function InventoryAdjustments({ notify, warehouses, products, inventory }) {
-  const [items, setItems] = useState([]); const [editing, setEditing] = useState(null); const [viewing, setViewing] = useState(null);
-  const load = () => api('/api/inventory-adjustments').then((r) => setItems(r.inventoryAdjustments || [])).catch((e) => notify(e.message, 'error'));
-  useEffect(() => { void load(); }, []);
-  async function openDetail(item) {
-    try { const result = await api(`/api/inventory-adjustments/${item.id}`); setViewing(result.inventoryAdjustment); }
-    catch (error) { notify(error.message, 'error'); }
-  }
-  async function changeState(item, action) {
-    try {
-      await api(`/api/inventory-adjustments/${item.id}/${action}`, { method: 'POST' });
-      notify(action === 'confirm' ? '库存调整已确认' : '库存调整已取消'); setViewing(null); await load();
-    } catch (error) { notify(error.message, 'error'); }
-  }
-  return <><Toolbar search={() => {}} placeholder="" action={<button className="primary" onClick={() => setEditing({})}>＋ 新建调整单</button>}/>
-    <p className="section-hint">用于人工修正、发现损坏、数据纠正或期初调整；正数增加库存，负数减少库存。</p>
-    <div className="table-wrap"><table><thead><tr><th>调整单号</th><th>仓库</th><th>调整日期</th><th>状态</th><th>调整项</th><th>原因</th></tr></thead><tbody>{items.map((item) => <tr key={item.id} className="clickable" onClick={() => void openDetail(item)}><td className="mono">{item.adjustment_no}</td><td>{item.warehouseName}</td><td>{item.adjustment_date}</td><td><Status status={item.status} label={item.statusLabel}/></td><td>{item.itemCount}</td><td>{item.reason}</td></tr>)}</tbody></table>{!items.length && <Empty text="没有库存调整记录"/>}</div>
-    {editing && <InventoryAdjustmentModal value={editing} warehouses={warehouses} products={products} inventory={inventory} notify={notify} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void load(); notify('库存调整单已保存'); }}/>}
-    {viewing && <InventoryAdjustmentDetail value={viewing} notify={notify} onDeleted={() => { setViewing(null); void load(); }} onClose={() => setViewing(null)} onEdit={() => { setViewing(null); setEditing(viewing); }} onAction={changeState}/>}
-  </>;
-}
 
-function InventoryAdjustmentModal({ value, warehouses, products, inventory, notify, onClose, onSaved }) {
-  const initialItems = value.items?.map((item) => ({ productId: item.productId, quantityDelta: item.quantityDelta, trackingAllocations: item.trackingAllocations || [] })) || [{ productId: '', quantityDelta: '', trackingAllocations: [] }];
-  const [form, setForm] = useState({ warehouseId: value.warehouse_id || '', adjustmentDate: value.adjustment_date || new Date().toISOString().slice(0, 10), reason: value.reason || '', items: initialItems });
-  const [warehouseStock, setWarehouseStock] = useState(inventory);
-  useEffect(() => { if (form.warehouseId) api(`/api/inventory?warehouse=${encodeURIComponent(form.warehouseId)}`).then((r) => setWarehouseStock(r.inventory || [])).catch((e) => notify(e.message, 'error')); else setWarehouseStock([]); }, [form.warehouseId]);
-  function updateLine(index, patch) { setForm({ ...form, items: form.items.map((item, i) => i === index ? { ...item, ...patch } : item) }); }
-  function currentStock(productId) { return warehouseStock.find((row) => row.warehouse_id === form.warehouseId && row.product_id === productId)?.quantity; }
-  async function save(event) {
-    event.preventDefault();
-    try { await api(value.id ? `/api/inventory-adjustments/${value.id}` : '/api/inventory-adjustments', { method: value.id ? 'PATCH' : 'POST', body: form }); onSaved(); }
-    catch (error) { notify(error.message, 'error'); }
-  }
-  return <Modal title={value.id ? '编辑库存调整单' : '新建库存调整单'} onClose={onClose} wide><form onSubmit={save}>
-    <div className="form-grid order-head"><label>仓库<select value={form.warehouseId} onChange={(e) => setForm({ ...form, warehouseId: e.target.value })} required><option value="">请选择仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></label><label>调整日期<input type="date" value={form.adjustmentDate} onChange={(e) => setForm({ ...form, adjustmentDate: e.target.value })} required/></label><label className="full">调整原因<input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="必填，如：发现损坏、数据纠正、期初调整" required/></label></div>
-    <div className="line-title"><div><strong>调整明细</strong><small className="block">输入变化量：正数增加库存，负数减少库存；系统在确认时计算调整前后数量。</small></div><button type="button" className="secondary" onClick={() => setForm({ ...form, items: [...form.items, { productId: '', quantityDelta: '' }] })}>＋ 添加一行</button></div>
-    <div className="line-table adjustment-lines"><div className="line-row line-header"><span>#</span><span>货品</span><span>当前库存</span><span>调整数量 (+/-)</span><span/></div>{form.items.map((line, index) => <div className="tracking-line" key={index}><div className="line-row"><span>{index + 1}</span><select value={line.productId} onChange={(e) => updateLine(index, withProductTracking(line, e.target.value))} required><option value="">请选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><span className="number">{line.productId ? currentStock(line.productId) ?? 0 : '—'}</span><input type="number" step="0.01" value={line.quantityDelta} onChange={(e) => updateLine(index, { quantityDelta: e.target.value, trackingAllocations: [] })} placeholder="如 5 或 -3" required/><button type="button" className="remove" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== index) })}>×</button></div><TrackingAllocationEditor product={products.find((p) => p.id === line.productId)} warehouseId={form.warehouseId} quantity={Math.abs(Number(line.quantityDelta) || 0)} businessDate={form.adjustmentDate} direction={Number(line.quantityDelta) > 0 ? 'IN' : 'OUT'} value={line.trackingAllocations || []} onChange={(trackingAllocations) => updateLine(index, { trackingAllocations })} notify={notify}/></div>)}</div>
-    <FormActions onClose={onClose} saveText="保存草稿"/>
-  </form></Modal>;
-}
 
 function InventoryAdjustmentDetail({ value, notify, onDeleted, onClose, onEdit, onAction }) {
   const stages = [{ key: 'DRAFT', label: '草稿' }, { key: 'CONFIRMED', label: '已确认' }];
@@ -2796,108 +2684,13 @@ function InventoryAdjustmentDetail({ value, notify, onDeleted, onClose, onEdit, 
   </Modal>;
 }
 
-function InventoryChecks({ user, notify, warehouses, products }) {
-  const [checks, setChecks] = useState([]); const [editing, setEditing] = useState(null);
-  const load = () => api('/api/inventory-checks').then((r) => setChecks(r.inventoryChecks)).catch((e) => notify(e.message, 'error'));
-  useEffect(() => { void load(); }, []);
-  function changeState(check, action) { api(`/api/inventory-checks/${check.id}`, { method: 'PATCH', body: { action } }).then(() => { notify('盘点已提交审批'); load(); }).catch((e) => notify(e.message, 'error')); }
-  return <><Toolbar search={() => {}} placeholder="" action={can(user, 'INVENTORY_CHECK_CREATE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建盘点单</button>}/>
-    <div className="table-wrap"><table><thead><tr><th>盘点单号</th><th>仓库</th><th>货品</th><th>账面数量</th><th>实盘数量</th><th>差异数量</th><th>状态</th><th>业务日期</th><th>制单人</th><th>时间</th><th/></tr></thead><tbody>{checks.map((c) => <tr key={c.id}><td className="mono">{c.check_no}</td><td>{c.warehouseName}</td><td>{c.productCode} {c.productName}</td><td className="number">{c.system_quantity}</td><td className="number">{c.actual_quantity}</td><td className={`number ${c.difference > 0 ? 'positive' : c.difference < 0 ? 'negative' : ''}`}>{c.difference > 0 ? '+' : ''}{c.difference}</td><td><Status status={c.status} label={c.statusLabel}/></td><td>{c.business_date || <span className="dim">业务日期缺失</span>}</td><td>{c.creatorName}</td><td className="dim">{dateTime(c.created_at)}</td><td>{c.status === 'DRAFT' && can(user, 'INVENTORY_CHECK_CREATE') && <><button className="row-action" onClick={() => setEditing(c)}>编辑</button><button className="approve-button" onClick={() => changeState(c, 'SUBMIT')}>提交审批</button></>}{c.status === 'SUBMITTED' && can(user, 'INVENTORY_CHECK_APPROVE') && <AppLink className="row-action strong" page="approvals">前往审批中心</AppLink>}{c.status === 'SUBMITTED' && !can(user, 'INVENTORY_CHECK_APPROVE') && <span className="dim">等待审批</span>}</td></tr>)}</tbody></table>{!checks.length && <Empty text="没有盘点记录"/>}</div>
-    {editing && <InventoryCheckModal value={editing} warehouses={warehouses} products={products} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('盘点单已保存'); }} notify={notify}/>}
-  </>;
-}
 
-function InventoryCheckModal({ value, warehouses, products, onClose, onSaved, notify }) {
-  const [form, setForm] = useState({
-    warehouseId: value.warehouse_id || '',
-    productId: value.product_id || '',
-    businessDate: value.business_date || value.businessDate || todayIso(),
-    actualQuantity: value.actual_quantity ?? '',
-    reason: value.reason || '',
-    trackingAllocations: value.trackingAllocations || [],
-  });
-  const [systemQuantity, setSystemQuantity] = useState(Number(value.system_quantity || 0));
-  useEffect(() => {
-    if (!form.warehouseId || !form.productId) { setSystemQuantity(0); return; }
-    api(`/api/inventory?warehouse=${encodeURIComponent(form.warehouseId)}&product=${encodeURIComponent(form.productId)}`).then((result) => setSystemQuantity(Number(result.inventory?.[0]?.quantity || 0))).catch((error) => notify(error.message, 'error'));
-  }, [form.warehouseId, form.productId]);
-  async function save(e) {
-    e.preventDefault();
-    if (!form.businessDate) { notify('请填写盘点业务日期', 'error'); return; }
-    try {
-      if (value.id) await api(`/api/inventory-checks/${value.id}`, { method: 'PATCH', body: { action: 'UPDATE', ...form, businessDate: form.businessDate } });
-      else await api('/api/inventory-checks', { method: 'POST', body: { ...form, businessDate: form.businessDate } });
-      onSaved();
-    } catch (error) { notify(error.message, 'error'); }
-  }
-  return <Modal title={value.id ? '编辑盘点单' : '新建盘点单'} onClose={onClose}><form className="form-grid" onSubmit={save}>
-    <label>仓库<select value={form.warehouseId} onChange={(e) => setForm({ ...form, warehouseId: e.target.value })} required><option value="">请选择仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></label>
-    <label>货品<select value={form.productId} onChange={(e) => setForm({ ...form, productId: e.target.value, trackingAllocations: [] })} required><option value="">请选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select></label>
-    <label>业务日期<input type="date" value={form.businessDate} onChange={(e) => setForm({ ...form, businessDate: e.target.value })} required/></label>
-    <label>实际盘点数量<input type="number" min="0" step="0.01" value={form.actualQuantity} onChange={(e) => setForm({ ...form, actualQuantity: e.target.value })} required/></label>
-    <label className="full">盘点原因<input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="如：年度盘点、发现异常等"/></label>
-    <TrackingAllocationEditor product={products.find((p) => p.id === form.productId)} warehouseId={form.warehouseId} quantity={Math.abs((Number(form.actualQuantity) || 0) - systemQuantity)} businessDate={form.businessDate} direction={(Number(form.actualQuantity) || 0) >= systemQuantity ? 'IN' : 'OUT'} value={form.trackingAllocations || []} onChange={(trackingAllocations) => setForm({ ...form, trackingAllocations })} notify={notify}/>
-    <FormActions onClose={onClose}/>
-  </form></Modal>;
-}
 
-function InventoryTransfers({ user, notify, warehouses, products }) {
-  const [transfers, setTransfers] = useState([]); const [editing, setEditing] = useState(null); const [viewing, setViewing] = useState(null);
-  const load = () => api('/api/inventory-transfers').then((r) => setTransfers(r.inventoryTransfers)).catch((e) => notify(e.message, 'error'));
-  useEffect(() => { void load(); }, []);
-  function openDetail(transfer) { api(`/api/inventory-transfers/${transfer.id}`).then((r) => setViewing(r.transfer)).catch((e) => notify(e.message, 'error')); }
-  // V1.4-E2: capability check uses the canonical CONFIRM permission. Legacy
-  // roles still holding only APPROVE keep working because the backend
-  // accepts APPROVE as a deprecated alias; we map both on the frontend so
-  // operators see the same button regardless of how their role was seeded.
-  const canConfirmTransfer = can(user, 'INVENTORY_TRANSFER_CONFIRM') || can(user, 'INVENTORY_TRANSFER_APPROVE');
-  const canCancelTransfer = can(user, 'INVENTORY_TRANSFER_CREATE');
-  function changeState(id, action) { api(`/api/inventory-transfers/${id}/${action}`, { method: 'POST' }).then(() => { notify(action === 'transfer' ? '调拨已确认' : '调拨已取消'); load(); }).catch((e) => notify(e.message, 'error')); }
-  return <><Toolbar search={() => {}} placeholder="" action={can(user, 'INVENTORY_TRANSFER_CREATE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建调拨单</button>}/>
-    <div className="table-wrap"><table><thead><tr><th>调拨单号</th><th>调出仓库</th><th>调入仓库</th><th>状态</th><th>业务日期</th><th>创建人</th><th>创建时间</th><th/></tr></thead><tbody>{transfers.map((t) => <tr key={t.id} className="clickable" onClick={() => openDetail(t)}><td className="mono">{t.transfer_no}</td><td>{t.fromWarehouseName}</td><td>{t.toWarehouseName}</td><td><Status status={t.status} label={t.statusLabel}/></td><td>{t.business_date || (t.businessDateMissing ? <span className="dim">业务日期缺失</span> : <span className="dim">—</span>)}</td><td>{t.creatorName}</td><td className="dim">{dateTime(t.createdAt)}</td><td onClick={(e) => e.stopPropagation()}>{t.status === 'DRAFT' && <>{canCancelTransfer && <button className="row-action danger" onClick={() => changeState(t.id, 'cancel')}>取消</button>}{canConfirmTransfer && <button className="confirm-button" onClick={() => changeState(t.id, 'transfer')}>确认调拨</button>}</>}</td></tr>)}</tbody></table>{!transfers.length && <Empty text="没有调拨记录"/>}</div>
-    {editing && <InventoryTransferModal value={editing} warehouses={warehouses} products={products} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('调拨单已保存'); }} notify={notify}/>}
-    {viewing && <InventoryTransferDetail value={viewing} onClose={() => setViewing(null)}/>}
-  </>;
-}
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function InventoryTransferModal({ value, warehouses, products, onClose, onSaved, notify }) {
-  const [form, setForm] = useState({
-    fromWarehouseId: '',
-    toWarehouseId: '',
-    businessDate: value.business_date || value.businessDate || todayIso(),
-    remark: '',
-    items: [{ productId: '', quantity: 1 }],
-  });
-  const total = useMemo(() => form.items.reduce((s, i) => s + (Number(i.quantity) || 0), 0), [form]);
-  function updateLine(idx, patch) { setForm({ ...form, items: form.items.map((it, i) => i === idx ? { ...it, ...patch } : it) }); }
-  async function save(e) {
-    e.preventDefault();
-    if (form.fromWarehouseId === form.toWarehouseId) { notify('源仓库和目标仓库不能相同', 'error'); return; }
-    if (!form.businessDate) { notify('请填写业务日期', 'error'); return; }
-    if (!form.items.length) { notify('请添加调拨货品', 'error'); return; }
-    try {
-      await api('/api/inventory-transfers', { method: 'POST', body: { ...form, businessDate: form.businessDate } });
-      onSaved();
-    } catch (error) { notify(error.message, 'error'); }
-  }
-  return <Modal title="新建调拨单" onClose={onClose} wide><form onSubmit={save}>
-    <div className="form-grid order-head">
-      <label>源仓库<select value={form.fromWarehouseId} onChange={(e) => setForm({ ...form, fromWarehouseId: e.target.value })} required><option value="">请选择</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></label>
-      <label>目标仓库<select value={form.toWarehouseId} onChange={(e) => setForm({ ...form, toWarehouseId: e.target.value })} required><option value="">请选择</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></label>
-      <label>业务日期<input type="date" value={form.businessDate} onChange={(e) => setForm({ ...form, businessDate: e.target.value })} required/></label>
-      <label className="full">备注<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })} placeholder="调拨说明"/></label>
-    </div>
-    <div className="line-title"><div><strong>调拨明细</strong></div><button type="button" className="secondary" onClick={() => setForm({ ...form, items: [...form.items, { productId: '', quantity: 1 }] })}>＋ 添加一行</button></div>
-    <div className="line-table"><div className="line-row line-header"><span>#</span><span>货品</span><span>数量</span><span/></div>
-      {form.items.map((line, idx) => <div className="tracking-line" key={idx}><div className="line-row"><span>{idx + 1}</span><select value={line.productId} onChange={(e) => updateLine(idx, withProductTracking(line, e.target.value))} required><option value="">请选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><input type="number" min="0.01" step="0.01" value={line.quantity} onChange={(e) => updateLine(idx, { quantity: e.target.value, trackingAllocations: [] })} required/><button type="button" className="remove" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== idx) })}>×</button></div><TrackingAllocationEditor product={products.find((p) => p.id === line.productId)} warehouseId={form.fromWarehouseId} quantity={line.quantity} businessDate={form.businessDate} direction="OUT" value={line.trackingAllocations || []} onChange={(trackingAllocations) => updateLine(idx, { trackingAllocations })} notify={notify}/></div>)}
-    </div>
-    <div className="order-total"><span>合计</span><strong>{total}</strong></div><FormActions onClose={onClose} saveText="保存草稿"/>
-  </form></Modal>;
-}
 
 function InventoryTransferDetail({ value, onClose }) {
   const isTransferred = value.status === 'TRANSFERRED';

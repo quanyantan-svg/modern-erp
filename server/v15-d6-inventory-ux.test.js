@@ -5,13 +5,19 @@ import { test } from 'node:test';
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
 test('D6 unifies inventory query and operations without calling confirmation approval', () => {
-  const source = read('src/pages/master-data.jsx');
-  assert.match(source, /className="v16-inventory-shell" width="rail"/);
+  // V24 (2026-11-12) — the inventory work surface moved to
+  // src/pages/inventory-work.jsx when the domain consolidated onto one
+  // canonical work face.
+  const source = read('src/pages/inventory-work.jsx');
+  assert.match(source, /className="v16-inventory-shell[^"]*" width="rail"/);
   assert.match(source, /aria-label="库存控制"/);
   assert.match(source, /确认调拨/);
-  assert.match(source, />调拨</);
-  assert.match(source, />盘点</);
-  assert.match(source, />调整</);
+  // V24 (2026-11-12): the canonical work surface renders its tab set from
+  // the WORK_TABS table, so the operator capability labels are asserted on
+  // that table.
+  assert.match(source, /label: '调拨'/);
+  assert.match(source, /label: '盘点'/);
+  assert.match(source, /label: '调整'/);
 });
 
 test('D6 treats inventory movements as a report and traceability as evidence', () => {

@@ -4,7 +4,7 @@ import { resolveDatabaseConfig } from '../../server/database/config.js';
 import { transaction } from '../../server/db.js';
 import { allocateDocumentNumber } from '../../server/modules/commercial-golive.js';
 import { idempotencyReplay, saveIdempotency } from '../../server/modules/financial-controls.js';
-import { confirmInventoryTransfer } from '../../server/app.js';
+import { confirmInventoryTransferCommand } from '../../server/modules/inventory-transfer.js';
 import { closeInventoryPeriodCommand } from '../../server/modules/inventory-period-close.js';
 import { applyInventoryMutation } from '../../server/lib/inventory-mutation.js';
 
@@ -121,7 +121,7 @@ function execute(command) {
     }, { today: command.today });
   }
   if (command.action === 'inventory-transfer-confirm') {
-    return confirmInventoryTransfer(db, { id: command.actorId }, command.transferId);
+    return confirmInventoryTransferCommand(db, { id: command.actorId }, command.transferId);
   }
   if (command.action === 'hold') {
     return transaction(db, () => {

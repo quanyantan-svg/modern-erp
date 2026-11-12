@@ -131,7 +131,7 @@ import {
   transferOut, transferIn, getInTransit,
 } from './modules/inventory-step-transfer.js';
 import {
-  createContainer, pack as containerPack, inventoryOfContainer, transferContainer,
+  createContainer, inventoryOfContainer, transferContainer, unpackContainer,
 } from './modules/inventory-container.js';
 import {
   parseBarcode, createBarcodeRule, createBarcodeBinding, listBarcodeRules,
@@ -534,6 +534,31 @@ import {
   listPendingProductionInspections, waiveProductionInspection, markProductionReceiptNonconforming,
   listInspectionDetectionValues,
 } from './modules/manufacturing-quality.js';
+import {
+  listWarehouseBins, createWarehouseBin, updateWarehouseBin, deactivateWarehouseBin,
+} from './modules/warehouse-bin.js';
+import { listStockStatuses, createStockStatus, updateStockStatus } from './modules/stock-status.js';
+import { listOwnerDimension } from './modules/owner-dimension.js';
+import { getInventoryParametersHandler, updateInventoryParameters } from './modules/inventory-parameters.js';
+import {
+  createStocktake, updateStocktake, submitStocktake, approveStocktake, scanStocktake, listStocktakes,
+} from './modules/inventory-stocktake.js';
+import { createLotAdjustment, confirmLotAdjustment } from './modules/inventory-lot-adjustment.js';
+import { createFormConversion, confirmFormConversion } from './modules/inventory-form-conversion.js';
+import {
+  createInventoryTransfer, confirmInventoryTransfer, cancelInventoryTransfer,
+  listInventoryTransfers, getInventoryTransfer,
+} from './modules/inventory-transfer.js';
+import {
+  listAbcClassifications, classifyInventoryAbc, getInventoryAbcAnalysis,
+} from './modules/inventory-abc-classifications.js';
+import {
+  createAssemblyOrder, confirmAssemblyOrder,
+  createDisassemblyOrder, confirmDisassemblyOrder, listAssemblyOrders,
+} from './modules/inventory-assembly-disassembly.js';
+import {
+  generateBarcode, listGeneratedBarcodes, renderBarcodeLabel,
+} from './modules/inventory-barcode-generation.js';
 import { productionScanLookup, productionScanIssue, productionScanReport, productionScanTransfer } from './modules/manufacturing-scan.js';
 
 // V2 owned-route registrations — Waves 3A–3F / 4A–4C
@@ -3248,6 +3273,393 @@ ownedRouteTable.register({
   handler: ({ db, res, actor, url }) => listInspectionDetectionValues(db, res, actor, url),
   owner: 'server/modules/manufacturing-quality.js',
 });
+
+// ===== V24 - Inventory & Warehouse Domain Closure wiring =====
+// The modules below were implemented and unit-tested but never reachable:
+// their handlers existed, their routes did not. Each registration delegates
+// to the frozen module function; no business logic is duplicated here.
+
+// INV-27 - the canonical identity filter set, shared by the instant query
+// and the scan query.
+const inventoryQueryFilters = (query) => ({
+  warehouseId: query.get('warehouseId') || query.get('warehouse') || null,
+  productId: query.get('productId') || query.get('product') || null,
+  binId: query.get('binId') || query.get('bin') || null,
+  ownerType: query.get('ownerType') || query.get('owner') || null,
+  ownerId: query.get('ownerId') || null,
+  stockStatus: query.get('stockStatus') || query.get('status') || null,
+  lotId: query.get('lotId') || query.get('lot') || null,
+  serialId: query.get('serialId') || query.get('serial') || null,
+});
+  // INV-03 - warehouse bin / location
+  ownedRouteTable.register({
+    method: 'GET',
+    path: '/api/warehouse-bins',
+    handler: ({ db, res, actor, url }) => listWarehouseBins(db, res, actor, url),
+    owner: 'server/modules/warehouse-bin.js',
+  });
+  ownedRouteTable.register({
+    method: 'POST',
+    path: '/api/warehouse-bins',
+    handler: ({ db, req, res, actor }) => createWarehouseBin(db, req, res, actor),
+    owner: 'server/modules/warehouse-bin.js',
+  });
+  ownedRouteTable.register({
+    method: 'PATCH',
+    path: /^\/api\/warehouse-bins\/([^/]+)$/,
+    handler: ({ db, req, res, actor, params }) => updateWarehouseBin(db, req, res, actor, params[0]),
+    owner: 'server/modules/warehouse-bin.js',
+  });
+  ownedRouteTable.register({
+    method: 'POST',
+    path: /^\/api\/warehouse-bins\/([^/]+)\/deactivate$/,
+    handler: ({ db, res, actor, params }) => deactivateWarehouseBin(db, res, actor, params[0]),
+    owner: 'server/modules/warehouse-bin.js',
+  });
+
+  // INV-04 - stock status master
+  ownedRouteTable.register({
+    method: 'GET',
+    path: '/api/inventory-stock-statuses',
+    handler: ({ db, res, actor }) => listStockStatuses(db, res, actor),
+    owner: 'server/modules/stock-status.js',
+  });
+  ownedRouteTable.register({
+    method: 'POST',
+    path: '/api/inventory-stock-statuses',
+    handler: ({ db, req, res, actor }) => createStockStatus(db, req, res, actor),
+    owner: 'server/modules/stock-status.js',
+  });
+  ownedRouteTable.register({
+    method: 'PATCH',
+    path: /^\/api\/inventory-stock-statuses\/([^/]+)$/,
+    handler: ({ db, req, res, actor, params }) => updateStockStatus(db, req, res, actor, params[0]),
+    owner: 'server/modules/stock-status.js',
+  });
+
+  // INV-05 - owner dimension
+  ownedRouteTable.register({
+    method: 'GET',
+    path: '/api/inventory-owner-dimensions',
+    handler: ({ db, res, actor }) => listOwnerDimension(db, res, actor),
+    owner: 'server/modules/owner-dimension.js',
+  });
+
+  // INV-01 - inventory parameters
+  ownedRouteTable.register({
+    method: 'GET',
+    path: '/api/inventory-parameters',
+    handler: ({ db, res, actor }) => getInventoryParametersHandler(db, res, actor),
+    owner: 'server/modules/inventory-parameters.js',
+  });
+  ownedRouteTable.register({
+    method: 'PUT',
+    path: '/api/inventory-parameters',
+    handler: ({ db, req, res, actor }) => updateInventoryParameters(db, req, res, actor),
+    owner: 'server/modules/inventory-parameters.js',
+  });
+
+  // INV-29 / INV-30 / INV-31 - canonical stocktake (applyInventoryMutation)
+  ownedRouteTable.register({
+    method: 'GET',
+    path: '/api/inventory-stocktakes',
+    handler: ({ db, res, actor, url }) => listStocktakes(db, res, actor, url),
+    owner: 'server/modules/inventory-stocktake.js',
+  });
+  ownedRouteTable.register({
+    method: 'POST',
+    path: '/api/inventory-stocktakes',
+    handler: ({ db, req, res, actor }) => createStocktake(db, req, res, actor),
+    owner: 'server/modules/inventory-stocktake.js',
+  });
+  ownedRouteTable.register({
+    method: 'PATCH',
+    path: /^\/api\/inventory-stocktakes\/([^/]+)$/,
+    handler: async ({ db, req, res, actor, params }) => {
+      const body = await readJson(req);
+      return updateStocktake(db, res, actor, params[0], body);
+    },
+    owner: 'server/modules/inventory-stocktake.js',
+  });
+  ownedRouteTable.register({
+    method: 'POST',
+    path: /^\/api\/inventory-stocktakes\/([^/]+)\/submit$/,
+    handler: ({ db, res, actor, params }) => submitStocktake(db, res, actor, params[0]),
+    owner: 'server/modules/inventory-stocktake.js',
+  });
+  ownedRouteTable.register({
+    method: 'POST',
+    path: /^\/api\/inventory-stocktakes\/([^/]+)\/approve$/,
+    handler: ({ db, res, actor, params }) => approveStocktake(db, res, actor, params[0]),
+    owner: 'server/modules/inventory-stocktake.js',
+  });
+  // INV-42 — the barcode scan counts one line of a draft stocktake.
+  ownedRouteTable.register({
+    method: 'POST',
+    path: /^\/api\/inventory-stocktakes\/([^/]+)\/scan$/,
+    handler: async ({ db, req, res, actor, params }) => {
+      const body = await readJson(req);
+      return scanStocktake(db, res, actor, params[0], body);
+    },
+    owner: 'server/modules/inventory-stocktake.js',
+  });
+  // The legacy read URL stays readable; the canonical module owns the read
+  // model for both the legacy single-line documents and the canonical
+  // multi-line documents.
+  ownedRouteTable.register({
+    method: 'GET',
+    path: '/api/inventory-checks',
+    handler: ({ db, res, actor, url }) => listStocktakes(db, res, actor, url),
+    owner: 'server/modules/inventory-stocktake.js',
+  });
+
+  // INV-18 - lot adjustment
+  ownedRouteTable.register({
+    method: 'POST',
+    path: '/api/inventory-lot-adjustments',
+    handler: ({ db, req, res, actor }) => createLotAdjustment(db, req, res, actor),
+    owner: 'server/modules/inventory-lot-adjustment.js',
+  });
+  ownedRouteTable.register({
+    method: 'POST',
+    path: /^\/api\/inventory-lot-adjustments\/([^/]+)\/confirm$/,
+    handler: ({ db, res, actor, params }) => confirmLotAdjustment(db, res, actor, params[0]),
+    owner: 'server/modules/inventory-lot-adjustment.js',
+  });
+
+  // INV-20 - inventory form / attribute conversion
+  ownedRouteTable.register({
+    method: 'POST',
+    path: '/api/inventory-form-conversions',
+    handler: ({ db, req, res, actor }) => createFormConversion(db, req, res, actor),
+    owner: 'server/modules/inventory-form-conversion.js',
+  });
+  ownedRouteTable.register({
+    method: 'POST',
+    path: /^\/api\/inventory-form-conversions\/([^/]+)\/confirm$/,
+    handler: ({ db, res, actor, params }) => confirmFormConversion(db, res, actor, params[0]),
+    owner: 'server/modules/inventory-form-conversion.js',
+  });
+
+  // INV-15 - direct transfer. The canonical module owns the document write
+  // path; the legacy inline handlers in app.js are retired.
+  ownedRouteTable.register({
+    method: 'GET',
+    path: '/api/inventory-transfers',
+    handler: ({ db, res, actor, url }) => listInventoryTransfers(db, res, actor, url),
+    owner: 'server/modules/inventory-transfer.js',
+  });
+  ownedRouteTable.register({
+    method: 'POST',
+    path: '/api/inventory-transfers',
+    handler: ({ db, req, res, actor }) => createInventoryTransfer(db, req, res, actor),
+    owner: 'server/modules/inventory-transfer.js',
+  });
+  ownedRouteTable.register({
+    method: 'GET',
+    path: /^\/api\/inventory-transfers\/([^/]+)$/,
+    handler: ({ db, res, actor, params }) => getInventoryTransfer(db, res, actor, params[0]),
+    owner: 'server/modules/inventory-transfer.js',
+  });
+  ownedRouteTable.register({
+    method: 'POST',
+    path: /^\/api\/inventory-transfers\/([^/]+)\/transfer$/,
+    handler: ({ db, res, actor, params }) => confirmInventoryTransfer(db, res, actor, params[0]),
+    owner: 'server/modules/inventory-transfer.js',
+  });
+  ownedRouteTable.register({
+    method: 'POST',
+    path: /^\/api\/inventory-transfers\/([^/]+)\/cancel$/,
+    handler: ({ db, res, actor, params }) => cancelInventoryTransfer(db, res, actor, params[0]),
+    owner: 'server/modules/inventory-transfer.js',
+  });
+
+  // INV-44 - bounded packing / container core
+  ownedRouteTable.register({
+    method: 'POST',
+    path: '/api/inventory-containers',
+    handler: ({ db, req, res, actor }) => createContainer(db, req, res, actor),
+    owner: 'server/modules/inventory-container.js',
+  });
+  ownedRouteTable.register({
+    method: 'POST',
+    path: /^\/api\/inventory-containers\/([^/]+)\/pack$/,
+    handler: async ({ db, req, res, actor, params }) => {
+      const body = await readJson(req);
+      return pack(db, res, actor, params[0], body.items || body.allocations || []);
+    },
+    owner: 'server/modules/inventory-container.js',
+  });
+  ownedRouteTable.register({
+    method: 'GET',
+    path: /^\/api\/inventory-containers\/([^/]+)\/inventory$/,
+    handler: ({ db, res, actor, params }) => inventoryOfContainer(db, res, actor, params[0]),
+    owner: 'server/modules/inventory-container.js',
+  });
+  ownedRouteTable.register({
+    method: 'POST',
+    path: /^\/api\/inventory-containers\/([^/]+)\/transfer$/,
+    handler: async ({ db, req, res, actor, params }) => {
+      const body = await readJson(req);
+      return transferContainer(db, res, actor, params[0], body.toWarehouseId);
+    },
+    owner: 'server/modules/inventory-container.js',
+  });
+  ownedRouteTable.register({
+    method: 'POST',
+    path: /^\/api\/inventory-containers\/([^/]+)\/unpack$/,
+    handler: ({ db, res, actor, params }) => unpackContainer(db, res, actor, params[0]),
+    owner: 'server/modules/inventory-container.js',
+  });
+
+  // INV-27 - instant inventory query (summary + position detail)
+  ownedRouteTable.register({
+    method: 'GET',
+    path: '/api/inventory/instant-query',
+    handler: ({ db, res, actor, url }) => {
+      allow(actor, 'INVENTORY_VIEW');
+      const filters = inventoryQueryFilters(url);
+      return send(res, 200, {
+        summary: instantInventoryQuery(db, filters),
+        positions: inventoryPositionsList(db, filters),
+      });
+    },
+    owner: 'server/lib/inventory-reports.js',
+  });
+
+  // INV-40 / INV-41 - scan resolution and physical validation
+  ownedRouteTable.register({
+    method: 'POST',
+    path: '/api/inventory/scan/resolve',
+    handler: async ({ db, req, res, actor }) => {
+      const body = await readJson(req);
+      return send(res, 200, { resolution: resolveScan(db, body.barcode, { actorId: actor?.id, source: body.source || 'SCAN_RESOLVE' }) });
+    },
+    owner: 'server/lib/inventory-scan-adapter.js',
+  });
+  ownedRouteTable.register({
+    method: 'POST',
+    path: '/api/inventory/scan/validate',
+    handler: async ({ db, req, res, actor }) => {
+      const body = await readJson(req);
+      return send(res, 200, { validation: validateScanForInventory(db, body.barcode, body.position || {}) });
+    },
+    owner: 'server/lib/inventory-scan-adapter.js',
+  });
+  ownedRouteTable.register({
+    method: 'GET',
+    path: '/api/inventory/scan/duplicate',
+    handler: ({ db, res, actor, url }) => {
+      allow(actor, 'INVENTORY_VIEW');
+      return send(res, 200, { duplicate: isDuplicateSerialScan(db, url.searchParams.get('barcode') || '', url.searchParams.get('source') || 'SCAN') });
+    },
+    owner: 'server/lib/inventory-scan-adapter.js',
+  });
+
+  // INV-43 - instant inventory scan query
+  ownedRouteTable.register({
+    method: 'GET',
+    path: '/api/inventory/scan/query',
+    handler: ({ db, res, actor, url }) => {
+      allow(actor, 'INVENTORY_VIEW');
+      const filters = inventoryQueryFilters(url);
+      return send(res, 200, { positions: inventoryPositionsList(db, filters) });
+    },
+    owner: 'server/lib/inventory-reports.js',
+  });
+
+  // INV-39 - barcode master and bindings
+  ownedRouteTable.register({
+    method: 'GET',
+    path: '/api/inventory/barcode/rules',
+    handler: ({ db, res, actor }) => listBarcodeRules(db, res, actor),
+    owner: 'server/lib/inventory-barcode.js',
+  });
+  ownedRouteTable.register({
+    method: 'POST',
+    path: '/api/inventory/barcode/rules',
+    handler: ({ db, req, res, actor }) => createBarcodeRule(db, req, res, actor),
+    owner: 'server/lib/inventory-barcode.js',
+  });
+  ownedRouteTable.register({
+    method: 'POST',
+    path: '/api/inventory/barcode/bindings',
+    handler: ({ db, req, res, actor }) => createBarcodeBinding(db, req, res, actor),
+    owner: 'server/lib/inventory-barcode.js',
+  });
+
+// INV-26 - ABC classification (the module is the canonical owner; the legacy
+// inline raw SELECT is retired by the route swap below).
+  ownedRouteTable.register({
+    method: 'GET',
+    path: '/api/inventory/abc',
+  handler: ({ db, res, actor, url }) => listAbcClassifications(db, res, actor, url),
+  owner: 'server/modules/inventory-abc-classifications.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/inventory/abc/classify',
+  handler: ({ db, req, res, actor }) => classifyInventoryAbc(db, req, res, actor),
+  owner: 'server/modules/inventory-abc-classifications.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/inventory/abc/analysis',
+  handler: ({ db, res, actor, url }) => getInventoryAbcAnalysis(db, res, actor, url),
+  owner: 'server/modules/inventory-abc-classifications.js',
+});
+
+// INV-17 - assembly and disassembly
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/inventory/assembly-orders',
+  handler: ({ db, res, actor, url }) => listAssemblyOrders(db, res, actor, url),
+  owner: 'server/modules/inventory-assembly-disassembly.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/inventory/assembly-orders',
+  handler: ({ db, req, res, actor }) => createAssemblyOrder(db, req, res, actor),
+  owner: 'server/modules/inventory-assembly-disassembly.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/inventory\/assembly-orders\/([^/]+)\/confirm$/,
+  handler: ({ db, req, res, actor, params }) => confirmAssemblyOrder(db, req, res, actor, params[0]),
+  owner: 'server/modules/inventory-assembly-disassembly.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/inventory/disassembly-orders',
+  handler: ({ db, req, res, actor }) => createDisassemblyOrder(db, req, res, actor),
+  owner: 'server/modules/inventory-assembly-disassembly.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/inventory\/disassembly-orders\/([^/]+)\/confirm$/,
+  handler: ({ db, req, res, actor, params }) => confirmDisassemblyOrder(db, req, res, actor, params[0]),
+  owner: 'server/modules/inventory-assembly-disassembly.js',
+});
+
+// INV-39 - barcode generation and label rendering
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/inventory/barcode/generated',
+  handler: ({ db, res, actor, url }) => listGeneratedBarcodes(db, res, actor, url),
+  owner: 'server/modules/inventory-barcode-generation.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/inventory/barcode/generate',
+  handler: ({ db, req, res, actor }) => generateBarcode(db, req, res, actor),
+  owner: 'server/modules/inventory-barcode-generation.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/inventory/barcode/label',
+  handler: ({ db, req, res, actor }) => renderBarcodeLabel(db, req, res, actor),
+  owner: 'server/modules/inventory-barcode-generation.js',
+});
 ownedRouteTable.register({
   method: 'GET',
   path: '/api/inspection-items',
@@ -3622,9 +4034,10 @@ async function handleApi(db, req, res, url) {
     }
   }
 
+
   // Inventory
   if (pathname === '/api/inventory' && req.method === 'GET') return listInventory(db, res, actor, url);
-  if (pathname === '/api/inventory/alerts' && req.method === 'GET') return getInventoryAlerts(db, res, actor);
+  if (pathname === '/api/inventory/alerts' && req.method === 'GET') return send(res, 200, inventoryAlerts(db, { warehouseId: url.searchParams.get('warehouse') }));
   if (pathname === '/api/inventory/reorder' && req.method === 'GET') return getReorderList(db, res, actor);
   const inventoryDetailMatch = pathname.match(/^\/api\/inventory\/([^/]+)\/([^/]+)$/);
   if (inventoryDetailMatch && req.method === 'GET') return getInventoryDetail(db, res, actor, inventoryDetailMatch[1], inventoryDetailMatch[2]);
@@ -3640,20 +4053,20 @@ async function handleApi(db, req, res, url) {
   if (adjustmentMatch && req.method === 'DELETE') return deleteDraftDocument(db, res, actor, 'inventoryAdjustment', adjustmentMatch[1]);
   if (pathname === '/api/mrp/calculate' && req.method === 'POST') return send(res, 410, { error: '旧版即时 MRP 已停用，请使用 /api/planning/mrp/runs' });
   if (pathname === '/api/mrp/bom-explode' && req.method === 'POST') return send(res, 410, { error: '旧版 BOM 展开已停用，请使用 /api/planning/reports/supply-demand-detail 或 Engineering BOM resolver' });
-  if (pathname === '/api/inventory-checks' && req.method === 'GET') return listInventoryChecks(db, res, actor, url);
-  if (pathname === '/api/inventory-checks' && req.method === 'POST') return createInventoryCheck(db, req, res, actor);
+  // The legacy stocktake write paths are retired. The canonical module owns
+  // create (POST /api/inventory-stocktakes) and approve
+  // (POST /api/inventory-stocktakes/{id}/approve); the read model of the
+  // legacy URL is served by the same module.
+  if (pathname === '/api/inventory-checks' && req.method === 'POST') return send(res, 410, { error: '旧版盘点单据写入口已停用，请使用 /api/inventory-stocktakes' });
   const inventoryCheckReverseMatch = pathname.match(/^\/api\/inventory-checks\/([^/]+)\/(?:reverse|reversal-request|reversal-confirm)$/);
   if (inventoryCheckReverseMatch && req.method === 'POST') return reverseInventoryControl(db, req, res, actor, 'INVENTORY_CHECK', inventoryCheckReverseMatch[1], pathname.endsWith('reversal-confirm') ? 'CONFIRM' : pathname.endsWith('reversal-request') ? 'REQUEST' : null);
   const icMatch = pathname.match(/^\/api\/inventory-checks\/([^/]+)$/);
-  if (icMatch && req.method === 'PATCH') return approveInventoryCheck(db, req, res, actor, icMatch[1]);
-  if (pathname === '/api/inventory-transfers' && req.method === 'GET') return listInventoryTransfers(db, res, actor, url);
-  if (pathname === '/api/inventory-transfers' && req.method === 'POST') return createInventoryTransfer(db, req, res, actor);
+  if (icMatch && req.method === 'PATCH') return send(res, 410, { error: '旧版盘点单据写入口已停用，请使用 /api/inventory-stocktakes/{id}/approve' });
+  // The duplicate transfer write path registered by the V24 round is retired:
+  // the canonical module owns /api/inventory-transfers.
+  if (pathname === '/api/inventory-transfer-commands' && req.method === 'POST') return send(res, 410, { error: '重复的调拨写入口已停用，请使用 /api/inventory-transfers' });
   const inventoryTransferReverseMatch = pathname.match(/^\/api\/inventory-transfers\/([^/]+)\/reverse$/);
   if (inventoryTransferReverseMatch && req.method === 'POST') return reverseInventoryControl(db, req, res, actor, 'INVENTORY_TRANSFER', inventoryTransferReverseMatch[1]);
-  const itMatch = pathname.match(/^\/api\/inventory-transfers\/([^/]+)$/);
-  if (itMatch && req.method === 'GET') return getInventoryTransfer(db, res, actor, itMatch[1]);
-  const itActionMatch = pathname.match(/^\/api\/inventory-transfers\/([^/]+)\/(transfer|cancel)$/);
-  if (itActionMatch && req.method === 'POST') return changeInventoryTransferState(db, req, res, actor, itActionMatch[1], itActionMatch[2]);
 
   // Accounting
   if (pathname === '/api/accounting-subjects' && req.method === 'GET') return listAccountingSubjects(db, res, actor);
@@ -4015,26 +4428,13 @@ async function handleApi(db, req, res, url) {
     return send(res, 201, { id: sid, serial: { id: sid, productId: body.productId, serialNumber: body.serialNumber, lifecycleState: body.lifecycleState || 'AVAILABLE' } });
   }
 
-  if (pathname === '/api/containers' && req.method === 'POST') return createContainer(db, req, res, actor);
+  // The legacy container URLs are retired: the canonical container module
+  // owns the packing relation (/api/inventory-containers).
+  if (pathname === '/api/containers' && req.method === 'POST') return send(res, 410, { error: '旧版容器写入口已停用，请使用 /api/inventory-containers' });
   const containerPackMatch = pathname.match(/^\/api\/containers\/([^/]+)\/pack$/);
-  if (containerPackMatch && req.method === 'POST') {
-    const body = await readJson(req);
-    return containerPack(db, res, actor, containerPackMatch[1], body.items || body);
-  }
+  if (containerPackMatch && req.method === 'POST') return send(res, 410, { error: '旧版容器写入口已停用，请使用 /api/inventory-containers/{id}/pack' });
   const containerUnpackMatch = pathname.match(/^\/api\/containers\/([^/]+)\/unpack$/);
-  if (containerUnpackMatch && req.method === 'POST') {
-    const body = await readJson(req);
-    // Unpack is the inverse: inventory +1 at each line, container -1
-    for (const item of (body.items || body)) {
-      applyInventoryMutation({
-        db, actor, productId: item.productId, warehouseId: item.warehouseId || body.warehouseId,
-        ownerType: 'ENTERPRISE', ownerId: null, stockStatus: 'AVAILABLE',
-        direction: 'IN', quantity: Number(item.quantity || 1), businessDate: body.businessDate || new Date().toISOString().slice(0,10),
-        sourceType: 'CONTAINER_UNPACK', sourceId: containerUnpackMatch[1], reason: 'unpack',
-      });
-    }
-    return send(res, 200, { id: containerUnpackMatch[1], status: 'UNPACKED' });
-  }
+  if (containerUnpackMatch && req.method === 'POST') return send(res, 410, { error: '旧版容器写入口已停用，请使用 /api/inventory-containers/{id}/unpack' });
   const containerContentsMatch = pathname.match(/^\/api\/containers\/([^/]+)\/contents$/);
   if (containerContentsMatch && req.method === 'GET') return inventoryOfContainer(db, res, actor, containerContentsMatch[1]);
 
@@ -4069,9 +4469,11 @@ async function handleApi(db, req, res, url) {
     return send(res, 200, { slowMoving: slowMovingInventory(db) });
   }
   if (pathname === '/api/inventory-abc' && req.method === 'GET') {
-    const rows = db.prepare(`SELECT product_id productId, abc_class abcClass, effective_from effectiveFrom, effective_to effectiveTo, basis FROM inventory_abc_classifications ORDER BY effective_from DESC LIMIT 200`).all();
-    return send(res, 200, { abc: rows });
+    // INV-26: the canonical ABC module owns this read. The inline raw SELECT
+    // returned the table without the classification history.
+    return listAbcClassifications(db, res, actor, url);
   }
+
   if (pathname === '/api/inventory-availability' && req.method === 'GET') {
     const warehouseId = url.searchParams.get('warehouseId');
     const productId = url.searchParams.get('productId');
@@ -4088,21 +4490,10 @@ async function handleApi(db, req, res, url) {
   }
 
   // V21 — Barcode stocktake scan: adds a line to an existing inventory check
+  // The legacy stocktake scan write path is retired: the canonical module
+  // owns the scan on a draft stocktake.
   const checkScanMatch = pathname.match(/^\/api\/inventory-checks\/([^/]+)\/scan$/);
-  if (checkScanMatch && req.method === 'POST') {
-    const body = await readJson(req);
-    const check = db.prepare('SELECT * FROM inventory_checks WHERE id=?').get(checkScanMatch[1]);
-    if (!check) return send(res, 404, { error: '盘点单不存在' });
-    if (check.status !== 'DRAFT') return send(res, 409, { error: 'only DRAFT check accepts scan' });
-    const code = body.code || '';
-    const parsed = parseBarcode(db, code);
-    if (!parsed) return send(res, 400, { error: 'invalid barcode' });
-    const productId = parsed.entityType === 'product' ? parsed.entityId : parsed.fields?.product || parsed.productId;
-    if (!productId) return send(res, 400, { error: 'barcode has no product identity' });
-    if (productId !== check.product_id) return send(res, 409, { error: 'scan product mismatch' });
-    // Scan into the canonical check; no separate truth created
-    return send(res, 200, { ok: true, checkId: checkScanMatch[1], scanned: parsed, quantity: body.quantity || 1 });
-  }
+  if (checkScanMatch && req.method === 'POST') return send(res, 410, { error: '旧版盘点扫码写入口已停用，请使用 /api/inventory-stocktakes/{id}/scan' });
 
   // Narrow lookups for warehouse-flavored pickers (gated by INVENTORY_VIEW).
   // V2 Wave 4C: migrated to ownedRouteTable (server/modules/lookups.js).
@@ -4646,9 +5037,7 @@ function saveOrderItems(db, orderId, items) {
 function sha256(value) { return createHash('sha256').update(value).digest('hex'); }
 function makeVoucherNo() { const now = new Date(); return `VCH-${now.toISOString().slice(0,10).replaceAll('-','')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random()*90+10)}`; }
 
-function makeInventoryTransferNo() { const now = new Date(); return `IT-${now.toISOString().slice(0,10).replaceAll('-','')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random()*90+10)}`; }
 
-function makeInventoryCheckNo() { const now = new Date(); return `IC-${now.toISOString().slice(0,10).replaceAll('-','')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random()*90+10)}`; }
 
 function makeInventoryAdjustmentNo() { const now = new Date(); return `IA-${now.toISOString().slice(0,10).replaceAll('-','')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random()*90+10)}`; }
 
@@ -4973,34 +5362,6 @@ function listInventory(db, res, actor, url) {
 
 // ============ 库存预警 ============
 
-function getInventoryAlerts(db, res, actor) {
-  allowAny(actor, ['INVENTORY_VIEW', 'PRODUCTS_VIEW', 'WAREHOUSES_VIEW']);
-  
-  // 查询库存不足的货品（低于最低库存或再订货点）
-  // 首先获取所有有预警配置的货品
-  const productsWithAlerts = db.prepare(`SELECT p.id, p.code, p.name, p.unit, p.reorder_point, p.min_stock, p.max_stock, p.lead_time_days,
-    (SELECT COALESCE(SUM(quantity), 0) FROM inventory WHERE product_id = p.id) as total_stock
-    FROM products p WHERE p.active = 1 AND (p.reorder_point > 0 OR p.min_stock > 0)`).all();
-  
-  const alerts = productsWithAlerts.filter(p => 
-    (p.reorder_point > 0 && p.total_stock < p.reorder_point) || 
-    (p.min_stock > 0 && p.total_stock < p.min_stock)
-  );
-  
-  const productsWithLowStock = productsWithAlerts.filter(p => p.min_stock > 0 && p.total_stock < p.min_stock);
-  const productsToReorder = productsWithAlerts.filter(p => p.reorder_point > 0 && p.total_stock < p.reorder_point);
-  const lowStockCount = { cnt: productsWithLowStock.length };
-  const reorderCount = { cnt: productsToReorder.length };
-  
-  return send(res, 200, {
-    alerts,
-    summary: {
-      lowStockCount: lowStockCount?.cnt || 0,
-      reorderCount: reorderCount?.cnt || 0,
-      totalAlerts: alerts.length
-    }
-  });
-}
 
 function getReorderList(db, res, actor) {
   allowAny(actor, ['INVENTORY_VIEW', 'PRODUCTS_VIEW']);
@@ -5049,49 +5410,7 @@ function getReorderList(db, res, actor) {
 
 // ============ Inventory Checks ============
 
-function listInventoryChecks(db, res, actor, url) {
-  allow(actor, 'INVENTORY_VIEW');
-  const where = []; const params = [];
-  const archiveFilter = lifecycleArchiveFilter('INVENTORY_CHECK', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'ic.id' });
-  if (archiveFilter.clause) where.push(archiveFilter.clause);
-  const status = url.searchParams.get('status');
-  if (status && INVENTORY_CHECK_STATUS[status]) { where.push('ic.status=?'); params.push(status); }
-  const sql = `SELECT ic.*,w.code warehouseCode,w.name warehouseName,p.code productCode,p.name productName,p.unit,
-    creator.display_name creatorName,reviewer.display_name reviewerName
-    FROM inventory_checks ic
-    JOIN warehouses w ON w.id=ic.warehouse_id JOIN products p ON p.id=ic.product_id
-    JOIN users creator ON creator.id=ic.creator_id LEFT JOIN users reviewer ON reviewer.id=ic.reviewer_id
-    ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY ic.created_at DESC`;
-  const checks = db.prepare(sql).all(...params).map((row) => ({ ...row, statusLabel: INVENTORY_CHECK_STATUS[row.status], trackingAllocations: sourceTrackingAllocations(db, 'INVENTORY_CHECK', row.id, row.id) }));
-  return send(res, 200, { inventoryChecks: checks });
-}
 
-async function createInventoryCheck(db, req, res, actor) {
-  allow(actor, 'INVENTORY_CHECK_CREATE');
-  const body = await readJson(req);
-  const { warehouseId, productId, actualQuantity, reason } = body;
-  // V1.4-E2: every new stocktake declares an authoritative business date.
-  // Existing checked_at is the submit/event timestamp and cannot double as
-  // the stocktake business date (solution.md §21.4.1).
-  const businessDate = normalizeBusinessDate(body.businessDate || body.business_date, '盘点业务日期');
-  requireActiveReference(db, 'warehouses', warehouseId, '仓库');
-  if (!productId || !db.prepare('SELECT 1 FROM products WHERE id=? AND active=1').get(productId)) throw new HttpError(400, '请选择有效货品');
-  if (actualQuantity === undefined || actualQuantity === null) throw new HttpError(400, '请填写实际盘点数量');
-  const counted = Number(actualQuantity);
-  if (!Number.isFinite(counted) || counted < 0) throw new HttpError(400, '实际盘点数量不正确');
-  const inv = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(warehouseId, productId);
-  if (!inv) throw new HttpError(400, '该仓库没有此货品的库存记录');
-  const systemQuantity = inv.quantity;
-  const difference = counted - systemQuantity;
-  const checkId = id(); const now = new Date().toISOString(); const checkNo = makeInventoryCheckNo();
-  transaction(db, () => {
-    db.prepare(`INSERT INTO inventory_checks(id,check_no,warehouse_id,product_id,system_quantity,actual_quantity,difference,reason,status,creator_id,created_at,business_date)
-      VALUES(?,?,?,?,?,?,?,?,\'DRAFT\',?,?,?)`).run(checkId, checkNo, warehouseId, productId, systemQuantity, counted, difference, optionalText(reason, 200), actor.id, now, businessDate);
-    saveTrackedAllocations(db, { sourceType: 'INVENTORY_CHECK', sourceId: checkId, sourceItemId: checkId, productId, quantity: Math.abs(difference), allocations: body.trackingAllocations || body.tracking_allocations || [] });
-    audit(db, actor.id, 'CREATE', 'INVENTORY_CHECK', checkId, `盘点差异: ${difference}`);
-  });
-  return send(res, 201, { id: checkId, checkNo, status: 'DRAFT', businessDate });
-}
 
 function getInventoryDetail(db, res, actor, warehouseId, productId) {
   allow(actor, 'INVENTORY_VIEW');
@@ -5215,118 +5534,8 @@ function changeInventoryAdjustmentState(db, res, actor, adjustmentId, action) {
   return send(res, 200, { ok: true });
 }
 
-async function approveInventoryCheck(db, req, res, actor, checkId) {
-  const check = db.prepare('SELECT * FROM inventory_checks WHERE id=?').get(checkId);
-  if (!check) throw new HttpError(404, '盘点单不存在');
-  const body = await readJson(req);
-  const action = String(body.action || '').toUpperCase();
-  const now = new Date().toISOString();
-  if (action === 'UPDATE') {
-    allow(actor, 'INVENTORY_CHECK_CREATE');
-    if (check.status !== 'DRAFT') throw new HttpError(409, '只有草稿盘点单可以修改');
-    if (check.creator_id !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能修改自己创建的盘点单');
-    requireActiveReference(db, 'warehouses', body.warehouseId, '仓库');
-    if (!body.productId || !db.prepare('SELECT 1 FROM products WHERE id=? AND active=1').get(body.productId)) throw new HttpError(400, '请选择有效货品');
-    const actualQuantity = Number(body.actualQuantity);
-    if (!Number.isFinite(actualQuantity) || actualQuantity < 0) throw new HttpError(400, '实际盘点数量不正确');
-    const inventory = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(body.warehouseId, body.productId);
-    if (!inventory) throw new HttpError(400, '该仓库没有此货品的库存记录');
-    // V1.4-E2: business date is editable while DRAFT and only while DRAFT.
-    let businessDate = check.business_date;
-    if (body.businessDate || body.business_date) {
-      businessDate = normalizeBusinessDate(body.businessDate || body.business_date, '盘点业务日期');
-    } else if (!businessDate) {
-      throw new HttpError(400, '请填写盘点业务日期');
-    }
-    db.prepare('UPDATE inventory_checks SET warehouse_id=?,product_id=?,system_quantity=?,actual_quantity=?,difference=?,reason=?,business_date=? WHERE id=?')
-      .run(body.warehouseId, body.productId, inventory.quantity, actualQuantity, actualQuantity - inventory.quantity, optionalText(body.reason, 200), businessDate, checkId);
-    db.prepare("DELETE FROM tracked_source_allocations WHERE source_type='INVENTORY_CHECK' AND source_id=?").run(checkId);
-    saveTrackedAllocations(db,{sourceType:'INVENTORY_CHECK',sourceId:checkId,sourceItemId:checkId,productId:body.productId,quantity:Math.abs(actualQuantity-inventory.quantity),allocations:body.trackingAllocations||body.tracking_allocations||[]});
-    audit(db, actor.id, 'UPDATE', 'INVENTORY_CHECK', checkId, '修改盘点单 ' + check.check_no);
-  } else if (action === 'SUBMIT') {
-    allow(actor, 'INVENTORY_CHECK_CREATE');
-    if (check.status !== 'DRAFT') throw new HttpError(409, '只有草稿盘点单可以提交');
-    if (check.creator_id !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能提交自己创建的盘点单');
-    // V1.4-E2: checked_at is the submit/event timestamp and never substitutes
-    // for the authoritative business_date.
-    db.prepare("UPDATE inventory_checks SET status='SUBMITTED',checked_at=? WHERE id=?").run(now, checkId);
-    audit(db, actor.id, 'SUBMIT', 'INVENTORY_CHECK', checkId, '提交盘点单 ' + check.check_no);
-  } else if (action === 'APPROVE') {
-    allow(actor, 'INVENTORY_CHECK_APPROVE');
-    if (check.status !== 'SUBMITTED') throw new HttpError(409, '只有已提交盘点单可以审批');
-    if (check.creator_id === actor.id) throw new HttpError(409, '盘点单创建人不能审批自己的单据');
-    // V1.4-E2: approval uses the stored business_date for period-open and
-    // valuation. Legacy rows missing business_date are rejected to enforce
-    // solution.md §21.4.2.
-    const businessDate = check.business_date;
-    if (!businessDate || !/^\d{4}-\d{2}-\d{2}$/.test(businessDate)) throw new HttpError(409, '盘点单缺少权威业务日期，无法审批');
-    transaction(db, () => {
-      assertFinancialPeriodsOpen(db, businessDate);
-      const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=? AND active=1').get(check.warehouse_id, check.product_id);
-      if (!current) throw new HttpError(409, '库存记录不存在');
-      if (current.quantity !== check.system_quantity) throw new HttpError(409, '库存已变化，请重新盘点');
-      if (check.difference !== 0) postTrackedMovement(db, { sourceType: 'INVENTORY_CHECK', sourceId: checkId, sourceItemId: checkId, productId: check.product_id, warehouseId: check.warehouse_id, quantity: Math.abs(check.difference), direction: check.difference > 0 ? 'IN' : 'OUT', businessDate });
-      db.prepare("UPDATE inventory_checks SET status='APPROVED',reviewer_id=?,reviewed_at=? WHERE id=?").run(actor.id, now, checkId);
-      // V21 — write at the canonical default position so the multidimensional
-      // identity is preserved. The previous UPDATE against the legacy
-      // (warehouse_id, product_id) tuple could touch the wrong row once a
-      // second position (e.g. lot) co-exists in the same warehouse+product.
-      setInventoryQuantity(db, check.warehouse_id, check.product_id, check.actual_quantity, now);
-      if (check.difference !== 0) {
-        const transactionId=id(); db.prepare("INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,?,?,'INVENTORY_CHECK',?,?,?,?,?,?)")
-          .run(transactionId, check.warehouse_id, check.product_id, Math.abs(check.difference), check.difference > 0 ? 'IN' : 'OUT', check.actual_quantity, checkId, check.check_no, '盘点调整', actor.id, now, businessDate);
-        const movements=check.difference>0?receivePositiveSourceValue(db,{businessDate,productId:check.product_id,warehouseId:check.warehouse_id,quantity:Number(check.difference),movementType:'INVENTORY_COUNT_GAIN',sourceType:'INVENTORY_CHECK',sourceId:checkId,sourceItemId:checkId,inventoryTransactionId:transactionId}):issueSourceValue(db,{businessDate,productId:check.product_id,warehouseId:check.warehouse_id,quantity:-Number(check.difference),movementType:'INVENTORY_COUNT_SHORTAGE',sourceType:'INVENTORY_CHECK',sourceId:checkId,sourceItemId:checkId,inventoryTransactionId:transactionId});
-        const amount=movements.reduce((s,x)=>s+Math.abs(x.valueDeltaCents),0), role=inventoryAccountRole(db,check.product_id);
-        createSystemVoucher(db,{sourceType:'INVENTORY_COUNT',sourceId:checkId,businessDate,actorId:actor.id,entries:check.difference>0?[{role,direction:'DEBIT',amountCents:amount},{role:'INVENTORY_GAIN_LOSS',direction:'CREDIT',amountCents:amount}]:[{role:'INVENTORY_GAIN_LOSS',direction:'DEBIT',amountCents:amount},{role,direction:'CREDIT',amountCents:amount}]});
-      }
-      audit(db, actor.id, 'APPROVE', 'INVENTORY_CHECK', checkId, `审核通过，库存调整为 ${check.actual_quantity} 业务日期 ${businessDate}`);
-    });
-  } else throw new HttpError(400, '无效操作');
-  return send(res, 200, { ok: true });
-}
 
 // ============ Inventory Transfers ============
-
-// Status labels for inventory transfers. Runtime accepts
-// DRAFT / SUBMITTED / APPROVED (legacy CHECK) and
-// TRANSFERRED / CANCELLED (post-fix CHECK after schema rebuild).
-const INVENTORY_TRANSFER_STATUS = {
-  DRAFT: '草稿',
-  SUBMITTED: '待审核',
-  APPROVED: '已审核',
-  TRANSFERRED: '已调拨',
-  CANCELLED: '已取消',
-};
-
-function listInventoryTransfers(db, res, actor, url) {
-  allow(actor, 'INVENTORY_VIEW');
-  const where = []; const params = [];
-  const archiveFilter = lifecycleArchiveFilter('INVENTORY_TRANSFER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'it.id' });
-  if (archiveFilter.clause) where.push(archiveFilter.clause);
-  const status = url.searchParams.get('status');
-  if (status && INVENTORY_TRANSFER_STATUS[status]) { where.push('it.status=?'); params.push(status); }
-  const sql = `SELECT it.*,fw.code fromWarehouseCode,fw.name fromWarehouseName,tw.code toWarehouseCode,tw.name toWarehouseName,
-    creator.display_name creatorName,reviewer.display_name reviewerName,
-    (SELECT count(*) FROM inventory_transfer_items WHERE transfer_id=it.id) itemCount
-    FROM inventory_transfers it
-    JOIN warehouses fw ON fw.id=it.from_warehouse_id JOIN warehouses tw ON tw.id=it.to_warehouse_id
-    JOIN users creator ON creator.id=it.creator_id LEFT JOIN users reviewer ON reviewer.id=it.reviewer_id
-    ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY it.created_at DESC`;
-  const transfers = db.prepare(sql).all(...params).map((row) => {
-    applyInventoryTransferCompatibility(row);
-    return { ...row, statusLabel: INVENTORY_TRANSFER_STATUS[row.status] };
-  });
-  return send(res, 200, { inventoryTransfers: transfers });
-}
-
-function validateWarehouseItems(db, items) {
-  if (!Array.isArray(items) || items.length === 0) throw new HttpError(400, '请添加明细');
-  for (const item of items) {
-    const quantity = Number(item?.quantity);
-    if (!item?.productId || !db.prepare('SELECT 1 FROM products WHERE id=? AND active=1').get(item.productId)) throw new HttpError(400, '请选择有效货品');
-    if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, '数量必须大于 0');
-  }
-}
 
 function normalizeWarehouseItems(db, items) {
   if (!Array.isArray(items) || items.length === 0) throw new HttpError(400, '请添加明细');
@@ -5353,7 +5562,7 @@ const INVENTORY_CONTROL_REVERSAL = Object.freeze({
   INVENTORY_ADJUSTMENT: { table: 'inventory_adjustments', status: 'CONFIRMED', permission: 'INVENTORY_ADJUSTMENT_MANAGE', voucherSourceType: 'INVENTORY_ADJUSTMENT' },
   INVENTORY_SCRAP: { table: 'inventory_scraps', status: 'CONFIRMED', permission: 'INVENTORY_SCRAP_MANAGE', voucherSourceType: 'INVENTORY_SCRAP' },
   INVENTORY_TRANSFER: { table: 'inventory_transfers', status: 'TRANSFERRED', permission: 'INVENTORY_TRANSFER_APPROVE', voucherSourceType: 'INVENTORY_TRANSFER' },
-  INVENTORY_CHECK: { table: 'inventory_checks', status: 'APPROVED', requestPermission: 'INVENTORY_CHECK_CREATE', confirmPermission: 'INVENTORY_CHECK_APPROVE', voucherSourceType: 'INVENTORY_COUNT' },
+  INVENTORY_CHECK: { table: 'inventory_checks', status: 'APPROVED', requestPermission: 'INVENTORY_CHECK_CREATE', confirmPermission: 'INVENTORY_CHECK_APPROVE', voucherSourceType: 'INVENTORY_COUNT', transactionSourceTypes: ['INVENTORY_CHECK', 'INVENTORY_STOCKTAKE_DIFF'] },
 });
 
 async function reverseInventoryControl(db, req, res, actor, sourceType, sourceId, routeAction = null) {
@@ -5396,7 +5605,9 @@ async function reverseInventoryControl(db, req, res, actor, sourceType, sourceId
     const lockedExisting = db.prepare('SELECT * FROM inventory_control_reversals WHERE source_type=? AND source_id=?').get(sourceType, sourceId);
     if (lockedExisting?.status === 'CONFIRMED') return;
     if (!lockedExisting) db.prepare("INSERT INTO inventory_control_reversals(id,source_type,source_id,business_date,reason,status,creator_id,created_at) VALUES(?,?,?,?,?,'DRAFT',?,?)").run(reversalId, sourceType, sourceId, businessDate, reason, actor.id, now);
-    const originalTransactions = db.prepare('SELECT * FROM inventory_transactions WHERE source_type=? AND source_id=? ORDER BY CASE direction WHEN \'OUT\' THEN 0 ELSE 1 END,created_at,id').all(sourceType, sourceId);
+    const transactionSourceTypes = config.transactionSourceTypes || [sourceType];
+    const transactionSourcePlaceholders = transactionSourceTypes.map(() => '?').join(',');
+    const originalTransactions = db.prepare(`SELECT * FROM inventory_transactions WHERE source_type IN (${transactionSourcePlaceholders}) AND source_id=? ORDER BY CASE direction WHEN 'OUT' THEN 0 ELSE 1 END,created_at,id`).all(...transactionSourceTypes, sourceId);
     if (!originalTransactions.length) throw new HttpError(409, '原单没有可冲销的库存事件');
     const netByStock = new Map();
     for (const item of originalTransactions) {
@@ -5431,53 +5642,7 @@ async function reverseInventoryControl(db, req, res, actor, sourceType, sourceId
   return send(res, 200, { id: reversalId, status: 'CONFIRMED' });
 }
 
-async function createInventoryTransfer(db, req, res, actor) {
-  allow(actor, 'INVENTORY_TRANSFER_CREATE');
-  const body = await readJson(req);
-  const { fromWarehouseId, toWarehouseId, remark, items } = body;
-  if (!fromWarehouseId) throw new HttpError(400, '请选择源仓库');
-  if (!toWarehouseId) throw new HttpError(400, '请选择目标仓库');
-  if (fromWarehouseId === toWarehouseId) throw new HttpError(400, '源仓库和目标仓库不能相同');
-  // V1.4-E2: every new transfer must declare an authoritative business date.
-  // Empty / malformed values are rejected — never silently backfilled from
-  // created_at or updated_at per solution.md §21.4.2.
-  const businessDate = normalizeBusinessDate(body.businessDate || body.business_date);
-  validateWarehouseItems(db, items);
-  // Validate stock
-  for (const item of items) {
-    const inv = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(fromWarehouseId, item.productId);
-    if (!inv || inv.quantity < Number(item.quantity)) {
-      const product = db.prepare('SELECT code,name FROM products WHERE id=?').get(item.productId);
-      throw new HttpError(400, `${product?.code ?? item.productId} 库存不足`);
-    }
-  }
-  const transferId = id(); const now = new Date().toISOString(); const transferNo = makeInventoryTransferNo();
-  transaction(db, () => {
-    db.prepare(`INSERT INTO inventory_transfers(id,transfer_no,from_warehouse_id,to_warehouse_id,status,remark,creator_id,created_at,updated_at,business_date)
-      VALUES(?,?,?,?,'DRAFT',?,?,?,?,?)`).run(transferId, transferNo, fromWarehouseId, toWarehouseId, optionalText(remark, 200), actor.id, now, now, businessDate);
-    const stmt = db.prepare('INSERT INTO inventory_transfer_items(id,transfer_id,product_id,quantity) VALUES(?,?,?,?)');
-    for (const item of items) { const itemId = id(); stmt.run(itemId, transferId, item.productId, Number(item.quantity)); saveTrackedAllocations(db, { sourceType: 'INVENTORY_TRANSFER', sourceId: transferId, sourceItemId: itemId, productId: item.productId, quantity: Number(item.quantity), allocations: item.trackingAllocations || item.tracking_allocations || [] }); }
-    audit(db, actor.id, 'CREATE', 'INVENTORY_TRANSFER', transferId, `创建调拨单 ${transferNo}`);
-  });
-  return send(res, 201, { id: transferId, transferNo, businessDate });
-}
 
-function getInventoryTransfer(db, res, actor, transferId) {
-  allow(actor, 'INVENTORY_VIEW');
-  const transfer = db.prepare(`SELECT it.*,fw.code fromWarehouseCode,fw.name fromWarehouseName,tw.code toWarehouseCode,tw.name toWarehouseName,
-    creator.display_name creatorName,reviewer.display_name reviewerName
-    FROM inventory_transfers it
-    JOIN warehouses fw ON fw.id=it.from_warehouse_id JOIN warehouses tw ON tw.id=it.to_warehouse_id
-    JOIN users creator ON creator.id=it.creator_id LEFT JOIN users reviewer ON reviewer.id=it.reviewer_id
-    WHERE it.id=?`).get(transferId);
-  if (!transfer) throw new HttpError(404, '调拨单不存在');
-  transfer.items = db.prepare(`SELECT ti.*,p.code productCode,p.name productName,p.unit
-    FROM inventory_transfer_items ti JOIN products p ON p.id=ti.product_id WHERE ti.transfer_id=?`).all(transferId)
-    .map((item) => ({ ...item, trackingAllocations: sourceTrackingAllocations(db, 'INVENTORY_TRANSFER', transferId, item.id) }));
-  transfer.statusLabel = INVENTORY_TRANSFER_STATUS[transfer.status];
-  applyInventoryTransferCompatibility(transfer);
-  return send(res, 200, { transfer });
-}
 
 // V1.4-E2 DTO compatibility mapping (solution.md §21.8.2):
 //   * `reviewer_id` is the existing technical column. We never rename the
@@ -5489,111 +5654,11 @@ function getInventoryTransfer(db, res, actor, transferId) {
 //     surface their stored `reviewer_id` unchanged so we never silently
 //     rewrite historical audit data.
 //   * business_date is surfaced on every response. NULL means "业务日期缺失".
-function applyInventoryTransferCompatibility(transfer) {
-  if (!transfer) return;
-  const status = transfer.status;
-  const hasExecutor = !!transfer.reviewer_id;
-  if (status === 'TRANSFERRED') {
-    transfer.confirmedBy = transfer.reviewer_id || null;
-    transfer.confirmedByName = transfer.reviewerName || null;
-    transfer.confirmedAt = transfer.updated_at || null;
-    transfer.businessDateKnown = !!transfer.business_date;
-    transfer.businessDateMissing = !transfer.business_date;
-  } else if (status === 'CANCELLED') {
-    transfer.cancelledBy = transfer.reviewer_id || null;
-    transfer.cancelledByName = transfer.reviewerName || null;
-    transfer.cancelledAt = transfer.updated_at || null;
-    transfer.businessDateKnown = !!transfer.business_date;
-    transfer.businessDateMissing = !transfer.business_date;
-  } else {
-    transfer.businessDateKnown = !!transfer.business_date;
-    transfer.businessDateMissing = !transfer.business_date;
-  }
-  transfer.executorId = hasExecutor ? transfer.reviewer_id : null;
-  transfer.executorName = hasExecutor ? transfer.reviewerName : null;
-  transfer.legacyTechnicalStatus = (status === 'SUBMITTED' || status === 'APPROVED');
-}
 
 // Shared E2 command used by the HTTP route and the real multi-process MySQL
 // concurrency gate. Authorization remains at the route boundary; this command
 // owns the serialized state re-read and all physical/value side effects.
-export function confirmInventoryTransfer(db, actor, transferId, confirmedAt = new Date().toISOString()) {
-  return transaction(db, () => {
-    // Re-read after acquiring the shared SQLite/MySQL transaction gate.
-    // Reading before the gate lets two MySQL processes retain the same stale
-    // DRAFT snapshot and execute the physical movement twice.
-    const transfer = db.prepare('SELECT * FROM inventory_transfers WHERE id=?').get(transferId);
-    if (!transfer) throw new HttpError(404, '调拨单不存在');
-    if (transfer.status !== 'DRAFT') {
-      if (transfer.status === 'TRANSFERRED') {
-        throw new HttpError(409, '调拨单已确认，请勿重复操作', {
-          code: 'DUPLICATE_CONFIRMATION',
-          resolution: '刷新调拨单并查看已完成的确认记录',
-        });
-      }
-      throw new HttpError(409, '只有草稿状态的调拨单可以确认', { code: 'INVALID_DOCUMENT_STATE' });
-    }
-    // Confirm uses the stored authoritative date. Legacy NULL remains
-    // unknown and is never replaced with created_at / updated_at.
-    const businessDate = transfer.business_date;
-    if (!businessDate || !/^\d{4}-\d{2}-\d{2}$/.test(businessDate)) {
-      throw new HttpError(409, '调拨单缺少权威业务日期，无法确认', { code: 'SOURCE_LINEAGE_MISSING' });
-    }
-    assertFinancialPeriodsOpen(db, businessDate);
-    const items = db.prepare('SELECT * FROM inventory_transfer_items WHERE transfer_id=?').all(transferId);
-    for (const item of items) {
-      const source = db.prepare('SELECT COALESCE(SUM(quantity),0) quantity FROM inventory WHERE warehouse_id=? AND product_id=? AND active=1').get(transfer.from_warehouse_id, item.product_id);
-      if (!source || source.quantity < item.quantity) throw new HttpError(400, '源仓库库存不足');
-      const trackingAllocations = transferTrackedInventory(db, { sourceId: transferId, sourceItemId: item.id, productId: item.product_id, fromWarehouseId: transfer.from_warehouse_id, toWarehouseId: transfer.to_warehouse_id, quantity: item.quantity, businessDate });
-      if (trackingAllocations.length) {
-        for (const allocation of trackingAllocations) {
-          const position = { lotId: allocation.lot_id || null, serialId: allocation.serial_id || null };
-          adjustInventoryAtPosition(db, { warehouseId: transfer.from_warehouse_id, productId: item.product_id, quantityChange: -Number(allocation.quantity), now: confirmedAt, ...position });
-          adjustInventoryAtPosition(db, { warehouseId: transfer.to_warehouse_id, productId: item.product_id, quantityChange: Number(allocation.quantity), now: confirmedAt, ...position });
-        }
-      } else {
-        adjustInventory(db, transfer.from_warehouse_id, item.product_id, -item.quantity, confirmedAt);
-        adjustInventory(db, transfer.to_warehouse_id, item.product_id, item.quantity, confirmedAt);
-      }
-      const sourceBalance = Number(db.prepare('SELECT COALESCE(SUM(quantity),0) quantity FROM inventory WHERE warehouse_id=? AND product_id=? AND active=1').get(transfer.from_warehouse_id, item.product_id).quantity);
-      const targetBalance = Number(db.prepare('SELECT COALESCE(SUM(quantity),0) quantity FROM inventory WHERE warehouse_id=? AND product_id=? AND active=1').get(transfer.to_warehouse_id, item.product_id).quantity);
-      const insertTransaction = db.prepare(`INSERT INTO inventory_transactions
-        (id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-      const outTransactionId=id(); const inTransactionId=id();
-      insertTransaction.run(outTransactionId, transfer.from_warehouse_id, item.product_id, item.quantity, 'OUT', sourceBalance, 'INVENTORY_TRANSFER', transferId, transfer.transfer_no, '库存调拨出库', actor.id, confirmedAt, businessDate);
-      insertTransaction.run(inTransactionId, transfer.to_warehouse_id, item.product_id, item.quantity, 'IN', targetBalance, 'INVENTORY_TRANSFER', transferId, transfer.transfer_no, '库存调拨入库', actor.id, confirmedAt, businessDate);
-      const issued=issueSourceValue(db,{businessDate,productId:item.product_id,warehouseId:transfer.from_warehouse_id,quantity:Number(item.quantity),movementType:'TRANSFER_OUT',sourceType:'INVENTORY_TRANSFER',sourceId:transferId,sourceItemId:item.id,inventoryTransactionId:outTransactionId});
-      issued.forEach((m)=>receiveValue(db,{businessDate,productId:item.product_id,warehouseId:transfer.to_warehouse_id,lotId:m.lotId,serialId:m.serialId,quantity:-m.quantityDelta,valueCents:-m.valueDeltaCents,movementType:'TRANSFER_IN',sourceType:'INVENTORY_TRANSFER',sourceId:transferId,sourceItemId:item.id,inventoryTransactionId:inTransactionId,valuationBasis:m.valuationMethod==='LEGACY_UNVALUED'?'LEGACY_UNVALUED':'TRANSFER_CARRYING_VALUE'}));
-    }
-    db.prepare("UPDATE inventory_transfers SET status='TRANSFERRED',reviewer_id=?,updated_at=? WHERE id=?").run(actor.id, confirmedAt, transferId);
-    audit(db, actor.id, 'TRANSFER', 'INVENTORY_TRANSFER', transferId, `确认调拨 ${transfer.transfer_no} 业务日期 ${businessDate}`);
-    // 同一公司内仓库调拨仅改变估值维度，不形成损益或公司总存货 GL。
-    return { id: transferId, status: 'TRANSFERRED', businessDate };
-  });
-}
 
-async function changeInventoryTransferState(db, req, res, actor, transferId, action) {
-  const now = new Date().toISOString();
-  if (action === 'transfer') {
-    // V1.4-E2: capability gate accepts the canonical
-    // INVENTORY_TRANSFER_CONFIRM permission or its deprecated APPROVE alias.
-    allowInventoryTransferConfirm(actor);
-    confirmInventoryTransfer(db, actor, transferId, now);
-  } else if (action === 'cancel') {
-    // Cancellation terminates an unexecuted draft and belongs to the CREATE
-    // capability, not the physical CONFIRM capability.
-    allow(actor, 'INVENTORY_TRANSFER_CREATE');
-    transaction(db, () => {
-      const transfer = db.prepare('SELECT * FROM inventory_transfers WHERE id=?').get(transferId);
-      if (!transfer) throw new HttpError(404, '调拨单不存在');
-      if (transfer.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态的调拨单可以取消', { code: 'INVALID_DOCUMENT_STATE' });
-      db.prepare("UPDATE inventory_transfers SET status='CANCELLED',reviewer_id=?,updated_at=? WHERE id=?").run(actor.id, now, transferId);
-      audit(db, actor.id, 'CANCEL', 'INVENTORY_TRANSFER', transferId, `取消调拨 ${transfer.transfer_no}`);
-    });
-  } else throw new HttpError(400, '无效操作');
-  return send(res, 200, { ok: true });
-}
 
 
 
@@ -7704,7 +7769,6 @@ const PO_STATUS = { PENDING: '待生产', IN_PROGRESS: '生产中', COMPLETED: '
 
 
 
-const INVENTORY_CHECK_STATUS = { DRAFT: "草稿", SUBMITTED: "待审批", APPROVED: "已审批" };
 const AR_STATUS = { OPEN: '未收', PARTIAL: '部分收款', CLOSED: '已结清' };
 const AP_STATUS = { OPEN: '未付', PARTIAL: '部分付款', CLOSED: '已结清' };
 

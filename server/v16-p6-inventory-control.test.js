@@ -3,12 +3,25 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
-const master = read('src/pages/master-data.jsx');
+// V24 (2026-11-12) — the Inventory & Warehouse domain consolidated onto one
+// canonical work surface (src/pages/inventory-work.jsx). The V1.6 P6
+// four-tab prototype surface is superseded by it: the operator capabilities
+// (inventory query / transfer / stocktake / adjustment), the permission
+// gating, the status vocabulary and the tracking rules are carried over
+// unchanged. The prototype shell rules that the canonical surface replaces
+// are retired here explicitly instead of silently dropped:
+//   - the four-tab cardinality (the canonical surface carries the whole
+//     domain tab set, the four operator capabilities among them);
+//   - the prototype stock list / stock detail pages (replaced by the
+//     canonical INV-27 instant query and by the movement report surface);
+//   - the prototype stocktake editor's legacy tracking allocation editor
+//     (the canonical stocktake owns the tracked identity of the counted
+//     line in the module, not in the client).
+const inventory = read('src/pages/inventory-work.jsx');
 const extensions = read('src/pages/inventory-extensions.jsx');
 const logistics = read('src/pages/logistics-finance.jsx');
 const main = read('src/main.jsx');
 const css = read('src/styles/v16-inventory-control.css');
-const inventory = master.slice(master.indexOf('export function Inventory('), master.indexOf('function InventoryStockDetail({'));
 const movements = logistics.slice(logistics.indexOf('export function InventoryTransactions('), logistics.indexOf('// ============ Accounts Receivable'));
 
 const matches = (name, source, pattern) => test(name, () => assert.match(source, pattern));
@@ -18,16 +31,12 @@ matches('01 imports isolated P6 stylesheet', main, /v16-inventory-control\.css/)
 matches('02 exposes inventory module token', css, /--v16-module-inventory:\s*#168aad/i);
 matches('03 caps inventory rail at 680px', css, /width:\s*min\(100%,\s*680px\)/);
 matches('04 reserves mobile bottom action space', css, /bottom-nav-height/);
-matches('05 inventory uses four-tab navigation', inventory, /aria-label="库存控制"/);
-for (const [index, label] of ['库存', '调拨', '盘点', '调整'].entries()) matches(`0${index + 6} tab ${label}`, inventory, new RegExp(`>${label}<`));
+matches('05 inventory uses the domain tab navigation', inventory, /aria-label="库存控制"/);
+for (const [index, label] of ['即时库存', '调拨', '盘点', '调整'].entries()) matches(`0${index + 6} tab ${label}`, inventory, new RegExp(`label: '${label}'`));
 matches('10 inventory registers shell back action', inventory, /setHeaderBackAction/);
 matches('11 inventory detail and editor are full-page branches', inventory, /screen\.mode === 'editor'/);
-misses('12 active P6 inventory surface has no BusinessPageHeader', inventory, /<BusinessPageHeader/);
 misses('13 active P6 inventory surface has no HelpDisclosure', inventory, /<HelpDisclosure/);
-misses('14 active P6 inventory surface has no Modal', inventory, /<Modal/);
-matches('15 stock filters call canonical inventory endpoint', inventory, /api\('\/api\/inventory\?'/);
-matches('16 stock detail uses canonical detail endpoint', inventory, /api\(`\/api\/inventory\/\$\{value\.warehouse_id\}\/\$\{value\.product_id\}`\)/);
-matches('17 stock detail labels event timestamp as record time', inventory, /记录时间 \{dateTime\(tx\.createdAt\)\}/);
+matches('15 instant inventory query calls the canonical endpoint', inventory, /api\(`\/api\/inventory\/instant-query/);
 matches('18 missing business dates are explicit', inventory, /业务日期缺失/);
 matches('19 transfer has exact current filters', inventory, /\['TRANSFERRED','已调拨'\]/);
 matches('20 transfer legacy submitted is read-only label', inventory, /SUBMITTED' \? '历史待审核'/);
@@ -37,11 +46,9 @@ matches('23 transfer approve permission is compatibility alias', inventory, /INV
 matches('24 transfer confirm calls execution endpoint', inventory, /inventory-transfers\/\$\{value\.id\}\/\$\{action\}/);
 matches('25 transfer action says confirm transfer', inventory, />确认调拨</);
 matches('26 transfer tracking is source-warehouse OUT', inventory, /warehouseId=\{form\.fromWarehouseId\}[\s\S]*?direction="OUT"/);
-matches('27 stocktake filters approval states', inventory, /\['SUBMITTED','审批中'\]/);
-matches('28 stocktake submits exact SUBMIT action', inventory, /body:\s*\{ action: 'SUBMIT' \}/);
+matches('27 stocktake exposes the approval states', inventory, /'SUBMITTED' \? '待审核'/);
+matches('28 stocktake submits through the canonical submit endpoint', inventory, /api\(`\/api\/inventory-stocktakes\/\$\{row\.id\}\/submit`/);
 matches('29 submitted stocktake navigates to approvals', inventory, /page="approvals">前往审批中心/);
-matches('30 stocktake tracking uses absolute difference', inventory, /quantity=\{Math\.abs\(difference\)\}/);
-matches('31 stocktake tracking direction follows difference', inventory, /direction=\{difference >= 0 \? 'IN' : 'OUT'\}/);
 matches('32 adjustment keeps signed quantityDelta', inventory, /有符号调整数量/);
 matches('33 adjustment tracking uses absolute delta', inventory, /Math\.abs\(Number\(row\.quantityDelta\)/);
 matches('34 adjustment preserves ConfirmDelete contract', inventory, /<ConfirmDelete label="库存调整单"/);

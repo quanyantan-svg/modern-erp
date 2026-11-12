@@ -100,7 +100,7 @@ describe('UI source — route surface preserved', () => {
       ['UsersRoles', 'pages/master-data.jsx'],
       ['PurchaseOrders', 'pages/master-data.jsx'],
       ['Warehouses', 'pages/master-data.jsx'],
-      ['Inventory', 'pages/master-data.jsx'],
+      ['InventoryWork', 'pages/inventory-work.jsx'],
       ['Accounting', 'pages/accounting.jsx'],
       ['Boms', 'pages/manufacturing.jsx'],
       ['ProductionOrders', 'pages/manufacturing.jsx'],

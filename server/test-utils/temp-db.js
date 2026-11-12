@@ -94,6 +94,7 @@ export function createTempDb({
       'RUN_FINANCE_RACES',
       'RUN_ENGINEERING_RACES',
       'RUN_MANUFACTURING_QUALITY_RACES',
+      'RUN_INVENTORY_WAREHOUSE_RACES',
       'CLEANUP_SCHEMA_POST_RUN',
     ]);
     const config = resolveDatabaseConfig({ backend: 'mysql' });

@@ -13,10 +13,19 @@ import { openInitialization, closeInitialization, confirmOpeningDocument } from 
 import { confirmNativeDocument } from './modules/inventory-native-document.js';
 import { approveStocktake } from './modules/inventory-stocktake.js';
 import { applyInventoryMutation } from './lib/inventory-mutation.js';
+import { computePositionKey } from './lib/inventory-position.js';
+
+const positionKey = (productId, warehouseId) => computePositionKey({
+  productId, warehouseId, binId: null, ownerType: 'ENTERPRISE', ownerId: null,
+  stockStatus: 'AVAILABLE', lotId: null, serialId: null,
+});
 
 function seedMaster(db) {
   const now = new Date().toISOString();
   db.prepare(`INSERT OR IGNORE INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at) VALUES('u-act','a','A','x','x','role-admin',1,?)`).run(now);
+  // The stocktake contract separates the counter from the approver, so the
+  // approver has to be a second real user.
+  db.prepare(`INSERT OR IGNORE INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at) VALUES('u-approver','b','B','x','x','role-admin',1,?)`).run(now);
   db.prepare(`INSERT OR IGNORE INTO warehouses(id,code,name,active,bin_enabled,created_at,updated_at) VALUES('wh-S','WH-S','WH S',1,0,?,?)`).run(now, now);
   db.prepare(`INSERT OR IGNORE INTO products(id,code,name,category,unit,price_cents,stock_quantity,active,tracking_policy,created_at,updated_at) VALUES('p-S','P-S','SKU STK','CAT','PCS',1000,0,1,'NONE',?,?)`).run(now, now);
 }
@@ -128,9 +137,11 @@ describe('V21 Wave C — Opening / Native / Stocktake', () => {
     // Insert inventory_check + items manually (avoiding req body parsing)
     const now = new Date().toISOString();
     const checkId = 'stk-1';
-    db.prepare(`INSERT INTO inventory_checks(id, check_no, warehouse_id, status, checked_at, creator_id, created_at, check_kind, scope_strategy, snapshot_at) VALUES(?, 'STK-001', 'wh-S', 'SUBMITTED', ?, 'u-act', ?, 'REGULAR', 'ALL', ?)`).run(checkId, now, now, now);
-    db.prepare(`INSERT INTO inventory_check_items(id, check_id, product_id, position_key, owner_type, stock_status, book_quantity, check_quantity, diff_quantity, snapshot_book_quantity) VALUES('stk-item-1', ?, 'p-S', 'pk-1', 'ENTERPRISE', 'AVAILABLE', 100, 95, -5, 100)`).run(checkId);
-    approveStocktake(db, makeRes(), ACTOR, checkId);
+    db.prepare(`INSERT INTO inventory_checks(id, check_no, warehouse_id, status, checked_at, creator_id, created_at, check_kind, scope_strategy, snapshot_at, business_date) VALUES(?, 'STK-001', 'wh-S', 'SUBMITTED', ?, 'u-act', ?, 'REGULAR', 'ALL', ?, '2026-10-10')`).run(checkId, now, now, now);
+    db.prepare(`INSERT INTO inventory_check_items(id, check_id, product_id, position_key, owner_type, stock_status, book_quantity, check_quantity, diff_quantity, snapshot_book_quantity) VALUES('stk-item-1', ?, 'p-S', ?, 'ENTERPRISE', 'AVAILABLE', 100, 95, -5, 100)`).run(checkId, positionKey('p-S', 'wh-S'));
+    // The approver must not be the creator: the separation of duties is part of
+    // the stocktake contract.
+    approveStocktake(db, makeRes(), { ...ACTOR, id: 'u-approver' }, checkId);
     const pos = db.prepare(`SELECT quantity FROM inventory WHERE product_id='p-S' AND warehouse_id='wh-S'`).get();
     assert.equal(Number(pos.quantity), 95);
   });
@@ -143,9 +154,11 @@ describe('V21 Wave C — Opening / Native / Stocktake', () => {
       idempotencyKey: 'OTHER_RECEIPT:or-4' });
     const now = new Date().toISOString();
     const checkId = 'stk-2';
-    db.prepare(`INSERT INTO inventory_checks(id, check_no, warehouse_id, status, checked_at, creator_id, created_at, check_kind, scope_strategy, snapshot_at) VALUES(?, 'STK-002', 'wh-S', 'SUBMITTED', ?, 'u-act', ?, 'REGULAR', 'ALL', ?)`).run(checkId, now, now, now);
-    db.prepare(`INSERT INTO inventory_check_items(id, check_id, product_id, position_key, owner_type, stock_status, book_quantity, check_quantity, diff_quantity, snapshot_book_quantity) VALUES('stk-item-2', ?, 'p-S', 'pk-2', 'ENTERPRISE', 'AVAILABLE', 50, 75, 25, 50)`).run(checkId);
-    approveStocktake(db, makeRes(), ACTOR, checkId);
+    db.prepare(`INSERT INTO inventory_checks(id, check_no, warehouse_id, status, checked_at, creator_id, created_at, check_kind, scope_strategy, snapshot_at, business_date) VALUES(?, 'STK-002', 'wh-S', 'SUBMITTED', ?, 'u-act', ?, 'REGULAR', 'ALL', ?, '2026-10-10')`).run(checkId, now, now, now);
+    db.prepare(`INSERT INTO inventory_check_items(id, check_id, product_id, position_key, owner_type, stock_status, book_quantity, check_quantity, diff_quantity, snapshot_book_quantity) VALUES('stk-item-2', ?, 'p-S', ?, 'ENTERPRISE', 'AVAILABLE', 50, 75, 25, 50)`).run(checkId, positionKey('p-S', 'wh-S'));
+    // The approver must not be the creator: the separation of duties is part of
+    // the stocktake contract.
+    approveStocktake(db, makeRes(), { ...ACTOR, id: 'u-approver' }, checkId);
     const pos = db.prepare(`SELECT quantity FROM inventory WHERE product_id='p-S' AND warehouse_id='wh-S'`).get();
     assert.equal(Number(pos.quantity), 75);
   });

@@ -6,6 +6,11 @@
    - Single source of truth for cards, tables, forms, buttons, badges
    ============================================================ */
 
+/* V24 — Inventory & Warehouse work surfaces (INV-01..INV-44).
+ * Touch-target floor + anti-overflow guard per
+ * docs/requirements/manufacturing-quality.md §29.8 A.2. */
+@import './styles/v16-inventory-work.css';
+
 :root {
   /* Surfaces */
   --bg-app: #F4F5F7;

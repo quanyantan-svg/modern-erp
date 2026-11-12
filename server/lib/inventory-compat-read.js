@@ -5,11 +5,22 @@
 //   canonical positions instead of selecting one arbitrary row.
 //   This adapter is the single read-side entry point.
 
-export function aggregateInventoryByWarehouseProduct(db, { warehouseId, productId }) {
+// INV-27 — the instant inventory query must support the full canonical
+// identity: product / warehouse / bin / owner / stock status / lot / serial.
+// The filter set used to be warehouse + product only, which made the query
+// unable to answer "the stock of this lot in this bin owned by this supplier".
+export function aggregateInventoryByWarehouseProduct(db, filters = {}) {
+  const { warehouseId, productId, binId, ownerType, ownerId, stockStatus, lotId, serialId } = filters || {};
   const params = [];
   const where = ['active=1'];
   if (warehouseId) { where.push('warehouse_id=?'); params.push(warehouseId); }
   if (productId)   { where.push('product_id=?');   params.push(productId); }
+  if (binId)       { where.push('bin_id=?');       params.push(binId); }
+  if (ownerType)   { where.push('owner_type=?');   params.push(String(ownerType).toUpperCase()); }
+  if (ownerId)     { where.push('owner_id=?');     params.push(ownerId); }
+  if (stockStatus) { where.push('stock_status=?'); params.push(String(stockStatus).toUpperCase()); }
+  if (lotId)       { where.push('lot_id=?');       params.push(lotId); }
+  if (serialId)    { where.push('serial_id=?');    params.push(serialId); }
   const rows = db.prepare(`
     SELECT warehouse_id warehouseId, product_id productId,
            SUM(quantity)                                              AS totalQuantity,

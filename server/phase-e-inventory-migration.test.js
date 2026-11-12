@@ -40,6 +40,7 @@ import { fileURLToPath } from 'node:url';
 import { after, afterEach, before, beforeEach, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { createDatabase, hashPassword, PERMISSIONS } from './db.js';
+import { computePositionKey } from './lib/inventory-position.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
@@ -152,8 +153,16 @@ describe('Phase E — legacy inventory_transfers schema reconciled on canonical 
 
     // 2. Re-open through the application's canonical initialization path.
     db = createDatabase(legacyPath);
-    db.prepare(`INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at)
-      VALUES('inv-mig-source','wh-1','product-mig-1',20,datetime('now'))`).run();
+    // The seeded balance carries the canonical position identity. A row
+    // written without position_key is invisible to the canonical mutation
+    // contract, which reads and writes at the position level.
+    const migratedPositionKey = computePositionKey({
+      productId: 'product-mig-1', warehouseId: 'wh-1', binId: null,
+      ownerType: 'ENTERPRISE', ownerId: null, stockStatus: 'AVAILABLE',
+      lotId: null, serialId: null,
+    });
+    db.prepare(`INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at,position_key,bin_id,owner_type,owner_id,stock_status,lot_id,serial_id,active)
+      VALUES('inv-mig-source','wh-1','product-mig-1',20,datetime('now'),?,NULL,'ENTERPRISE',NULL,'AVAILABLE',NULL,NULL,1)`).run(migratedPositionKey);
 
     // 3. Boot a fresh HTTP server against the migrated DB.
     svr = createServer(createApp(db, { distDir: resolve('dist') }));

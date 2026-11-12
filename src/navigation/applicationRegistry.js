@@ -123,6 +123,7 @@ const loadScreenModule = (path) => {
     case '../pages/logistics-finance.jsx': return import('../pages/logistics-finance.jsx');
     case '../pages/traceability.jsx': return import('../pages/traceability.jsx');
     case '../pages/inventory-extensions.jsx': return import('../pages/inventory-extensions.jsx');
+    case '../pages/inventory-work.jsx': return import('../pages/inventory-work.jsx');
     case '../pages/discounts.jsx': return import('../pages/discounts.jsx');
     case '../pages/manufacturing.jsx': return import('../pages/manufacturing.jsx');
     case '../pages/manufacturing-quality.jsx': return import('../pages/manufacturing-quality.jsx');
@@ -175,7 +176,7 @@ const SCREEN_DEFINITIONS = Object.freeze({
   orders: named('../pages/master-data.jsx','Orders'), approvals: defaultScreen('../components/MobileApprovalCenter.jsx'),
   customers: named('../pages/master-data.jsx','Customers'), suppliers: named('../pages/master-data.jsx','Suppliers'),
   'purchase-orders': named('../pages/master-data.jsx','PurchaseOrders'), products: named('../pages/master-data.jsx','Products'),
-  warehouses: named('../pages/master-data.jsx','Warehouses'), inventory: named('../pages/master-data.jsx','Inventory'),
+  warehouses: named('../pages/master-data.jsx','Warehouses'), inventory: named('../pages/inventory-work.jsx','InventoryWork'),
   users: named('../pages/master-data.jsx','UsersRoles'), 'cash-journals': named('../pages/treasury-cost.jsx','CashJournals'),
   'bank-accounts': named('../pages/treasury-cost.jsx','BankAccounts'), bills: named('../pages/treasury-cost.jsx','Bills'),
   'fixed-assets': named('../pages/fixed-assets.jsx','FixedAssets'), 'product-costs': named('../pages/treasury-cost.jsx','ProductCosts'),
@@ -294,7 +295,7 @@ export const APPLICATION_LAUNCHER_GROUPS = Object.freeze([
   launcherGroup('planning','Planning','domain','planning', [['planner-workbench','计划员工作台','dashboard'],['forecasts','计划预测','forecasts'],['mrp-runs','MRP','mrpRuns'],['planned-orders','计划订单','mrpRuns'],['production-instructions','生产指令','planningDocuments'],['purchase-instructions','采购指令','planningDocuments']]),
   launcherGroup('procurement-outsourcing','Procurement & Outsourcing','domain','purchasing', [['suppliers','供应商资料','suppliers'],['sourcing-pricing','寻源与定价','sourcingPricing'],['purchase-requisitions','请购单','planningDocuments'],['purchase-orders','采购订单','purchaseOrders'],['purchase-receipts','采购收货','purchaseReceipts'],['returns','采购退货','returns',{key:'returns:purchase',target:{documentType:'PURCHASE_RETURN'}}],['outsourcing','委外加工','outsourcing']]),
   launcherGroup('manufacturing-quality','Manufacturing & Quality','domain','production', [['production-orders','制令单','productionOrders'],['material-issues','用料出库','salesDeliveries'],['production-quality','生产质量','iqc'],['production-receipts','生产入库','purchaseReceipts'],['production-scan','生产扫码','traceability'],['quality-configuration','质量配置','iqc']]),
-  launcherGroup('inventory-warehouse','Inventory & Warehouse','domain','inventory', [['warehouses','仓库资料','warehouses'],['inventory','库存作业','inventory'],['inventory-scraps','存货报废','inventoryScrap'],['inventory-month-end','存货月结','inventoryPeriod'],['inventory-transactions','库存异动','inventoryTransactions'],['traceability','批次 / 序列号','traceability']]),
+  launcherGroup('inventory-warehouse','Inventory & Warehouse','domain','inventory', [['warehouses','仓库资料','warehouses'],['inventory','库存作业与主数据','inventory'],['inventory-scraps','存货报废','inventoryScrap'],['inventory-month-end','存货月结','inventoryPeriod'],['inventory-transactions','库存异动','inventoryTransactions'],['traceability','批次 / 序列号','traceability']]),
   launcherGroup('finance-operations','Finance Operations','domain','finance', [['accounts-receivable','应收','accountsReceivable'],['payment-collections','收款','paymentCollections'],['accounts-payable','应付','accountsPayable'],['payment-disbursements','付款','paymentDisbursements'],['finance-invoices','发票','accounting'],['finance-treasury','资金','bankAccounts']]),
   launcherGroup('accounting-analytics','Accounting & Analytics','domain','analytics', [
     ['business-overview','业务总览','overview'],

@@ -12,6 +12,7 @@ const read = (path) => readFileSync(resolve(root, path), 'utf8');
 const appSource = read('src/App.jsx');
 const workflowSource = read('src/components/MobileWorkflowProgress.jsx');
 const masterSource = read('src/pages/master-data.jsx');
+const inventoryWorkSource = read('src/pages/inventory-work.jsx');
 const logisticsSource = read('src/pages/logistics-finance.jsx');
 const approvalSource = read('src/components/MobileApprovalCenter.jsx');
 
@@ -122,7 +123,7 @@ describe('navigation state and regression contracts', () => {
   test('24 M2 launcher uses canonical navigation', () => { assert.match(appSource, /function handleMobileApplicationSelect\(item\) \{[\s\S]*?navigate\(\{ routeKey: item\.page/); });
   test('25 M3 approval mutation dispatch is unchanged', () => { assert.match(approvalSource, /await api\(request\.path, request\.options\)/); });
   test('26 M4 relationship data rendering is unchanged', () => { assert.match(logisticsSource, /relation\.upstream/); assert.match(logisticsSource, /relation\.downstream/); });
-  test('27 M5 inventory behavior code is outside navigation changes', () => { assert.match(masterSource, /INVENTORY_ADJUSTMENT_MANAGE/); assert.match(logisticsSource, /INVENTORY_ADJUSTMENT/); });
+  test('27 M5 inventory behavior code is outside navigation changes', () => { assert.match(inventoryWorkSource, /INVENTORY_ADJUSTMENT_MANAGE/); assert.match(logisticsSource, /INVENTORY_ADJUSTMENT/); });
   test('28 registered permissions reflect Core Scope Cleanup', async () => {
     const { PERMISSIONS } = await import('../server/db.js');
     // M14 reached 113 entries; subsequent M5/V13 hardening added

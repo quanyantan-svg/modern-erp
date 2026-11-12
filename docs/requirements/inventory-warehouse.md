@@ -14,9 +14,9 @@
 > Boundary 手册 = `B3101` Procurement / `B3102` Sales / `B3106` Inventory Costing / `B3119` Manufacturing / `B3120` Planning / `B3121` Outsourcing，仅用于确定接口；不得重新打开冻结业务域。
 >
 > **本节 Coverage 以 Inventory & Warehouse Audit PASS 为准：**
-> Audit = `PASS`；Requirement capability set = 44；Owner accounting = 40 Domain-Owned + 4 Integration-Backed；Requirement Only；Design 未开始；Implementation 未开始。
+> Audit = `PASS`；Requirement capability set = 44；Owner accounting = 40 Domain-Owned + 4 Integration-Backed。
 >
-> Design 见 `solution.md §27`（待用户 PASS 后展开）；本阶段不进入 Design / Implementation / Migration / API / UI / Test 任一阶段。
+> **2026-11-12 状态更正（域级 Acceptance 整改轮）**：本节的能力基线与 owner accounting 不变；Design 已展开为 `solution.md §27`，Implementation 已完成并进入域级验收阶段。逐项复核结论、真实缺陷与残余登记在 [`docs/audits/inventory-warehouse-capability-audit-20261112.md`](../audits/inventory-warehouse-capability-audit-20261112.md)。本节正文条款本身未被改写。
 >
 > 已知 Domain Authority：
 > - Inventory & Warehouse = **Physical Inventory Truth Owner**；

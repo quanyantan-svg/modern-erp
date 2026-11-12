@@ -10,6 +10,10 @@ const css = read('src', 'styles.css');
 const ui = read('src', 'components', 'ui.jsx');
 const approvals = read('src', 'components', 'MobileApprovalCenter.jsx');
 const masterData = read('src', 'pages', 'master-data.jsx');
+// V24 (2026-11-12) — the inventory work surface moved to
+// src/pages/inventory-work.jsx when the domain consolidated onto one
+// canonical work face.
+const inventoryWork = read('src', 'pages', 'inventory-work.jsx');
 const settlement = read('src', 'pages', 'settlement.jsx');
 const ordinaryFilterPages = [
   read('src', 'pages', 'platform-notifications.jsx'),
@@ -36,11 +40,11 @@ describe('V1.2 premium visual polish round 2', () => {
   });
 
   test('inventory uses compact modes and product-first semantic records', () => {
-    assert.match(masterData, /className="v16-inventory-row"/);
-    assert.match(masterData, /v16-inventory-row__body[\s\S]*?productName/);
-    assert.match(masterData, /v16-inventory-row__metric/);
-    assert.doesNotMatch(masterData, /<strong>库存查询<\/strong><small>/);
-    assert.match(masterData, /className="v16-inventory-tabs"/);
+    assert.match(inventoryWork, /className="v16-inventory-row"/);
+    assert.match(inventoryWork, /v16-inventory-row__body[\s\S]*?\{title\}/);
+    assert.match(inventoryWork, /v16-inventory-row__metric/);
+    assert.doesNotMatch(inventoryWork, /<strong>库存查询<\/strong><small>/);
+    assert.match(inventoryWork, /className="inv-work-tabs"/);
   });
 
   test('root panel and launcher groups use whitespace instead of container chrome', () => {

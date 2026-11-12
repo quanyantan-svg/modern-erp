@@ -45,15 +45,22 @@ export async function createInventoryLock(db, req, res, actor) {
   });
   if (!productId || !warehouseId || !Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, '产品 / 仓库 / 数量必填');
   if (!reason) throw new HttpError(400, '锁定原因必填');
-  // Validate against lockable on_hand
-  const onHand = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) q FROM inventory WHERE product_id=? AND warehouse_id=? AND active=1 AND stock_status='AVAILABLE'`).get(productId, warehouseId)?.q || 0);
-  const alreadyLocked = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) q FROM inventory_locks WHERE position_key=? AND status='ACTIVE'`).get(positionKey)?.q || 0);
-  if (alreadyLocked + quantity > onHand) {
-    throw new HttpError(409, `锁库数量超过可锁量：可用 ${onHand - alreadyLocked}，需锁 ${quantity}`);
-  }
   const lockId = genId();
   const now = nowIso();
   transaction(db, () => {
+    // The over-lock guard reads the locked quantity INSIDE the transaction and
+    // locks the canonical position row first. Reading it before the
+    // transaction let two concurrent locks both see "nothing locked yet" and
+    // lock more than the position holds.
+    const lockSql = db.dialect === 'mysql'
+      ? 'SELECT id, quantity FROM inventory WHERE position_key=? AND active=1 FOR UPDATE'
+      : 'SELECT id, quantity FROM inventory WHERE position_key=? AND active=1';
+    db.prepare(lockSql).get(positionKey);
+    const onHand = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) q FROM inventory WHERE product_id=? AND warehouse_id=? AND active=1 AND stock_status='AVAILABLE'`).get(productId, warehouseId)?.q || 0);
+    const alreadyLocked = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) q FROM inventory_locks WHERE position_key=? AND status='ACTIVE'`).get(positionKey)?.q || 0);
+    if (alreadyLocked + quantity > onHand) {
+      throw new HttpError(409, `锁库数量超过可锁量：可用 ${onHand - alreadyLocked}，需锁 ${quantity}`);
+    }
     db.prepare(`
       INSERT INTO inventory_locks(id, product_id, warehouse_id, position_key, quantity, reason, status, locked_by, locked_at, source_type, source_id)
       VALUES(?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?)

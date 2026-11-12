@@ -1904,7 +1904,7 @@ Integration-Backed = 4
 | ID | Design owner module / service | schema / integration | acceptance evidence (placeholder for Implementation) |
 |---|---|---|---|
 | INV-01 | `inventory-parameters.js` | `inventory_parameters` | focused + UAT-14 |
-| INV-02 | `warehouse-master.js` | `warehouses` EXTEND | focused + UAT-01 |
+| INV-02 | `warehouses.js` | `warehouses` EXTEND | focused + UAT-01 |
 | INV-03 | `warehouse-bin.js` | `warehouse_bins` NEW | focused + UAT-01 |
 | INV-04 | `stock-status.js` | `inventory_stock_statuses` NEW | focused + UAT-08 |
 | INV-05 | `owner-dimension.js` | `inventory.owner_type / owner_id` | focused + UAT-03 / UAT-04 / UAT-20 |
@@ -1921,9 +1921,9 @@ Integration-Backed = 4
 | INV-16 | `inventory-step-transfer.js` | `inventory_step_transfer_in_transit` NEW | focused + UAT-06 |
 | INV-17 | `inventory-assembly-disassembly.js` | consumes `engineering-bom.js` resolver | Integration-Backed — Engineering BOM; focused |
 | INV-18 | `inventory-lot-adjustment.js` | `inventory_lots` + `inventory_lot_balances` | focused + UAT-09 |
-| INV-19 | `inventory-stock-status-mutation.js` | `inventory_stock_statuses` | focused + UAT-08 |
+| INV-19 | `app.js` inline handler → `lib/inventory-mutation.js` (STATUS_CHANGE) | `inventory_stock_statuses` | focused + UAT-08 |
 | INV-20 | `inventory-form-conversion.js` | consumes Master Data / Engineering | focused |
-| INV-21 | `inventory-adjustment-scrap.js` | `inventory_adjustments` + `inventory_scraps` EXTEND | focused + UAT-18 / UAT-19 |
+| INV-21 | `app.js` inline adjustment / scrap handlers | `inventory_adjustments` + `inventory_scraps` EXTEND | focused + UAT-18 / UAT-19 |
 | INV-22 | `traceability-quality.js` EXTEND | `inventory_lots / inventory_lot_balances` | focused + UAT-09 |
 | INV-23 | `traceability-quality.js` EXTEND | `inventory_lots.expiry_date / manufacture_date` | focused + UAT-11 |
 | INV-24 | `traceability-quality.js` EXTEND | `inventory_serials` | focused + UAT-10 |
@@ -1941,7 +1941,7 @@ Integration-Backed = 4
 | INV-36 | `inventory-reports.js` | reads canonical movements (movement age) | focused + UAT-26 |
 | INV-37 | `inventory-reports.js` + `inventory_alert_thresholds` | reads canonical + threshold params | focused + UAT-26 |
 | INV-38 | `inventory-reports.js` | reads ABC + SERIAL canonical | focused + UAT-26 |
-| INV-39 | `inventory-barcode.js` | `inventory_barcode_rules / bindings / resolution_log` | focused + UAT-22 |
+| INV-39 | `inventory-barcode.js` + `inventory-barcode-generation.js` | `inventory_barcode_rules / bindings / resolution_log` | focused + UAT-22 |
 | INV-40 | `inventory-scan-adapter.js` | adapter contract only | Integration-Backed — Business Domains; UAT-24 |
 | INV-41 | `inventory-scan-adapter.js` | physical validation helper | Integration-Backed — Business Domains; UAT-24 |
 | INV-42 | `inventory-scan-adapter.js` + `inventory-stocktake.js` | `inventory_check_items` insert | focused + UAT-23 |
@@ -1953,6 +1953,8 @@ Integration-Backed = 4
 40 Domain-Owned
 4 Integration-Backed
 ```
+
+> **2026-11-12 修订（域级 Acceptance 整改轮）**：上表的 owner 列按实现事实更正。`warehouse-master.js`、`inventory-stock-status-mutation.js`、`inventory-adjustment-scrap.js` 三个模块**从未存在**；INV-02 的实际 owner 是 `warehouses.js`，INV-19 与 INV-21 分别是 `server/app.js` 的 inline handler。INV-15 的 owner `inventory-transfer.js` 与 INV-29～31 的 owner `inventory-stocktake.js` 已在本轮成为**唯一**写入口（legacy 的 tuple 写入口退役），INV-39 增加条码生成与标签渲染模块 `inventory-barcode-generation.js`。本修订只更正 owner 映射，不改变任何能力语义。
 
 ### 27.53 Rollback Strategy
 

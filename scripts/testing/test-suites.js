@@ -438,6 +438,12 @@ const FULL = [
   // Operation Plan + Scheduling + Quality masters + Inspection + Scan +
   // Analytics + legacy production_outputs convergence.
   'server/manufacturing-quality-domain.test.js',
+  // V24 Inventory & Warehouse Domain Closure — ABC classification, assembly /
+  // disassembly and barcode generation.
+  'server/inventory-closure-abc-assembly-barcode.test.js',
+  // V24 Inventory & Warehouse domain contract — one write entry per document,
+  // canonical position identity and canonical mutation.
+  'server/inventory-domain-closure.test.js',
   // V23 Manufacturing & Quality Domain Closure — 2026-11-12 remediation round:
   // material list lifecycle, topology / outsourced boundary enforcement at
   // report confirm and operation completion, inspection type vocabulary,

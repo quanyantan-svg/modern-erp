@@ -430,18 +430,21 @@ describe('v1.0.1 — warehouse inventory transfer workflow (create + transfer + 
 // =====================================================================
 
 describe('v1.0.1 — frontend action buttons use canonical transfer permission', () => {
-  const accountingSrc = readSrc(join('pages', 'master-data.jsx'));
+  // The transfer surface moved to the Inventory & Warehouse work surface
+  // (src/pages/inventory-work.jsx) when the domain consolidated onto one
+  // canonical work face.
+  const accountingSrc = readSrc(join('pages', 'inventory-work.jsx'));
 
-  test('"+ 新建调拨单" button gated by INVENTORY_TRANSFER_CREATE', () => {
+  test('"新建库存调拨" button gated by INVENTORY_TRANSFER_CREATE', () => {
     assert.match(accountingSrc,
-      /can\(user,\s*['"]INVENTORY_TRANSFER_CREATE['"]\)\s*&&\s*<button[^>]*onClick=\{\(\)\s*=>\s*setEditing\(\{\}\)\}>＋\s*新建调拨单<\/button>/);
+      /canCreate=\{can\(user,\s*['"]INVENTORY_TRANSFER_CREATE['"]\)\}\s*createLabel="新建库存调拨"/);
   });
 
   test('"确认调拨" is gated by canonical CONFIRM while draft cancellation stays on CREATE', () => {
     assert.match(accountingSrc,
       /const canConfirmTransfer\s*=\s*can\(user,\s*['"]INVENTORY_TRANSFER_CONFIRM['"]\)[\s\S]*?canConfirmTransfer\s*&&\s*<button[\s\S]*?>确认调拨<\/button>/);
     assert.match(accountingSrc,
-      /const canCancelTransfer\s*=\s*can\(user,\s*['"]INVENTORY_TRANSFER_CREATE['"]\)[\s\S]*?canCancelTransfer\s*&&\s*<button[\s\S]*?>取消<\/button>/);
+      /const canCancelTransfer\s*=\s*can\(user,\s*['"]INVENTORY_TRANSFER_CREATE['"]\)[\s\S]*?canCancelTransfer\s*&&\s*<button[\s\S]*?>取消调拨<\/button>/);
   });
 
   test('buttons accept only canonical CONFIRM or the explicit legacy APPROVE alias', () => {
@@ -449,8 +452,8 @@ describe('v1.0.1 — frontend action buttons use canonical transfer permission',
     // is the approved compatibility alias. Unrelated permissions cannot leak
     // the action.
     const block = accountingSrc.slice(
-      accountingSrc.indexOf('function InventoryTransfers'),
-      accountingSrc.indexOf('function InventoryTransferModal'),
+      accountingSrc.indexOf('function InventoryTransferDetailV16'),
+      accountingSrc.indexOf('function InventoryTransferEditorV16'),
     );
     assert.match(block, /INVENTORY_TRANSFER_CONFIRM/);
     assert.match(block, /INVENTORY_TRANSFER_APPROVE/);
