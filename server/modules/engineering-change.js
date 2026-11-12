@@ -41,8 +41,12 @@ function validateOpForType(changeType, opType) {
   }
 }
 
-function loadChangeOrder(db, changeId) {
-  const eco = db.prepare('SELECT * FROM engineering_change_orders WHERE id=?').get(changeId);
+function loadChangeOrder(db, changeId, { lock = false } = {}) {
+  // A locking read observes the latest committed row and holds it for the
+  // rest of the transaction. Two concurrent applies of the same ECO must not
+  // both pass the APPROVED gate.
+  const suffix = lock && db.dialect === 'mysql' ? ' FOR UPDATE' : '';
+  const eco = db.prepare(`SELECT * FROM engineering_change_orders WHERE id=?${suffix}`).get(changeId);
   if (!eco) throw new HttpError(404, '工程变更单不存在');
   eco.items = db.prepare('SELECT * FROM engineering_change_items WHERE change_order_id=? ORDER BY line_no').all(changeId);
   return eco;
@@ -141,13 +145,19 @@ export async function createEngineeringChange(db, req, res, actor) {
 
 export async function submitEngineeringChange(db, res, actor, changeId) {
   allow(actor, 'ENGINEERING_CHANGE_MANAGE');
-  const eco = loadChangeOrder(db, changeId);
-  if (eco.status !== 'DRAFT' && eco.status !== 'PENDING') {
-    throw new HttpError(409, '仅 DRAFT / PENDING 状态可提交');
-  }
   const now = new Date().toISOString();
   transaction(db, () => {
-    db.prepare("UPDATE engineering_change_orders SET status='PENDING', updated_at=? WHERE id=?").run(now, changeId);
+    // The state is re-read inside the transaction under a row lock and the
+    // write is a compare-and-swap on the prior status, so two concurrent
+    // transitions cannot both pass the state gate.
+    const eco = loadChangeOrder(db, changeId, { lock: true });
+    if (eco.status !== 'DRAFT' && eco.status !== 'PENDING') {
+      throw new HttpError(409, '仅 DRAFT / PENDING 状态可提交');
+    }
+    const updated = db.prepare("UPDATE engineering_change_orders SET status='PENDING', updated_at=? WHERE id=? AND status IN ('DRAFT','PENDING')").run(now, changeId);
+    if (Number(updated.changes ?? updated.affectedRows) !== 1) {
+      throw new HttpError(409, '工程变更单状态已变更，请刷新后重试', { code: 'ENGINEERING_CHANGE_STATE_CONFLICT' });
+    }
     audit(db, actor.id, 'SUBMIT', 'ENGINEERING_CHANGE', changeId, eco.doc_no);
   });
   return send(res, 200, { ok: true });
@@ -155,14 +165,17 @@ export async function submitEngineeringChange(db, res, actor, changeId) {
 
 export async function approveEngineeringChange(db, res, actor, changeId) {
   allow(actor, 'ENGINEERING_CHANGE_APPROVE');
-  const eco = loadChangeOrder(db, changeId);
-  if (eco.status !== 'PENDING') {
-    throw new HttpError(409, '仅 PENDING 状态可审批');
-  }
   const now = new Date().toISOString();
   transaction(db, () => {
-    db.prepare("UPDATE engineering_change_orders SET status='APPROVED', approver_id=?, approved_at=?, updated_at=? WHERE id=?")
+    const eco = loadChangeOrder(db, changeId, { lock: true });
+    if (eco.status !== 'PENDING') {
+      throw new HttpError(409, '仅 PENDING 状态可审批');
+    }
+    const updated = db.prepare("UPDATE engineering_change_orders SET status='APPROVED', approver_id=?, approved_at=?, updated_at=? WHERE id=? AND status='PENDING'")
       .run(actor.id, now, now, changeId);
+    if (Number(updated.changes ?? updated.affectedRows) !== 1) {
+      throw new HttpError(409, '工程变更单状态已变更，请刷新后重试', { code: 'ENGINEERING_CHANGE_STATE_CONFLICT' });
+    }
     audit(db, actor.id, 'APPROVE', 'ENGINEERING_CHANGE', changeId, eco.doc_no);
   });
   return send(res, 200, { ok: true });
@@ -170,16 +183,19 @@ export async function approveEngineeringChange(db, res, actor, changeId) {
 
 export async function rejectEngineeringChange(db, req, res, actor, changeId) {
   allow(actor, 'ENGINEERING_CHANGE_APPROVE');
-  const eco = loadChangeOrder(db, changeId);
-  if (eco.status !== 'PENDING') {
-    throw new HttpError(409, '仅 PENDING 状态可驳回');
-  }
   const body = await readJson(req);
   const reason = requiredText(body.reason, '驳回原因', 200);
   const now = new Date().toISOString();
   transaction(db, () => {
-    db.prepare("UPDATE engineering_change_orders SET status='REJECTED', reason=?, updated_at=? WHERE id=?")
+    const eco = loadChangeOrder(db, changeId, { lock: true });
+    if (eco.status !== 'PENDING') {
+      throw new HttpError(409, '仅 PENDING 状态可驳回');
+    }
+    const updated = db.prepare("UPDATE engineering_change_orders SET status='REJECTED', reason=?, updated_at=? WHERE id=? AND status='PENDING'")
       .run(`${eco.reason}\n[REJECT] ${reason}`, now, changeId);
+    if (Number(updated.changes ?? updated.affectedRows) !== 1) {
+      throw new HttpError(409, '工程变更单状态已变更，请刷新后重试', { code: 'ENGINEERING_CHANGE_STATE_CONFLICT' });
+    }
     audit(db, actor.id, 'REJECT', 'ENGINEERING_CHANGE', changeId, eco.doc_no);
   });
   return send(res, 200, { ok: true });
@@ -228,44 +244,49 @@ export async function previewImpactEngineeringChange(db, res, actor, changeId) {
 // production snapshots.
 export async function applyEngineeringChange(db, res, actor, changeId) {
   allow(actor, 'ENGINEERING_CHANGE_MANAGE');
-  const eco = loadChangeOrder(db, changeId);
-  if (eco.status !== 'APPROVED') {
-    throw new HttpError(409, '仅 APPROVED 状态可应用');
-  }
-  if (!eco.target_bom_id) {
-    throw new HttpError(409, '工程变更单未指定目标 BOM');
-  }
-  const targetBom = db.prepare('SELECT * FROM boms WHERE id=?').get(eco.target_bom_id);
-  if (!targetBom) throw new HttpError(404, '目标 BOM 不存在');
-  const currentItems = db.prepare('SELECT * FROM bom_items WHERE bom_id=? ORDER BY line_no').all(eco.target_bom_id);
-  const projected = currentItems.map((it) => ({ ...it }));
-  for (const item of eco.items) {
-    if (item.op_type === 'MODIFY_HEADER') continue;
-    const productId = item.product_id;
-    if (item.op_type === 'ADD_COMPONENT') {
-      if (!projected.find((p) => p.product_id === productId)) {
-        projected.push({ product_id: productId, quantity: item.quantity || 1, scrap_rate: 0 });
-      }
-    } else if (item.op_type === 'MODIFY_COMPONENT') {
-      const t = projected.find((it) => it.product_id === productId);
-      if (t) {
-        t.quantity = item.quantity ?? t.quantity;
-        t.scrap_rate = item.scrap_rate ?? t.scrap_rate;
-      }
-    } else if (item.op_type === 'DELETE_COMPONENT' || item.op_type === 'INVALIDATE_COMPONENT') {
-      const idx = projected.findIndex((it) => it.product_id === productId);
-      if (idx >= 0) projected.splice(idx, 1);
-    }
-  }
-  const newVersion = String(Number(targetBom.version || '1') + Math.max(1, eco.version_upgrade)) + '.0';
-  const newBomId = id();
   const now = new Date().toISOString();
-  let appliedBomId;
+  let appliedBomId = null;
+  let newVersion = null;
+  // The authoritative state is re-read INSIDE the transaction, and the ECO row
+  // is locked for the duration of the apply. A concurrent apply or reject that
+  // commits first is therefore observed here, and two concurrent applies of
+  // the same ECO cannot both pass the APPROVED gate.
   transaction(db, () => {
+    const eco = loadChangeOrder(db, changeId, { lock: true });
+    if (eco.status !== 'APPROVED') {
+      throw new HttpError(409, '仅 APPROVED 状态可应用');
+    }
+    if (!eco.target_bom_id) {
+      throw new HttpError(409, '工程变更单未指定目标 BOM');
+    }
+    const targetBom = db.prepare('SELECT * FROM boms WHERE id=?').get(eco.target_bom_id);
+    if (!targetBom) throw new HttpError(404, '目标 BOM 不存在');
+    const currentItems = db.prepare('SELECT * FROM bom_items WHERE bom_id=? ORDER BY line_no').all(eco.target_bom_id);
+    const projected = currentItems.map((it) => ({ ...it }));
+    for (const item of eco.items) {
+      if (item.op_type === 'MODIFY_HEADER') continue;
+      const productId = item.product_id;
+      if (item.op_type === 'ADD_COMPONENT') {
+        if (!projected.find((p) => p.product_id === productId)) {
+          projected.push({ product_id: productId, quantity: item.quantity || 1, scrap_rate: 0 });
+        }
+      } else if (item.op_type === 'MODIFY_COMPONENT') {
+        const t = projected.find((it) => it.product_id === productId);
+        if (t) {
+          t.quantity = item.quantity ?? t.quantity;
+          t.scrap_rate = item.scrap_rate ?? t.scrap_rate;
+        }
+      } else if (item.op_type === 'DELETE_COMPONENT' || item.op_type === 'INVALIDATE_COMPONENT') {
+        const idx = projected.findIndex((it) => it.product_id === productId);
+        if (idx >= 0) projected.splice(idx, 1);
+      }
+    }
+    const version = String(Number(targetBom.version || '1') + Math.max(1, eco.version_upgrade)) + '.0';
+    const newBomId = id();
     db.prepare(`INSERT INTO boms(id,product_id,version,status,remark,creator_id,created_at,updated_at,
         purpose,effective_from,effective_to,approval_status,approved_by,approved_at,change_request_id,eco_change_id)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-      newBomId, targetBom.product_id, newVersion, 'ACTIVE', `由工程变更单 ${eco.doc_no} 生成`,
+      newBomId, targetBom.product_id, version, 'ACTIVE', `由工程变更单 ${eco.doc_no} 生成`,
       actor.id, now, now,
       targetBom.purpose || 'GENERAL',
       eco.change_type === 'EFFECTIVE_DATE' ? eco.effective_date : targetBom.effective_from,
@@ -287,10 +308,14 @@ export async function applyEngineeringChange(db, res, actor, changeId) {
     });
     db.prepare(`UPDATE boms SET status='DISCONTINUED', updated_at=? WHERE product_id=? AND id<>? AND status='ACTIVE' AND COALESCE(purpose,'GENERAL')=COALESCE(?, 'GENERAL')`)
       .run(now, targetBom.product_id, newBomId, targetBom.purpose || 'GENERAL');
-    db.prepare("UPDATE engineering_change_orders SET status='APPLIED', applied_at=?, updated_at=? WHERE id=?")
+    const applied = db.prepare("UPDATE engineering_change_orders SET status='APPLIED', applied_at=?, updated_at=? WHERE id=? AND status='APPROVED'")
       .run(now, now, changeId);
-    audit(db, actor.id, 'APPLY', 'ENGINEERING_CHANGE', changeId, `${eco.doc_no} → ${newVersion}`);
+    if (Number(applied.changes ?? applied.affectedRows) !== 1) {
+      throw new HttpError(409, '工程变更单状态已变更，请刷新后重试', { code: 'ENGINEERING_CHANGE_STATE_CONFLICT' });
+    }
+    audit(db, actor.id, 'APPLY', 'ENGINEERING_CHANGE', changeId, `${eco.doc_no} → ${version}`);
     appliedBomId = newBomId;
+    newVersion = version;
   });
   return send(res, 200, { ok: true, appliedBomId, newVersion });
 }

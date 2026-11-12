@@ -44,6 +44,17 @@ export const FINANCE_MYSQL_MANIFEST = Object.freeze([
   'RUN_FINANCE_RACES',
   'CLEANUP_SCHEMA_POST_RUN',
 ]);
+// Master & Engineering 域（工程主数据生命周期 + ECO 原子应用并发实证）的独立
+// ACK-4 Manifest。前四个 Manifest 属于各自的 campaign，既不被本 Manifest 复用，
+// 也不被本 Manifest 修改；本 Manifest 的夹具操作名带 ENGINEERING 前缀，使运行期
+// 证据可以唯一地归属本域 campaign。
+export const MASTER_ENGINEERING_MYSQL_MANIFEST_NAME = 'MASTER_ENGINEERING_MYSQL_V1';
+export const MASTER_ENGINEERING_MYSQL_MANIFEST = Object.freeze([
+  'RESET_SCHEMA_PRE_RUN',
+  'BOOTSTRAP_CURRENT_SCHEMA',
+  'RUN_ENGINEERING_RACES',
+  'CLEANUP_SCHEMA_POST_RUN',
+]);
 export const ACK4_RECOVERY_MANIFEST = Object.freeze([
   'INSPECT_QUARANTINE',
   'CLEANUP_SCHEMA_RECOVERY',

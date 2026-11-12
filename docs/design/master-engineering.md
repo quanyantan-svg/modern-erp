@@ -305,6 +305,46 @@ API：
 - Reference master lifecycle：`active=0` 而非 DELETE；
 - 关键 cycle：DB mutation → re-read → check state → if conflicted throw。
 
+#### 23.14.1 并发权威复读合同（2026-11-12 整改轮补入）
+
+问题（真实缺陷，非风格问题）：ECO 的 `submit` / `approve` / `reject` / `apply` 与工程参考资料
+master 的 `update` / `deactivate` 都在**事务外**读取权威状态，事务内的 `UPDATE` 又不带先决状态
+条件。两个并发请求可以同时通过同一闸门：
+
+- 并发双 `apply` 同一 ECO：两侧都读到 `APPROVED`，各自生成一个新 BOM 版本；
+- 并发 `approve` 与 `reject` 同一 ECO：两侧都读到 `PENDING`，都写入终态，审计出现两条终态记录；
+- 并发双 `deactivate` 同一 master：两侧都读到 `active=1`，产生**两条** `DEACTIVATE` 审计行。
+
+合同（Requirement §28.8 A / §28.2「ECO / 参考资料 master 并发合同」）：
+
+1. **事务内复读**：状态与引用守卫一律在 `transaction(db, ...)` 的回调内读取；
+2. **行锁**：MySQL 下对被改写的主行使用 `SELECT ... FOR UPDATE`（SQLite 无此语义，按方言条件追加），
+   使后到者等待先到者提交，随后读到**最新已提交**值；
+3. **compare-and-swap**：状态迁移的 `UPDATE` 附带先决状态条件，并校验受影响行数必须为 1，
+   否则以 `409` + 稳定错误码拒绝；
+4. **幂等**：master 的 `deactivate` 在事务内读到 `active=0` 即直接返回，**不写审计**；
+5. **守卫同事务**：引用计数与写入在同一事务内求值，被引用的 master 一律 `409`。
+
+实现落点：`server/modules/engineering-change.js`（`loadChangeOrder(db, id, { lock })` 与四个迁移
+函数）、`server/modules/engineering-reference.js`（`readActive(db, table, id, label, { lock })` 与
+`updateEngineeringReferenceMaster` / `deactivateEngineeringReferenceMaster` / `updateWorkCenter` /
+`deactivateWorkCenter`）。
+
+#### 23.14.2 域级 ACK-4 campaign（2026-11-12 整改轮补入）
+
+- Manifest：`MASTER_ENGINEERING_MYSQL_V1`，操作序列
+  `RESET_SCHEMA_PRE_RUN → BOOTSTRAP_CURRENT_SCHEMA → RUN_ENGINEERING_RACES → CLEANUP_SCHEMA_POST_RUN`；
+- 运行期文件：`scripts/gates/mysql-master-engineering-gate.mjs`（root）、
+  `scripts/gates/mysql-master-engineering-child.mjs`（子进程）、
+  `scripts/gates/mysql-master-engineering-root-lifecycle.mjs`（root 生命周期）、
+  `scripts/gates/master-engineering-concurrency-worker.mjs`（每 worker 一条 MySQL 连接）；
+- 套件：`server/mysql-master-engineering-concurrency.integration.js`（4 条 race），
+  入口 `pnpm test:mysql:master-engineering`，launcher 条目 `test:mysql:master-engineering`；
+- 该 campaign 与 M1-Core G07 / OUT-001 / Accounting & Analytics / Finance Operations 的
+  Manifest 与生命周期**互相独立、互不复用**，运行期证据可唯一归属本域 campaign；
+- `BOOTSTRAP_CURRENT_SCHEMA` 在真实 MySQL 8 上运行**全量当前迁移集**，因此本域 schema 对等
+  由该步骤证明；`RUN_ENGINEERING_RACES` 在真实 MySQL 8 上证明并发行为等价。
+
 ### 23.15 Test Strategy
 
 | Wave | 测试族 | 关注合同 |
@@ -317,6 +357,7 @@ API：
 | F | `engineering-downstream.test.js` | production consumer stability / MRP consumer stability / outsource resolver contract
 | Frontend | `engineering-frontend-contract.test.js` + `scripts/acceptance/v17-engineering-frontend.mjs` | Registry/API contract；Edge 320/390/430/680 响应式与 runtime error |
 | MySQL schema | `engineering-mysql-schema.test.js`、`mysql-v14-1-hotfix-upgrade-path.integration.js` | 15 张工程表、5 张既有表上的 28 个 additive 列、7 个显式普通索引、metadata alias、existing DB upgrade、数据保留与二次启动幂等性 |
+| MySQL 并发（域级 campaign） | `server/mysql-master-engineering-concurrency.integration.js` | ME-RACE-01 并发双 apply 只产生一个新 BOM 版本且只落一条 APPLY 审计；ME-RACE-02 并发 approve/reject 只产生一个终态与一条终态审计；ME-RACE-03 并发双 deactivate 只落一条 DEACTIVATE 审计；ME-RACE-04 被引用 master 的并发停用一律 409 且不落审计 |
 
 所有 focused tests 纳入 `scripts/testing/test-suites.js`。
 

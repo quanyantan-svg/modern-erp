@@ -92,6 +92,7 @@ export function createTempDb({
       'BOOTSTRAP_CURRENT_SCHEMA',
       'RUN_M1_HTTP_FIXTURES',
       'RUN_FINANCE_RACES',
+      'RUN_ENGINEERING_RACES',
       'CLEANUP_SCHEMA_POST_RUN',
     ]);
     const config = resolveDatabaseConfig({ backend: 'mysql' });

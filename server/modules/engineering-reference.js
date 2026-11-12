@@ -32,8 +32,12 @@ const WORK_CENTER_PERMS = Object.freeze({
   MANAGE: 'WORK_CENTERS_MANAGE',
 });
 
-function readActive(db, table, id, label = '记录') {
-  const record = db.prepare(`SELECT * FROM ${table} WHERE id=?`).get(id);
+function readActive(db, table, id, label = '记录', { lock = false } = {}) {
+  // A locking read observes the latest committed row and holds it for the rest
+  // of the transaction, so a concurrent deactivate cannot slip between the
+  // authoritative read and the write.
+  const suffix = lock && db.dialect === 'mysql' ? ' FOR UPDATE' : '';
+  const record = db.prepare(`SELECT * FROM ${table} WHERE id=?${suffix}`).get(id);
   if (!record) throw new HttpError(404, `${label}不存在`);
   return record;
 }
@@ -442,15 +446,17 @@ function parseWorkCenterPayload(body, current = null) {
 
 export async function updateWorkCenter(db, req, res, actor, workCenterId) {
   allow(actor, WORK_CENTER_PERMS.MANAGE);
-  const current = readActive(db, 'work_centers', workCenterId, '工作中心');
   const body = await readJson(req);
-  const payload = parseWorkCenterPayload(body, current);
-  if (payload.calendarId) {
-    const cal = db.prepare("SELECT 1 FROM engineering_work_calendars WHERE id=? AND active=1").get(payload.calendarId);
-    if (!cal) throw new HttpError(400, '工作日历不存在或未启用');
-  }
   const now = new Date().toISOString();
   transaction(db, () => {
+    // The work center row is re-read and locked inside the transaction so the
+    // payload defaults and the write cannot disagree with a concurrent change.
+    const current = readActive(db, 'work_centers', workCenterId, '工作中心', { lock: true });
+    const payload = parseWorkCenterPayload(body, current);
+    if (payload.calendarId) {
+      const cal = db.prepare("SELECT 1 FROM engineering_work_calendars WHERE id=? AND active=1").get(payload.calendarId);
+      if (!cal) throw new HttpError(400, '工作日历不存在或未启用');
+    }
     db.prepare(`UPDATE work_centers SET code=?,name=?,type=?,capacity_hours=?,efficiency=?,default_efficiency_pct=?,unit_cost_cents=?,
       daily_capacity_minutes=?,labor_rate_cents_per_hour=?,overhead_rate_cents_per_hour=?,
       calendar_id=?,is_outsource=?,notes=?,active=?,updated_at=? WHERE id=?`)
@@ -465,18 +471,20 @@ export async function updateWorkCenter(db, req, res, actor, workCenterId) {
 
 export async function deactivateWorkCenter(db, res, actor, workCenterId) {
   allow(actor, WORK_CENTER_PERMS.MANAGE);
-  const current = readActive(db, 'work_centers', workCenterId, '工作中心');
-  if (current.active === 0) return send(res, 200, { ok: true, active: 0 });
-  // Reference guard: cannot deactivate if any active engineering resource / equipment / operation references it.
-  const refs = db.prepare(`SELECT
-    (SELECT COUNT(*) FROM engineering_resources WHERE work_center_id=? AND active=1) +
-    (SELECT COUNT(*) FROM engineering_equipment WHERE work_center_id=? AND status='ACTIVE') +
-    (SELECT COUNT(*) FROM engineering_operations WHERE work_center_id=? AND active=1) AS cnt`).get(workCenterId, workCenterId, workCenterId);
-  if (Number(refs.cnt) > 0) {
-    throw new HttpError(409, '工作中心仍被活动引用，无法停用');
-  }
   const now = new Date().toISOString();
   transaction(db, () => {
+    // The work center row is locked and the reference guards are counted
+    // inside the same transaction that performs the deactivation.
+    const current = readActive(db, 'work_centers', workCenterId, '工作中心', { lock: true });
+    if (current.active === 0) return;
+    // Reference guard: cannot deactivate if any active engineering resource / equipment / operation references it.
+    const refs = db.prepare(`SELECT
+      (SELECT COUNT(*) FROM engineering_resources WHERE work_center_id=? AND active=1) +
+      (SELECT COUNT(*) FROM engineering_equipment WHERE work_center_id=? AND status='ACTIVE') +
+      (SELECT COUNT(*) FROM engineering_operations WHERE work_center_id=? AND active=1) AS cnt`).get(workCenterId, workCenterId, workCenterId);
+    if (Number(refs.cnt) > 0) {
+      throw new HttpError(409, '工作中心仍被活动引用，无法停用');
+    }
     db.prepare('UPDATE work_centers SET active=0, updated_at=? WHERE id=?').run(now, workCenterId);
     audit(db, actor.id, 'DEACTIVATE', 'WORK_CENTER', workCenterId, current.code);
   });
@@ -774,16 +782,19 @@ export async function updateEngineeringReferenceMaster(db, req, res, actor, kind
   allow(actor, 'ENGINEERING_REFERENCE_MANAGE');
   const spec = referenceMasterSpecs()[kind];
   if (!spec) throw new HttpError(400, '未知的工程参考资料类型');
-  const current = readActive(db, spec.table, masterId, spec.label);
   const body = await readJson(req);
-  const prepared = spec.normalize(body, current, db);
   const now = new Date().toISOString();
-  const params = prepared.params.map((value) => {
-    if (value === 'NOW') return now;
-    if (value === 'MASTER_ID') return masterId;
-    return value;
-  });
   transaction(db, () => {
+    // The authoritative master row is re-read inside the transaction and
+    // locked, so the defaults derived from it and the write that follows
+    // cannot disagree with a concurrent deactivate.
+    const current = readActive(db, spec.table, masterId, spec.label, { lock: true });
+    const prepared = spec.normalize(body, current, db);
+    const params = prepared.params.map((value) => {
+      if (value === 'NOW') return now;
+      if (value === 'MASTER_ID') return masterId;
+      return value;
+    });
     db.prepare(prepared.sql).run(...params);
     audit(db, actor.id, 'UPDATE', spec.entity, masterId, String(prepared.values.code ?? current.code));
   });
@@ -794,16 +805,19 @@ export function deactivateEngineeringReferenceMaster(db, res, actor, kind, maste
   allow(actor, 'ENGINEERING_REFERENCE_MANAGE');
   const spec = referenceMasterSpecs()[kind];
   if (!spec) throw new HttpError(400, '未知的工程参考资料类型');
-  const current = readActive(db, spec.table, masterId, spec.label);
-  if (Number(current.active) === 0) return send(res, 200, { ok: true, active: 0 });
-  for (const guard of referenceGuards(kind)) {
-    const row = db.prepare(guard.sql).get(guard.param(masterId));
-    if (Number(row?.n || 0) > 0) {
-      throw new HttpError(409, `${spec.label}仍被活动的${guard.label}引用，无法停用`);
-    }
-  }
   const now = new Date().toISOString();
   transaction(db, () => {
+    // The master row is locked and the reference guards are counted inside the
+    // same transaction that performs the deactivation, so a reference created
+    // concurrently cannot be missed by the guard.
+    const current = readActive(db, spec.table, masterId, spec.label, { lock: true });
+    if (Number(current.active) === 0) return;
+    for (const guard of referenceGuards(kind)) {
+      const row = db.prepare(guard.sql).get(guard.param(masterId));
+      if (Number(row?.n || 0) > 0) {
+        throw new HttpError(409, `${spec.label}仍被活动的${guard.label}引用，无法停用`);
+      }
+    }
     db.prepare(`UPDATE ${spec.table} SET active=0, updated_at=? WHERE id=?`).run(now, masterId);
     audit(db, actor.id, 'DEACTIVATE', spec.entity, masterId, String(current.code));
   });

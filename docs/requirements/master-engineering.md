@@ -38,6 +38,7 @@
 | Routing Operation Control Code | 控制排程/加工/汇报/检验；execution 语义归 M&Q |
 | Substitute 策略/方式 | 至少：混用/手工/整批/整批+混用；替代/取代/按比例 |
 | ECO Change Type | 至少 `IMMEDIATE / EFFECTIVE_DATE / USE_UP_OLD` |
+| ECO / 参考资料 master 并发合同 | 状态机迁移与 master 生命周期必须在**同一事务内复读权威状态**；迁移以先决状态做 compare-and-swap；重复停用幂等且只落一条审计行；引用守卫与写入同事务求值 |
 | BOM Reference 不得 | direct self-reference + multi-level cycle |
 | Production Snapshot 不得被 master edit 反向污染 | `bom_version_snapshot` / `routing_id_snapshot` / `production_order_routing_snapshots` 不可写回修改 |
 | Routing 双源收敛 | `product_routings` canonical；legacy `routing_operations` 保持 table+FK 但停止 active mutation |
@@ -136,6 +137,11 @@
 - Routing enrichment：WorkCenter / Operation / ControlCode / Activity / Resource / Equipment 引用；
 - Routing topology metadata：main / alternate / split / merge；
 - ECO：IMMEDIATE / EFFECTIVE_DATE / USE_UP_OLD；allowed operations 受限；impact preview；atomic apply；audit；历史 snapshot 不被污染；
+- ECO 与工程参考资料 master 的并发合同（2026-11-12 整改轮补入）：
+  - ECO 状态机迁移（submit / approve / reject / apply）必须在**同一事务内**复读权威状态，并以先决状态做 compare-and-swap；两个并发请求不得同时通过同一闸门；
+  - ECO apply 在真实并发下只允许产生一个新 BOM 版本，历史 snapshot 不被污染；
+  - 工程参考资料 master 的停用是幂等的：重复停用只落**一条** `DEACTIVATE` 审计行；
+  - 引用守卫（`engineering_*` / `work_centers` / `product_routing_operations` 的活动引用计数）与写入必须在**同一事务内**求值，被引用 master 的停用一律 `409`；
 - Use-Up-Old：当前库存 cleanup candidate；预计入供应标记 PARTIAL CROSS_DOMAIN_DEPENDENCY；
 - 工程分析（forward/reverse/where-used/consolidated/compare/cleanup-log）UI 与 API 可用。
 
@@ -164,6 +170,7 @@
 - 所有 focused tests 纳入 `scripts/testing/test-suites.js`；
 - canonical gate：`pnpm test:fast` / `pnpm test` / `pnpm build` / `git diff --check` 全 PASS；
 - 若变更触及 MySQL 敏感路径且具备受保护 disposable MySQL 环境，运行 `pnpm test:mysql` + `pnpm test:mysql:concurrency`。
+- **真实 MySQL 域级证据（2026-11-12 整改轮补入）**：本域并发合同必须在受保护的 ACK-4 campaign `MASTER_ENGINEERING_MYSQL_V1` 上于真实 MySQL 8 实证 —— schema 对等由该 campaign 的 `BOOTSTRAP_CURRENT_SCHEMA` 证明，并发行为等价由该 campaign 的 `RUN_ENGINEERING_RACES` 证明。**仅 SQLite 证据不计入本条**；该 campaign 的入口为 `pnpm test:mysql:master-engineering`。
 
 #### E. UI / Mobile
 
