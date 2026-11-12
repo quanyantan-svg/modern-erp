@@ -4285,3 +4285,46 @@ M0 验收后，**后续业务包的启动仍需各自的显式授权**；W11-A �
 - `PLAN-DEC-02` 已裁定（接受为残余）；`PLAN-RES-01`～`PLAN-RES-04` 已随冻结接受。
 - **下一域**：按就绪度顺序继续域 2 —— **Finance Operations**（FO01～FO58）。
 - 本轮**未**执行真实环境 migration、业务数据库写入、push / merge / tag / 发布 / 部署。
+
+## 55. 一次性裁定：真实 MySQL 证据统一口径与两个系统性问题的处置（2026-11-12）
+
+### 55.1 授权与范围
+
+- **授权来源**：业务所有者 2026-11-12 指示「全部按『schema 对等由 AA campaign 的全量 bootstrap 证明 + 行为等价由 focused 覆盖 + 显式登记残余』处理」「记录在案的系统性问题请你解决」「一次性裁定再往下走」。
+- **本轮范围**：① 真实 MySQL 证据的项目级统一口径；② 解决「历史已验收结论可能已失效」与「跨域错误码耦合」两个系统性问题。**未签发任何新 token，未进入下一个域。**
+
+### 55.2 决定一：真实 MySQL 证据统一口径（`MYSQL-EV-01`）
+
+- 决策记录：[`docs/decisions/mysql-evidence-policy-20261112.md`](../decisions/mysql-evidence-policy-20261112.md)，状态 `APPROVED`。
+- **事实依据**：本仓库只有三个已批准的 ACK-4 campaign 可运行（`test:mysql:m1-core`、`test:mysql:accounting-analytics`、`test:mysql:out001`）；其余 MySQL 入口被 `blockUnmigratedAck4Entry` **永久阻断**。两个可运行 campaign 的对等清单都是域内的（16 张采购/库存表、47 张会计/分析表），**不含**其余五域的表。
+- **统一口径**（全部业务域适用，含已签发三域与剩余五域）：
+  1. **schema / migration 对等** —— 由 `test:mysql:accounting-analytics` 的 `BOOTSTRAP_CURRENT_SCHEMA` 证明（它在真实 MySQL 8 上运行全量当前迁移集）；
+  2. **release / reservation 行为等价** —— 由本域 focused 套件的并发与幂等反例覆盖，**在真实 MySQL 上未被单独取证**，必须作为显式残余登记。
+- **对后续域的约束**：每个域的域级 Acceptance 必须有一节「真实 MySQL 证据边界」，逐段写明覆盖什么、**不**覆盖什么；其 Requirement 的 database 条款若指向被永久阻断的入口，按本决策修正指向。剩余五域在各自的域级审计中逐域落实。
+
+### 55.3 决定二：跨域错误码耦合治理（`XDC-01`）
+
+- 决策记录：[`docs/decisions/cross-domain-error-code-policy-20261112.md`](../decisions/cross-domain-error-code-policy-20261112.md)，状态 `APPROVED`。
+- **原则**：一个域的内部错误码**不是**跨域合同。`DECISION` 类耦合（用生产方错误码做自己的业务判断）必须消除；`CONTRACT_TRANSLATION` 与 `FRONTEND_CONTRACT` 类必须登记理由。
+- **已处置**：
+  - `server/modules/sales-reservation-intent.js` 不再 catch `PLANNING_EXPECTED_FINITE_SOURCE_REQUIRED`（该码在 Planning 实现 PL-31 后已不存在，属**死引用**）；EXPECTED 的判定改为在 Sales 模块内自包含地做出，**已签发的行为与错误码逐字不变**（Sales Wave 7 两套件 87/87 PASS）。
+  - 登记既有耦合 2 处：`PLANNING_RESERVATION_CAPACITY_EXCEEDED`（Sales ← Planning，契约转译）与 `PERMISSION_DENIED`（前端 ← `server/lib/http.js`，已发布 API 合同）。
+- **机器可验证入口**：`scripts/qa/verify-error-code-coupling.mjs` —— 扫描 322 个生产文件，输出「已登记 / 未登记 / 死引用 / 驱动级」清单；当前 **已登记 2 / 未登记 0 / 死引用 0**。**变异实验**：注入一处未登记耦合后守卫按预期返回非零退出码并指出该耦合。
+- **AGENTS.md**：§6 新增两条规则（错误码不得作为跨域合同；守卫入口），§4.5 之后新增 §4.6「验收证据的引用规则」。
+
+### 55.4 决定三：历史验收记录当前有效性复核
+
+- 复核记录：[`docs/acceptance/acceptance-record-revalidation-20261112.md`](../acceptance/acceptance-record-revalidation-20261112.md)（`ACTIVE`，不改写任何已签发记录）。
+- **机器可验证入口**：`scripts/qa/verify-acceptance-records.mjs` —— 对 `docs/acceptance/` 下全部 **68** 份记录逐份核对证据指针（允许扩展名不同或路径搬迁，搬迁必须登记）与锚点之后的改动；当前 **CURRENT 15 / NEEDS_REVIEW 53 / BROKEN 0 / 漂移未登记 0**，耗时 0.55 秒（可进门禁）。
+- **分类裁定**：15 份 `CURRENT`；3 份 `STILL_VALID`（其后只有与该域无关的加法改动）；36 份 `SUPERSEDED_BY_DOMAIN_ACCEPTANCE`（Procurement 域内 M1-Core / OUT-001 / 委外工作面 / WP-A1 记录，已被 2026-11-11 的域级验收取代）；13 份 `PENDING_DOMAIN_AUDIT`（Sales 域内记录，待域 6 复核）；1 份 `NEEDS_REVIEW`（G0 治理验收，其文档一致性结论已被双模式重构改变 —— 当前 `current` 模式 N7 FAIL，成因是四个既有历史提交的追溯债务，与任何域无关）。
+- **引用规则（AGENTS.md §4.6）**：引用历史验收记录必须写明其类别；`CURRENT` / `STILL_VALID` 可直接引用，其余三类必须写成「历史记录，结论已被更晚的域级验收取代」或「历史记录，结论待复核」。
+
+### 55.5 门禁化
+
+- 新增 `server/qa-governance-checks.test.js`（2 条用例），已登记进 FULL 套件清单：两个守卫任一失败即门禁失败。
+- 两个守卫都是**只读**的：不写文件、不碰数据库。
+
+### 55.6 未解决事项与暂停点
+
+- **下一域**：按就绪度顺序继续域 2 —— **Finance Operations**（FO01～FO58）。它在审计时必须落实 `MYSQL-EV-01` 的两段口径，并按 §4.6 引用规则处理历史记录。
+- 本轮**未**执行真实环境 migration、业务数据库写入、push / merge / tag / 发布 / 部署。

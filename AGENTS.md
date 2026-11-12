@@ -319,6 +319,23 @@ Implementation Agent 自报"PASS / 完成"不能替代用户最终 Acceptance。
 
 只有用户明确确认 PASS 后，才能 Freeze 对应 Capability/Manual，并进入下一阶段。
 
+### 4.6 验收证据的引用规则
+
+历史验收结论会随实现演进而失效，且失效本身不会主动暴露。本节把"能不能引用它"变成可判定的事。
+
+- 引用一份历史验收记录时，**必须**同时写明它在
+  [`docs/acceptance/acceptance-record-revalidation-20261112.md`](./docs/acceptance/acceptance-record-revalidation-20261112.md)
+  中的类别：
+  - `CURRENT` / `STILL_VALID` —— 可作为当前证据直接引用；
+  - `SUPERSEDED_BY_DOMAIN_ACCEPTANCE` —— 不得单独引用，改引更晚的域级 Acceptance；
+  - `PENDING_DOMAIN_AUDIT` —— 不得作为当前证据单独引用，待该域域级审计复核；
+  - `NEEDS_REVIEW` —— 只能按复核记录写明的具体失效点引用。
+- 域级 Acceptance 的**真实 MySQL 证据**必须逐段写明覆盖什么、**不**覆盖什么；本仓库只有三个已批准的 ACK-4 campaign 可运行，其余入口被永久阻断，不得被引用为证据（见
+  [`docs/decisions/mysql-evidence-policy-20261112.md`](./docs/decisions/mysql-evidence-policy-20261112.md)）。
+- 域级验收审计必须把**历史已验收结论的当前有效性**列为必查项：至少核对被引用的门禁、脚本、能力集合是否仍存在且仍成立。
+- 机器可验证入口：
+  `node scripts/qa/verify-acceptance-records.mjs`（指针悬空或未登记漂移即失败）。
+
 ---
 
 ## 5. 防止文档再次膨胀
@@ -420,7 +437,9 @@ C4 链接与锚点、C5 历史引用解析、C6 重复 Active 合同。
 - inventory / LOT-SERIAL / valuation / AR/AP / WIP / accounting 等失败副作用必须为零；
 - 关键 mutation 写 audit；
 - 未知历史事实不得伪造；
-- GET/CHECK 不静默修复历史。
+- GET/CHECK 不静默修复历史；
+- **一个域的内部错误码不是跨域合同**：消费方不得用生产方的错误码做自己的业务判断；确需转译明细的耦合必须登记理由，生产方改码须走对应域的 Requirement / Design 裁定（见 [`docs/decisions/cross-domain-error-code-policy-20261112.md`](./docs/decisions/cross-domain-error-code-policy-20261112.md)）；
+- 机器可验证入口：`node scripts/qa/verify-error-code-coupling.mjs`（未登记的耦合或死引用即失败）。
 
 ---
 

@@ -190,11 +190,8 @@ function createPlanningReservationAdapter(db, actor, args) {
   } catch (error) {
     // Preserve the approved Sales API error contract while Planning remains the
     // sole owner of validation, locking, capacity calculation and persistence.
-    if (error?.code === 'PLANNING_EXPECTED_FINITE_SOURCE_REQUIRED') {
-      throw new HttpError(409, 'EXPECTED 模式需要 Planning 端有界集成扩展以提供权威有限供给；当前 fail closed', {
-        code: 'SALES_RESERVATION_EXPECTED_BOUNDED_EXTENSION_REQUIRED',
-      });
-    }
+    // The EXPECTED case is decided above, inside this module, so that the
+    // Sales contract does not depend on a Planning-internal error code.
     if (error?.code === 'PLANNING_RESERVATION_CAPACITY_EXCEEDED') {
       const remaining = Number(error.details?.remaining ?? 0);
       throw new HttpError(409, `可预留供应仅剩 ${remaining}`, {

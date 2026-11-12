@@ -210,6 +210,7 @@ scripts/gates/
 scripts/diagnostics/
 scripts/acceptance/
 scripts/testing/
+scripts/qa/（治理守卫：跨域错误码耦合、历史验收记录有效性）
 
 deploy/
 docs/operations/

@@ -11,6 +11,8 @@
 |---|---|---|
 | [`OPEN-BUSINESS-DECISIONS.md`](./OPEN-BUSINESS-DECISIONS.md) | 尚未裁定的业务政策与设计决策登记 | `ACTIVE` |
 | [`m1-core-scope-rebaseline-20261102.md`](./m1-core-scope-rebaseline-20261102.md) | `M1-SRD-01` —— M1 首期范围重定基线决定（SRD-01 / SRD-02 / SRD-03） | `APPROVED`（仅三项范围决定；不含任何 Implementation 授权） |
+| [`mysql-evidence-policy-20261112.md`](./mysql-evidence-policy-20261112.md) | `MYSQL-EV-01` —— 域级验收的真实 MySQL 证据**统一口径**：schema / migration 对等由 `test:mysql:accounting-analytics` 的全量 bootstrap 证明，行为等价由 focused 覆盖并**显式登记残余**（本仓库只有三个已批准 ACK-4 campaign 可运行，其余入口被永久阻断） | `APPROVED` |
+| [`cross-domain-error-code-policy-20261112.md`](./cross-domain-error-code-policy-20261112.md) | `XDC-01` —— 跨域错误码耦合治理：一个域的内部错误码不是跨域合同；`DECISION` 类耦合必须消除，契约转译必须登记；守卫 `scripts/qa/verify-error-code-coupling.mjs` | `APPROVED` |
 | [`product-scope-rebaseline-proposal-20261107.md`](./product-scope-rebaseline-proposal-20261107.md) | B3101 / B3121 **产品范围重定基线建议**与 `SCP-01`～`SCP-15` Scope Change Proposal：54 项能力逐项 `Product Scope` 建议、危险写入路径处置建议、复用约束与交付标准改写建议 | `PENDING` —— **全部是建议**，待业务所有者逐项批准；未批准前已批准 Requirement / Design / Acceptance / 延期政策**全部原样有效** |
 
 ## 登记规则
