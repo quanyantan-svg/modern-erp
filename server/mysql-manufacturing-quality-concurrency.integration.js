@@ -243,11 +243,20 @@ describe('V23 Manufacturing & Quality real MySQL concurrency matrix (4 races)', 
     const order = db.prepare('SELECT material_list_status FROM production_orders WHERE id=?').get(orderId);
     assert.equal(order.material_list_status, 'APPROVED',
       'MQ-RACE-02: the material list must end in APPROVED, never CONTROLLED_EDIT');
-    const item = db.prepare('SELECT scrap_rate_snapshot FROM production_order_items WHERE id=?').get(itemId);
-    assert.equal(Number(item.scrap_rate_snapshot), 0,
-      'MQ-RACE-02: an approved material list must not be rewritten by a late controlled edit');
     assert.equal(auditCount('APPROVE', orderId), 1,
       `MQ-RACE-02: exactly one APPROVE audit row may exist, got ${auditCount('APPROVE', orderId)}`);
+    // Which of the two writes wins the race is legitimate either way: a
+    // controlled edit that commits before the approval is approved as edited.
+    // What must never happen is a torn state — an edit recorded after the
+    // approval, or an item value without (or with) its audit.
+    const approveAudit = db.prepare("SELECT created_at FROM audit_logs WHERE action='APPROVE' AND entity_id=? ORDER BY created_at LIMIT 1").get(orderId);
+    const lateEdits = Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='CONTROL_EDIT' AND entity_id=? AND created_at > ?")
+      .get(orderId, approveAudit?.created_at || '').n || 0);
+    assert.equal(lateEdits, 0, 'MQ-RACE-02: no controlled edit may be recorded after the approval');
+    const editAudits = auditCount('CONTROL_EDIT', orderId);
+    const item = db.prepare('SELECT scrap_rate_snapshot FROM production_order_items WHERE id=?').get(itemId);
+    assert.equal(Number(item.scrap_rate_snapshot), editAudits ? 0.08 : 0,
+      `MQ-RACE-02: the item value must match whether the controlled edit committed (audits=${editAudits})`);
   });
 
   // MQ-RACE-03 --------------------------------------------------------
