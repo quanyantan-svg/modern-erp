@@ -85,18 +85,27 @@
 | 整改轮新增合同套件 `server/engineering-topology-cleanup.test.js` | **5/5 PASS** |
 | 浏览器（真实 Edge，`v17-engineering-frontend.mjs`，4 工作面 × 320/390/430/680） | **PASS**，含「打开参考资料详情 → 断言编辑/停用动作存在 → 断言触控目标不小于 44px」 |
 | 非空洞证明 | 变异实验：把生命周期按钮强制为 20px 后，浏览器验收按预期 **FAIL** 并指出 `编辑`/`停用` 两个目标 |
-| 真实 MySQL 8 | **PASS**：run `63805c9f-a1f9-4ae1-97a9-32329c7e9254`、commit `de9496b`，`RESULT = PASS`、`ACK-4 STATE = FINISHED`（清理由 Root 的 `CLEANUP_SCHEMA_POST_RUN` 子进程独立 post-flight 证明）；目标 `modern_erp_domain_test` @ `127.0.0.1:3306`，server uuid `256c7a4e-d275-11f1-885b-b025aa71d167`，grants sha256 `bef61617d1b96913f479c7642176eca53f60410b003773707cd56355e4ce807e` |
+| 真实 MySQL 8（**本域专属 campaign**） | **PASS**：run `cbc6b6a6-5ed2-4460-898c-9140ee1916d7`、commit `4584f22`，`RESULT = PASS`、`ACK-4 STATE = FINISHED`（清理由 Root 的 `CLEANUP_SCHEMA_POST_RUN` 子进程独立 post-flight 证明；只读复核 `tables=0 views=0`）；目标 `modern_erp_domain_test` @ `127.0.0.1:3306`，server uuid `256c7a4e-d275-11f1-885b-b025aa71d167`，grants sha256 `bef61617d1b96913f479c7642176eca53f60410b003773707cd56355e4ce807e`；竞态套件 4/4 PASS |
+| 真实 MySQL 8（前一轮 AA campaign 取证） | **PASS**：run `63805c9f-a1f9-4ae1-97a9-32329c7e9254`、commit `de9496b`，`RESULT = PASS`、`ACK-4 STATE = FINISHED` |
 
 ### 5.2 真实 MySQL 证据（按 `MYSQL-EV-01`）
 
-按项目级统一口径，本域的证据分两段：
+本域已建立**专属** ACK-4 campaign `MASTER_ENGINEERING_MYSQL_V1`，证据不再依赖「由别的域 campaign 顺带覆盖」。按项目级统一口径分两段：
 
 | 段 | 覆盖 | 证据 |
 |---|---|---|
-| schema 对等 | 本域 15 张新表 + 28 个加法列 + 本轮新增的 2 个工序级拓扑列，在真实 MySQL 8 上被接受 | `test:mysql:accounting-analytics` campaign 的 `BOOTSTRAP_CURRENT_SCHEMA` 步骤在**全量当前迁移集**上运行（工程域迁移链在其中）；run `63805c9f-a1f9-4ae1-97a9-32329c7e9254`、commit `de9496b`，`RESULT = PASS`、`ACK-4 STATE = FINISHED`，清理由 Root 的 `CLEANUP_SCHEMA_POST_RUN` 子进程独立 post-flight 证明 |
-| 行为等价 | 生命周期守卫、BOM 周期拒绝、快照不可变、ECO 原子应用 | 本域 focused 合同套件（含负例） |
+| schema 对等 | 本域 15 张新表 + 28 个加法列 + 2 个工序级拓扑列 + 本轮新增的 ECO compare-and-swap 语义，在真实 MySQL 8 上被接受 | `test:mysql:master-engineering` campaign 的 `BOOTSTRAP_CURRENT_SCHEMA` 步骤在**全量当前迁移集**上运行；run `cbc6b6a6-5ed2-4460-898c-9140ee1916d7`、commit `4584f22`，`RESULT = PASS`、`ACK-4 STATE = FINISHED` |
+| 行为等价 | 生命周期守卫、BOM 周期拒绝、快照不可变、ECO 原子应用 | 本域 focused 合同套件（含负例）+ **本域 campaign 的 `RUN_ENGINEERING_RACES`**：ME-RACE-01 并发双 apply 只产生一个新 BOM 版本且只落一条 `APPLY` 审计；ME-RACE-02 并发 approve/reject 只产生一个终态与一条终态审计；ME-RACE-03 并发双 deactivate 只落一条 `DEACTIVATE` 审计；ME-RACE-04 被引用 master 的并发停用一律 `409` 且不落审计 |
 
-**残余**（随冻结显式登记）：本域 15 张表**没有**列入任何可运行 campaign 的**列级** parity 清单（`M1_CORE_PARITY_TABLES` 16 张采购/库存表、`AA_PARITY_TABLES` 47 张会计/分析表，均不含工程表），因此「真实 MySQL 上的列级 schema parity」未被单独取证；「真实 MySQL 上的工程域并发行为等价」同样未被单独取证。两者均按 `MYSQL-EV-01` 登记为残余，不得表述为已证明。
+**仍然存在的残余**（随冻结显式登记）：本域 15 张表**没有**列入任何 campaign 的**列级** parity 清单（`M1_CORE_PARITY_TABLES` 16 张采购/库存表、`AA_PARITY_TABLES` 47 张会计/分析表，均不含工程表）。因此「真实 MySQL 上的列级 schema parity 逐列比对」**未被单独取证**；本轮取证的是「schema 被真实 MySQL 8 接受并成功 bootstrap」与「并发行为等价」。该差异不得表述为已证明的逐列 parity。
+
+### 5.2.1 首轮专属 campaign 失败与处置（2026-11-12）
+
+首个专属 campaign run `8636a783-0171-46a1-aa1f-b7d55dec634e`（commit `b514451`）**未通过**：ME-RACE-01 在真实 MySQL 8 上 PASS（577ms），随后 ME-RACE-02 永久挂起。根因是**测试装置**的退出监听竞态 —— 套件在闸门放行之后才为每个 worker 挂 `'exit'` 监听，先退出的 worker 的事件被漏掉，`await` 永不 settle；被测生产代码与合同均无问题。
+
+处置：终止 race 子进程后，gate 依约执行 `CLEANUP_SCHEMA_POST_RUN`，cleanup 由 Root 的独立 post-flight 证明，ACK-4 终态为 `FAILED`，disposable 目标经只读复核确认为空（`tables=0`）。修正内容为在 spawn 时即捕获 exit promise 并加入 60 秒 worker 超时（提交 `b40b63f`）。修正后以新 ACK-4 capability 重跑，得到上表的 `PASS` / `FINISHED`。
+
+**该失败不构成域能力缺陷，但如实登记在此**：这是本域专属 campaign 的第一次失败运行。
 
 ### 5.3 治理证据
 
@@ -110,8 +119,8 @@
 
 | 编号 | 事项 | 需要裁定的问题 |
 |---|---|---|
-| `ME-DEC-01` | 真实 MySQL 的**列级 parity** 与**并发行为等价**未单独取证（§5.2） | 接受为随冻结的显式残余；或授权新建 `MASTER_ENGINEERING_MYSQL_V1` 域级 campaign（需要新 manifest、launcher 条目与业主逐次签发 ACK-4 capability） |
-| `ME-DEC-02` | §5.2 的残余 | 业务所有者确认残余范围 |
+| `ME-DEC-01` | 真实 MySQL 的**列级 parity** 与**并发行为等价**未单独取证（§5.2） | **已裁定并执行**：业务所有者 2026-11-12 裁定「逐域新建专属 campaign」，本域据此建立 `MASTER_ENGINEERING_MYSQL_V1` 并在真实 MySQL 8 上取得 `PASS` / `FINISHED`（§5.1、§5.2）。仅余「逐列 parity 比对」一项残余，见下 |
+| `ME-DEC-02` | 「真实 MySQL 上的列级 schema parity 逐列比对」未取证（§5.2） | 业务所有者确认残余范围 |
 | `ME-DEC-03` | 域级 Acceptance 与 Capability Freeze 的签发范围 | — |
 
 ## 7. 变更历史
@@ -119,3 +128,4 @@
 | 日期 | 变更 |
 |---|---|
 | 2026-11-12 | 建立本审计基线并完成整改轮：21 项能力由 13 `COVERED` / 5 `PARTIAL` / 3 `MISSING` 变为 **17 `COVERED` / 1 `PARTIAL` / 3 `OUT_OF_SCOPE`**；修复 `ME-DEF-01..08`；新增 2 个合同套件（12 条用例，含负例）与 1 个浏览器断言组。**仍未签发域级 Acceptance。** |
+| 2026-11-12（第二轮） | 按业务所有者「逐域新建专属 campaign」的裁定，建立 `MASTER_ENGINEERING_MYSQL_V1` ACK-4 campaign；审计中查出并修复 ECO 状态机与工程参考资料 master 的**并发权威复读缺陷**（事务外读权威状态 + 无先决状态条件的 UPDATE）；首轮 campaign 因测试装置退出监听竞态未通过（§5.2.1），修正后重跑 `PASS` / `FINISHED`，竞态套件 4/4 PASS。`ME-DEC-01` 已执行；`ME-DEC-02`（逐列 parity 未取证）保留为显式残余。 |

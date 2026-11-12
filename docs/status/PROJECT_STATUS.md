@@ -4385,3 +4385,45 @@ Requirement §33.39 的 **15 个 Finance race**（RACE-01..15）实现齐备（`
 
 - **下一域**：按就绪度顺序继续域 3 —— **Master & Engineering**（ME-01..31）。
 - 本轮**未**执行真实环境 migration、业务数据库写入、push / merge / tag / 发布 / 部署。
+
+## 57. Master & Engineering 工程主数据域：域级并发整改、专属真实 MySQL campaign 与 Acceptance 签发（2026-11-12）
+
+### 57.1 授权与范围
+
+- **授权来源**：业务所有者 2026-11-12 指示「现在完成剩下几个业务域的收尾工作」「最终目标是该 mobile erp 系统各业务域的 acceptance 完成整个项目验收」，并就真实 MySQL 证据口径裁定「逐域新建专属 campaign」。
+- **本轮范围**：域 3 —— Master & Engineering（§22.18 共 21 项能力）的并发缺陷整改、专属 ACK-4 campaign 建立与真实取证、域级 Acceptance 与 Capability Freeze 签发。
+- **共享基线**：FAST **632/632**、FULL **3740/3740**、HEAVY **67/67**、build PASS、`git diff --check` PASS；文档一致性 `current` N1、N3～N6、N8、N9 PASS、N2 `RETIRED`、**N7 FAIL**（四个既有历史提交的追溯债务，与本域无关）、`migration` C1～C6 全 PASS。
+
+### 57.2 查出的真实缺陷（并发权威复读）
+
+审计中发现 ECO 与工程参考资料 master 的状态机/生命周期**在事务外**读取权威状态，且事务内 `UPDATE` 不带先决状态条件：
+
+| 编号 | 事实 | 处置 |
+|---|---|---|
+| `ME-CONC-01` | 并发双 `apply` 同一 ECO：两侧都读到 `APPROVED`，各自生成一个新 BOM 版本 | 改为事务内复读 + MySQL `SELECT ... FOR UPDATE` 行锁 + 以先决状态 compare-and-swap；受影响行数必须为 1，否则 `409` + `ENGINEERING_CHANGE_STATE_CONFLICT` |
+| `ME-CONC-02` | 并发 `approve` 与 `reject` 同一 ECO：两侧都读到 `PENDING`，都写入终态，审计出现两条终态记录 | 同上；submit / approve / reject / apply 四个迁移统一改为事务内复读 + CAS |
+| `ME-CONC-03` | 并发双 `deactivate` 同一 master：两侧都读到 `active=1`，产生**两条** `DEACTIVATE` 审计行 | 改为事务内复读并加行锁；读到 `active=0` 即幂等返回且不写审计；引用守卫与写入同事务求值 |
+
+落点：`server/modules/engineering-change.js`、`server/modules/engineering-reference.js`；合同：Requirement §28.2 / §28.8 A、Design §23.14.1。
+
+### 57.3 专属 ACK-4 campaign
+
+- Manifest `MASTER_ENGINEERING_MYSQL_V1`，操作序列 `RESET_SCHEMA_PRE_RUN → BOOTSTRAP_CURRENT_SCHEMA → RUN_ENGINEERING_RACES → CLEANUP_SCHEMA_POST_RUN`；与 M1-Core G07 / OUT-001 / Accounting & Analytics / Finance Operations 的 manifest 互相独立。
+- 运行期四件套 + 竞态套件：`scripts/gates/mysql-master-engineering-{gate,child,root-lifecycle}.mjs`、`scripts/gates/master-engineering-concurrency-worker.mjs`、`server/mysql-master-engineering-concurrency.integration.js`；入口 `pnpm test:mysql:master-engineering`；launcher 条目 `test:mysql:master-engineering`。
+- **首轮未通过**（run `8636a783-0171-46a1-aa1f-b7d55dec634e`、commit `b514451`）：ME-RACE-01 在真实 MySQL 8 上 PASS（577ms），随后 ME-RACE-02 永久挂起。根因是**测试装置**的退出监听竞态（`exit` 监听挂载晚于闸门放行，先退出的 worker 事件被漏掉），不是被测生产代码缺陷。处置：终止 race 子进程后 gate 依约执行 `CLEANUP_SCHEMA_POST_RUN`，ACK-4 终态 `FAILED`，disposable 目标经只读复核确认为空；修正见提交 `b40b63f`。
+- **重跑通过**：run `cbc6b6a6-5ed2-4460-898c-9140ee1916d7`、commit `4584f22`，`RESULT = PASS`、`ACK-4 STATE = FINISHED`（清理由 Root 的独立 post-flight 证明，只读复核 `tables=0 views=0`），竞态套件 **4/4 PASS**。
+
+### 57.4 域级 Acceptance 与 Capability Freeze 签发
+
+- **决定**：**域级 Acceptance 通过**（`MASTER_ENGINEERING_DOMAIN_ACCEPTANCE_PASS`）与 **Capability Freeze 签发**（`MASTER_ENGINEERING_CAPABILITY_FREEZE`，17 项 `COVERED` 能力）。
+- **签发记录**：[`docs/acceptance/master-engineering-domain-acceptance-20261112.md`](../acceptance/master-engineering-domain-acceptance-20261112.md)。同日候签材料标记为 `SUPERSEDED`，保留为决定过程的证据。
+- **能力判定**：21 项 = `COVERED` **17**、`PARTIAL` **1**（Old Material Cleanup，按 §28.4 自身目标口径）、`OUT_OF_SCOPE` **3**、`MISSING` **0**。
+- **`ME-DEC-01`** → **已执行**：按所有者裁定建立专属 campaign 并取得真实取证。
+- **`ME-DEC-02` / `ME-RES-01`**（逐列 schema parity 未取证）→ **不解决**，作为显式残余随冻结接受。
+- **`ME-RES-02`**（两个不同 ECO 并发作用于同一目标 BOM 的版本唯一性未取证）、**`ME-RES-03`**（预计入供应仍属 `CROSS_DOMAIN_DEPENDENCY`）、**`ME-RES-04`**（N7 文档追溯债务，与本域能力无关）→ 随冻结接受。
+- **不签发**：Manual Closure（B3118 手册级关闭）、Release Readiness、发布、部署。
+
+### 57.5 未解决事项与暂停点
+
+- **下一域**：按就绪度顺序继续域 4 —— **Manufacturing & Quality**（MQ-01..43）。该域的 Requirement 阶段修订已在本轮登记（提交 `4584f22`）：§29.4 补入 Operation Transfer Scan、Nonconforming 改为本轮 `COVERED`、Production Scan 增加 Transfer 动作；§29.8 新增 A.1「强制执行点」与 A.2「前端工作面覆盖」；§29.8 D 补入专属 campaign `MANUFACTURING_QUALITY_MYSQL_V1` 与浏览器证据条款；§29.6 按 registry 实况更正 route 数量口径。
+- 本轮**未**执行真实环境 migration、业务数据库写入、push / merge / tag / 发布 / 部署。

@@ -4,7 +4,7 @@
 >
 > **Owner**：Master & Engineering Domain Owner（Acceptance 与 Freeze 的唯一签字人）；Platform / QA（证据维护）。
 >
-> **状态**：`PENDING_APPROVAL` —— 候签材料，等待业务所有者决定。逐项证据见 [`docs/audits/master-engineering-capability-audit-20261112.md`](../audits/master-engineering-capability-audit-20261112.md)。
+> **状态**：`SUPERSEDED` —— 本候签材料已被同日的正式签发记录取代：[`docs/acceptance/master-engineering-domain-acceptance-20261112.md`](./master-engineering-domain-acceptance-20261112.md)（`MASTER_ENGINEERING_DOMAIN_ACCEPTANCE_PASS` / `MASTER_ENGINEERING_CAPABILITY_FREEZE`）。本文件保留为决定过程的证据，不构成当前权威。逐项证据见 [`docs/audits/master-engineering-capability-audit-20261112.md`](../audits/master-engineering-capability-audit-20261112.md)。
 >
 > **权威来源**：Requirement [`docs/requirements/master-engineering.md`](../requirements/master-engineering.md) §28.1～§28.10；Design [`docs/design/master-engineering.md`](../design/master-engineering.md) §23；能力基线 `document.md` §22.18；唯一项目状态登记表 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md)。
 >
