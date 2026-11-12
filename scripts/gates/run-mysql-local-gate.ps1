@@ -42,6 +42,7 @@ Set-StrictMode -Version Latest
 $ApprovedCampaigns = @{
   'test:mysql:m1-core'             = 'M1_CORE_G07_V1'
   'test:mysql:accounting-analytics' = 'ACCOUNTING_ANALYTICS_MYSQL_V1'
+  'test:mysql:finance'               = 'FINANCE_MYSQL_V1'
 }
 if (-not $ApprovedCampaigns.ContainsKey($Script)) {
   Write-Host "[mysql-gate] BLOCKED: $Script has no independently approved ACK-4 manifest." -ForegroundColor Red

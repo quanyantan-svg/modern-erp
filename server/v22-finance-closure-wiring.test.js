@@ -21,6 +21,9 @@ import { createManualAccountReceivable } from './modules/finance-ar-open-item.js
 import { recognizeFinanceExposure } from './modules/finance-recognition.js';
 import { RECOGNITION_MODES } from './modules/finance-recognition-policy.js';
 import { activeSettlementScheme, reconcileSettlementSubledgers } from './modules/settlement-core.js';
+import {
+  listRecognitionPolicies, resolveRecognitionPolicy, upsertRecognitionPolicy,
+} from './modules/finance-recognition-policy.js';
 import { invoiceOperationalReport } from './modules/finance-reports.js';
 
 const now = () => new Date().toISOString();
@@ -161,4 +164,42 @@ test('FO36: the invoice operational report reads the invoice facts and their sou
   assert.equal(Number(row.linked_amount_cents), 10000);
   assert.equal(res.body.totals.invoices, 1);
   assert.deepEqual(row.tax_snapshot, []);
+});
+
+test('FO02: the recognition policy admin surface writes and lists policies', async () => {
+  const db = createDatabase(':memory:');
+  const manage = actor(['FINANCE_RECOGNITION_POLICY_MANAGE', 'FINANCE_RECOGNITION_POLICY_VIEW']);
+  const res = mkRes();
+  await upsertRecognitionPolicy(db, await mkReq({
+    side: 'AR', sourceType: 'SALES_DELIVERY', sourceId: 'cust-1',
+    recognitionMode: 'INVOICE_DRIVEN_OPEN_ITEM', effectiveDate: '2026-10-01',
+  }), res, manage);
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+
+  const listRes = mkRes();
+  listRecognitionPolicies(db, listRes, manage);
+  assert.equal(listRes.statusCode, 200, JSON.stringify(listRes.body));
+  const created = listRes.body.policies.find((row) => row.source_id === 'cust-1');
+  assert.ok(created, 'the new policy must be listed');
+  assert.equal(created.recognition_mode, 'INVOICE_DRIVEN_OPEN_ITEM');
+  assert.equal(created.side, 'AR');
+
+  // The written policy is the one the canonical resolver uses.
+  const resolved = resolveRecognitionPolicy(db, 'AR', 'SALES_DELIVERY', 'cust-1', '2026-10-02');
+  assert.equal(resolved.mode, 'INVOICE_DRIVEN_OPEN_ITEM');
+  assert.equal(resolved.scope, 'SOURCE');
+
+  // Negative control: an unknown recognition mode is rejected and nothing is
+  // written.
+  const badReq = await mkReq({
+    side: 'AR', sourceType: 'SALES_DELIVERY', sourceId: 'cust-2', recognitionMode: 'NOT_A_MODE',
+  });
+  await assert.rejects(
+    () => upsertRecognitionPolicy(db, badReq, mkRes(), manage),
+    (error) => /recognitionMode/.test(String(error?.message || '')),
+  );
+  assert.equal(
+    db.prepare("SELECT COUNT(*) n FROM finance_recognition_policy WHERE source_id='cust-2'").get().n, 0,
+    'a rejected policy must not be written',
+  );
 });
