@@ -16,6 +16,18 @@ const widths = [320, 390, 430, 680];
 const routes = ['engineering-reference', 'boms', 'engineering-substitute', 'engineering-change'];
 let browser;
 
+// A reference master must exist so that the lifecycle actions (update /
+// deactivate) are actually rendered and can be asserted. Without a fixture
+// the lifecycle assertions would silently be skipped.
+function ensureReferenceMaster() {
+  const now = new Date().toISOString();
+  const shiftId = 'v17-ui-shift';
+  if (!db.prepare('SELECT 1 FROM engineering_shifts WHERE id=?').get(shiftId)) {
+    db.prepare(`INSERT INTO engineering_shifts(id,code,name,start_minute,end_minute,active,notes,created_at,updated_at)
+      VALUES(?,?,?,?,?,1,?,?,?)`).run(shiftId, 'V17-UI-SHIFT', '验收用班次', 480, 600, '浏览器验收夹具', now, now);
+  }
+}
+
 try {
   mkdirSync(outputDir, { recursive: true });
   await new Promise((done) => server.listen(0, '127.0.0.1', done));
@@ -26,6 +38,7 @@ try {
   });
   assert.equal(login.status, 200, 'admin login must succeed');
   const token = (await login.json()).token;
+  ensureReferenceMaster();
   browser = await chromium.launch({ executablePath: edgePath, headless: true });
 
   for (const width of widths) {
@@ -47,6 +60,37 @@ try {
       assert.ok(metrics.bodyText.trim().length > 0, `${route}@${width}: empty surface`);
       assert.ok(metrics.scrollWidth <= metrics.clientWidth + 1, `${route}@${width}: horizontal overflow ${metrics.scrollWidth}/${metrics.clientWidth}`);
       assert.deepEqual(errors, [], `${route}@${width}: browser errors`);
+
+      // The reference master lifecycle must be REACHABLE from the console, not
+      // only from the API. Open the first master and assert that its update /
+      // deactivate actions exist and keep the 44px touch-target baseline.
+      if (route === 'engineering-reference') {
+        const firstCard = surface.locator('button.record-card').first();
+        assert.ok(await firstCard.count() > 0, `engineering-reference@${width}: no reference master row to open`);
+        {
+          await firstCard.click();
+          const editAction = page.getByRole('button', { name: '编辑', exact: true });
+          await editAction.waitFor({ timeout: 8000 });
+          const deactivateAction = page.getByRole('button', { name: '停用', exact: true });
+          assert.equal(await deactivateAction.count(), 1, `engineering-reference@${width}: the deactivate action must be present`);
+          const undersized = await page.evaluate(() => {
+            const targets = [...document.querySelectorAll('button')].filter((node) => {
+              const box = node.getBoundingClientRect();
+              return box.width > 0 && box.height > 0 && box.height < 43.5;
+            });
+            return targets.map((node) => ({ label: node.textContent.trim(), height: node.getBoundingClientRect().height }));
+          });
+          assert.deepEqual(undersized, [], `engineering-reference@${width}: touch targets below 44px ${JSON.stringify(undersized)}`);
+          const modalOverflow = await page.evaluate(() => {
+            const modal = document.querySelector('[role="dialog"], .modal, .sheet');
+            if (!modal) return null;
+            return modal.scrollWidth - modal.clientWidth;
+          });
+          assert.ok(modalOverflow === null || modalOverflow <= 1, `engineering-reference@${width}: the detail sheet overflows by ${modalOverflow}`);
+          await page.screenshot({ path: join(outputDir, `${route}-detail-${width}.png`), fullPage: true });
+        }
+      }
+
       await page.screenshot({ path: join(outputDir, `${route}-${width}.png`), fullPage: true });
       await context.close();
       console.log(`PASS ${route} @ ${width}px`);

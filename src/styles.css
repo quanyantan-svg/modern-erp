@@ -4099,6 +4099,25 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
   width: 100%;
 }
 
+/* Reference master lifecycle actions (Requirement §28.8.A "CRUD 闭环").
+   The update / deactivate actions are primary touch targets on the mobile
+   baseline, so they keep the 44px minimum height. */
+.engineering-lifecycle {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.engineering-lifecycle__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.engineering-lifecycle__actions button[disabled] {
+  opacity: 0.55;
+}
+
 .engineering-form .full {
   grid-column: 1 / -1;
 }

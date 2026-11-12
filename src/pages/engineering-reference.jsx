@@ -87,7 +87,7 @@ function CalendarSection({ user, notify, canManage }) {
   const refresh = () => { shifts.reload(); patterns.reload(); calTpls.reload(); calendars.reload(); };
 
   const lists = [
-    { id: 'shift', label: '班次', rows: shifts.items.map((s) => ({
+    { id: 'shift', label: '班次', slug: 'shifts', rows: shifts.items.map((s) => ({
       id: s.id, code: s.code, name: s.name, active: s.active, raw: s,
       facts: [
         { label: '起始', value: `${Math.floor(s.start_minute / 60)}:${String(s.start_minute % 60).padStart(2, '0')}` },
@@ -95,15 +95,17 @@ function CalendarSection({ user, notify, canManage }) {
         { label: '备注', value: s.notes || '—' },
       ],
     })) },
-    { id: 'pattern', label: '班制', rows: patterns.items.map((p) => ({ id: p.id, code: p.code, name: p.name, status: p.active ? 'ACTIVE' : 'INACTIVE', facts: [] })) },
-    { id: 'calendar-template', label: '日历模板', rows: calTpls.items.map((t) => ({ id: t.id, code: t.code, name: t.name, status: t.active ? 'ACTIVE' : 'INACTIVE', facts: [{ label: '工作日', value: t.work_days }, { label: '班制', value: t.shift_pattern_code || '—' }] })) },
-    { id: 'work-calendar', label: '工作日历', rows: calendars.items.map((c) => ({ id: c.id, code: c.code, name: c.name, status: c.active ? 'ACTIVE' : 'INACTIVE', facts: [{ label: '模板', value: c.template_code || '—' }, { label: '起止', value: `${c.start_date} ~ ${c.end_date}` }] })) },
+    { id: 'pattern', label: '班制', slug: 'shift-patterns', rows: patterns.items.map((p) => ({ id: p.id, code: p.code, name: p.name, status: p.active ? 'ACTIVE' : 'INACTIVE', facts: [], raw: p })) },
+    { id: 'calendar-template', label: '日历模板', slug: 'calendar-templates', rows: calTpls.items.map((t) => ({ id: t.id, code: t.code, name: t.name, status: t.active ? 'ACTIVE' : 'INACTIVE', facts: [{ label: '工作日', value: t.work_days }, { label: '班制', value: t.shift_pattern_code || '—' }], raw: t })) },
+    { id: 'work-calendar', label: '工作日历', slug: 'work-calendars', rows: calendars.items.map((c) => ({ id: c.id, code: c.code, name: c.name, status: c.active ? 'ACTIVE' : 'INACTIVE', facts: [{ label: '模板', value: c.template_code || '—' }, { label: '起止', value: `${c.start_date} ~ ${c.end_date}` }], raw: c })) },
   ];
 
   const onCreate = (kind) => setEditor({ kind });
   const onSelect = (item) => {
-    const kind = lists.find((l) => l.rows.some((r) => r.id === item.id))?.id;
-    setSelected({ ...item, kind });
+    const list = lists.find((l) => l.rows.some((r) => r.id === item.id));
+    if (!list) return;
+    const row = list.rows.find((r) => r.id === item.id);
+    setSelected({ ...item, kind: list.id, slug: list.slug, raw: row?.raw });
   };
 
   return <section className="engineering-reference-section">
@@ -122,7 +124,7 @@ function CalendarSection({ user, notify, canManage }) {
       ))}
     </RecordList>
     {editor && <CalendarKindEditor kind={editor.kind} onClose={() => { setEditor(null); refresh(); }} notify={notify} />}
-    {selected && <CalendarDetailView item={selected} onClose={() => setSelected(null)} />}
+    {selected && <CalendarDetailView item={selected} onClose={() => setSelected(null)} notify={notify} onChanged={refresh} />}
   </section>;
 }
 
@@ -144,10 +146,11 @@ function CalendarKindEditor({ kind, onClose, notify }) {
   </Modal>;
 }
 
-function CalendarDetailView({ item, onClose }) {
+function CalendarDetailView({ item, onClose, notify, onChanged }) {
   return <Modal title={`${item.code} · ${item.name}`} onClose={onClose}>
     <MetaList items={item.facts} />
     <p className="record-card-facts">当前资料的状态与关键属性。历史已引用资料不在界面提供硬删除。</p>
+    {item.slug && item.raw && <ReferenceLifecycleEditor slug={item.slug} raw={item.raw} notify={notify} onClose={onClose} onChanged={onChanged} />}
   </Modal>;
 }
 
@@ -207,7 +210,7 @@ function FormulaSection({ user, notify, canManage }) {
     <article className="engineering-reference-block">
       <header><strong>车间公式</strong><span>{formulas.items.length}</span></header>
       <EntityList items={formulas.items.map((f) => ({ id: f.id, code: f.code, name: f.name,
-        status: f.active ? 'ACTIVE' : 'INACTIVE',
+        status: f.active ? 'ACTIVE' : 'INACTIVE', raw: f,
         facts: [{ label: '公式', value: f.formula }, { label: '变量', value: f.variables || '[]' }] }))}
         onSelect={(item) => setEditor({ kind: 'formula', item })} canManage={canManage}
         emptyText="暂无公式" />
@@ -215,13 +218,13 @@ function FormulaSection({ user, notify, canManage }) {
     <article className="engineering-reference-block">
       <header><strong>基础活动</strong><span>{activities.items.length}</span></header>
       <EntityList items={activities.items.map((a) => ({ id: a.id, code: a.code, name: a.name,
-        status: a.active ? 'ACTIVE' : 'INACTIVE',
+        status: a.active ? 'ACTIVE' : 'INACTIVE', raw: a,
         facts: [{ label: '阶段', value: a.stage }, { label: '单位', value: a.unit || '—' }] }))}
         onSelect={(item) => setEditor({ kind: 'activity-view', item })} emptyText="暂无基础活动" />
     </article>
     {editor?.kind === 'formula' && <FormulaEditor editor={editor} onClose={() => { setEditor(null); refresh(); }} notify={notify} />}
     {editor?.kind === 'activity' && <ReferenceCreateEditor kind="activity" onClose={() => { setEditor(null); refresh(); }} notify={notify} />}
-    {editor?.kind === 'activity-view' && <ReferenceDetail item={editor.item} title="基础活动" onClose={() => setEditor(null)} />}
+    {editor?.kind === 'activity-view' && <ReferenceDetail item={editor.item} title="基础活动" onClose={() => setEditor(null)} lifecycle="basic-activities" raw={editor.item.raw} notify={notify} onChanged={refresh} />}
   </section>;
 }
 
@@ -235,7 +238,14 @@ function FormulaEditor({ editor, onClose, notify }) {
     try {
       const variables = JSON.parse(body.variables || '[]');
       if (!Array.isArray(variables)) throw new Error('变量必须是 JSON 数组');
-      await api('/api/engineering/workshop-formulas', { method: 'POST', body: { ...body, variables } });
+      // An existing formula is UPDATED through the canonical PATCH route; a
+      // new one is created. Posting an existing formula would create a
+      // duplicate master instead of editing it.
+      if (editor.item?.id) {
+        await api(`/api/engineering/workshop-formulas/${editor.item.id}`, { method: 'PATCH', body: { ...body, variables } });
+      } else {
+        await api('/api/engineering/workshop-formulas', { method: 'POST', body: { ...body, variables } });
+      }
       notify('已保存');
       onClose();
     } catch (err) { notify(err.message, 'error'); }
@@ -284,18 +294,18 @@ function ResourcesSection({ user, notify, canManage }) {
     <article className="engineering-reference-block">
       <header><strong>资源</strong><span>{resources.items.length}</span></header>
       <EntityList items={resources.items.map((r) => ({ id: r.id, code: r.code, name: r.name,
-        status: r.active ? 'ACTIVE' : 'INACTIVE',
+        status: r.active ? 'ACTIVE' : 'INACTIVE', raw: r,
         facts: [{ label: '类别', value: r.category }, { label: '数量', value: r.quantity }, { label: '工作中心', value: r.work_center_code || '—' }] }))}
         onSelect={(item) => setEditor({ kind: 'view', title: '资源', item })} emptyText="暂无资源" />
     </article>
     <article className="engineering-reference-block">
       <header><strong>设备</strong><span>{equipment.items.length}</span>{canManage && <button type="button" className="secondary" onClick={() => setEditor({ kind: 'equipment' })}>新建设备</button>}</header>
       <EntityList items={equipment.items.map((e) => ({ id: e.id, code: e.code, name: e.name,
-        status: e.status === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE',
+        status: e.status === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE', raw: e,
         facts: [{ label: '型号', value: e.model || '—' }, { label: '工作中心', value: e.work_center_code || '—' }] }))}
         onSelect={(item) => setEditor({ kind: 'view', title: '设备', item })} emptyText="暂无设备" />
     </article>
-    {editor?.kind === 'view' ? <ReferenceDetail item={editor.item} title={editor.title} onClose={() => setEditor(null)} /> : editor && <ReferenceCreateEditor kind={editor.kind} notify={notify} onClose={() => { setEditor(null); refresh(); }} />}
+    {editor?.kind === 'view' ? <ReferenceDetail item={editor.item} title={editor.title} onClose={() => setEditor(null)} lifecycle={editor.title === '资源' ? 'resources' : 'equipment'} raw={editor.item.raw} notify={notify} onChanged={refresh} /> : editor && <ReferenceCreateEditor kind={editor.kind} notify={notify} onClose={() => { setEditor(null); refresh(); }} />}
   </section>;
 }
 
@@ -312,18 +322,18 @@ function OperationsSection({ user, notify, canManage }) {
     <article className="engineering-reference-block">
       <header><strong>作业</strong><span>{operations.items.length}</span></header>
       <EntityList items={operations.items.map((o) => ({ id: o.id, code: o.code, name: o.name,
-        status: o.active ? 'ACTIVE' : 'INACTIVE',
+        status: o.active ? 'ACTIVE' : 'INACTIVE', raw: o,
         facts: [{ label: '标准工时', value: `${o.standard_minutes} 分钟` }, { label: '活动', value: o.activity_code || '—' }, { label: '工作中心', value: o.work_center_code || '—' }] }))}
         onSelect={(item) => setEditor({ kind: 'view', title: '作业', item })} emptyText="暂无作业" />
     </article>
     <article className="engineering-reference-block">
       <header><strong>控制码</strong><span>{codes.items.length}</span>{canManage && <button type="button" className="secondary" onClick={() => setEditor({ kind: 'control-code' })}>新建控制码</button>}</header>
       <EntityList items={codes.items.map((c) => ({ id: c.id, code: c.code, name: c.name,
-        status: c.active ? 'ACTIVE' : 'INACTIVE',
+        status: c.active ? 'ACTIVE' : 'INACTIVE', raw: c,
         facts: [{ label: '类别', value: c.category }, { label: '策略', value: c.policy }] }))}
         onSelect={(item) => setEditor({ kind: 'view', title: '控制码', item })} emptyText="暂无控制码" />
     </article>
-    {editor?.kind === 'view' ? <ReferenceDetail item={editor.item} title={editor.title} onClose={() => setEditor(null)} /> : editor && <ReferenceCreateEditor kind={editor.kind} notify={notify} onClose={() => { setEditor(null); refresh(); }} />}
+    {editor?.kind === 'view' ? <ReferenceDetail item={editor.item} title={editor.title} onClose={() => setEditor(null)} lifecycle={editor.title === '作业' ? 'operations' : 'control-codes'} raw={editor.item.raw} notify={notify} onChanged={refresh} /> : editor && <ReferenceCreateEditor kind={editor.kind} notify={notify} onClose={() => { setEditor(null); refresh(); }} />}
   </section>;
 }
 
@@ -367,6 +377,74 @@ function WorkCenterDetail({ item, onClose, canManage, onChanged, notify }) {
   </Modal>;
 }
 
+// The reference master lifecycle (Requirement §28.8.A "CRUD 闭环"). Every
+// master exposes the same two operations — update the master, or deactivate it
+// when no active record still references it — so the UI drives them from one
+// shared component instead of ten per-section editors.
+const REFERENCE_LIFECYCLE = {
+  shifts: {
+    title: '班次', fields: ['code', 'name', 'start_minute', 'end_minute', 'notes'],
+    body: (raw) => ({ code: raw.code, name: raw.name, startMinute: raw.start_minute, endMinute: raw.end_minute, notes: raw.notes || '' }),
+  },
+  'shift-patterns': {
+    title: '班制', fields: ['code', 'name', 'shift_ids', 'notes'],
+    body: (raw) => ({ code: raw.code, name: raw.name, shiftIds: parseJsonArray(raw.shift_ids), notes: raw.notes || '' }),
+  },
+  'calendar-templates': {
+    title: '日历模板', fields: ['code', 'name', 'work_days', 'shift_pattern_id', 'notes'],
+    body: (raw) => ({ code: raw.code, name: raw.name, workDays: parseJsonArray(raw.work_days), shiftPatternId: raw.shift_pattern_id || '', notes: raw.notes || '' }),
+  },
+  'work-calendars': {
+    title: '工作日历', fields: ['code', 'name', 'template_id', 'start_date', 'end_date', 'notes'],
+    body: (raw) => ({ code: raw.code, name: raw.name, templateId: raw.template_id || '', startDate: raw.start_date, endDate: raw.end_date, notes: raw.notes || '' }),
+  },
+  'basic-activities': {
+    title: '基础活动', fields: ['code', 'name', 'stage', 'unit', 'default_quantity', 'notes'],
+    body: (raw) => ({ code: raw.code, name: raw.name, stage: raw.stage, unit: raw.unit || '', defaultQuantity: raw.default_quantity ?? 0, notes: raw.notes || '' }),
+  },
+  'workshop-formulas': {
+    title: '公式', fields: ['code', 'name', 'formula', 'variables', 'notes'],
+    body: (raw) => ({ code: raw.code, name: raw.name, formula: raw.formula, variables: parseJsonArray(raw.variables), notes: raw.notes || '' }),
+  },
+  resources: {
+    title: '资源', fields: ['code', 'name', 'quantity', 'unit', 'category', 'work_center_id', 'notes'],
+    body: (raw) => ({ code: raw.code, name: raw.name, quantity: raw.quantity ?? 1, unit: raw.unit || '', category: raw.category, workCenterId: raw.work_center_id || '', notes: raw.notes || '' }),
+  },
+  equipment: {
+    title: '设备', fields: ['code', 'name', 'model', 'serial', 'work_center_id', 'notes'],
+    body: (raw) => ({ code: raw.code, name: raw.name, model: raw.model || '', serial: raw.serial || '', workCenterId: raw.work_center_id || '', notes: raw.notes || '' }),
+  },
+  operations: {
+    title: '作业', fields: ['code', 'name', 'standard_minutes', 'activity_id', 'work_center_id', 'notes'],
+    body: (raw) => ({ code: raw.code, name: raw.name, standardMinutes: raw.standard_minutes ?? 0, activityId: raw.activity_id || '', workCenterId: raw.work_center_id || '', notes: raw.notes || '' }),
+  },
+  'control-codes': {
+    title: '控制码', fields: ['code', 'name', 'category', 'policy', 'notes'],
+    body: (raw) => ({ code: raw.code, name: raw.name, category: raw.category, policy: raw.policy || '', notes: raw.notes || '' }),
+  },
+};
+
+const REFERENCE_LIFECYCLE_LABELS = {
+  code: '编码', name: '名称', start_minute: '起始（分钟）', end_minute: '结束（分钟）',
+  shift_ids: '班次 ID（JSON 数组）', work_days: '工作日（JSON 数组）', shift_pattern_id: '班制 ID',
+  template_id: '日历模板 ID', start_date: '起始日期', end_date: '结束日期', stage: '阶段',
+  unit: '单位', default_quantity: '默认数量', formula: '公式', variables: '变量（JSON 数组）',
+  quantity: '数量', category: '类别', work_center_id: '工作中心 ID', model: '型号',
+  serial: '序列号', standard_minutes: '标准工时（分钟）', activity_id: '基础活动 ID',
+  policy: '策略', notes: '备注',
+};
+
+function parseJsonArray(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (raw === undefined || raw === null || raw === '') return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
 const REFERENCE_EDITOR = {
   activity: { title: '新建基础活动', endpoint: '/api/engineering/basic-activities', initial: { code: '', name: '', stage: 'PROCESS', unit: '', defaultQuantity: 0 } },
   resource: { title: '新建资源', endpoint: '/api/engineering/resources', initial: { code: '', name: '', category: 'MACHINE', quantity: 1, unit: '', workCenterId: '' } },
@@ -400,11 +478,56 @@ function ReferenceCreateEditor({ kind, onClose, notify }) {
   </Modal>;
 }
 
-function ReferenceDetail({ item, title, onClose }) {
+function ReferenceDetail({ item, title, onClose, lifecycle, raw, notify, onChanged }) {
   return <Modal title={`${title}·${item.code || ''} ${item.name || ''}`} onClose={onClose}>
     <MetaList items={item.facts || []} />
+    {lifecycle && raw && <ReferenceLifecycleEditor slug={lifecycle} raw={raw} notify={notify} onClose={onClose} onChanged={onChanged} />}
     <BusinessActionBar><button type="button" className="primary" onClick={onClose}>关闭</button></BusinessActionBar>
   </Modal>;
+}
+
+// Update or deactivate one reference master. Both operations go through the
+// canonical routes; the deactivation is refused by the server while an active
+// record still references the master.
+function ReferenceLifecycleEditor({ slug, raw, notify, onClose, onChanged }) {
+  const config = REFERENCE_LIFECYCLE[slug];
+  const [body, setBody] = useState(() => config.body(raw));
+  const [editing, setEditing] = useState(false);
+  if (!config) return null;
+  const set = (name, value) => setBody({ ...body, [name]: value });
+  const save = async () => {
+    try {
+      await api(`/api/engineering/${slug}/${raw.id}`, { method: 'PATCH', body });
+      notify('已保存');
+      setEditing(false);
+      onChanged?.();
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+  };
+  const deactivate = async () => {
+    try {
+      await api(`/api/engineering/${slug}/${raw.id}/deactivate`, { method: 'POST' });
+      notify('已停用');
+      onChanged?.();
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+  };
+  const isInactive = raw.active === 0 || raw.active === false;
+  return <div className="engineering-lifecycle">
+    {editing ? <form className="engineering-form" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+      {config.fields.map((name) => <label key={name}>{REFERENCE_LIFECYCLE_LABELS[name] || name}
+        <input value={String(body[name] ?? '')} onChange={(event) => set(name, event.target.value)} required={name === 'code' || name === 'name'} /></label>)}
+      <div className="engineering-lifecycle__actions">
+        <button type="button" className="secondary" onClick={() => setEditing(false)}>取消</button>
+        <button type="submit" className="primary">保存</button>
+      </div>
+    </form> : <div className="engineering-lifecycle__actions">
+      <button type="button" className="secondary" onClick={() => setEditing(true)}>编辑</button>
+      <button type="button" className="secondary" disabled={isInactive} onClick={() => void deactivate()}>停用</button>
+    </div>}
+  </div>;
 }
 
 export default function EngineeringReference({ user, notify }) {

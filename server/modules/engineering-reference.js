@@ -492,3 +492,320 @@ export function listWorkCenterEnhancement(db, res, actor, url) {
 }
 
 export { parseVariables };
+
+
+// ---------------------------------------------------------------------------
+// Reference master lifecycle (Requirement §28.8.A "CRUD 闭环" / §28.4
+// "强制 lifecycle active/inactive")
+//
+// Every engineering reference master is a lifecycle master: it can be
+// created, read, UPDATED and DEACTIVATED, and it may never be hard-deleted
+// while an active record still references it. The masters differ only in
+// their editable columns and their validation, so the lifecycle is written
+// once against a per-master specification instead of nine near-copies.
+//
+// Deactivation is a soft state change (`active = 0`): historical references
+// must not break, so the row stays and the reference guard refuses to
+// deactivate a master that an active record still points at.
+// ---------------------------------------------------------------------------
+
+function referenceMasterSpecs() {
+  return {
+    SHIFT: {
+      table: 'engineering_shifts', entity: 'ENGINEERING_SHIFT', label: '班次',
+      normalize(body, current) {
+        const shift = normalizeShift(body, current);
+        return {
+          sql: 'UPDATE engineering_shifts SET code=?,name=?,start_minute=?,end_minute=?,notes=?,updated_at=? WHERE id=?',
+          params: [shift.code, shift.name, shift.startMinute, shift.endMinute, shift.notes, 'NOW', 'MASTER_ID'],
+          values: shift,
+        };
+      },
+    },
+    PATTERN: {
+      table: 'engineering_shift_patterns', entity: 'ENGINEERING_SHIFT_PATTERN', label: '班制',
+      normalize(body, current, db) {
+        const code = requiredCode(body.code ?? current?.code, '班制编码');
+        const name = requiredText(body.name ?? current?.name, '班制名称', 100);
+        const shiftIds = Array.isArray(body.shiftIds ?? body.shift_ids)
+          ? (body.shiftIds ?? body.shift_ids).map(String)
+          : parseShiftIds(current?.shift_ids);
+        if (!shiftIds.length) throw new HttpError(400, '班制至少包含一个班次');
+        const unknown = [];
+        for (const sid of shiftIds) {
+          if (!db.prepare('SELECT 1 FROM engineering_shifts WHERE id=? AND active=1').get(sid)) unknown.push(sid);
+        }
+        if (unknown.length) throw new HttpError(400, `班次不存在或未启用 ${unknown.join(',')}`);
+        return {
+          sql: 'UPDATE engineering_shift_patterns SET code=?,name=?,shift_ids=?,notes=?,updated_at=? WHERE id=?',
+          params: [code, name, JSON.stringify(shiftIds), optionalText(body.notes ?? current?.notes, 500), 'NOW', 'MASTER_ID'],
+          values: { code, name, shiftIds },
+        };
+      },
+    },
+    CALENDAR_TEMPLATE: {
+      table: 'engineering_calendar_templates', entity: 'ENGINEERING_CALENDAR_TEMPLATE', label: '日历模板',
+      normalize(body, current, db) {
+        const code = requiredCode(body.code ?? current?.code, '日历模板编码');
+        const name = requiredText(body.name ?? current?.name, '日历模板名称', 100);
+        const workDays = Array.isArray(body.workDays ?? body.work_days)
+          ? (body.workDays ?? body.work_days)
+          : parseWorkDays(current?.work_days);
+        const sanitized = Array.from(new Set(workDays
+          .filter((d) => Number.isInteger(Number(d)) && Number(d) >= 0 && Number(d) <= 6))).map(Number);
+        if (!sanitized.length) throw new HttpError(400, '工作日不能为空');
+        const shiftPatternId = body.shiftPatternId ?? body.shift_pattern_id ?? current?.shift_pattern_id ?? null;
+        if (shiftPatternId && !db.prepare('SELECT 1 FROM engineering_shift_patterns WHERE id=? AND active=1').get(shiftPatternId)) {
+          throw new HttpError(400, '班制不存在或未启用');
+        }
+        return {
+          sql: 'UPDATE engineering_calendar_templates SET code=?,name=?,work_days=?,shift_pattern_id=?,notes=?,updated_at=? WHERE id=?',
+          params: [code, name, JSON.stringify(sanitized), shiftPatternId, optionalText(body.notes ?? current?.notes, 500), 'NOW', 'MASTER_ID'],
+          values: { code, name, workDays: sanitized, shiftPatternId },
+        };
+      },
+    },
+    WORK_CALENDAR: {
+      table: 'engineering_work_calendars', entity: 'ENGINEERING_WORK_CALENDAR', label: '工作日历',
+      normalize(body, current, db) {
+        const code = requiredCode(body.code ?? current?.code, '工作日历编码');
+        const name = requiredText(body.name ?? current?.name, '工作日历名称', 100);
+        const startDate = requiredText(body.startDate ?? body.start_date ?? current?.start_date, '起始日期', 10);
+        const endDate = requiredText(body.endDate ?? body.end_date ?? current?.end_date, '结束日期', 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+          throw new HttpError(400, '日期格式必须为 YYYY-MM-DD');
+        }
+        if (startDate >= endDate) throw new HttpError(400, '结束日期必须晚于起始日期');
+        const templateId = body.templateId ?? body.template_id ?? current?.template_id ?? null;
+        if (templateId && !db.prepare('SELECT 1 FROM engineering_calendar_templates WHERE id=? AND active=1').get(templateId)) {
+          throw new HttpError(400, '日历模板不存在或未启用');
+        }
+        return {
+          sql: 'UPDATE engineering_work_calendars SET code=?,name=?,template_id=?,start_date=?,end_date=?,notes=?,updated_at=? WHERE id=?',
+          params: [code, name, templateId, startDate, endDate, optionalText(body.notes ?? current?.notes, 500), 'NOW', 'MASTER_ID'],
+          values: { code, name, templateId, startDate, endDate },
+        };
+      },
+    },
+    ACTIVITY: {
+      table: 'engineering_basic_activities', entity: 'ENGINEERING_BASIC_ACTIVITY', label: '基础活动',
+      normalize(body, current) {
+        const code = requiredCode(body.code ?? current?.code, '基础活动编码');
+        const name = requiredText(body.name ?? current?.name, '基础活动名称', 100);
+        const stage = String(body.stage ?? current?.stage ?? 'PROCESS').toUpperCase();
+        if (!['PREPARE', 'PROCESS', 'DISASSEMBLE'].includes(stage)) throw new HttpError(400, '活动阶段不正确');
+        const unit = optionalText(body.unit ?? current?.unit, 20) || '';
+        const defaultQuantity = Number(body.defaultQuantity ?? body.default_quantity ?? current?.default_quantity ?? 0);
+        if (!Number.isFinite(defaultQuantity) || defaultQuantity < 0) throw new HttpError(400, '默认数量必须为非负数');
+        return {
+          sql: 'UPDATE engineering_basic_activities SET code=?,name=?,stage=?,unit=?,default_quantity=?,notes=?,updated_at=? WHERE id=?',
+          params: [code, name, stage, unit, defaultQuantity, optionalText(body.notes ?? current?.notes, 500), 'NOW', 'MASTER_ID'],
+          values: { code, name, stage, unit, defaultQuantity },
+        };
+      },
+    },
+    FORMULA: {
+      table: 'engineering_workshop_formulas', entity: 'ENGINEERING_WORKSHOP_FORMULA', label: '公式',
+      normalize(body, current) {
+        const code = requiredCode(body.code ?? current?.code, '公式编码');
+        const name = requiredText(body.name ?? current?.name, '公式名称', 100);
+        const formula = requiredText(body.formula ?? current?.formula, '公式', 256);
+        try {
+          compileFormula(formula);
+        } catch (error) {
+          if (error instanceof FormulaError) {
+            throw new HttpError(400, `公式非法 (${error.reason}): ${error.message}`);
+          }
+          throw error;
+        }
+        const variables = Array.isArray(body.variables)
+          ? body.variables.map(String)
+          : parseVariables(current?.variables);
+        return {
+          sql: 'UPDATE engineering_workshop_formulas SET code=?,name=?,formula=?,formula_version=?,variables=?,notes=?,updated_at=? WHERE id=?',
+          params: [code, name, formula, Number(current?.formula_version || 1) + 1, JSON.stringify(variables), optionalText(body.notes ?? current?.notes, 500), 'NOW', 'MASTER_ID'],
+          values: { code, name, formula, variables },
+        };
+      },
+    },
+    RESOURCE: {
+      table: 'engineering_resources', entity: 'ENGINEERING_RESOURCE', label: '资源',
+      normalize(body, current, db) {
+        const code = requiredCode(body.code ?? current?.code, '资源编码');
+        const name = requiredText(body.name ?? current?.name, '资源名称', 100);
+        const category = String(body.category ?? current?.category ?? 'MACHINE').toUpperCase();
+        if (!['MACHINE', 'TOOL', 'PERSON', 'MATERIAL', 'OTHER'].includes(category)) throw new HttpError(400, '资源类型不正确');
+        const quantity = Number(body.quantity ?? current?.quantity ?? 1);
+        if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, '资源数量必须为正数');
+        const unit = optionalText(body.unit ?? current?.unit, 20) || '';
+        const workCenterId = body.workCenterId ?? body.work_center_id ?? current?.work_center_id ?? null;
+        if (workCenterId && !db.prepare('SELECT 1 FROM work_centers WHERE id=?').get(workCenterId)) {
+          throw new HttpError(400, '工作中心不存在');
+        }
+        return {
+          sql: 'UPDATE engineering_resources SET code=?,name=?,quantity=?,unit=?,category=?,work_center_id=?,notes=?,updated_at=? WHERE id=?',
+          params: [code, name, quantity, unit, category, workCenterId, optionalText(body.notes ?? current?.notes, 500), 'NOW', 'MASTER_ID'],
+          values: { code, name, quantity, unit, category, workCenterId },
+        };
+      },
+    },
+    EQUIPMENT: {
+      table: 'engineering_equipment', entity: 'ENGINEERING_EQUIPMENT', label: '设备',
+      normalize(body, current, db) {
+        const code = requiredCode(body.code ?? current?.code, '设备编码');
+        const name = requiredText(body.name ?? current?.name, '设备名称', 100);
+        const model = optionalText(body.model ?? current?.model, 100) || '';
+        const serial = optionalText(body.serial ?? current?.serial, 100) || '';
+        const workCenterId = body.workCenterId ?? body.work_center_id ?? current?.work_center_id ?? null;
+        if (workCenterId && !db.prepare('SELECT 1 FROM work_centers WHERE id=?').get(workCenterId)) {
+          throw new HttpError(400, '工作中心不存在');
+        }
+        return {
+          sql: 'UPDATE engineering_equipment SET code=?,name=?,model=?,serial=?,work_center_id=?,notes=?,updated_at=? WHERE id=?',
+          params: [code, name, model, serial, workCenterId, optionalText(body.notes ?? current?.notes, 500), 'NOW', 'MASTER_ID'],
+          values: { code, name, model, serial, workCenterId },
+        };
+      },
+    },
+    OPERATION: {
+      table: 'engineering_operations', entity: 'ENGINEERING_OPERATION', label: '作业',
+      normalize(body, current, db) {
+        const code = requiredCode(body.code ?? current?.code, '作业编码');
+        const name = requiredText(body.name ?? current?.name, '作业名称', 100);
+        const standardMinutes = Number(body.standardMinutes ?? body.standard_minutes ?? current?.standard_minutes ?? 0);
+        if (!Number.isFinite(standardMinutes) || standardMinutes < 0) throw new HttpError(400, '标准工时必须为非负数');
+        const activityId = body.activityId ?? body.activity_id ?? current?.activity_id ?? null;
+        if (activityId && !db.prepare('SELECT 1 FROM engineering_basic_activities WHERE id=? AND active=1').get(activityId)) {
+          throw new HttpError(400, '基础活动不存在或未启用');
+        }
+        const workCenterId = body.workCenterId ?? body.work_center_id ?? current?.work_center_id ?? null;
+        if (workCenterId && !db.prepare('SELECT 1 FROM work_centers WHERE id=?').get(workCenterId)) {
+          throw new HttpError(400, '工作中心不存在');
+        }
+        return {
+          sql: 'UPDATE engineering_operations SET code=?,name=?,standard_minutes=?,activity_id=?,work_center_id=?,notes=?,updated_at=? WHERE id=?',
+          params: [code, name, standardMinutes, activityId, workCenterId, optionalText(body.notes ?? current?.notes, 500), 'NOW', 'MASTER_ID'],
+          values: { code, name, standardMinutes, activityId, workCenterId },
+        };
+      },
+    },
+    CONTROL_CODE: {
+      table: 'engineering_control_codes', entity: 'ENGINEERING_CONTROL_CODE', label: '控制码',
+      normalize(body, current) {
+        const code = requiredCode(body.code ?? current?.code, '控制码编码');
+        const name = requiredText(body.name ?? current?.name, '控制码名称', 100);
+        const category = String(body.category ?? current?.category ?? 'PROCESSING').toUpperCase();
+        if (!['SCHEDULING', 'PROCESSING', 'REPORT', 'INSPECTION', 'OUTSOURCE', 'QUALITY'].includes(category)) {
+          throw new HttpError(400, '控制码类别不正确');
+        }
+        const policy = optionalText(body.policy ?? current?.policy, 100) || 'STANDARD';
+        return {
+          sql: 'UPDATE engineering_control_codes SET code=?,name=?,category=?,policy=?,notes=?,updated_at=? WHERE id=?',
+          params: [code, name, category, policy, optionalText(body.notes ?? current?.notes, 500), 'NOW', 'MASTER_ID'],
+          values: { code, name, category, policy },
+        };
+      },
+    },
+  };
+}
+
+// The active references that block a deactivation. A master that is still
+// pointed at by an active record must stay active: historical references must
+// not break.
+function referenceGuards(kind) {
+  const guards = {
+    SHIFT: [
+      { sql: "SELECT COUNT(*) n FROM engineering_shift_patterns WHERE active=1 AND shift_ids LIKE ?", param: (id) => `%${id}%`, label: '班制' },
+    ],
+    PATTERN: [
+      { sql: 'SELECT COUNT(*) n FROM engineering_calendar_templates WHERE active=1 AND shift_pattern_id=?', param: (id) => id, label: '日历模板' },
+    ],
+    CALENDAR_TEMPLATE: [
+      { sql: 'SELECT COUNT(*) n FROM engineering_work_calendars WHERE active=1 AND template_id=?', param: (id) => id, label: '工作日历' },
+    ],
+    WORK_CALENDAR: [
+      { sql: 'SELECT COUNT(*) n FROM work_centers WHERE active=1 AND calendar_id=?', param: (id) => id, label: '工作中心' },
+    ],
+    ACTIVITY: [
+      { sql: 'SELECT COUNT(*) n FROM engineering_operations WHERE active=1 AND activity_id=?', param: (id) => id, label: '作业' },
+      { sql: 'SELECT COUNT(*) n FROM product_routing_operations WHERE activity_id=?', param: (id) => id, label: '工艺路线作业' },
+    ],
+    RESOURCE: [
+      { sql: 'SELECT COUNT(*) n FROM product_routing_operations WHERE resource_id=?', param: (id) => id, label: '工艺路线作业' },
+    ],
+    EQUIPMENT: [
+      { sql: 'SELECT COUNT(*) n FROM product_routing_operations WHERE equipment_id=?', param: (id) => id, label: '工艺路线作业' },
+    ],
+    OPERATION: [
+      { sql: 'SELECT COUNT(*) n FROM product_routing_operations WHERE operation_id=?', param: (id) => id, label: '工艺路线作业' },
+    ],
+    CONTROL_CODE: [
+      { sql: 'SELECT COUNT(*) n FROM product_routing_operations WHERE control_code_id=?', param: (id) => id, label: '工艺路线作业' },
+    ],
+  };
+  return guards[kind] || [];
+}
+
+function parseShiftIds(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function parseWorkDays(raw) {
+  if (!raw) return [1, 2, 3, 4, 5];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(Number) : [1, 2, 3, 4, 5];
+  } catch (_) {
+    return [1, 2, 3, 4, 5];
+  }
+}
+
+export function listEngineeringReferenceMasters() {
+  return Object.keys(referenceMasterSpecs());
+}
+
+export async function updateEngineeringReferenceMaster(db, req, res, actor, kind, masterId) {
+  allow(actor, 'ENGINEERING_REFERENCE_MANAGE');
+  const spec = referenceMasterSpecs()[kind];
+  if (!spec) throw new HttpError(400, '未知的工程参考资料类型');
+  const current = readActive(db, spec.table, masterId, spec.label);
+  const body = await readJson(req);
+  const prepared = spec.normalize(body, current, db);
+  const now = new Date().toISOString();
+  const params = prepared.params.map((value) => {
+    if (value === 'NOW') return now;
+    if (value === 'MASTER_ID') return masterId;
+    return value;
+  });
+  transaction(db, () => {
+    db.prepare(prepared.sql).run(...params);
+    audit(db, actor.id, 'UPDATE', spec.entity, masterId, String(prepared.values.code ?? current.code));
+  });
+  return send(res, 200, { ok: true, id: masterId });
+}
+
+export function deactivateEngineeringReferenceMaster(db, res, actor, kind, masterId) {
+  allow(actor, 'ENGINEERING_REFERENCE_MANAGE');
+  const spec = referenceMasterSpecs()[kind];
+  if (!spec) throw new HttpError(400, '未知的工程参考资料类型');
+  const current = readActive(db, spec.table, masterId, spec.label);
+  if (Number(current.active) === 0) return send(res, 200, { ok: true, active: 0 });
+  for (const guard of referenceGuards(kind)) {
+    const row = db.prepare(guard.sql).get(guard.param(masterId));
+    if (Number(row?.n || 0) > 0) {
+      throw new HttpError(409, `${spec.label}仍被活动的${guard.label}引用，无法停用`);
+    }
+  }
+  const now = new Date().toISOString();
+  transaction(db, () => {
+    db.prepare(`UPDATE ${spec.table} SET active=0, updated_at=? WHERE id=?`).run(now, masterId);
+    audit(db, actor.id, 'DEACTIVATE', spec.entity, masterId, String(current.code));
+  });
+  return send(res, 200, { ok: true, active: 0 });
+}

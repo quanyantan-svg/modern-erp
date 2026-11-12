@@ -473,7 +473,9 @@ import {
   listOperations, createOperation,
   listControlCodes, createControlCode,
   listWorkCenterEnhancement, updateWorkCenter, deactivateWorkCenter,
+  updateEngineeringReferenceMaster, deactivateEngineeringReferenceMaster,
 } from './modules/engineering-reference.js';
+import { listEngineeringCleanupCandidates } from './modules/engineering-cleanup.js';
 import {
   listBomsGovernance, getBomGovernance,
   createBomGovernance, updateBomGovernance, deactivateBomGovernance,
@@ -2456,12 +2458,6 @@ ownedRouteTable.register({
   owner: 'server/modules/engineering-reference.js',
 });
 ownedRouteTable.register({
-  method: 'PATCH',
-  path: /^\/api\/engineering\/shifts\/([^/]+)$/,
-  handler: ({ db, req, res, actor, params }) => updateShift(db, req, res, actor, params[0]),
-  owner: 'server/modules/engineering-reference.js',
-});
-ownedRouteTable.register({
   method: 'GET',
   path: '/api/engineering/shift-patterns',
   handler: ({ db, res, actor }) => listShiftPatterns(db, res, actor),
@@ -2726,6 +2722,138 @@ ownedRouteTable.register({
 // These routes expose the deterministic substitute resolver contract for
 // Planning to call. They do NOT consume substitutes in MRP; that is owned
 // by the Planning Domain (per solution.md §23.8).
+// Reference master lifecycle (Requirement §28.8.A "CRUD 闭环" / §28.4
+// "强制 lifecycle active/inactive"). Every engineering reference master can be
+// updated and deactivated; deactivation is a soft state change and is refused
+// while an active record still references the master.
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/engineering\/shifts\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateEngineeringReferenceMaster(db, req, res, actor, 'SHIFT', params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/shifts\/([^/]+)\/deactivate$/,
+  handler: ({ db, res, actor, params }) => deactivateEngineeringReferenceMaster(db, res, actor, 'SHIFT', params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/engineering\/shift-patterns\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateEngineeringReferenceMaster(db, req, res, actor, 'PATTERN', params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/shift-patterns\/([^/]+)\/deactivate$/,
+  handler: ({ db, res, actor, params }) => deactivateEngineeringReferenceMaster(db, res, actor, 'PATTERN', params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/engineering\/calendar-templates\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateEngineeringReferenceMaster(db, req, res, actor, 'CALENDAR_TEMPLATE', params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/calendar-templates\/([^/]+)\/deactivate$/,
+  handler: ({ db, res, actor, params }) => deactivateEngineeringReferenceMaster(db, res, actor, 'CALENDAR_TEMPLATE', params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/engineering\/work-calendars\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateEngineeringReferenceMaster(db, req, res, actor, 'WORK_CALENDAR', params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/work-calendars\/([^/]+)\/deactivate$/,
+  handler: ({ db, res, actor, params }) => deactivateEngineeringReferenceMaster(db, res, actor, 'WORK_CALENDAR', params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/engineering\/basic-activities\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateEngineeringReferenceMaster(db, req, res, actor, 'ACTIVITY', params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/basic-activities\/([^/]+)\/deactivate$/,
+  handler: ({ db, res, actor, params }) => deactivateEngineeringReferenceMaster(db, res, actor, 'ACTIVITY', params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/engineering\/workshop-formulas\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateEngineeringReferenceMaster(db, req, res, actor, 'FORMULA', params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/workshop-formulas\/([^/]+)\/deactivate$/,
+  handler: ({ db, res, actor, params }) => deactivateEngineeringReferenceMaster(db, res, actor, 'FORMULA', params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/engineering\/resources\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateEngineeringReferenceMaster(db, req, res, actor, 'RESOURCE', params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/resources\/([^/]+)\/deactivate$/,
+  handler: ({ db, res, actor, params }) => deactivateEngineeringReferenceMaster(db, res, actor, 'RESOURCE', params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/engineering\/equipment\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateEngineeringReferenceMaster(db, req, res, actor, 'EQUIPMENT', params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/equipment\/([^/]+)\/deactivate$/,
+  handler: ({ db, res, actor, params }) => deactivateEngineeringReferenceMaster(db, res, actor, 'EQUIPMENT', params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/engineering\/operations\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateEngineeringReferenceMaster(db, req, res, actor, 'OPERATION', params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/operations\/([^/]+)\/deactivate$/,
+  handler: ({ db, res, actor, params }) => deactivateEngineeringReferenceMaster(db, res, actor, 'OPERATION', params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/engineering\/control-codes\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateEngineeringReferenceMaster(db, req, res, actor, 'CONTROL_CODE', params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/control-codes\/([^/]+)\/deactivate$/,
+  handler: ({ db, res, actor, params }) => deactivateEngineeringReferenceMaster(db, res, actor, 'CONTROL_CODE', params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+// Use-Up-Old cleanup candidates (Requirement §28.4). The engineering domain
+// READS the current inventory projection; it never mutates it.
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/cleanup-candidates',
+  handler: ({ db, res, actor, url }) => listEngineeringCleanupCandidates(db, res, actor, url),
+  owner: 'server/modules/engineering-cleanup.js',
+});
 ownedRouteTable.register({
   method: 'GET',
   path: '/api/engineering/substitute-schemes',

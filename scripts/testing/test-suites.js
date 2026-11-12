@@ -385,6 +385,9 @@ const FULL = [
   // preservation (legacy tables/columns intact) + engineering
   // permission family gate.
   'server/engineering-reference-integration.test.js',
+  // ----- B3118 Master & Engineering remediation round (2026-11-12) -----
+  'server/engineering-reference-lifecycle.test.js',
+  'server/engineering-topology-cleanup.test.js',
 
   // ----- V17 Master & Engineering Domain Closure — Wave B BOM Governance -----
   // Live HTTP integration: BOM lifecycle (create / submit / approve /

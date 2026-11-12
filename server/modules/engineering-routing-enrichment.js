@@ -19,6 +19,7 @@ import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, optionalText, readJson, requiredText, send } from '../lib/http.js';
 
 const LINK_TYPES = new Set(['PARALLEL', 'SPLIT', 'MERGE', 'ALTERNATE']);
+const OPERATION_TOPOLOGIES = new Set(['LINEAR', 'PARALLEL', 'SPLIT', 'MERGE', 'ALTERNATE']);
 
 function ensureRoutingExists(db, routingId) {
   const routing = db.prepare('SELECT * FROM product_routings WHERE id=?').get(routingId);
@@ -96,9 +97,19 @@ export async function updateRoutingEnrichment(db, req, res, actor, routingId) {
     if (operations) {
       for (const item of operations) {
         if (!item.id) continue;
+        // The per-operation topology is part of the master payload. It is
+        // optional: an operation that does not declare one keeps its current
+        // value, so the topology can be introduced incrementally.
+        const topology = item.topology === undefined || item.topology === null
+          ? null
+          : String(item.topology).toUpperCase();
+        if (topology !== null && !OPERATION_TOPOLOGIES.has(topology)) {
+          throw new HttpError(400, '工序 topology 必须是 LINEAR / PARALLEL / SPLIT / MERGE / ALTERNATE');
+        }
         db.prepare(`UPDATE product_routing_operations
           SET operation_id=?, control_code_id=?, activity_id=?, resource_id=?, equipment_id=?,
             is_outsource=?, quality_policy=?
+            ${topology === null ? '' : ', topology=?, topology_meta=?'}
           WHERE id=? AND routing_id=?`).run(
           item.operationId ?? item.operation_id ?? null,
           item.controlCodeId ?? item.control_code_id ?? null,
@@ -107,6 +118,7 @@ export async function updateRoutingEnrichment(db, req, res, actor, routingId) {
           item.equipmentId ?? item.equipment_id ?? null,
           item.isOutsource === true || item.is_outsource === true ? 1 : 0,
           optionalText(item.qualityPolicy ?? item.quality_policy, 100) || '',
+          ...(topology === null ? [] : [topology, optionalText(item.topologyMeta ?? item.topology_meta, 500) || '']),
           item.id, routingId,
         );
       }
@@ -155,6 +167,13 @@ export function deleteRoutingLink(db, res, actor, linkId) {
   if (!link) throw new HttpError(404, '拓扑连接不存在');
   transaction(db, () => {
     db.prepare('DELETE FROM product_routing_operation_links WHERE id=?').run(linkId);
+    // The routing's topology_type is a projection of its links: when the
+    // last link is gone the routing is linear again. Leaving it at NETWORK
+    // would describe a topology that no longer exists.
+    const remaining = db.prepare('SELECT COUNT(*) n FROM product_routing_operation_links WHERE routing_id=?').get(link.routing_id);
+    if (Number(remaining.n) === 0) {
+      db.prepare("UPDATE product_routings SET topology_type='LINEAR', updated_at=? WHERE id=?").run(new Date().toISOString(), link.routing_id);
+    }
     audit(db, actor.id, 'DELETE_LINK', 'PRODUCT_ROUTING', link.routing_id, link.link_type);
   });
   return send(res, 200, { ok: true });

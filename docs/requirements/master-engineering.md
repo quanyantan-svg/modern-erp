@@ -204,7 +204,8 @@
   - 7 个显式普通索引：`idx_bom_items_product`、`idx_boms_product_purpose_status`、`idx_engineering_change_items_change`、`idx_engineering_change_orders_status`、`idx_engineering_substitutes_primary`、`idx_engineering_substitutes_scheme`、`idx_product_routing_operation_links_routing`。
 - MySQL parity 证据：真实 disposable MySQL 8 上 fresh bootstrap、V1.3/V1.4-shaped existing database additive upgrade、连续第二次初始化、Engineering 表/列恢复、原始行与 permission mapping 保留均通过；`pnpm test:mysql` 与 `pnpm test:mysql:concurrency` 最终 PASS。
 - BOM Permission Family：Original Gap `SEMANTIC_MISMATCH`；独立 `ENGINEERING_BOM_VIEW` / `ENGINEERING_BOM_MANAGE` / `ENGINEERING_BOM_APPROVE` 权限族及测试已落地，Final Coverage `COVERED`。
-- 最终保留 Gap：非 Shift 参考资料 update/deactivate；完整 APS；预计入供参与 Use-Up-Old；完整 MRP substitute 消费；Multi-Org/Mold/Auxiliary 的合法 deferred 范围。
+- 最终保留 Gap：完整 APS；预计入供参与 Use-Up-Old；完整 MRP substitute 消费；Multi-Org/Mold/Auxiliary 的合法 deferred 范围。
+- **2026-11-12 整改轮**：上列「非 Shift 参考资料 update/deactivate」缺口已闭合 —— 十个工程参考资料 master 全部具备 update + deactivate 生命周期与引用守卫，路由 master 补齐工序级拓扑，Use-Up-Old 补齐**当前库存** cleanup candidate（预计入供应仍为 `CROSS_DOMAIN_DEPENDENCY`）。逐项判定与证据见 [`docs/audits/master-engineering-capability-audit-20261112.md`](../audits/master-engineering-capability-audit-20261112.md)。
 
 ---
 
