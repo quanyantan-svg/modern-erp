@@ -233,6 +233,10 @@
 与 §35.3 的目标判定（43 `COVERED` + 1 `OUT_OF_SCOPE`）**一致**：AA-07 委外成本的合同缺位已由
 业务所有者 2026-11-11 的裁定（选项 A）闭合，见 §7.3。
 
+2026-11-12 域级 Acceptance 与 Capability Freeze 已签发（`ACCOUNTING_ANALYTICS_DOMAIN_ACCEPTANCE_PASS` /
+`ACCOUNTING_ANALYTICS_CAPABILITY_FREEZE`），43 项 `COVERED` 能力已冻结；签发记录见
+[`docs/acceptance/accounting-analytics-domain-acceptance-20261111.md`](../acceptance/accounting-analytics-domain-acceptance-20261111.md)。
+
 ### 7.2 逐项复核结论
 
 | Capability | 基线判定 | 复核判定 | 证据（写入口 / 约束 / 可执行测试） |

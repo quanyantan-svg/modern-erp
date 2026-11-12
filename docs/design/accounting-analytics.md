@@ -1077,8 +1077,8 @@ AA-W1 → AA-W2 → AA-W5 → AA-W3 → AA-W6 → AA-W4 → AA-W7 → 整域 Acc
 | Design 状态 | `APPROVED` → 已实施（AA-W1..AA-W7 七个范围包按 §31.14 顺序全部落地） |
 | Requirement 状态 | `IMPLEMENTED`（`docs/requirements/accounting-analytics.md` §35，2026-11-10 批准、2026-11-11 实施完毕） |
 | Implementation 状态 | `COMPLETE`（提交 `3876bd3` / `e40a015` / `943414c` / `5e6739d` / `bc2035d` / `d9e7319`；前端工作面 `src/pages/accounting-analytics.jsx` 按 §31.0.3 承载 5 个新 route） |
-| Domain Acceptance | 未签发（候签材料见 `docs/acceptance/accounting-analytics-domain-acceptance-candidate-20261111.md`） |
-| Capability Freeze | 未签发 |
+| Domain Acceptance | **已签发**（`ACCOUNTING_ANALYTICS_DOMAIN_ACCEPTANCE_PASS`，2026-11-12） |
+| Capability Freeze | **已签发**（`ACCOUNTING_ANALYTICS_CAPABILITY_FREEZE`） |
 
 **实施偏离登记（按 §31.0.3 执行）**：本域 5 个新 route（`accounting-events` / `accounting-reconciliation` /
 `accounting-reports` / `accounting-costing` / `management-accounting`）全部绑定到单一页面

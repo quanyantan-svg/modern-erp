@@ -4,7 +4,7 @@
 >
 > **Owner**：Accounting & Analytics Domain Owner（Acceptance 与 Freeze 的唯一签字人）；Platform / QA（证据维护）。
 >
-> **状态**：`PENDING_OWNER_DECISION` —— 本文件是候签材料，**尚未**构成 Acceptance、Capability Freeze、Manual Closure 或 Release Readiness。
+> **状态**：`SUPERSEDED` —— 本文件是候签材料（决定过程的证据），**已被** [`accounting-analytics-domain-acceptance-20261111.md`](./accounting-analytics-domain-acceptance-20261111.md) 取代；该签发记录才是 Acceptance 与 Freeze 的正式证据。本文件**不是** Manual Closure 或 Release Readiness 证据。
 >
 > **权威来源**：Requirement [`docs/requirements/accounting-analytics.md`](../requirements/accounting-analytics.md) §35；Design [`docs/design/accounting-analytics.md`](../design/accounting-analytics.md) §31；唯一项目状态登记表 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §52；能力覆盖矩阵 [`docs/status/CAPABILITY_MATRIX.md`](../status/CAPABILITY_MATRIX.md)；逐项复核台账 [`docs/audits/accounting-analytics-capability-audit-20261110.md`](../audits/accounting-analytics-capability-audit-20261110.md) §7。
 >
@@ -12,7 +12,7 @@
 
 ```text
 ACCOUNTING_ANALYTICS_DOMAIN_ACCEPTANCE_CANDIDATE_READY_FOR_OWNER_DECISION
-（AA-07 已由业务所有者 2026-11-11 裁定闭合；等待业务所有者签发域级 Acceptance 与 Capability Freeze）
+（已于 2026-11-12 签发：ACCOUNTING_ANALYTICS_DOMAIN_ACCEPTANCE_PASS / ACCOUNTING_ANALYTICS_CAPABILITY_FREEZE）
 ```
 
 ## 1. 候签范围

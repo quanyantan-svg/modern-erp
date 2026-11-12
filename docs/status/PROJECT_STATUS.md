@@ -4143,11 +4143,72 @@ M0 验收后，**后续业务包的启动仍需各自的显式授权**；W11-A �
 
 ### 52.8 未解决事项与暂停点
 
-- **域级 Acceptance 与 Capability Freeze 尚未签发**：本节只登记证据与残余，不代替业务所有者签字。
-- **跨域遗留：受保护门禁的失败信号不可靠**。本轮发现 TAP 报告器只监听 `test:fail` 事件，嵌套子测试的失败不一定到达该事件，
-  于是失败套件的子进程仍以 0 退出，**门禁会把失败的套件报成 PASS**。已修复并以负例证明守卫生效（`0a81155`）。
-  该缺陷同样影响采购与委外域 2026-11-11 已签发的 **M1-Core G07 campaign**，该域的 PASS 结论需按本修正重跑确认
-  （属采购与委外域的解冻范围，本域**不**代为处置）。
+- **域级 Acceptance 与 Capability Freeze 已于 2026-11-12 签发**（见 §53）；本节只登记实施期证据与残余。
+- **跨域遗留已闭合**：受保护门禁的失败信号曾不可靠（TAP 报告器只监听 `test:fail` 事件，嵌套子测试的失败不一定到达该事件，
+  于是失败套件的子进程仍以 0 退出，门禁会把失败的套件报成 PASS）。已修复（`0a81155`）并以负例证明守卫生效；
+  采购与委外域 2026-11-11 已签发的 **M1-Core G07 campaign 已按修正重跑**（run `b4e124fe-ae09-44fd-927a-6a4d1eb518ed`
+  @ `003fc8cd`，`RESULT = PASS`、`state=FINISHED`），确认该域的 PASS 在修正后的报告器下**依然成立**。
 - **Manual Closure 未签发**：B3106 / B3107 / B3114–B3117 手册级关闭是独立决定。
 - **Release Readiness 未签发**：本域的 Acceptance 与 Freeze **不**构成任何 Domain 的发布授权。
 - 本轮**未**执行真实环境 migration、业务数据库写入、真实 MySQL Gate、push / merge / tag / 发布 / 部署；**未**代替业务所有者签发 Acceptance 或 Freeze。
+
+## 53. Accounting & Analytics 会计与分析域：域级 Acceptance 与 Capability Freeze 签发（2026-11-12）
+
+### 53.1 授权、决定与状态
+
+- **授权来源**：业务所有者 2026-11-12 指示「你修复完成后 就批准域级验收」。此前同一轮对话中所有者已指示
+  「w1、w2、w3 和 w5 应该已经做完 请接着做剩余wave 最终目标是域级acceptance和freezen」，并就两项待裁定事项分别裁定
+  「A：裁定归采购委外域，本域只引用」（AA-07）与「授权本域 ACK-4 campaign」（真实 MySQL Gate）。
+- **决定**：**域级 Acceptance 通过**（`ACCOUNTING_ANALYTICS_DOMAIN_ACCEPTANCE_PASS`）与
+  **Capability Freeze 签发**（`ACCOUNTING_ANALYTICS_CAPABILITY_FREEZE`，冻结 43 项 `COVERED` 能力）。
+- **签发记录**：[`docs/acceptance/accounting-analytics-domain-acceptance-20261111.md`](../acceptance/accounting-analytics-domain-acceptance-20261111.md)。
+  同日的候签材料（`…-candidate-20261111.md`）标记为 `SUPERSEDED`，保留为决定过程的证据。
+- **不签发**：Manual Closure（B3106 / B3107 / B3114–B3117 手册级关闭）、Release Readiness、发布、部署。
+
+### 53.2 能力判定与冻结范围
+
+- **44 项能力**：`COVERED` **43**、`PARTIAL` **0**、`MISSING` **0**、按已批准决定排除在本域范围外 **1** 项
+  （AA-31 汇兑损益 / 多币种，业务所有者 2026-11-10 裁定）。
+- **AA-07 委外成本**：口径由 Procurement & Outsourcing 域已冻结的 canonical 实现承担，本域按 Requirement
+  §35.4.6 AA-W6.17～AA-W6.19 **只做权威事实引用**（业务所有者 2026-11-11 裁定选项 A）；该裁定以**合同条款**落地，
+  未新增任何实现代码，本域仍无第二套委外成本事实表或第二条委外加工费过账路径。
+- 逐行依据见 [`docs/audits/accounting-analytics-capability-audit-20261110.md`](../audits/accounting-analytics-capability-audit-20261110.md) §7.2。
+
+### 53.3 Gate 结果（2026-11-12，实现锚点 `003fc8cd`）
+
+| Gate | 结果 |
+|---|---|
+| `pnpm test:fast` | **632/632 PASS** |
+| `pnpm test`（FULL） | **3708/3708 PASS**，0 失败 |
+| `pnpm test:heavy` | **67/67 PASS** |
+| `pnpm build` / `git diff --check` | PASS |
+| focused（AA-W1..AA-W7 六个契约套件） | **85/85 PASS** |
+| focused（域级 schema 双引擎离线对等） | **53/53 PASS** |
+| focused（四处真实缺陷的回归测试，新登记） | **13/13 PASS** |
+| 浏览器四档宽度验收（真实 Edge，6 个工作面 × 320/390/430/680） | **6/6 PASS**，浏览器错误 **0** |
+| **真实 MySQL 8.0.37 parity / concurrency**（受保护 disposable 目标） | **PASS**：run `52ee28ff-377c-4558-a0d8-d4e7824a8c47`、commit `003fc8cd`；`RESULT = PASS`、`state=FINISHED`、清理由 root 独立 post-flight 证明；47 张表目录对等、七个包的权威写入路径、三条并发 UNIQUE 边界与金额边界全部通过 |
+| **M1-Core G07 重跑**（跨域复核，修正后的报告器） | **PASS**：run `b4e124fe-ae09-44fd-927a-6a4d1eb518ed`、commit `003fc8cd`；确认采购与委外域已签发的 PASS 在修正后**依然成立** |
+| 文档一致性 `current` | N1、N3～N6、N8、N9 **PASS**；N2 `RETIRED`；**N7 FAIL**（既存历史提交 `a40e356` / `59eccd5` / `171ade5` / `4403a80` 的追溯债务，与本域无关） |
+| 文档一致性 `migration` | C1～C6 全 PASS |
+
+### 53.4 本轮由真实 MySQL Gate 暴露并修复的真实缺陷
+
+| 缺陷 | 影响面 | 修复与守卫 |
+|---|---|---|
+| MySQL 重复键冲突返回 500 而非 409（驱动把 `ER_DUP_ENTRY` 放在错误码上） | **跨域** | `server/app.js` 抽出 `isDuplicateKeyConflict`；回归测试 `server/app-duplicate-key-mapping.test.js`（5 条，含负例） |
+| `information_schema` 字符串列为 latin1，utf8mb4 字节被逐字节解码，目录默认值无法与 canonical SQLite 文本相等 | 跨域（schema 对等） | 比较器按 UTF-8 还原目录列文本；回归测试 `server/m1-core-schema-parity-catalogue.test.js`（5 条，含「还原前必须确实不等」的负例） |
+| MySQL 目录把字面量渲染成带反斜杠转义的定界符，比较器只接受单反斜杠形式 | 同上 | 比较器把「反斜杠串 + 引号」整体当作定界符；回归测试同上 |
+| 受保护门禁的 TAP 报告器只监听 `test:fail`，失败套件被报成 PASS | **跨域**（任何用该报告器的门禁） | 报告器同时扫描合成 TAP 的 `not ok` 行；回归测试 `scripts/gates/m1-core-g07-suite-reporter.test.js`（3 条，以子进程退出码为断言）；M1-Core G07 已按修正重跑确认仍为 PASS |
+
+### 53.5 冻结边界与随冻结接受的残余
+
+- **冻**：Requirement §35 与 Design §31 及其 43 项 `COVERED` 能力的实现、schema、测试与证据，自本记录起冻结；
+  任何修改必须先走显式解冻，跨域合同变更必须回到对应 Domain 的 Requirement / Design 层重新裁定。
+- **残余 1**：既有 `src/pages/accounting.jsx` 的「未结转损益（虚拟行，不持久化）」资产负债表展示行仍保留
+  （AA-W3 已实现真实损益结转并移除结转链上的虚拟权益行补偿）；该展示行与真实结转事实的一致性**未取得浏览器取证**。
+- **残余 2**：试算平衡科目集合由 21 增至 27（AA-W3 的 `4103`、AA-W5 的 `1601` / `1602` / `6602` / `6603`）；
+  既有损益表与资产负债表口径不变。
+- **残余 3**：真实 MySQL campaign 只覆盖 parity、七个包的代表性权威写入路径、三条并发边界与金额边界，
+  **不**覆盖本域全部 85 条契约用例（以本地 SQLite 套件为准），也**不**覆盖 MySQL 下的库存估值并发（属 Inventory 域）。
+- **残余 4**：N7 仍 FAIL，成因是四个既有历史提交的追溯债务，与本域无关；本域**未**把它写成 PASS。
+- 本轮**未**执行真实环境 migration、业务数据库写入、push / merge / tag / 发布 / 部署。

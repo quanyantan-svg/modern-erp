@@ -541,11 +541,11 @@ Accounting & Analytics 域级 Acceptance 必须同时满足：
 
 | 项 | 值 |
 |---|---|
-| Requirement 状态 | `IMPLEMENTED`（业务所有者 2026-11-10 授权：AA-W1..AA-W7 全部纳入；AA-31 `OUT_OF_SCOPE`；Requirement + Design 连续执行授权。AA-W1..AA-W7 七个范围包已于 2026-11-11 全部实施完毕并通过本地 Gate，**尚未经业务所有者验收**） |
+| Requirement 状态 | `FROZEN`（2026-11-12 域级 Acceptance 与 Capability Freeze 已签发：`ACCOUNTING_ANALYTICS_DOMAIN_ACCEPTANCE_PASS` / `ACCOUNTING_ANALYTICS_CAPABILITY_FREEZE`，43 项 `COVERED` 能力冻结；签发记录见 [`docs/acceptance/accounting-analytics-domain-acceptance-20261111.md`](../acceptance/accounting-analytics-domain-acceptance-20261111.md)） |
 | Design 状态 | `APPROVED` → 已实施（`docs/design/accounting-analytics.md` §31） |
 | Implementation 状态 | `COMPLETE`（AA-W1 → AA-W2 → AA-W5 → AA-W3 → AA-W6 → AA-W4 → AA-W7，提交 `3876bd3` / `e40a015` / `943414c` / `5e6739d` / `bc2035d` / `d9e7319`） |
-| Domain Acceptance | 未签发（候签材料见 `docs/acceptance/accounting-analytics-domain-acceptance-candidate-20261111.md`） |
-| Capability Freeze | 未签发 |
+| Domain Acceptance | **已签发**（`ACCOUNTING_ANALYTICS_DOMAIN_ACCEPTANCE_PASS`，2026-11-12） |
+| Capability Freeze | **已签发**（`ACCOUNTING_ANALYTICS_CAPABILITY_FREEZE`，冻结 43 项 `COVERED` 能力） |
 | Manual Closure | 未闭合 |
 | Release Readiness | 未就绪 |
 
@@ -556,8 +556,10 @@ Procurement & Outsourcing 域已冻结的 canonical 实现承担，本域只做�
 1 `OUT_OF_SCOPE`（AA-31）**，与 §35.3 目标一致。裁定过程见
 [`docs/audits/accounting-analytics-capability-audit-20261110.md`](../audits/accounting-analytics-capability-audit-20261110.md) §7.3。
 
-**仍未闭合**：Requirement §35.8.1 第 6 项的真实 MySQL 8 parity / concurrency 尚未运行
-（见 `docs/acceptance/accounting-analytics-domain-acceptance-candidate-20261111.md` §7）。
+**已闭合**：Requirement §35.8.1 第 6 项的真实 MySQL 8 parity / concurrency 已运行并通过
+（run `52ee28ff-377c-4558-a0d8-d4e7824a8c47` @ `003fc8cd`，`state=FINISHED`，清理独立 post-flight 证明）。
+
+**冻**：本节（§35）与 Design §31 自 2026-11-12 起冻结，任何修改必须先走显式解冻。
 
 ---
 
