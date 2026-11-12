@@ -34,6 +34,7 @@
     "test:mysql:accounting-analytics": "node scripts/gates/mysql-accounting-analytics-gate.mjs",
     "test:mysql:finance": "node scripts/gates/mysql-finance-gate.mjs",
     "test:mysql:master-engineering": "node scripts/gates/mysql-master-engineering-gate.mjs",
+    "test:mysql:manufacturing-quality": "node scripts/gates/mysql-manufacturing-quality-gate.mjs",
     "test:finance:responsive": "node scripts/acceptance/finance-operations-responsive-uat.mjs",
     "test:finance:uat": "node scripts/acceptance/finance-operations-final-uat.mjs",
     "test:sales:wave2-responsive": "node scripts/acceptance/sales-customer-wave2-responsive.mjs",

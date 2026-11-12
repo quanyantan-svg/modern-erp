@@ -15,6 +15,42 @@
 import { id, transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { HttpError, allow, optionalText, readJson, requiredText, send } from '../lib/http.js';
+import { calculateSampleQuantity } from './traceability-quality.js';
+
+// The controlled inspection kinds. The server validates the submitted kind
+// against this vocabulary, so a typo can never be stored as a valid type.
+export const PRODUCTION_INSPECTION_TYPES = Object.freeze(new Set([
+  'NORMAL', 'SAMPLING', 'FULL', 'FIRST_ARTICLE', 'PATROL', 'FINAL', 'REGRESSION', 'REWORK',
+]));
+
+// Resolve the sampling decision for a production inspection.
+//
+// The inspection plan is the WHAT. The quality control point linked to the
+// plan is the WHEN and the HOW MUCH: `inspection_required` says whether an
+// inspection has to happen at all, and `sampling_mode / sampling_value` say how
+// much of the source quantity is actually inspected. The sampling engine is
+// the existing `calculateSampleQuantity` — this domain does not build a second
+// sampling engine.
+function resolveInspectionSampling(db, planId, sourceQuantity, productId, businessDate) {
+  const plan = planId ? db.prepare('SELECT * FROM inspection_plans WHERE id=?').get(planId) : null;
+  const qcp = plan?.qcp_id
+    ? db.prepare('SELECT * FROM quality_control_points WHERE id=?').get(plan.qcp_id)
+    : null;
+  const mode = String(qcp?.sampling_mode || 'FULL').toUpperCase();
+  const value = qcp?.sampling_value ?? null;
+  const quantity = calculateSampleQuantity(
+    sourceQuantity > 0 ? sourceQuantity : 0,
+    mode,
+    mode === 'FULL' ? null : value,
+  );
+  return {
+    mode,
+    value,
+    quantity,
+    qcpId: qcp?.id || null,
+    inspectionRequired: qcp ? Number(qcp.inspection_required || 0) === 1 : true,
+  };
+}
 
 // ============ Inspection Item ============
 
@@ -64,6 +100,18 @@ export async function createInspectionDetectionValue(db, req, res, actor) {
     VALUES(?,?,?,?,?,?,?)`).run(dvId, itemId, label, value, body.active === false ? 0 : 1, now, now);
   audit(db, actor.id, 'CREATE', 'INSPECTION_DETECTION_VALUE', dvId, `创建检测值 ${label}`);
   return send(res, 201, { id: dvId });
+}
+
+// The detection value list is the read side of the detection value master. It
+// is filtered by the inspection item so the quality configuration surface can
+// offer the values of one item without loading the whole master.
+export function listInspectionDetectionValues(db, res, actor, url) {
+  allow(actor, 'PRODUCTION_QUALITY_CONFIG_VIEW');
+  const itemId = url.searchParams.get('itemId');
+  const rows = itemId
+    ? db.prepare('SELECT * FROM inspection_detection_values WHERE item_id=? ORDER BY created_at').all(itemId)
+    : db.prepare('SELECT * FROM inspection_detection_values ORDER BY created_at LIMIT 500').all();
+  return send(res, 200, { values: rows });
 }
 
 // ============ Inspection Instrument ============
@@ -170,24 +218,41 @@ export async function createProductionInspection(db, req, res, actor) {
   if (!['OPERATION_REPORT', 'PRODUCTION_RECEIPT'].includes(sourceType)) throw new HttpError(400, '来源类型不正确');
   const sourceId = String(body.sourceId || '').trim();
   if (!sourceId) throw new HttpError(400, '请提供来源单据');
+  // The inspection kind is a controlled vocabulary. A free-text kind used to
+  // be written straight to the column, which made the stored value
+  // unqueryable and let a typo masquerade as a valid inspection type.
+  const inspectionType = String(body.inspectionType || 'NORMAL').toUpperCase();
+  if (!PRODUCTION_INSPECTION_TYPES.has(inspectionType)) {
+    throw new HttpError(400, `检验类型不正确，可用类型：${[...PRODUCTION_INSPECTION_TYPES].join(' / ')}`);
+  }
   let productionOperationId = null;
+  let sourceQuantity = 0;
   if (sourceType === 'OPERATION_REPORT') {
     const report = db.prepare("SELECT * FROM production_operation_reports WHERE id=? AND production_order_id=?").get(sourceId, order.id);
     if (!report) throw new HttpError(400, '工序报工单不存在');
     productionOperationId = report.production_operation_id;
+    sourceQuantity = Number(report.good_quantity || 0) + Number(report.scrap_quantity || 0);
   } else {
     const receipt = db.prepare("SELECT * FROM production_receipts WHERE id=? AND production_order_id=?").get(sourceId, order.id);
     if (!receipt) throw new HttpError(400, '生产入库单不存在');
+    sourceQuantity = Number(receipt.quantity || 0);
   }
+  // The "when / what" relation: the inspection plan carries the WHAT (the
+  // criteria), and the quality control point linked to the plan carries the
+  // WHEN (is an inspection required at all) and the HOW MUCH (the sampling
+  // rule). Both are frozen onto the inspection so a later policy change can
+  // never rewrite a decision that was already taken.
+  const sampling = resolveInspectionSampling(db, body.planId, sourceQuantity, order.product_id, body.businessDate);
   const inspectionId = id();
   const code = buildInspectionCode(sourceType === 'OPERATION_REPORT' ? 'POI' : 'PPI');
   const now = new Date().toISOString();
   transaction(db, () => {
-    db.prepare(`INSERT INTO production_inspections(id,code,production_order_id,production_operation_id,source_type,source_id,plan_id,inspection_type,status,business_date,inspector_id,creator_id,remark,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?, 'DRAFT', ?, ?, ?, ?, ?, ?)`).run(
+    db.prepare(`INSERT INTO production_inspections(id,code,production_order_id,production_operation_id,source_type,source_id,plan_id,inspection_type,status,business_date,inspector_id,creator_id,remark,created_at,updated_at,sampling_mode,sampling_value,sample_quantity)
+      VALUES(?,?,?,?,?,?,?,?, 'DRAFT', ?, ?, ?, ?, ?, ?,?,?,?)`).run(
       inspectionId, code, order.id, productionOperationId, sourceType, sourceId, body.planId || null,
-      String(body.inspectionType || 'NORMAL').toUpperCase(),
+      inspectionType,
       body.businessDate || now.slice(0, 10), actor.id, actor.id, optionalText(body.remark, 500) || '', now, now,
+      sampling.mode, sampling.value, sampling.quantity,
     );
     const planId = body.planId;
     if (planId) {
@@ -231,9 +296,11 @@ export function listProductionInspections(db, res, actor, url) {
   allow(actor, 'PRODUCTION_INSPECTION_VIEW');
   const orderId = url.searchParams.get('productionOrderId');
   const status = url.searchParams.get('status');
+  const sourceType = url.searchParams.get('sourceType');
   const clauses = []; const ps = [];
   if (orderId) { clauses.push('i.production_order_id=?'); ps.push(orderId); }
   if (status && ['DRAFT','COMPLETED','CANCELLED'].includes(status)) { clauses.push('i.status=?'); ps.push(status); }
+  if (sourceType && ['OPERATION_REPORT', 'PRODUCTION_RECEIPT'].includes(sourceType)) { clauses.push('i.source_type=?'); ps.push(sourceType); }
   const rows = db.prepare(`SELECT i.*, po.order_no productionOrderNo, po.status productionOrderStatus
     FROM production_inspections i JOIN production_orders po ON po.id=i.production_order_id
     ${clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''}
@@ -349,10 +416,115 @@ export function assertProductionReceiptQualityGate(db, receiptId) {
   const receipt = db.prepare(`SELECT r.*,o.product_id order_product_id FROM production_receipts r
     JOIN production_orders o ON o.id=r.production_order_id WHERE r.id=?`).get(receiptId);
   if (!receipt) throw new HttpError(404, '生产入库单不存在');
-  const plan = db.prepare("SELECT id FROM inspection_plans WHERE target_type='PRODUCT' AND product_id=? AND active=1 ORDER BY created_at DESC LIMIT 1").get(receipt.order_product_id);
+  const plan = db.prepare("SELECT * FROM inspection_plans WHERE target_type='PRODUCT' AND product_id=? AND active=1 ORDER BY created_at DESC LIMIT 1").get(receipt.order_product_id);
   if (!plan) return;
-  const inspection = db.prepare("SELECT result FROM production_inspections WHERE source_type='PRODUCTION_RECEIPT' AND source_id=? AND status='COMPLETED' ORDER BY confirmed_at DESC LIMIT 1").get(receiptId);
-  if (!inspection || inspection.result !== 'PASS' || receipt.quality_state !== 'PASS') {
-    throw new HttpError(409, '该生产入库需先完成产品检验并通过');
+  // The quality control point linked to the plan carries the WHEN: a point
+  // that does not require an inspection means the receipt is not gated. With
+  // no linked point the plan stays fail-closed and an inspection must pass.
+  const qcp = plan.qcp_id ? db.prepare('SELECT * FROM quality_control_points WHERE id=?').get(plan.qcp_id) : null;
+  if (qcp && Number(qcp.inspection_required || 0) === 0) return;
+  const inspection = db.prepare("SELECT * FROM production_inspections WHERE source_type='PRODUCTION_RECEIPT' AND source_id=? AND status='COMPLETED' ORDER BY confirmed_at DESC LIMIT 1").get(receiptId);
+  if (!inspection) throw new HttpError(409, '该生产入库需先完成产品检验并通过');
+  if (inspection.result === 'WAIVED') {
+    // A waiver is a controlled decision: it must carry the waiver person and
+    // the reason, and the receipt must carry the same provenance.
+    if (!inspection.waived_by || !inspection.waive_reason) throw new HttpError(409, '检验放行缺少放行人或放行原因');
+    if (receipt.quality_state !== 'WAIVED') throw new HttpError(409, '生产入库单未登记检验放行');
+    return;
   }
+  if (inspection.result !== 'PASS') {
+    // A failed inspection may only be received when the receipt is explicitly
+    // marked nonconforming; the identities are then isolated by a HOLD.
+    if (Number(receipt.nonconforming || 0) !== 1) throw new HttpError(409, '该生产入库需先完成产品检验并通过');
+    if (!receipt.nonconforming_reason) throw new HttpError(409, '不合格入库必须填写不合格原因');
+    return;
+  }
+  if (receipt.quality_state !== 'PASS') throw new HttpError(409, '生产入库单质量状态与检验结论不一致');
+}
+
+// ============ Inspection worklist, waiver and nonconforming disposition ============
+
+// The pending worklist: the drafts that still need a decision. The quality
+// execution surface is driven from this list, so an inspector never has to
+// type an identifier to find the work.
+export function listPendingProductionInspections(db, res, actor, url) {
+  allow(actor, 'PRODUCTION_INSPECTION_VIEW');
+  const sourceType = url.searchParams.get('sourceType');
+  const clauses = ["i.status='DRAFT'"];
+  const ps = [];
+  if (sourceType && ['OPERATION_REPORT', 'PRODUCTION_RECEIPT'].includes(sourceType)) { clauses.push('i.source_type=?'); ps.push(sourceType); }
+  const rows = db.prepare(`SELECT i.*, po.order_no productionOrderNo, po.product_id productId,
+    po.quantity orderQuantity, op.operation_code operationCode, op.operation_name operationName
+    FROM production_inspections i JOIN production_orders po ON po.id=i.production_order_id
+    LEFT JOIN production_order_operations op ON op.id=i.production_operation_id
+    WHERE ${clauses.join(' AND ')}
+    ORDER BY i.created_at ASC LIMIT 200`).all(...ps);
+  return send(res, 200, { inspections: rows });
+}
+
+// A waiver releases the source document without a passing inspection. It is
+// not a silent escape: it requires a reason and it is attributed.
+export async function waiveProductionInspection(db, req, res, actor, inspectionId) {
+  allow(actor, 'PRODUCTION_INSPECTION_MANAGE');
+  const body = await readJson(req);
+  const reason = requiredText(body.reason, '放行原因', 500);
+  const now = new Date().toISOString();
+  transaction(db, () => {
+    const insp = db.prepare('SELECT * FROM production_inspections WHERE id=?').get(inspectionId);
+    if (!insp) throw new HttpError(404, '生产检验单不存在');
+    if (insp.status !== 'DRAFT') throw new HttpError(409, '只有草稿检验单可以放行');
+    const items = db.prepare('SELECT * FROM production_inspection_items WHERE inspection_id=?').all(inspectionId);
+    db.prepare('UPDATE production_inspection_items SET passed=NULL WHERE inspection_id=?').run(inspectionId);
+    db.prepare(`UPDATE production_inspections SET status='COMPLETED',result='WAIVED',waived_by=?,waived_at=?,waive_reason=?,inspector_id=?,confirmed_at=?,remark=?,updated_at=? WHERE id=?`)
+      .run(actor.id, now, reason, actor.id, now, optionalText(body.remark || insp.remark, 500) || '', now, inspectionId);
+    if (insp.source_type === 'PRODUCTION_RECEIPT') {
+      db.prepare("UPDATE production_receipts SET quality_state='WAIVED',quality_inspection_id=?,quality_waived_by=?,quality_waived_at=?,quality_waive_reason=? WHERE id=?")
+        .run(inspectionId, actor.id, now, reason, insp.source_id);
+    }
+    audit(db, actor.id, 'INSPECTION_WAIVED', 'PRODUCTION_INSPECTION', inspectionId, `放行检验 ${insp.code}：${reason}`);
+    void items;
+  });
+  return send(res, 200, { ok: true, result: 'WAIVED' });
+}
+
+// The nonconforming disposition: a receipt that failed its inspection is
+// marked as such and the identities it carries are isolated by a HOLD, so the
+// nonconforming stock can never be consumed as ordinary stock.
+export async function markProductionReceiptNonconforming(db, req, res, actor, receiptId) {
+  allow(actor, 'PRODUCTION_RECEIPT_MANAGE');
+  const body = await readJson(req);
+  const reason = requiredText(body.reason, '不合格原因', 500);
+  const now = new Date().toISOString();
+  let held = 0;
+  transaction(db, () => {
+    const receipt = db.prepare('SELECT * FROM production_receipts WHERE id=?').get(receiptId);
+    if (!receipt) throw new HttpError(404, '生产入库单不存在');
+    if (receipt.status !== 'CONFIRMED') throw new HttpError(409, '只有已确认的生产入库单可以标记不合格');
+    if (Number(receipt.nonconforming || 0) === 1) throw new HttpError(409, '该生产入库单已标记为不合格');
+    db.prepare('UPDATE production_receipts SET nonconforming=1,nonconforming_reason=?,updated_at=? WHERE id=?').run(reason, now, receiptId);
+    const allocations = db.prepare('SELECT COALESCE(lot_id,serial_id) identityId, lot_id lotId, serial_id serialId FROM tracked_source_allocations WHERE source_type=? AND source_id=?')
+      .all('PRODUCTION_RECEIPT', receiptId);
+    for (const allocation of allocations) {
+      if (allocation.lotId) {
+        const lot = db.prepare('SELECT status FROM inventory_lots WHERE id=?').get(allocation.lotId);
+        if (lot && lot.status === 'AVAILABLE') {
+          db.prepare("UPDATE inventory_lots SET status='HOLD' WHERE id=?").run(allocation.lotId);
+          db.prepare('INSERT INTO tracked_identity_hold_history(id,identity_type,identity_id,action,reason,operator_id,created_at) VALUES(?,?,?,?,?,?,?)')
+            .run(id(), 'LOT', allocation.lotId, 'HOLD', reason, actor.id, now);
+          held += 1;
+        }
+      }
+      if (allocation.serialId) {
+        const serial = db.prepare('SELECT lifecycle_state FROM inventory_serials WHERE id=?').get(allocation.serialId);
+        if (serial && serial.lifecycle_state === 'AVAILABLE') {
+          db.prepare("UPDATE inventory_serials SET lifecycle_state='HOLD',updated_at=? WHERE id=?").run(now, allocation.serialId);
+          db.prepare('INSERT INTO tracked_identity_hold_history(id,identity_type,identity_id,action,reason,operator_id,created_at) VALUES(?,?,?,?,?,?,?)')
+            .run(id(), 'SERIAL', allocation.serialId, 'HOLD', reason, actor.id, now);
+          held += 1;
+        }
+      }
+    }
+    audit(db, actor.id, 'NONCONFORMING', 'PRODUCTION_RECEIPT', receiptId, `不合格入库 ${receipt.receipt_no}：${reason}（隔离身份 ${held} 个）`);
+  });
+  return send(res, 200, { ok: true, nonconforming: true, heldIdentities: held });
 }

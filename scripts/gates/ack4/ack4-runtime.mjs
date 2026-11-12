@@ -55,6 +55,17 @@ export const MASTER_ENGINEERING_MYSQL_MANIFEST = Object.freeze([
   'RUN_ENGINEERING_RACES',
   'CLEANUP_SCHEMA_POST_RUN',
 ]);
+// Manufacturing & Quality 域（工序执行 / 质量门禁 / 用料清单 / 委外边界并发实证）的
+// 独立 ACK-4 Manifest。前面四个 Manifest 属于各自的 campaign，既不被本 Manifest
+// 复用，也不被本 Manifest 修改；本 Manifest 的夹具操作名带 MANUFACTURING_QUALITY
+// 前缀，使运行期证据可以唯一地归属本域 campaign。
+export const MANUFACTURING_QUALITY_MYSQL_MANIFEST_NAME = 'MANUFACTURING_QUALITY_MYSQL_V1';
+export const MANUFACTURING_QUALITY_MYSQL_MANIFEST = Object.freeze([
+  'RESET_SCHEMA_PRE_RUN',
+  'BOOTSTRAP_CURRENT_SCHEMA',
+  'RUN_MANUFACTURING_QUALITY_RACES',
+  'CLEANUP_SCHEMA_POST_RUN',
+]);
 export const ACK4_RECOVERY_MANIFEST = Object.freeze([
   'INSPECT_QUARANTINE',
   'CLEANUP_SCHEMA_RECOVERY',

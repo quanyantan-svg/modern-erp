@@ -221,3 +221,108 @@ export function deleteProductionReceipt(db, res, actor, receiptId) { allow(actor
 export async function createProductionReceiptReversal(db, req, res, actor) { allow(actor, 'PRODUCTION_RECEIPT_MANAGE'); const body = await readJson(req); const receipt = db.prepare("SELECT * FROM production_receipts WHERE id=? AND status='CONFIRMED'").get(body.originalReceiptId); if (!receipt) throw new HttpError(409, '只能冲销已确认生产入库'); requireInProgress(loadOrder(db, receipt.production_order_id)); const quantity = positive(body.quantity, '冲销数量'); const reversalId = id(); const reversalNo = docNo('PRR'); const now = new Date().toISOString(); transaction(db, () => { db.prepare("INSERT INTO production_receipt_reversals(id,reversal_no,original_receipt_id,production_order_id,product_id,warehouse_id,quantity,status,reversal_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'DRAFT',?,?,?,?,?)").run(reversalId, reversalNo, receipt.id, receipt.production_order_id, receipt.product_id, receipt.warehouse_id, quantity, body.reversalDate || now.slice(0, 10), optionalText(body.remark || '', 500), actor.id, now, now); saveTrackedAllocations(db, { sourceType: SOURCE.RECEIPT_REVERSAL, sourceId: reversalId, sourceItemId: reversalId, productId: receipt.product_id, quantity, allocations: body.trackingAllocations || body.tracking_allocations || [] }); audit(db, actor.id, 'CREATE', 'PRODUCTION_RECEIPT_REVERSAL', reversalId, `创建生产入库冲销 ${reversalNo}`); }); return send(res, 201, { id: reversalId, reversalNo, status: 'DRAFT' }); }
 
 export function confirmProductionReceiptReversal(db, res, actor, reversalId) { allow(actor, 'PRODUCTION_RECEIPT_MANAGE'); const now = new Date().toISOString(); transaction(db, () => { const x = db.prepare('SELECT * FROM production_receipt_reversals WHERE id=?').get(reversalId); if (!x) throw new HttpError(404, '生产入库冲销单不存在'); if (x.status !== 'DRAFT') throw new HttpError(409, '只有草稿冲销单可以确认'); requireInProgress(loadOrder(db, x.production_order_id)); assertFinancialPeriodsOpen(db,x.reversal_date); const receipt = db.prepare("SELECT * FROM production_receipts WHERE id=? AND status='CONFIRMED'").get(x.original_receipt_id); if (!receipt || receipt.production_order_id !== x.production_order_id || receipt.product_id !== x.product_id || receipt.warehouse_id !== x.warehouse_id) throw new HttpError(409, '冲销来源与原生产入库不匹配'); const reversed = Number(db.prepare("SELECT COALESCE(SUM(quantity),0) total FROM production_receipt_reversals WHERE original_receipt_id=? AND status='CONFIRMED'").get(receipt.id).total); if (reversed + Number(x.quantity) > Number(receipt.quantity) + EPS) throw new HttpError(409, '冲销数量超过原入库未冲销数量'); const before = inventoryQty(db, x.warehouse_id, x.product_id); if (before + EPS < Number(x.quantity)) throw new HttpError(409, '成品库存不足，无法冲销'); postTrackedMovement(db, { sourceType: SOURCE.RECEIPT_REVERSAL, sourceId: x.id, sourceItemId: x.id, productId: x.product_id, warehouseId: x.warehouse_id, quantity: x.quantity, direction: 'OUT', businessDate: x.reversal_date }); const identityIds = db.prepare('SELECT COALESCE(serial_id,lot_id) id FROM tracked_source_allocations WHERE source_type=? AND source_id=?').all(SOURCE.RECEIPT_REVERSAL, x.id).map((row) => row.id); reverseReceiptGenealogy(db, receipt.id, identityIds); const after = adjustInventory(db, x.warehouse_id, x.product_id, -Number(x.quantity), now); db.prepare("UPDATE production_receipt_reversals SET before_quantity=?,after_quantity=?,status='CONFIRMED',confirmed_by=?,confirmed_at=?,updated_at=? WHERE id=?").run(before, after, actor.id, now, now, x.id); const transactionId=postLedger(db, { warehouseId: x.warehouse_id, productId: x.product_id, quantity: Number(x.quantity), direction: 'OUT', sourceType: SOURCE.RECEIPT_REVERSAL, sourceId: x.id, sourceNo: x.reversal_no, remark: '生产入库冲销', actorId: actor.id, now,businessDate:x.reversal_date }); const valueCents=consumeOriginalInboundValue(db,{businessDate:x.reversal_date,productId:x.product_id,warehouseId:x.warehouse_id,quantity:Number(x.quantity),movementType:'PRODUCTION_RECEIPT_REVERSAL',sourceType:SOURCE.RECEIPT_REVERSAL,sourceId:x.id,sourceItemId:x.id,inventoryTransactionId:transactionId,productionOrderId:x.production_order_id,originalSourceType:SOURCE.RECEIPT,originalSourceId:receipt.id,originalSourceItemId:receipt.id}).reduce((s,m)=>s-m.valueDeltaCents,0); const voucherId=createSystemVoucher(db,{sourceType:'PRODUCTION_RECEIPT_REVERSAL',sourceId:x.id,businessDate:x.reversal_date,actorId:actor.id,entries:[{role:'WIP',direction:'DEBIT',amountCents:valueCents},{role:inventoryAccountRole(db,x.product_id),direction:'CREDIT',amountCents:valueCents}]}); if(valueCents)postWipMovement(db,{productionOrderId:x.production_order_id,businessDate:x.reversal_date,movementType:'FG_CAPITALIZATION_REVERSAL',amountCents:valueCents,sourceType:SOURCE.RECEIPT_REVERSAL,sourceId:x.id,sourceItemId:x.id,voucherId}); audit(db, actor.id, 'CONFIRM', 'PRODUCTION_RECEIPT_REVERSAL', x.id, `确认生产入库冲销 ${x.reversal_no}`); }); return send(res, 200, { ok: true }); }
+
+// ============ Byproduct maintenance and byproduct receipt (Design §24.6) ============
+//
+// The byproduct header records what the order is expected to yield and what
+// has actually been received. The byproduct receipt is the document that puts
+// the byproduct into stock. Cost allocation stays with Finance
+// (Requirement §29.7), so this domain never writes a cost for the byproduct.
+
+export function listProductionByproducts(db, res, actor, url) {
+  allow(actor, 'PRODUCTION_BYPART_MANAGE');
+  const orderId = url.searchParams.get('orderId');
+  const ps = [];
+  let where = '';
+  if (orderId) { where = 'WHERE b.production_order_id=?'; ps.push(orderId); }
+  const rows = db.prepare(`SELECT b.*, p.code productCode, p.name productName, p.unit,
+      po.order_no productionOrderNo,
+      COALESCE((SELECT SUM(r.quantity) FROM production_byproduct_receipts r WHERE r.byproduct_id=b.id AND r.status='CONFIRMED'),0) receivedQuantity
+    FROM production_byproducts b JOIN products p ON p.id=b.product_id
+    JOIN production_orders po ON po.id=b.production_order_id
+    ${where} ORDER BY b.created_at DESC LIMIT 200`).all(...ps);
+  return send(res, 200, { byproducts: rows.map((row) => ({
+    ...row,
+    plannedQuantity: Number(row.planned_quantity),
+    actualQuantity: Number(row.actual_quantity),
+    receivedQuantity: Number(row.receivedQuantity),
+    pendingQuantity: Math.max(0, Number(row.planned_quantity) - Number(row.actual_quantity)),
+  })) });
+}
+
+export async function createProductionByproduct(db, req, res, actor) {
+  allow(actor, 'PRODUCTION_BYPART_MANAGE');
+  const body = await readJson(req);
+  const order = loadOrder(db, body.productionOrderId);
+  const productId = String(body.productId || '').trim();
+  if (!db.prepare('SELECT 1 FROM products WHERE id=?').get(productId)) throw new HttpError(400, '副产品产品不存在');
+  const plannedQuantity = Number(body.plannedQuantity ?? 0);
+  if (!Number.isFinite(plannedQuantity) || plannedQuantity < 0) throw new HttpError(400, '预计副产品数量必须是非负数');
+  const byproductId = id();
+  const now = new Date().toISOString();
+  transaction(db, () => {
+    db.prepare(`INSERT INTO production_byproducts(id,production_order_id,product_id,planned_quantity,actual_quantity,remark,creator_id,created_at,updated_at)
+      VALUES(?,?,?,?,0,?,?,?,?)`).run(
+      byproductId, order.id, productId, plannedQuantity, optionalText(body.remark, 500) || '', actor.id, now, now,
+    );
+    audit(db, actor.id, 'CREATE', 'PRODUCTION_BYPRODUCT', byproductId, `登记副产品 ${productId}`);
+  });
+  return send(res, 201, { id: byproductId });
+}
+
+export async function createProductionByproductReceipt(db, req, res, actor) {
+  allow(actor, 'PRODUCTION_BYPART_MANAGE');
+  const body = await readJson(req);
+  const byproduct = db.prepare('SELECT * FROM production_byproducts WHERE id=?').get(String(body.byproductId || ''));
+  if (!byproduct) throw new HttpError(404, '副产品记录不存在');
+  const order = loadOrder(db, byproduct.production_order_id);
+  requireInProgress(order);
+  const warehouseId = String(body.warehouseId || '').trim();
+  requireWarehouse(db, warehouseId);
+  const quantity = positive(body.quantity, '副产品入库数量');
+  const receiptId = id();
+  const receiptNo = 'PBR-' + Date.now().toString(36).toUpperCase() + '-' + Math.floor(Math.random() * 900 + 100);
+  const now = new Date().toISOString();
+  transaction(db, () => {
+    db.prepare(`INSERT INTO production_byproduct_receipts(id,receipt_no,byproduct_id,production_order_id,warehouse_id,quantity,status,receipt_date,remark,creator_id,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,'DRAFT',?,?,?,?,?)`).run(
+      receiptId, receiptNo, byproduct.id, order.id, warehouseId, quantity,
+      body.receiptDate || now.slice(0, 10), optionalText(body.remark, 500) || '', actor.id, now, now,
+    );
+    audit(db, actor.id, 'CREATE', 'PRODUCTION_BYPRODUCT_RECEIPT', receiptId, `创建副产品入库 ${receiptNo}`);
+  });
+  return send(res, 201, { id: receiptId, receiptNo, status: 'DRAFT' });
+}
+
+export async function confirmProductionByproductReceipt(db, req, res, actor, receiptId) {
+  allow(actor, 'PRODUCTION_BYPART_MANAGE');
+  const now = new Date().toISOString();
+  const key = String(req.headers['idempotency-key'] || `document-${receiptId}`);
+  const fingerprint = requestFingerprint({ action: 'confirm-byproduct-receipt' });
+  const replay = idempotencyReplay(db, 'BYPRODUCT_RECEIPT_CONFIRM', receiptId, key, fingerprint);
+  if (replay) return send(res, 200, { ...replay, replayed: true });
+  transaction(db, () => {
+    const receipt = db.prepare('SELECT * FROM production_byproduct_receipts WHERE id=?').get(receiptId);
+    if (!receipt) throw new HttpError(404, '副产品入库单不存在');
+    if (receipt.status !== 'DRAFT') throw new HttpError(409, '只有草稿副产品入库单可以确认');
+    const order = loadOrder(db, receipt.production_order_id);
+    requireInProgress(order);
+    assertFinancialPeriodsOpen(db, receipt.receipt_date);
+    const byproduct = db.prepare('SELECT * FROM production_byproducts WHERE id=?').get(receipt.byproduct_id);
+    if (!byproduct) throw new HttpError(409, '副产品记录不存在');
+    const before = inventoryQty(db, receipt.warehouse_id, byproduct.product_id);
+    const after = adjustInventory(db, receipt.warehouse_id, byproduct.product_id, Number(receipt.quantity), now);
+    postLedger(db, {
+      warehouseId: receipt.warehouse_id, productId: byproduct.product_id, quantity: Number(receipt.quantity),
+      direction: 'IN', sourceType: 'PRODUCTION_BYPRODUCT_RECEIPT', sourceId: receipt.id, sourceLineId: receipt.id,
+      sourceNo: receipt.receipt_no, remark: '副产品入库', actorId: actor.id, now, businessDate: receipt.receipt_date,
+    });
+    db.prepare("UPDATE production_byproduct_receipts SET status='CONFIRMED',confirmed_by=?,confirmed_at=?,updated_at=? WHERE id=?")
+      .run(actor.id, now, now, receipt.id);
+    db.prepare('UPDATE production_byproducts SET actual_quantity=actual_quantity+?,updated_at=? WHERE id=?')
+      .run(Number(receipt.quantity), now, byproduct.id);
+    saveIdempotency(db, 'BYPRODUCT_RECEIPT_CONFIRM', receiptId, key, fingerprint, { ok: true, id: receiptId, status: 'CONFIRMED', beforeQuantity: before, afterQuantity: after });
+    audit(db, actor.id, 'CONFIRM', 'PRODUCTION_BYPRODUCT_RECEIPT', receiptId, `确认副产品入库 ${receipt.receipt_no}`);
+  });
+  return send(res, 200, { ok: true });
+}

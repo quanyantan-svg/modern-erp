@@ -98,6 +98,8 @@ import {
   listProductionMaterialIssues, listProductionReceipts,
   prefetchMaterialIssueFromBom, productionNetReceived, productionRequirementSummary,
   updateProductionMaterialIssue, updateProductionReceipt,
+  listProductionByproducts, createProductionByproduct,
+  createProductionByproductReceipt, confirmProductionByproductReceipt,
 } from './modules/production-workflow.js';
 import {
   changeProductRoutingStatus, createProductRouting, createProductRoutingOperation,
@@ -507,11 +509,13 @@ import {
   createProductionOrder as createProductionOrderV18,
   changeProductionOrderState as changeProductionOrderStateV18,
   changeProductionOrderStateByBody,
+  editProductionOrderMaterialList, approveProductionOrderMaterialList, releaseProductionOrderMaterialList,
 } from './modules/manufacturing-orders.js';
 import {
   scheduleProductionOrder as scheduleProductionOrderV18,
   submitOperationPlan, approveOperationPlan, releaseOperationPlan,
   manufacturingExecutionSummaryReport, materialIssueSummaryReport,
+  listProductionOperationPlans, markOperationOutsourcedHandoff,
 } from './modules/manufacturing-execution.js';
 import {
   createProductionMaterialSupplement, getProductionMaterialSupplement, listProductionMaterialSupplements,
@@ -527,8 +531,10 @@ import {
   listInspectionPlans, createInspectionPlan, getInspectionPlan,
   listProductionInspections, createProductionInspection, getProductionInspection,
   completeProductionInspection, cancelProductionInspection,
+  listPendingProductionInspections, waiveProductionInspection, markProductionReceiptNonconforming,
+  listInspectionDetectionValues,
 } from './modules/manufacturing-quality.js';
-import { productionScanLookup, productionScanIssue, productionScanReport } from './modules/manufacturing-scan.js';
+import { productionScanLookup, productionScanIssue, productionScanReport, productionScanTransfer } from './modules/manufacturing-scan.js';
 
 // V2 owned-route registrations — Waves 3A–3F / 4A–4C
 //
@@ -3171,7 +3177,77 @@ ownedRouteTable.register({
   owner: 'server/modules/manufacturing-execution.js',
 });
 
+// Material List lifecycle (Design §24.5) and the Operation Plan read surface.
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/production-orders\/([^/]+)\/operations$/,
+  handler: ({ db, res, actor, params }) => listProductionOperationPlans(db, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-execution.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/production-orders\/([^/]+)\/material-list\/edit$/,
+  handler: ({ db, req, res, actor, params }) => editProductionOrderMaterialList(db, req, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-orders.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/production-orders\/([^/]+)\/material-list\/approve$/,
+  handler: ({ db, res, actor, params }) => approveProductionOrderMaterialList(db, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-orders.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/production-orders\/([^/]+)\/material-list\/release$/,
+  handler: ({ db, res, actor, params }) => releaseProductionOrderMaterialList(db, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-orders.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/production-operations\/([^/]+)\/outsource-handoff$/,
+  handler: ({ db, req, res, actor, params }) => markOperationOutsourcedHandoff(db, req, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-execution.js',
+});
+
+// Byproduct maintenance and byproduct receipt (Design §24.6).
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/production-byproducts',
+  handler: ({ db, res, actor, url }) => listProductionByproducts(db, res, actor, url),
+  owner: 'server/modules/production-workflow.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/production-byproducts',
+  handler: ({ db, req, res, actor }) => createProductionByproduct(db, req, res, actor),
+  owner: 'server/modules/production-workflow.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/production-byproduct-receipts',
+  handler: ({ db, req, res, actor }) => createProductionByproductReceipt(db, req, res, actor),
+  owner: 'server/modules/production-workflow.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/production-byproduct-receipts\/([^/]+)\/confirm$/,
+  handler: ({ db, req, res, actor, params }) => confirmProductionByproductReceipt(db, req, res, actor, params[0]),
+  owner: 'server/modules/production-workflow.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/production-receipts\/([^/]+)\/nonconforming$/,
+  handler: ({ db, req, res, actor, params }) => markProductionReceiptNonconforming(db, req, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-quality.js',
+});
+
 // Manufacturing Quality master
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/inspection-detection-values',
+  handler: ({ db, res, actor, url }) => listInspectionDetectionValues(db, res, actor, url),
+  owner: 'server/modules/manufacturing-quality.js',
+});
 ownedRouteTable.register({
   method: 'GET',
   path: '/api/inspection-items',
@@ -3240,10 +3316,25 @@ ownedRouteTable.register({
   handler: ({ db, req, res, actor }) => createProductionInspection(db, req, res, actor),
   owner: 'server/modules/manufacturing-quality.js',
 });
+// The pending worklist must be registered before the `/:id` route: the route
+// table matches in registration order, and `pending` would otherwise be read
+// as an inspection id.
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/production-inspections/pending',
+  handler: ({ db, res, actor, url }) => listPendingProductionInspections(db, res, actor, url),
+  owner: 'server/modules/manufacturing-quality.js',
+});
 ownedRouteTable.register({
   method: 'GET',
   path: /^\/api\/production-inspections\/([^/]+)$/,
   handler: ({ db, res, actor, params }) => getProductionInspection(db, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-quality.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/production-inspections\/([^/]+)\/waive$/,
+  handler: ({ db, req, res, actor, params }) => waiveProductionInspection(db, req, res, actor, params[0]),
   owner: 'server/modules/manufacturing-quality.js',
 });
 ownedRouteTable.register({
@@ -3276,6 +3367,12 @@ ownedRouteTable.register({
   method: 'POST',
   path: '/api/production-scan/report',
   handler: ({ db, req, res, actor }) => productionScanReport(db, req, res, actor),
+  owner: 'server/modules/manufacturing-scan.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/production-scan/transfer',
+  handler: ({ db, req, res, actor }) => productionScanTransfer(db, req, res, actor),
   owner: 'server/modules/manufacturing-scan.js',
 });
 

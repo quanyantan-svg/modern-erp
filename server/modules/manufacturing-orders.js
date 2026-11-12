@@ -281,8 +281,7 @@ export function changeProductionOrderStateByBody(db, body, res, actor, poId, opt
   return send(res, 200, { ok: true, ...result });
 }
 
-export function getProductionOrder(db, res, actor, poId) {
-  allow(actor, 'PRODUCTION_ORDERS_VIEW');
+export function getProductionOrder(db, res, actor, poId) {  allow(actor, 'PRODUCTION_ORDERS_VIEW');
   const order = db.prepare(`SELECT po.*, p.code productCode, p.name productName, b.version bomVersion,
     creator.display_name creatorName, submitted.display_name submittedByName,
     approved.display_name approvedByName, released.display_name releasedByName,
@@ -317,4 +316,111 @@ export function getProductionOrder(db, res, actor, poId) {
   order.byproducts = db.prepare('SELECT * FROM production_byproducts WHERE production_order_id=? ORDER BY created_at').all(poId);
   order.statusLabel = PO_STATUS[order.status] || order.status;
   return send(res, 200, { order });
+}
+
+// ============ Material List lifecycle (Design §24.5) ================
+//
+// GENERATED → CONTROLLED_EDIT → APPROVED → RELEASED.
+//
+// A controlled edit may only adjust the scrap rate and the remark of a
+// material line. The frozen BOM identity (product_id, quantity_per_unit) and
+// the line quantity are NOT editable: changing them would silently diverge
+// the order from the BOM snapshot it was released against.
+
+const MATERIAL_LIST_STATUSES = Object.freeze(['GENERATED', 'CONTROLLED_EDIT', 'APPROVED', 'RELEASED']);
+
+function loadMaterialListOrder(db, poId) {
+  const order = db.prepare('SELECT * FROM production_orders WHERE id=?').get(poId);
+  if (!order) throw new HttpError(404, '生产工单不存在');
+  return order;
+}
+
+export async function editProductionOrderMaterialList(db, req, res, actor, poId) {
+  allow(actor, 'PRODUCTION_ORDERS_CREATE');
+  const body = await readJson(req);
+  const lines = Array.isArray(body.lines) ? body.lines : [];
+  if (!lines.length) throw new HttpError(400, '请至少选择一行用料清单进行受控编辑');
+  const now = new Date().toISOString();
+  transaction(db, () => {
+    const order = loadMaterialListOrder(db, poId);
+    const status = order.material_list_status || 'GENERATED';
+    if (!MATERIAL_LIST_STATUSES.includes(status)) throw new HttpError(409, '用料清单状态无效');
+    if (status === 'APPROVED') throw new HttpError(409, '用料清单已审核通过，不能再受控编辑');
+    if (status === 'RELEASED') throw new HttpError(409, '用料清单已下达，只能通过补料追加');
+    if (['RELEASED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'].includes(order.status)) {
+      throw new HttpError(409, '工单已下达或已结束，用料清单不能受控编辑');
+    }
+    for (const line of lines) {
+      const item = db.prepare('SELECT * FROM production_order_items WHERE id=? AND order_id=?').get(String(line.lineId || ''), poId);
+      if (!item) throw new HttpError(404, '用料清单行不存在');
+      if (line.productId !== undefined && String(line.productId) !== String(item.product_id)) {
+        throw new HttpError(409, '受控编辑不允许更换用料产品');
+      }
+      if (line.quantityPerUnit !== undefined && Number(line.quantityPerUnit) !== Number(item.quantity_per_unit)) {
+        throw new HttpError(409, '受控编辑不允许修改单位用量');
+      }
+      if (line.quantity !== undefined && Number(line.quantity) !== Number(item.quantity)) {
+        throw new HttpError(409, '受控编辑不允许修改需求数量，请使用补料');
+      }
+      const scrapRate = line.scrapRate === undefined || line.scrapRate === null || line.scrapRate === ''
+        ? Number(item.scrap_rate_snapshot || 0)
+        : Number(line.scrapRate);
+      if (!Number.isFinite(scrapRate) || scrapRate < 0 || scrapRate >= 1) {
+        throw new HttpError(400, '损耗率必须是 0 到 1 之间的小数');
+      }
+      db.prepare('UPDATE production_order_items SET scrap_rate_snapshot=?,material_list_remark=?,material_list_status=?,material_list_edited_at=? WHERE id=?')
+        .run(scrapRate, optionalText(line.remark, 500) || item.material_list_remark || '', 'CONTROLLED_EDIT', now, item.id);
+    }
+    // Compare-and-swap on the prior state: an approval that commits first must
+    // not be silently rewritten by a controlled edit that read the list before
+    // the approval.
+    const moved = db.prepare("UPDATE production_orders SET material_list_status='CONTROLLED_EDIT',updated_at=? WHERE id=? AND material_list_status IN ('GENERATED','CONTROLLED_EDIT')")
+      .run(now, poId);
+    if (Number(moved.changes ?? moved.affectedRows) !== 1) {
+      throw new HttpError(409, '用料清单已被审核，不能再受控编辑', { code: 'PRODUCTION_MATERIAL_LIST_STATE_CONFLICT' });
+    }
+    audit(db, actor.id, 'CONTROL_EDIT', 'PRODUCTION_MATERIAL_LIST', poId, `受控编辑 ${lines.length} 行用料清单`);
+  });
+  return send(res, 200, { ok: true, materialListStatus: 'CONTROLLED_EDIT' });
+}
+
+export function approveProductionOrderMaterialList(db, res, actor, poId) {
+  allow(actor, 'PRODUCTION_PLAN_MANAGE');
+  const now = new Date().toISOString();
+  transaction(db, () => {
+    const order = loadMaterialListOrder(db, poId);
+    const status = order.material_list_status || 'GENERATED';
+    if (status !== 'CONTROLLED_EDIT') throw new HttpError(409, '只有受控编辑过的用料清单需要审核');
+    if (!['APPROVED', 'SUBMITTED'].includes(order.status)) {
+      throw new HttpError(409, '只有已提交或已审核的工单允许审核用料清单');
+    }
+    // Compare-and-swap on the prior state: two concurrent approvals must not
+    // both pass the gate.
+    const approved = db.prepare("UPDATE production_orders SET material_list_status='APPROVED',material_list_approved_by=?,material_list_approved_at=?,updated_at=? WHERE id=? AND material_list_status='CONTROLLED_EDIT'")
+      .run(actor.id, now, now, poId);
+    if (Number(approved.changes ?? approved.affectedRows) !== 1) {
+      throw new HttpError(409, '用料清单状态已变更，请刷新后重试', { code: 'PRODUCTION_MATERIAL_LIST_STATE_CONFLICT' });
+    }
+    db.prepare("UPDATE production_order_items SET material_list_status='APPROVED' WHERE order_id=?").run(poId);
+    audit(db, actor.id, 'APPROVE', 'PRODUCTION_MATERIAL_LIST', poId, '审核通过用料清单');
+  });
+  return send(res, 200, { ok: true, materialListStatus: 'APPROVED' });
+}
+
+export function releaseProductionOrderMaterialList(db, res, actor, poId) {
+  allow(actor, 'PRODUCTION_PLAN_MANAGE');
+  const now = new Date().toISOString();
+  transaction(db, () => {
+    const order = loadMaterialListOrder(db, poId);
+    const status = order.material_list_status || 'GENERATED';
+    if (status !== 'APPROVED') throw new HttpError(409, '只有已审核的用料清单允许下达');
+    if (['RELEASED', 'IN_PROGRESS', 'COMPLETED'].includes(order.status)) {
+      throw new HttpError(409, '工单已下达或已结束');
+    }
+    db.prepare("UPDATE production_orders SET material_list_status='RELEASED',material_list_released_by=?,material_list_released_at=?,updated_at=? WHERE id=?")
+      .run(actor.id, now, now, poId);
+    db.prepare("UPDATE production_order_items SET material_list_status='RELEASED' WHERE order_id=?").run(poId);
+    audit(db, actor.id, 'RELEASE', 'PRODUCTION_MATERIAL_LIST', poId, '下达用料清单');
+  });
+  return send(res, 200, { ok: true, materialListStatus: 'RELEASED' });
 }

@@ -218,6 +218,10 @@ export function confirmOperationReport(db, req, res, actor, reportId) {
     if (report.status !== 'DRAFT') throw new HttpError(409, '只有草稿报工单可以确认');
     const order = loadOrder(db, report.production_order_id); if (order.status !== 'IN_PROGRESS') throw new HttpError(409, '生产工单不在生产中');
     const operation = db.prepare('SELECT * FROM production_order_operations WHERE id=?').get(report.production_operation_id); const input = availableInput(db, operation);
+    // The topology and the outsourced boundary are re-checked at confirmation:
+    // an operation may have been re-topologised or flagged as outsourced after
+    // its report was drafted, and a draft must not be confirmable in that case.
+    assertTopologyReportingAllowed(db, operation.id);
     if (Number(report.good_quantity) + Number(report.scrap_quantity) > input.available + EPS) throw new HttpError(409, `本次报工超过可报工数量 ${input.available}`);
     assertFinancialPeriodsOpen(db,report.business_date);
     const priorConfirmed=Number(db.prepare("SELECT COUNT(*) n FROM production_operation_reports WHERE production_operation_id=? AND status='CONFIRMED' AND id<>?").get(operation.id,reportId).n); const processed=Number(report.good_quantity)+Number(report.scrap_quantity); const seconds=(priorConfirmed?0:Number(operation.setup_seconds))+Number(operation.run_seconds_per_unit)*processed; const laborCents=Math.round(seconds*Number(operation.labor_rate_cents_per_hour)/3600); const overheadCents=Math.round(seconds*Number(operation.overhead_rate_cents_per_hour)/3600); const conversionCents=laborCents+overheadCents;
@@ -263,15 +267,62 @@ export async function reverseOperationReport(db, req, res, actor, reportId) {
 }
 
 export function completeOperation(db, res, actor, operationId) {
-  allow(actor, 'PRODUCTION_ORDERS_COMPLETE'); const operation = db.prepare('SELECT * FROM production_order_operations WHERE id=?').get(operationId); if (!operation) throw new HttpError(404, '生产工序不存在');
-  if (loadOrder(db, operation.production_order_id).status !== 'IN_PROGRESS') throw new HttpError(409, '只有生产中的工单允许完成工序');
-  if (!['NOT_STARTED', 'IN_PROGRESS'].includes(operation.status)) throw new HttpError(409, '当前工序状态不可完成');
-  if (db.prepare("SELECT 1 FROM production_operation_reports WHERE production_operation_id=? AND status='DRAFT'").get(operationId)) throw new HttpError(409, '存在未处理的草稿报工单');
-  const rows = operations(db, operation.production_order_id); const index = rows.findIndex((x) => x.id === operationId); const current = rows[index];
-  const expected = index === 0 ? Number(loadOrder(db, operation.production_order_id).quantity) : rows[index - 1].released;
-  if (index > 0 && rows[index - 1].status !== 'COMPLETED') throw new HttpError(409, '前工序尚未完成，当前工序不能最终完成');
-  if (Math.abs(current.good + current.scrap - expected) > EPS) throw new HttpError(409, `工序尚有未核算投入，应核算 ${expected}`);
-  const now = new Date().toISOString(); db.prepare("UPDATE production_order_operations SET status='COMPLETED',completed_by=?,completed_at=?,updated_at=? WHERE id=?").run(actor.id, now, now, operationId); audit(db, actor.id, 'COMPLETE', 'PRODUCTION_ORDER_OPERATION', operationId, current.operation_name); return send(res, 200, { ok: true });
+  allow(actor, 'PRODUCTION_ORDERS_COMPLETE');
+  const now = new Date().toISOString();
+  transaction(db, () => {
+    // Topology and the outsourced boundary are re-checked inside the
+    // transaction: an operation may have been re-topologised or flagged as
+    // outsourced after its report was drafted, and completion must not be
+    // able to slip past that guard.
+    const operation = db.prepare('SELECT * FROM production_order_operations WHERE id=?').get(operationId);
+    if (!operation) throw new HttpError(404, '生产工序不存在');
+    if (loadOrder(db, operation.production_order_id).status !== 'IN_PROGRESS') throw new HttpError(409, '只有生产中的工单允许完成工序');
+    if (!['NOT_STARTED', 'IN_PROGRESS'].includes(operation.status)) throw new HttpError(409, '当前工序状态不可完成');
+    if (Number(operation.is_outsource || 0) === 1) {
+      throw new HttpError(409, '委外工序必须经 OUTSOURCING_HANDOFF_REQUIRED 交接，内部不能直接完成');
+    }
+    if (operation.topology && operation.topology !== 'LINEAR') {
+      throw new HttpError(409, `拓扑 ${operation.topology} 暂未启用，不能完成工序`);
+    }
+    if (db.prepare("SELECT 1 FROM production_operation_reports WHERE production_operation_id=? AND status='DRAFT'").get(operationId)) throw new HttpError(409, '存在未处理的草稿报工单');
+    const rows = operations(db, operation.production_order_id); const index = rows.findIndex((x) => x.id === operationId); const current = rows[index];
+    const expected = index === 0 ? Number(loadOrder(db, operation.production_order_id).quantity) : rows[index - 1].released;
+    if (index > 0 && rows[index - 1].status !== 'COMPLETED') throw new HttpError(409, '前工序尚未完成，当前工序不能最终完成');
+    if (Math.abs(current.good + current.scrap - expected) > EPS) throw new HttpError(409, `工序尚有未核算投入，应核算 ${expected}`);
+    db.prepare("UPDATE production_order_operations SET status='COMPLETED',completed_by=?,completed_at=?,updated_at=? WHERE id=?").run(actor.id, now, now, operationId);
+    audit(db, actor.id, 'COMPLETE', 'PRODUCTION_ORDER_OPERATION', operationId, current.operation_name);
+  });
+  return send(res, 200, { ok: true });
+}
+
+// The outsourced boundary (Design §24.12): an outsourced operation is never
+// completed by the internal shop floor path. It leaves the order through this
+// handoff, which records the receiving supplier and moves the operation to
+// OUTSOURCED so the internal completion guard keeps refusing it.
+export async function markOperationOutsourcedHandoff(db, req, res, actor, operationId) {
+  allow(actor, 'PRODUCTION_ORDERS_COMPLETE');
+  const body = await readJson(req);
+  const supplierId = String(body.supplierId || '').trim();
+  if (!supplierId) throw new HttpError(400, '必须指定委外供应商');
+  const supplier = db.prepare('SELECT id FROM suppliers WHERE id=?').get(supplierId);
+  if (!supplier) throw new HttpError(404, '委外供应商不存在');
+  const now = new Date().toISOString();
+  transaction(db, () => {
+    const operation = db.prepare('SELECT * FROM production_order_operations WHERE id=?').get(operationId);
+    if (!operation) throw new HttpError(404, '生产工序不存在');
+    if (Number(operation.is_outsource || 0) !== 1) throw new HttpError(409, '只有委外工序允许发起委外交接');
+    if (operation.status === 'OUTSOURCED') throw new HttpError(409, '该工序已完成委外交接');
+    if (loadOrder(db, operation.production_order_id).status !== 'IN_PROGRESS') throw new HttpError(409, '只有生产中的工单允许发起委外交接');
+    // Compare-and-swap on the prior state: two concurrent hand-offs must not
+    // both leave the order.
+    const handedOff = db.prepare("UPDATE production_order_operations SET status='OUTSOURCED',outsource_supplier_id=?,outsource_handed_off_by=?,outsource_handed_off_at=?,updated_at=? WHERE id=? AND status<>'OUTSOURCED'")
+      .run(supplierId, actor.id, now, now, operationId);
+    if (Number(handedOff.changes ?? handedOff.affectedRows) !== 1) {
+      throw new HttpError(409, '该工序已完成委外交接', { code: 'PRODUCTION_OPERATION_STATE_CONFLICT' });
+    }
+    audit(db, actor.id, 'OUTSOURCE_HANDOFF', 'PRODUCTION_ORDER_OPERATION', operationId, `${operation.operation_code} → ${supplierId}`);
+  });
+  return send(res, 200, { ok: true, status: 'OUTSOURCED' });
 }
 
 export function cancelOperation(db, res, actor, operationId) {

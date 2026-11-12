@@ -35,6 +35,7 @@ import { migrateEngineeringSubstituteSchema } from './migrations/engineering-sub
 import { migrateEngineeringRoutingSchema } from './migrations/engineering-routing-schema.js';
 import { migrateEngineeringChangeSchema } from './migrations/engineering-change-schema.js';
 import { migrateManufacturingQualitySchema } from './migrations/manufacturing-quality-schema.js';
+import { migrateV23ManufacturingQualityClosure } from './migrations/v23-manufacturing-quality-closure.js';
 import { migratePlanningDomainSchema } from './migrations/planning-domain-schema.js';
 import { migrateProcurementOutsourcingSchema } from './migrations/procurement-outsourcing-schema.js';
 import { migrateProcurementSourcingSchema } from './migrations/procurement-sourcing-schema.js';
@@ -570,6 +571,7 @@ function createSqliteDatabase(filename) {
   migrateInventoryPositionSchema(db);
   migrateV13Phase7cPerformance(db);
   migrateManufacturingQualitySchema(db);
+  migrateV23ManufacturingQualityClosure(db);
   migrateR4PurchaseSourceCardinality(db);
   // V1.4-E2: authoritative business-date columns + canonical CONFIRM
   // permission. Order matters: schema columns first so the permission

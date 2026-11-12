@@ -25,9 +25,12 @@ function matchOrderByToken(db, token) {
 function matchLotSerialToken(db, token) {
   if (!token) return null;
   const trimmed = String(token).trim();
-  const lot = db.prepare('SELECT id, lot_no label, product_id productId, quantity_remaining remaining, warehouse_id warehouseId, status FROM inventory_lots WHERE lot_no=?').get(trimmed);
+  // The canonical tracking tables carry `lot_code` / `serial_number` and
+  // `lifecycle_state`; the earlier lookup read `lot_no` / `serial_no` /
+  // `status`, none of which exist, so every IDENTITY scan raised a SQL error.
+  const lot = db.prepare('SELECT id, lot_code label, product_id productId, status FROM inventory_lots WHERE lot_code=?').get(trimmed);
   if (lot) return { type: 'LOT', ...lot };
-  const serial = db.prepare('SELECT id, serial_no label, product_id productId, warehouse_id warehouseId, status FROM inventory_serials WHERE serial_no=?').get(trimmed);
+  const serial = db.prepare('SELECT id, serial_number label, product_id productId, lot_id lotId, current_warehouse_id warehouseId, lifecycle_state status FROM inventory_serials WHERE serial_number=?').get(trimmed);
   if (serial) return { type: 'SERIAL', ...serial };
   return null;
 }
@@ -82,7 +85,10 @@ export async function productionScanIssue(db, req, res, actor) {
   if (!db.prepare('SELECT 1 FROM warehouses WHERE id=? AND active=1').get(warehouseId)) throw new HttpError(400, '请选择有效仓库');
   const identity = body.identity ? matchLotSerialToken(db, body.identity) : null;
   if (body.identity && !identity) throw new HttpError(404, 'LOT / SERIAL token 未找到');
-  if (identity && (identity.productId !== requirement.product_id || identity.warehouseId !== warehouseId)) {
+  // A lot carries no warehouse of its own; only a serial does. The product
+  // identity is checked for both.
+  if (identity && (identity.productId !== requirement.product_id
+    || (identity.warehouseId !== undefined && identity.warehouseId !== warehouseId))) {
     throw new HttpError(409, 'LOT / SERIAL 与需求物料或出库仓库不匹配');
   }
   const issueQuantity = nonnegative(body.quantity, '出库数量');
@@ -130,4 +136,54 @@ export async function productionScanReport(db, req, res, actor) {
     audit(db, actor.id, 'SCAN_REPORT', 'PRODUCTION_OPERATION_REPORT', reportId, `扫码创建工序报工 ${reportNo}`);
   });
   return send(res, 201, { id: reportId, reportNo, status: 'DRAFT' });
+}
+
+// Operation transfer by scan: the source operation hands a quantity to the
+// destination operation. The transferred quantity may never exceed the good
+// quantity the source operation has released and that has not already been
+// consumed downstream. The transfer is recorded as a movement so the audit
+// trail can reconstruct where the quantity went.
+export async function productionScanTransfer(db, req, res, actor) {
+  allow(actor, 'PRODUCTION_SCAN_EXECUTE');
+  const body = await readJson(req);
+  const order = matchOrderByToken(db, body.orderToken);
+  if (!order) throw new HttpError(404, '未找到生产工单');
+  if (order.status !== 'IN_PROGRESS') throw new HttpError(409, '只有 IN_PROGRESS 工单允许扫码转移');
+  const source = db.prepare('SELECT * FROM production_order_operations WHERE production_order_id=? AND (operation_code=? OR id=?)').get(order.id, body.sourceOperationToken, body.sourceOperationToken);
+  if (!source) throw new HttpError(400, '源工序无效');
+  const target = db.prepare('SELECT * FROM production_order_operations WHERE production_order_id=? AND (operation_code=? OR id=?)').get(order.id, body.targetOperationToken, body.targetOperationToken);
+  if (!target) throw new HttpError(400, '目标工序无效');
+  if (source.id === target.id) throw new HttpError(400, '源工序与目标工序不能相同');
+  const quantity = nonnegative(body.quantity, '转移数量');
+  if (quantity <= 0) throw new HttpError(400, '转移数量必须大于 0');
+  const now = new Date().toISOString();
+  const transferNo = 'OPT-' + Date.now().toString(36).toUpperCase() + '-' + Math.floor(Math.random() * 900 + 100);
+  transaction(db, () => {
+    // The source operation row is locked for the duration of the transfer so
+    // two concurrent transfers cannot both read the same untransferred
+    // quantity.
+    const lockSuffix = db.dialect === 'mysql' ? ' FOR UPDATE' : '';
+    const sourceOperation = db.prepare(`SELECT * FROM production_order_operations WHERE id=?${lockSuffix}`).get(source.id);
+    if (sourceOperation.status !== 'COMPLETED') throw new HttpError(409, '源工序尚未完成，不能转移');
+    if (Number(sourceOperation.is_outsource || 0) === 1) throw new HttpError(409, '委外工序不能内部转移');
+    if (sourceOperation.topology && sourceOperation.topology !== 'LINEAR') {
+      throw new HttpError(409, `拓扑 ${sourceOperation.topology} 暂未启用，不能转移`);
+    }
+    const released = Number(db.prepare(`SELECT COALESCE(SUM(CASE WHEN r.status='CONFIRMED' THEN r.released_quantity ELSE 0 END),0)
+        - COALESCE((SELECT SUM(good_quantity) FROM production_operation_report_reversals WHERE production_operation_id=?),0) released
+      FROM production_operation_reports r WHERE r.production_operation_id=?`).get(sourceOperation.id, sourceOperation.id)?.released || 0);
+    const consumed = Number(db.prepare("SELECT COALESCE(SUM(quantity),0) q FROM production_operation_transfers WHERE source_operation_id=? AND status='CONFIRMED'")
+      .get(sourceOperation.id)?.q || 0);
+    if (quantity > released - consumed + 1e-9) {
+      throw new HttpError(409, `转移数量超过源工序可转移数量 ${Math.max(0, released - consumed)}`);
+    }
+    const transferId = id();
+    db.prepare(`INSERT INTO production_operation_transfers(id,transfer_no,production_order_id,source_operation_id,target_operation_id,quantity,business_date,status,remark,creator_id,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,'CONFIRMED',?,?,?,?)`).run(
+      transferId, transferNo, order.id, sourceOperation.id, target.id, quantity,
+      body.businessDate || now.slice(0, 10), optionalText(body.remark, 500) || '', actor.id, now, now,
+    );
+    audit(db, actor.id, 'SCAN_TRANSFER', 'PRODUCTION_OPERATION_TRANSFER', transferId, `扫码工序转移 ${transferNo}：${sourceOperation.operation_code} → ${target.operation_code} × ${quantity}`);
+  });
+  return send(res, 201, { ok: true, transferNo, sourceOperationId: source.id, targetOperationId: target.id, quantity });
 }

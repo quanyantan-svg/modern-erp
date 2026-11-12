@@ -44,6 +44,7 @@ $ApprovedCampaigns = @{
   'test:mysql:accounting-analytics' = 'ACCOUNTING_ANALYTICS_MYSQL_V1'
   'test:mysql:finance'               = 'FINANCE_MYSQL_V1'
   'test:mysql:master-engineering'    = 'MASTER_ENGINEERING_MYSQL_V1'
+  'test:mysql:manufacturing-quality' = 'MANUFACTURING_QUALITY_MYSQL_V1'
 }
 if (-not $ApprovedCampaigns.ContainsKey($Script)) {
   Write-Host "[mysql-gate] BLOCKED: $Script has no independently approved ACK-4 manifest." -ForegroundColor Red

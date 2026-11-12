@@ -3990,6 +3990,82 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
 .scan-lookup button { min-height: 44px; }
 .scan-action { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
 
+/* Requirement §29.8 A.2 — touch targets ≥ 44px inside the MQ workspace.
+ * The segmented-control rule above already sets min-height: 44px, so the
+ * generic button rule below must not fight it (same value, no override). */
+.mq-workspace button,
+.mq-workspace input:not([type="checkbox"]):not([type="radio"]),
+.mq-workspace select,
+.mq-workspace textarea,
+.mq-workspace .record-card,
+.mq-workspace .compact-record,
+.mq-workspace .link-button {
+  min-height: 44px;
+}
+.mq-workspace .segmented-control button { min-height: 44px; }
+.mq-workspace input[type="checkbox"],
+.mq-workspace input[type="radio"] { min-height: 0; height: 16px; width: 16px; padding: 0; }
+.mq-workspace label:has(> input[type="checkbox"]),
+.mq-workspace label:has(> input[type="radio"]) { min-height: 44px; display: flex; align-items: center; gap: 8px; }
+.mq-workspace .record-card,
+.mq-workspace .compact-record { padding-block: 12px; }
+.mq-workspace .record-card dl div,
+.mq-workspace .compact-record__metadata div,
+.mq-workspace .compact-record__metrics div { min-width: 0; overflow-wrap: anywhere; }
+.mq-workspace .record-card dd,
+.mq-workspace .record-card dt,
+.mq-workspace .compact-record__metadata dd,
+.mq-workspace .compact-record__metadata dt,
+.mq-workspace .compact-record__metrics dd,
+.mq-workspace .compact-record__metrics dt { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.mq-workspace .mono,
+.mq-workspace .form-grid label > span { overflow-wrap: anywhere; word-break: break-word; }
+
+/* Execution hub sections */
+.mq-hub { display: grid; gap: 12px; margin-top: 1rem; min-width: 0; }
+.mq-hub-section { min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); overflow: hidden; }
+.mq-hub-section__head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; align-items: center; padding: 10px 12px; background: var(--bg-grouped); border-bottom: 1px solid var(--border); }
+.mq-hub-section__toggle { display: grid; gap: 2px; min-width: 0; padding: 4px 0; border: 0; background: transparent; text-align: left; color: var(--text-primary); font: inherit; cursor: pointer; }
+.mq-hub-section__title { font-weight: 700; font-size: 15px; overflow-wrap: anywhere; }
+.mq-hub-section__toggle small { color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }
+.mq-hub-section__badge { justify-self: end; }
+.mq-hub-section__actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; }
+.mq-hub-section__actions .business-action { display: inline-flex; }
+.mq-hub-section__body { display: grid; gap: 8px; padding: 12px; min-width: 0; }
+.mq-hub-record { min-width: 0; }
+.mq-hub-record__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.mq-line-edit { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-top: 8px; min-width: 0; }
+.mq-line-editor { display: grid; gap: 10px; min-width: 0; }
+.mq-line-editor__row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; align-items: end; min-width: 0; }
+.mq-line-editor__row--block { grid-template-columns: minmax(0, 1fr); padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.mq-line-editor__row--block .danger-text { justify-self: end; }
+.mq-line-editor label { min-width: 0; }
+.mq-line-editor input,
+.mq-line-editor select { width: 100%; min-width: 0; }
+.mq-detection { display: grid; gap: 12px; min-width: 0; }
+.mq-detection__picker { min-width: 0; }
+.mq-detection__picker select { width: 100%; }
+.mq-range { margin-bottom: 12px; }
+
+/* Guard against long identifiers forcing horizontal page scroll at 320px.
+ * Scoped to text-bearing blocks; table cells keep their intrinsic sizing so a
+ * wide numeric table scrolls inside its own container instead of the page. */
+.mq-workspace,
+.mq-workspace .record-card,
+.mq-workspace .compact-record,
+.mq-workspace .form-grid,
+.mq-workspace .modal-body,
+.mq-workspace .hub-section__body,
+.mq-workspace .mq-hub-section__body,
+.mq-workspace .mq-line-editor__row,
+.mq-workspace .mq-line-edit { min-width: 0; }
+.mq-workspace .record-card,
+.mq-workspace .compact-record,
+.mq-workspace .form-grid,
+.mq-workspace .modal-body { overflow-wrap: anywhere; }
+.mq-workspace .line-table { display: block; overflow-x: auto; max-width: 100%; }
+.mq-workspace .table-wrap { max-width: 100%; overflow-x: auto; }
+
 @media (max-width: 430px) {
   .mq-workspace { padding-inline: 16px; }
   .scan-lookup { grid-template-columns: 1fr; }

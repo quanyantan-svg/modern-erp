@@ -438,6 +438,12 @@ const FULL = [
   // Operation Plan + Scheduling + Quality masters + Inspection + Scan +
   // Analytics + legacy production_outputs convergence.
   'server/manufacturing-quality-domain.test.js',
+  // V23 Manufacturing & Quality Domain Closure — 2026-11-12 remediation round:
+  // material list lifecycle, topology / outsourced boundary enforcement at
+  // report confirm and operation completion, inspection type vocabulary,
+  // waiver and nonconforming disposition, pending worklist, operation transfer
+  // by scan, byproduct maintenance and byproduct receipt.
+  'server/v23-manufacturing-quality-closure.test.js',
 
   // ----- V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E + Wave 3F — backend dispatch ownership architecture -----
   // Architecture tests for server/lib/route-table.js plus the live
