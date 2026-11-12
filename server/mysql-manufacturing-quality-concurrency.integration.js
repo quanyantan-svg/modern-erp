@@ -136,7 +136,7 @@ describe('V23 Manufacturing & Quality real MySQL concurrency matrix (4 races)', 
     db.prepare(`INSERT INTO suppliers(id,code,name,contact,phone,address,email,active,payment_terms_days,created_at,updated_at)
       VALUES(?,?,?,'','','','',1,0,?,?)`).run(supplierId, `MQR-S-${suffix}`, '竞态供应商', stamp, stamp);
     db.prepare(`INSERT INTO boms(id,product_id,version,status,purpose,approval_status,remark,creator_id,created_at,updated_at)
-      VALUES(?,?,?,'ACTIVE','SELF_MAKE','APPROVED','','user-admin',?,?)`).run(`mq-race-bom-${suffix}`, productId, '1.0', stamp, stamp);
+      VALUES(?,?,?,'ACTIVE','SELF_MAKE','APPROVED','',ACTOR_ID,?,?)`).run(`mq-race-bom-${suffix}`, productId, '1.0', stamp, stamp);
     db.prepare(`INSERT INTO bom_items(id,bom_id,product_id,quantity,scrap_rate,line_no,uom_code_snapshot,conversion_numerator,conversion_denominator)
       VALUES(?,?,?,?,0,1,'件',1,1)`).run(`mq-race-bomi-${suffix}`, `mq-race-bom-${suffix}`, componentId, 2);
     db.prepare(`INSERT INTO product_routings(id,product_id,routing_code,routing_name,version,status,notes,created_at,updated_at)
@@ -147,9 +147,7 @@ describe('V23 Manufacturing & Quality real MySQL concurrency matrix (4 races)', 
     db.prepare(`INSERT INTO product_routing_operations(id,routing_id,sequence_no,operation_code,operation_name,work_center,setup_minutes,run_minutes_per_unit,notes,created_at,updated_at,active,is_outsource,quality_policy,topology)
       VALUES(?,?,2,'OP20','检验工序','WC1',0,1,'',?,?,1,0,'NONE','LINEAR')`).run(`mq-race-op2-${suffix}`, routingId, stamp, stamp);
     db.prepare(`INSERT INTO inventory(warehouse_id,product_id,quantity,updated_at) VALUES(?,?,100,?)`).run(warehouseId, componentId, stamp);
-    db.prepare(`INSERT INTO production_order_routing_snapshots(id,production_order_id,routing_id,sequence_no,operation_code,operation_name,work_center,setup_minutes,run_minutes_per_unit,notes,created_at)
-      VALUES(?,?,?,1,'OP10','装配工序','WC1',0,1,'',?)`).run(`mq-race-snapshot-${suffix}`, `mq-race-unused-${suffix}`, routingId, stamp);
-    return { suffix, productId, componentId, warehouseId, supplierId, routingId, snapshotId: `mq-race-snapshot-${suffix}` };
+    return { suffix, productId, componentId, warehouseId, supplierId, routingId };
   }
 
   /** A production order in the state the scenario needs, with its items. */
@@ -157,13 +155,18 @@ describe('V23 Manufacturing & Quality real MySQL concurrency matrix (4 races)', 
     const stamp = now();
     const orderId = `mq-race-order-${scenario.suffix}`;
     db.prepare(`INSERT INTO production_orders(id,order_no,product_id,quantity,status,remark,creator_id,created_at,updated_at,source_type,material_list_status)
-      VALUES(?,?,?,10,?,'','user-admin',?,?,'MANUAL',?)`)
+      VALUES(?,?,?,10,?,'',ACTOR_ID,?,?,'MANUAL',?)`)
       .run(orderId, `MO-MQR-${scenario.suffix}`, scenario.productId, status, stamp, stamp, 'CONTROLLED_EDIT');
     const itemId = `mq-race-item-${scenario.suffix}`;
     db.prepare(`INSERT INTO production_order_items(id,order_id,product_id,quantity,consumed_quantity,line_no,bom_item_id,quantity_per_unit,scrap_rate_snapshot,material_list_status)
       VALUES(?,?,?,20,0,1,?,2,0,'CONTROLLED_EDIT')`)
       .run(itemId, orderId, scenario.componentId, `mq-race-bomi-${scenario.suffix}`);
-    return { orderId, itemId };
+    // The routing snapshot references the production order, so it is created
+    // here rather than in the shared scenario.
+    const snapshotId = `mq-race-snapshot-${scenario.suffix}`;
+    db.prepare(`INSERT INTO production_order_routing_snapshots(id,production_order_id,routing_id,sequence_no,operation_code,operation_name,work_center,setup_minutes,run_minutes_per_unit,notes,created_at)
+      VALUES(?,?,?,1,'OP10','装配工序','WC1',0,1,'',?)`).run(snapshotId, orderId, scenario.routingId, stamp);
+    return { orderId, itemId, snapshotId };
   }
 
   before(() => {
@@ -252,12 +255,12 @@ describe('V23 Manufacturing & Quality real MySQL concurrency matrix (4 races)', 
   // exactly one hand-off and one audit row.
   test('MQ-RACE-03 concurrent double outsource hand-off yields one hand-off', async () => {
     const scenario = seedScenario({ outsource: true });
-    const { orderId } = seedOrder(scenario, { status: 'IN_PROGRESS' });
+    const { orderId, snapshotId } = seedOrder(scenario, { status: 'IN_PROGRESS' });
     const stamp = now();
     const operationId = `mq-race-operation-${scenario.suffix}`;
     db.prepare(`INSERT INTO production_order_operations(id,production_order_id,routing_snapshot_id,sequence_no,operation_code,operation_name,work_center_code,work_center_name,setup_seconds,run_seconds_per_unit,expected_yield_bps,labor_rate_cents_per_hour,overhead_rate_cents_per_hour,daily_capacity_minutes,planned_input_quantity,status,created_at,updated_at,plan_status,control_code,control_participates_scheduling,control_reporting_method,control_inspection_method,is_outsource,quality_policy,topology,topology_meta)
       VALUES(?,?,?,1,'OP10','装配工序','WC1','竞态工作中心',0,1,10000,0,0,480,10,'NOT_STARTED',?,?,'NOT_STARTED','',1,'MANUAL','NONE',1,'NONE','LINEAR','{}')`)
-      .run(operationId, orderId, scenario.snapshotId, stamp, stamp);
+      .run(operationId, orderId, snapshotId, stamp, stamp);
     const results = await raceTwo([
       { action: 'outsource-handoff', payload: { operationId, supplierId: scenario.supplierId } },
       { action: 'outsource-handoff', payload: { operationId, supplierId: scenario.supplierId } },
@@ -276,10 +279,8 @@ describe('V23 Manufacturing & Quality real MySQL concurrency matrix (4 races)', 
   // quantity the source operation has released.
   test('MQ-RACE-04 concurrent transfers never exceed the released quantity', async () => {
     const scenario = seedScenario();
-    const { orderId } = seedOrder(scenario, { status: 'IN_PROGRESS' });
+    const { orderId, snapshotId } = seedOrder(scenario, { status: 'IN_PROGRESS' });
     const stamp = now();
-    const snapshotId = `mq-race-snapshot-${scenario.suffix}`;
-    db.prepare(`UPDATE production_order_routing_snapshots SET production_order_id=? WHERE id=?`).run(orderId, snapshotId);
     const sourceId = `mq-race-source-${scenario.suffix}`;
     const targetId = `mq-race-target-${scenario.suffix}`;
     const insertOperation = db.prepare(`INSERT INTO production_order_operations(id,production_order_id,routing_snapshot_id,sequence_no,operation_code,operation_name,work_center_code,work_center_name,setup_seconds,run_seconds_per_unit,expected_yield_bps,labor_rate_cents_per_hour,overhead_rate_cents_per_hour,daily_capacity_minutes,planned_input_quantity,status,created_at,updated_at,plan_status,control_code,control_participates_scheduling,control_reporting_method,control_inspection_method,is_outsource,quality_policy,topology,topology_meta)
@@ -289,7 +290,7 @@ describe('V23 Manufacturing & Quality real MySQL concurrency matrix (4 races)', 
     // The source operation has released exactly one unit.
     const reportId = `mq-race-report-${scenario.suffix}`;
     db.prepare(`INSERT INTO production_operation_reports(id,report_no,production_order_id,production_operation_id,business_date,good_quantity,scrap_quantity,labor_seconds,machine_seconds,status,released_quantity,operator_id,created_at,updated_at)
-      VALUES(?,?,?,?,'2026-11-01',1,0,0,0,'CONFIRMED',1,'user-admin',?,?)`)
+      VALUES(?,?,?,?,'2026-11-01',1,0,0,0,'CONFIRMED',1,ACTOR_ID,?,?)`)
       .run(reportId, `MQR-OR-${scenario.suffix}`, orderId, sourceId, stamp, stamp);
 
     const results = await raceTwo([
