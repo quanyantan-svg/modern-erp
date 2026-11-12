@@ -39,7 +39,7 @@ MASTER_ENGINEERING_DOMAIN_ACCEPTANCE_CANDIDATE_READY_FOR_OWNER_DECISION
 | 整改轮新增合同套件 `server/engineering-reference-lifecycle.test.js` | **7/7 PASS** |
 | 整改轮新增合同套件 `server/engineering-topology-cleanup.test.js` | **5/5 PASS** |
 | 浏览器（真实 Edge，`v17-engineering-frontend.mjs`，4 工作面 × 320/390/430/680） | **PASS**，含「打开参考资料详情 → 断言编辑/停用动作存在 → 断言触控目标不小于 44px」 |
-| 真实 MySQL 8 | 见 §3.2 |
+| 真实 MySQL 8 | **PASS**：run `63805c9f-a1f9-4ae1-97a9-32329c7e9254`、commit `de9496b`，`RESULT = PASS`、`ACK-4 STATE = FINISHED`（清理由 Root 的 `CLEANUP_SCHEMA_POST_RUN` 子进程独立 post-flight 证明）；目标 `modern_erp_domain_test` @ `127.0.0.1:3306`，server uuid `256c7a4e-d275-11f1-885b-b025aa71d167`，grants sha256 `bef61617d1b96913f479c7642176eca53f60410b003773707cd56355e4ce807e` |
 | 治理守卫（跨域错误码耦合 / 验收记录有效性） | 双 PASS |
 | 文档一致性 | `current` N1、N3～N6、N8、N9 PASS；N2 `RETIRED`；**N7 FAIL**（既有历史提交的追溯债务，与本域无关）；`migration` C1～C6 全 PASS |
 
@@ -66,7 +66,7 @@ MASTER_ENGINEERING_DOMAIN_ACCEPTANCE_CANDIDATE_READY_FOR_OWNER_DECISION
 
 | 段 | 覆盖 | 证据 |
 |---|---|---|
-| schema 对等 | 本域 15 张新表 + 28 个加法列 + 本轮新增的 2 个工序级拓扑列，在真实 MySQL 8 上被接受 | `test:mysql:accounting-analytics` 的 `BOOTSTRAP_CURRENT_SCHEMA` 步骤在**全量当前迁移集**上运行（工程域迁移链在其中） |
+| schema 对等 | 本域 15 张新表 + 28 个加法列 + 本轮新增的 2 个工序级拓扑列，在真实 MySQL 8 上被接受 | `test:mysql:accounting-analytics` campaign 的 `BOOTSTRAP_CURRENT_SCHEMA` 步骤在**全量当前迁移集**上运行（工程域迁移链在其中）；run `63805c9f-a1f9-4ae1-97a9-32329c7e9254`、commit `de9496b`，`RESULT = PASS`、`ACK-4 STATE = FINISHED` |
 | 行为等价 | 生命周期守卫、BOM 周期拒绝、快照不可变、ECO 原子应用 | 本域 focused 合同套件（含负例） |
 
 **残余（随冻结显式登记）**：本域 15 张表**没有**列入任何可运行 campaign 的**列级** parity 清单（`M1_CORE_PARITY_TABLES` 为 16 张采购/库存表，`AA_PARITY_TABLES` 为 47 张会计/分析表），因此「真实 MySQL 上的列级 schema parity」与「真实 MySQL 上的工程域并发行为等价」均**未被单独取证**，不得表述为已证明。
