@@ -131,8 +131,6 @@ describe('V23 Manufacturing & Quality real MySQL concurrency matrix (4 races)', 
       VALUES(?,?,?,'制造','件',0,0,1,0,?,?)`);
     insertProduct.run(productId, `MQR-P-${suffix}`, '竞态产品', stamp, stamp);
     insertProduct.run(componentId, `MQR-C-${suffix}`, '竞态组件', stamp, stamp);
-    db.prepare(`INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at)
-      VALUES(?,?,?,'x','x','role-admin',1,?)`).run(ACTOR_ID, ACTOR_ID, '竞态用户', stamp);
     db.prepare(`INSERT INTO warehouses(id,code,name,address,manager,active,created_at,updated_at) VALUES(?,?,?,'','',1,?,?)`)
       .run(warehouseId, `MQR-WH-${suffix}`, '竞态主仓', stamp, stamp);
     db.prepare(`INSERT INTO suppliers(id,code,name,contact,phone,address,email,active,payment_terms_days,created_at,updated_at)
@@ -145,7 +143,7 @@ describe('V23 Manufacturing & Quality real MySQL concurrency matrix (4 races)', 
       VALUES(?,?,?,?,'1.0','ACTIVE','',?,?)`).run(routingId, productId, `MQR-R-${suffix}`, '竞态工艺路线', stamp, stamp);
     const insertOperation = db.prepare(`INSERT INTO product_routing_operations(id,routing_id,sequence_no,operation_code,operation_name,work_center,setup_minutes,run_minutes_per_unit,notes,created_at,updated_at,active,is_outsource,quality_policy,topology)
       VALUES(?,?,?,'OP10','装配工序','WC1',0,1,'',?,?,1,?,'NONE','LINEAR')`);
-    insertOperation.run(`mq-race-op-${suffix}`, routingId, 1, outsource ? 1 : 0, stamp, stamp);
+    insertOperation.run(`mq-race-op-${suffix}`, routingId, 1, stamp, stamp, outsource ? 1 : 0);
     db.prepare(`INSERT INTO product_routing_operations(id,routing_id,sequence_no,operation_code,operation_name,work_center,setup_minutes,run_minutes_per_unit,notes,created_at,updated_at,active,is_outsource,quality_policy,topology)
       VALUES(?,?,2,'OP20','检验工序','WC1',0,1,'',?,?,1,0,'NONE','LINEAR')`).run(`mq-race-op2-${suffix}`, routingId, stamp, stamp);
     db.prepare(`INSERT INTO inventory(warehouse_id,product_id,quantity,updated_at) VALUES(?,?,100,?)`).run(warehouseId, componentId, stamp);
@@ -189,6 +187,10 @@ describe('V23 Manufacturing & Quality real MySQL concurrency matrix (4 races)', 
       throw new Error(`Manufacturing & Quality MySQL race suite requires MySQL 8; server reported '${server?.version || 'unknown'}'`);
     }
     console.log(`MANUFACTURING_QUALITY RACE MYSQL SERVER = ${server.version} database=${server.database_name} dialect=mysql`);
+    // The shared race actor is inserted once: the scenarios reuse it, and a
+    // second insert would violate the primary key.
+    db.prepare(`INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at)
+      VALUES(?,?,?,'x','x','role-admin',1,?)`).run(ACTOR_ID, ACTOR_ID, '竞态用户', new Date().toISOString());
   });
 
   beforeEach(() => {
