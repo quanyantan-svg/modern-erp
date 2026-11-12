@@ -105,6 +105,26 @@ export function migrateV22FinanceWaveAFoundation(db) {
   `);
 
   // -----------------------------------------------------------------
+  // FO03 — finance_payment_term_installments
+  //
+  // One term may produce 1..n schedule lines (Requirement §33.7). A term
+  // without installments still resolves to a single line.
+  // -----------------------------------------------------------------
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS finance_payment_term_installments (
+      id TEXT PRIMARY KEY,
+      term_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL CHECK(sequence > 0),
+      due_offset_days INTEGER NOT NULL DEFAULT 0,
+      ratio_bps INTEGER NOT NULL DEFAULT 0 CHECK(ratio_bps >= 0),
+      created_at TEXT NOT NULL,
+      UNIQUE(term_id, sequence),
+      FOREIGN KEY(term_id) REFERENCES finance_payment_terms(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_finance_term_installments_term ON finance_payment_term_installments(term_id, sequence);
+  `);
+
+  // -----------------------------------------------------------------
   // FO04 — finance_due_schedule_lines (side + open_item_id portable identity)
   // -----------------------------------------------------------------
   db.exec(`

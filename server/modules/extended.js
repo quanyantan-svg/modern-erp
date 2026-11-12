@@ -314,27 +314,11 @@ export async function createBankStatement(db, req, res, actor) {
 
 // ============ 银行对账 ============
 
-export function listBankReconciliations(db, res, actor, url) {
-  allowAny(actor, ["BANK_RECONCILE_VIEW", "BANK_RECONCILE_MANAGE"]);
-  const bankId = url.searchParams.get("bank_id") || "";
-  let sql = "SELECT r.*, ba.bank_name, ba.account_no, u.display_name reconciled_by_name FROM bank_reconciliations r JOIN bank_accounts ba ON ba.id=r.bank_account_id LEFT JOIN users u ON u.id=r.reconciled_by WHERE 1=1";
-  const params = [];
-  if (bankId) { sql += " AND r.bank_account_id=?"; params.push(bankId); }
-  sql += " ORDER BY r.period DESC";
-  const reconciliations = db.prepare(sql).all(...params);
-  return send(res, 200, { reconciliations });
-}
-
-export async function createBankReconciliation(db, req, res, actor) {
-  allow(actor, "BANK_RECONCILE_MANAGE");
-  const body = await readJson(req);
-  const now = new Date().toISOString();
-  const reconId = id();
-  const seq = String(db.prepare("SELECT COUNT(*) cnt FROM bank_reconciliations WHERE bank_account_id=?").get(body.bank_account_id).cnt + 1).padStart(4, "0");
-  const reconNo = "BR-" + body.period + "-" + seq;
-  db.prepare("INSERT INTO bank_reconciliations(id,bank_account_id,reconciliation_no,period,statement_balance_cents,book_balance_cents,difference_cents,reconciled_by,reconciled_at,remark) VALUES(?,?,?,?,?,?,?,?,?,?)").run(reconId, body.bank_account_id, reconNo, body.period, body.statement_balance_cents, body.book_balance_cents, body.difference_cents || 0, actor.id, now, body.remark || "");
-  return send(res, 201, { id: reconId, reconciliation_no: reconNo });
-}
+// The legacy bank_reconciliations ledger is retired (FO48): the canonical
+// reconciliation is finance_bank_reconciliations, written through
+// /api/finance/bank-reconciliations. The legacy table is kept as history and
+// is never written again; a second live reconciliation ledger would break
+// the single canonical truth.
 
 // ============ MRP物料需求计划 ============
 

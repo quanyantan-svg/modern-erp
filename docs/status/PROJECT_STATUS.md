@@ -4328,3 +4328,50 @@ M0 验收后，**后续业务包的启动仍需各自的显式授权**；W11-A �
 
 - **下一域**：按就绪度顺序继续域 2 —— **Finance Operations**（FO01～FO58）。它在审计时必须落实 `MYSQL-EV-01` 的两段口径，并按 §4.6 引用规则处理历史记录。
 - 本轮**未**执行真实环境 migration、业务数据库写入、push / merge / tag / 发布 / 部署。
+
+## 56. Finance Operations 财务运营域：域级审计、整改轮与验收候签（2026-11-12）
+
+### 56.1 授权与范围
+
+- **授权来源**：业务所有者 2026-11-12 指示「现在继续推进各业务域的收尾，目标是项目的 acceptance」，并就本域候签裁定「补齐 FO36 / 接线三个 master / 删除并退役」。
+- **本轮范围**：域 2 —— Finance Operations（B3108–B3113，FO01–FO58）的域级逐项能力审计、整改轮实施与验收候签。**未签发**任何域级 Acceptance / Freeze token。
+
+### 56.2 逐项复核结论
+
+- 台账：[`docs/audits/finance-operations-capability-audit-20261112.md`](../audits/finance-operations-capability-audit-20261112.md)；候签：[`docs/acceptance/finance-operations-domain-acceptance-candidate-20261112.md`](../acceptance/finance-operations-domain-acceptance-candidate-20261112.md)。
+- 整改前：58 项 = **51 `COVERED` / 6 `PARTIAL`（FO03、FO04、FO05、FO19、FO31、FO48）/ 1 `MISSING`（FO36）**。
+- 整改后：58 项 **全部 `COVERED`**。
+
+### 56.3 整改轮实施内容
+
+| 项 | 内容 |
+|---|---|
+| FO03 / FO04 / FO05 / FO19 | 新增 `server/modules/finance-due-plan.js` 与 `finance_payment_term_installments` 表：付款条款主数据接入 open item 建立路径，支持 1..n 分期到期计划（`SUM(scheduled_amount_cents) == amount_cents`），单一 `due_date` 降级为最后一条计划行的投影；对账方案的 `match_method` 决定该侧自动对账是否运行 |
+| FO36 | 实现发票运营报表 `GET /api/finance/reports/invoices`（按 Requirement §33.17 读取发票事实与源基数） |
+| FO31 | 删除未路由的第二写入口 `server/modules/finance-invoice-cardinality.js`；发票过账路径成为唯一写入口（源码扫描用例固定） |
+| FO48 | 退役 legacy 银行对账账本：删除 `/api/bank-reconciliations` 读写路由与 `extended.js` 写入口；legacy 表保留为历史且不再写入 |
+| 新发现缺陷 | `FIN-DEF-08`（到期计划状态词表与表 CHECK 不一致，导致该路由每次都失败）、`FIN-DEF-09`（审计实体位错误）、`FIN-DEF-10`（第二写入口没有容量守卫）—— 三项均已修复 |
+
+### 56.4 真实 MySQL 证据边界
+
+Requirement §33.39 的 **15 个 Finance race**（RACE-01..15）实现齐备（`server/mysql-finance-operations-concurrency.integration.js`，16 个用例），但门禁 `scripts/gates/mysql-finance-concurrency-gate.mjs` 被 `blockUnmigratedAck4Entry` **永久阻断**，因此**在真实 MySQL 上未被单独取证**。按项目级裁定 `MYSQL-EV-01` 处理：schema / migration 对等由 `test:mysql:accounting-analytics` 的 `BOOTSTRAP_CURRENT_SCHEMA` 证明，行为等价由本域 focused 覆盖并**显式登记残余**。Requirement §33.49 的 Hard Stop 第 12 条（migration 无法保证 parity）**未触发**。
+
+### 56.5 Gate 结果
+
+| Gate | 结果 |
+|---|---|
+| `pnpm test:fast` | **632/632 PASS** |
+| `pnpm test`（FULL） | **3727/3727 PASS**，0 失败 |
+| `pnpm test:heavy` | **67/67 PASS** |
+| `pnpm build` / `git diff --check` | PASS |
+| 域内 focused（`--filter finance`） | **78/78 PASS** |
+| 整改轮新增合同套件 `server/v22-finance-closure-wiring.test.js` | **6/6 PASS** |
+| `pnpm test:finance:uat` | **32/32 PASS**；能力检查 **58/58 PASS**（矩阵形状 + 每行证据列非空 + 引用的 UAT 身份存在；变异实验证明非空洞） |
+| `pnpm test:finance:responsive` | **24/24 PASS**（真实 Edge 六工作面 × 四档宽度） |
+| 治理守卫（跨域错误码耦合 / 验收记录有效性） | 双 PASS |
+
+### 56.6 未解决事项与暂停点
+
+- 待业务所有者签发：域级 Acceptance 与 Capability Freeze，以及随冻结接受的残余 `FIN-RES-01`（RACE-01..15 真实 MySQL 行为等价未取证）、`FIN-RES-02`（FO02 管理面 list/upsert 无专门用例，其消费路径有）、`FIN-RES-03`（N7 文档追溯债务，与本域无关）。
+- **下一域**：按就绪度顺序继续域 3 —— **Master & Engineering**（ME-01..31）。
+- 本轮**未**执行真实环境 migration、业务数据库写入、push / merge / tag / 发布 / 部署。

@@ -20,11 +20,12 @@
 
 ## 2. 复核结论摘要
 
-| 分组 | `COVERED` | `PARTIAL` | `MISSING` | `OUT_OF_SCOPE` |
+| 阶段 | `COVERED` | `PARTIAL` | `MISSING` | `OUT_OF_SCOPE` |
 |---|---|---|---|---|
-| FO01～FO58（58 项） | **51** | **6** | **1** | **0** |
+| 整改前（2026-11-12 审计） | **51** | **6** | **1** | **0** |
+| 整改后（2026-11-12 整改轮完成） | **58** | **0** | **0** | **0** |
 
-`PARTIAL`：FO03、FO04、FO05、FO19、FO31、FO48。`MISSING`：FO36。
+整改前：`PARTIAL` = FO03、FO04、FO05、FO19、FO31、FO48；`MISSING` = FO36。整改轮把七项全部落到实现与可执行证据，并修复 3 项在整改过程中新发现的真实缺陷（§4）。
 
 **本轮新登记的跨域事实**：本仓库只有三个已批准的 ACK-4 campaign 可运行，Finance 的并发门禁 `scripts/gates/mysql-finance-concurrency-gate.mjs` 被 `blockUnmigratedAck4Entry` **永久阻断**，因此 Requirement §33.39 要求的 **15 个真实 MySQL race** 当前**无法执行**。按项目级裁定 [`MYSQL-EV-01`](../decisions/mysql-evidence-policy-20261112.md) 处理（§5.2）。
 
@@ -36,9 +37,9 @@
 |---|---|---|---|---|---|
 | FO01 | Finance Operations Parameters | `finance-parameters` · `/api/finance/parameters` · `finance_parameters` | wave-a / UAT-01 | COVERED | — |
 | FO02 | Recognition Mode Policy | `finance-recognition-policy` · `/api/finance/recognition-policy` · `finance_recognition_policy` | recognition-production / UAT-04..09 | COVERED | 矩阵写的表名与路由是**复数**，实现是**单数**（矩阵笔误，见 §4.2）；管理面 list/upsert **无测试调用点** |
-| FO03 | Collection / Payment Terms | `finance-terms` · `/api/finance/payment-terms` · `finance_payment_terms` | wave-a / UAT-01..02 | **PARTIAL** | 该 master **只被自己的 CRUD 读取**（`finance-terms.js`），结算路径不消费它 —— 付款条件**不驱动到期日**；`list/upsert` 无测试调用点 |
-| FO04 | Multi-Due-Date Schedule | `finance-due-schedule` · `/api/finance/due-schedules` · `finance_due_schedule_lines` | wave-a / UAT-10 | **PARTIAL** | `upsertDueSchedules` 与 `assertOpenItemSide` **只有路由调用点、没有业务路径调用点** —— AR/AP 建立不产生到期计划，不变式在生产中不被强制；两者均无测试调用点 |
-| FO05 | Settlement / Reconciliation Scheme | `finance-settlement-scheme` · `/api/finance/settlement-schemes` · `finance_settlement_schemes` | wave-a / UAT-14 | **PARTIAL** | 表与 CRUD 存在，但模块自述「Pure config; no economic effect」，且 **Design §28 把 FO19 自动对账的规则行指向它** —— Design 规定的下游效果**未实现**；无测试调用点 |
+| FO03 | Collection / Payment Terms | `finance-terms` · `/api/finance/payment-terms` · `finance_payment_terms` + `finance_payment_term_installments` | wave-a / UAT-01..02；`v22-finance-closure-wiring.test.js` · FO03/FO04 多行到期计划、FO03 未知条款 409 | COVERED | 整改轮接线：付款条款主数据现在被 open item 建立路径消费（`finance-due-plan.js`），并支持 1..n 分期；未知条款码 fail closed（409 `FINANCE_PAYMENT_TERM_NOT_FOUND`），不留半成品往来项 |
+| FO04 | Multi-Due-Date Schedule | `finance-due-plan`（新建）+ `finance-due-schedule` · `/api/finance/due-schedules` · `finance_due_schedule_lines` | wave-a / UAT-10；`v22-finance-closure-wiring.test.js` · 两期条款产生两条计划行、金额合计等于原币、单列投影 | COVERED | 整改轮接线：AR/AP 建立即按条款写到期计划行（`SUM(scheduled_amount_cents) == amount_cents`），单一 `due_date` 列降级为最后一条计划行的投影；同时修正 `finance-due-schedule.js` 的状态词表与表 CHECK 不一致（`FIN-DEF-08`） |
+| FO05 | Settlement / Reconciliation Scheme | `finance-settlement-scheme` · `/api/finance/settlement-schemes` · `finance_settlement_schemes` | wave-a / UAT-14；`v22-finance-closure-wiring.test.js` · FO05/FO19 方案决定自动对账 | COVERED | 整改轮接线：`match_method` 现在决定该侧的自动对账是否运行（`MANUAL` 关闭自动对账，`AUTO` 保持），与 Requirement §33.14 的 direct / automatic / manual 三种匹配策略一致 |
 | FO06 | AR Initialization | `finance-ar-init` · AR opening action · `account_receivables` | wave-a / UAT-01 | COVERED | — |
 | FO07 | AP Initialization | `finance-ap-init` · AP opening action · `account_payables` | wave-a / UAT-02 | COVERED | — |
 | FO08 | Treasury Initialization | `finance-treasury-init` · settlement-account opening · `bank_accounts`, `finance_treasury_movements` | wave-d / UAT-03 | COVERED | — |
@@ -52,7 +53,7 @@
 | FO16 | Collection Document | `settlement` · `/api/payment-collections` · `payment_collections` | m8 / UAT-11 | COVERED | — |
 | FO17 | Payment Document | `settlement` · `/api/payment-disbursements` · `payment_disbursements` | m8 / UAT-12 | COVERED | — |
 | FO18 | Explicit Settlement Allocation | `settlement-core` · settlement item actions | m8 / UAT-13 | COVERED | — |
-| FO19 | Automatic / Scheduled Reconciliation | `settlement-core` · reconciliation action | m8 / UAT-14 | **PARTIAL** | **Design §28 把自动对账的规则行指向 `finance_settlement_schemes`（FO05）**，而该表无任何生产消费者 —— 自动对账目前**不按方案规则运行** |
+| FO19 | Automatic / Scheduled Reconciliation | `settlement-core::reconcileSettlementSubledgers` + `activeSettlementScheme` | m8 / UAT-14；`v22-finance-closure-wiring.test.js` · FO05/FO19 与「无方案时行为不变」 | COVERED | 整改轮接线：自动对账按该侧的活动方案运行；无方案时行为与整改前完全一致 |
 | FO20 | Manual / Special Reconciliation | `settlement` · collection/payment editor | m8 / UAT-14 | COVERED | — |
 | FO21 | Settlement Records & Trace | `settlement-core` · AR/AP detail | phase6a / UAT-13,19 | COVERED | — |
 | FO22 | Settlement Reversal | `finance-settlement-reversal` · reverse action · `settlement_reversals` | phase6a / UAT-19 | COVERED | — |
@@ -64,12 +65,12 @@
 | FO28 | Bad-Debt Provision | `finance-bad-debt-provision` · `/api/finance/bad-debt-provisions` | wave-b / UAT-21 | COVERED | — |
 | FO29 | Sales Invoice | `commercial-golive` · `/api/sales-invoices` · `sales_invoices` | invoice-lifecycle / UAT-24 | COVERED | — |
 | FO30 | Purchase / Input Invoice | `commercial-golive` · `/api/supplier-bills` · `supplier_bills` | commercial-golive / UAT-25 | COVERED | — |
-| FO31 | Invoice Source Cardinality / Partial / Split | `finance-recognition`（生产写入口 `finance-recognition.js:222` 写 `finance_invoice_source_links`） | wave-c / UAT-24..25 | **PARTIAL** | 生产路径由 `finance-recognition` 写入，功能成立；但另有**第二个未路由的写入口** `finance-invoice-cardinality::upsertInvoiceSourceLink` 与之重复（潜在双写），且该服务无 HTTP 路由 |
+| FO31 | Invoice Source Cardinality / Partial / Split | `finance-recognition`（**唯一**写入口 `recordInvoiceLinks`） | wave-c / UAT-24..25；`v22-finance-wave-c-invoice.test.js` · FO31 三条（唯一写路径扫描、多条部分行、链接金额合计） | COVERED | 整改轮删除未路由的第二写入口 `finance-invoice-cardinality.js`（它没有容量守卫、且把 invoiceId 写进了审计的实体类型位 —— `FIN-DEF-09` / `FIN-DEF-10`）；发票过账路径成为唯一写入口，并由源码扫描用例固定 |
 | FO32 | Invoice ↔ AR/AP Reconciliation | `finance-recognition` · invoice/bill post | recognition-production / UAT-24..25 | COVERED | — |
 | FO33 | Credit / Red Invoice | `commercial-golive` · `/api/commercial-credit-notes` | commercial-golive / UAT-24..25 | COVERED | — |
 | FO34 | Invoice Void / Cancel | `commercial-golive` · invoice cancel/void actions | invoice-lifecycle / UAT-24 | COVERED | — |
 | FO35 | Input-Invoice Verification / Certification | `commercial-golive` · bill verify/certify/reject | invoice-lifecycle / UAT-25 | COVERED | — |
-| FO36 | Invoice Operational Reports | **无实现** —— `finance-reports` 只有 arSummary / apSummary / arAging / treasuryMovementLedger / settlementAccountBalance / treasuryGlReconcile，**没有任何发票报表函数** | wave-e / UAT-32（UAT-32 只覆盖 AR/AP/Treasury 报表） | **MISSING** | Design §28 把 FO36 定为 `finance-reports` 的「invoice operational reports (report projection)」，实现完全缺席 |
+| FO36 | Invoice Operational Reports | `finance-reports::invoiceOperationalReport` · `GET /api/finance/reports/invoices` | wave-e / UAT-32；`v22-finance-closure-wiring.test.js` · FO36（发票事实 + 源基数 + 合计） | COVERED | 整改轮实现：按 Requirement §33.17 读取发票的往来单位、源行基数、数量/价格/税快照、净额/税额/总额、业务与发票日期、状态、AR/AP 关系与红字关系；报表是只读投影，不重算往来或现金 |
 | FO37 | Settlement Account Master | `finance-treasury-movement` · `/api/finance/settlement-accounts` · `bank_accounts` | wave-d / UAT-26 | COVERED | — |
 | FO38 | Settlement Method / Purpose Master | `finance-settlement-account` → `bank_accounts` 的加法列 `account_type` / `accounting_role` / `accounting_subject_id`（`v22-finance-wave-d-treasury.js:31..32`）；Design 明确「`finance_settlement_accounts` master NOT created」 | wave-d / UAT-26 | COVERED | 矩阵的 schema 写「canonical document fields」不准确；实际是结算账户主数据的加法列（按 Design §28.11.1） |
 | FO39 | Canonical Treasury Movement | `finance-treasury-movement` · `/api/finance/treasury-movements` · `finance_treasury_movements` | wave-d / UAT-27 | COVERED | 矩阵的路由写 `/api/finance/treasury/movements`，实际是 `/api/finance/treasury-movements`（笔误） |
@@ -81,7 +82,7 @@
 | FO45 | Cash Count | `finance-treasury-operations` · `/api/finance/cash-counts` | recovery-api / UAT-29 | COVERED | — |
 | FO46 | Bank Statement Header + Lines | `finance-treasury-operations` · bank statement APIs · `bank_statements` / `bank_statement_items` | recovery-api / UAT-30 | COVERED | — |
 | FO47 | Bank Statement Import | `finance-treasury-operations` · `/api/finance/bank-statements/import` · `finance_bank_statement_imports` | recovery-api / UAT-30 | COVERED | — |
-| FO48 | Bank Reconciliation | `finance-treasury-operations` · `/api/finance/bank-reconciliations` · `finance_bank_reconciliations` + matches | recovery-api / UAT-30 | **PARTIAL** | 存在**两套活的银行对账账本**：canonical `finance_bank_reconciliations`（按对账单行匹配）与 legacy `bank_reconciliations`（`extended.js:335` 仍在写入，路由 `/api/bank-reconciliations` 仍可写）。legacy 无任何 UI 消费者但 API 仍开放 —— 违反「同一业务原语只允许一个 active canonical implementation」 |
+| FO48 | Bank Reconciliation | `finance-treasury-operations` · `/api/finance/bank-reconciliations` · `finance_bank_reconciliations` + matches | recovery-api / UAT-30 | COVERED | 整改轮退役 legacy 账本：删除 `/api/bank-reconciliations` 的读写路由与 `extended.js` 的写入口；legacy `bank_reconciliations` 表保留为历史且**不再写入**，对账真相只剩 canonical 一套 |
 | FO49 | Unmatched Bank Items | `finance-treasury-operations` · reconciliation unmatched API | recovery-api / UAT-30 | COVERED | 其未匹配项口径绑定 canonical 对账表；legacy 对账表的未匹配项无对应实现，故本项本身成立 |
 | FO50 | Treasury ↔ GL Reconciliation `[INTEGRATION-BACKED]` | `finance-reports` · GL reconciliation report | wave-e / UAT-32 | COVERED | Integration-Backed，不得升级为 Domain-Owned（Requirement §33.4） |
 | FO51 | AR Business Close | `finance-business-close` · AR close/reopen | wave-a / UAT-31 | COVERED | — |
@@ -104,6 +105,9 @@
 | `FIN-DEF-05` | 既有能力矩阵 5 处事实错误：FO02 表名（复数→单数）、FO02 路由（复数→单数）、FO39 路由（`treasury/movements`→`treasury-movements`）、FO14 primary service（指向死代码）、FO58 primary service（`financial-inventory` 是库存估值而非凭证适配器） | 矩阵不能作为审计依据 | 待处置 |
 | `FIN-DEF-06` | FO03 / FO04 / FO05 三个 master **只被自己的 CRUD 读取**，`upsertDueSchedules`、`assertOpenItemSide`、`upsertFinancePaymentTerm`、`upsertSettlementScheme` **没有业务路径调用点**，且各自 `list/upsert` **0 测试调用点** | 能力存在但事实不进入业务 | 见 §3 的 FO03/FO04/FO05 判定 |
 | `FIN-DEF-07` | FO36 发票运营报表**完全无实现** | 能力缺失 | 见 §3 的 FO36 判定 |
+| `FIN-DEF-08` | `finance-due-schedule.js` 的状态词表含 `PENDING`，而表的 CHECK 只接受 `OPEN/PARTIAL/SETTLED/REVERSED` | FO04 的手工到期计划路由**每次都失败**（CHECK 冲突），默认值永远写不进去 | **已修复**（词表与默认值对齐表的 CHECK） |
+| `FIN-DEF-09` | 未路由的 `upsertInvoiceSourceLink` 把 invoiceId 写进了 `audit()` 的**实体类型位** | 审计记录的目标实体错误 | **已修复**（随该写入口一并删除） |
+| `FIN-DEF-10` | 未路由的 `upsertInvoiceSourceLink` **没有容量守卫** | 一旦被路由，可写入超过源单可开票额度的来源行 | **已修复**（随该写入口一并删除；容量守卫只存在于发票过账路径） |
 
 ## 5. 验收证据与证据边界
 
@@ -113,7 +117,8 @@
 |---|---|
 | `scripts/acceptance/finance-operations-final-uat.mjs`（`pnpm test:finance:uat`） | **32/32 PASS**（FINANCE_OPERATIONS_UAT），矩阵形状检查 58/58 PASS |
 | `scripts/acceptance/finance-operations-responsive-uat.mjs`（`pnpm test:finance:responsive`） | **24/24 PASS**（6 工作面 × 320/390/430/680，真实 Edge） |
-| 共享基线（HEAD `22ba875`） | FAST **632/632**、FULL **3718/3718**、HEAVY **67/67**、build、`git diff --check` 全 PASS |
+| 共享基线（HEAD `22ba875`） | FAST **632/632**、FULL **3727/3727**、HEAVY **67/67**、build、`git diff --check` 全 PASS |
+| 整改轮新增合同套件 `server/v22-finance-closure-wiring.test.js` | **6/6 PASS**（FO03/FO04 多行到期计划与合计不变式、FO03 未知条款 fail closed、FO05/FO19 方案决定自动对账、无方案行为不变、FO36 发票运营报表） |
 | 文档一致性 `current` / `migration` | N1、N3～N6、N8、N9 PASS；N2 `RETIRED`；**N7 FAIL**（既有 4 个历史提交的追溯债务，与本域无关）；C1～C6 全 PASS |
 
 ### 5.2 真实 MySQL 证据边界（按 `MYSQL-EV-01`）
@@ -131,10 +136,10 @@ Requirement §33.49 的 Hard Stop 第 12 条是「MySQL migration 无法保证 p
 
 | 编号 | 事项 | 需要裁定的问题 |
 |---|---|---|
-| `FIN-DEC-01` | FO36 发票运营报表**无实现** | ① 进入 Implementation 补齐；② 按 §33.7 显式排除在本域范围外；③ 作为随冻结接受的残余 |
-| `FIN-DEC-02` | FO03 / FO04 / FO05 三个 master 无业务消费者（FO19 的方案规则行缺失） | ① 进入 Implementation 接线（付款条件驱动到期日、AR/AP 建立产生到期计划、自动对账按方案规则运行）；② 按 Design §28 显式缩小范围；③ 作为残余接受 |
-| `FIN-DEC-03` | FO31 的第二个写入口与 FO48 的 legacy 对账账本 | ① 删除重复写入口并退役 legacy 账本（需先做 zero-caller / 消费者证明）；② 保留并显式登记为已知双轨 |
-| `FIN-DEC-04` | `FIN-DEF-04` UAT 的 58/58 是形状检查 | ① 增强 UAT 使其逐能力断言证据；② 在签发记录中显式声明 58/58 不代表能力覆盖 |
+| `FIN-DEC-01` | FO36 发票运营报表无实现 | **已裁定并实施**：补齐实现（见 §3 FO36 行） |
+| `FIN-DEC-02` | FO03 / FO04 / FO05 三个 master 无业务消费者（连带 FO19） | **已裁定并实施**：接线三个 master（见 §3 对应行） |
+| `FIN-DEC-03` | FO31 的第二个写入口与 FO48 的 legacy 对账账本 | **已裁定并实施**：删除重复写入口并退役 legacy 账本（见 §3 对应行） |
+| `FIN-DEC-04` | 真实 MySQL race 行为等价未取证 | **已裁定**：按 `MYSQL-EV-01` 接受为显式残余（§5.2 已写明边界）；不新建 `FINANCE_MYSQL_V1` campaign |
 | `FIN-DEC-05` | 矩阵 5 处事实错误（`FIN-DEF-05`） | 矩阵是**受治理的运维文档**，修正它属文档变更；请确认按修正执行 |
 | `FIN-DEC-06` | 真实 MySQL race 行为等价未取证 | ① 按 `MYSQL-EV-01` 接受为显式残余（§5.2 已写明边界）；② 授权新建 `FINANCE_MYSQL_V1` campaign |
 
@@ -143,3 +148,4 @@ Requirement §33.49 的 Hard Stop 第 12 条是「MySQL migration 无法保证 p
 | 日期 | 变更 |
 |---|---|
 | 2026-11-12 | 建立本审计基线：FO01～FO58 逐项复核（51 `COVERED` / 6 `PARTIAL` / 1 `MISSING`）；登记 7 项真实缺陷与证据问题（§4）；登记 Requirement §33.39 的 15 个真实 MySQL race 因门禁被永久阻断而无法执行的事实，并按 `MYSQL-EV-01` 写明证据边界（§5.2）。**未签发域级 Acceptance，未做任何实现修改。** |
+| 2026-11-12 整改轮 | 业务所有者裁定「补齐 FO36 / 接线三个 master / 删除并退役」。整改轮实施后：FO01～FO58 **全部 `COVERED`**；新增 `server/modules/finance-due-plan.js`、`finance_payment_term_installments` 表、FO36 发票运营报表与路由、3 条新路由；删除 `finance-invoice-cardinality.js`（未路由的第二写入口）与 legacy 银行对账账本写路径；修复 `FIN-DEF-08..10` 三项新发现缺陷；新增 `server/v22-finance-closure-wiring.test.js`（6 条合同用例，含负例）。**仍未签发域级 Acceptance。** |

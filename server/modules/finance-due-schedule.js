@@ -10,7 +10,9 @@ import { audit } from '../lib/audit.js';
 import { id } from '../db.js';
 
 const VALID_SIDE = new Set(['AR', 'AP']);
-const VALID_STATUS = new Set(['PENDING', 'PARTIAL', 'SETTLED', 'REVERSED']);
+// The status vocabulary must match the table's CHECK constraint exactly:
+// a value outside it fails the insert.
+const VALID_STATUS = new Set(['OPEN', 'PARTIAL', 'SETTLED', 'REVERSED']);
 
 export function listDueSchedules(db, res, actor, side, openItemId) {
   allow(actor, side === 'AR' ? 'FINANCE_AR_VIEW' : 'FINANCE_AP_VIEW');
@@ -47,7 +49,7 @@ export async function upsertDueSchedules(db, req, res, actor) {
     if (!Number.isSafeInteger(scheduledCents) || scheduledCents <= 0) {
       throw new HttpError(400, `第 ${idx + 1} 行的 scheduledAmountCents 必须为正整数`);
     }
-    const status = optionalText(l.status ?? 'PENDING', 16);
+    const status = optionalText(l.status ?? 'OPEN', 16);
     if (!VALID_STATUS.has(status)) {
       throw new HttpError(400, `第 ${idx + 1} 行的 status 非法`);
     }

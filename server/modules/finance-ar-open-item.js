@@ -19,6 +19,7 @@ import { id, transaction } from '../db.js';
 import { resolveRecognitionPolicy, RECOGNITION_MODES } from './finance-recognition-policy.js';
 import { refreshOpenAmount, assertOpenAmountReconciled } from './finance-refresh-open-amount.js';
 import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
+import { applyDueScheduleForOpenItem } from './finance-due-plan.js';
 
 export function listAccountReceivables(db, res, actor, query = {}) {
   allow(actor, 'FINANCE_AR_VIEW');
@@ -70,6 +71,10 @@ export async function createManualAccountReceivable(db, req, res, actor) {
       amount, amount, businessDate, businessDate, policy.mode, actor.id, now, now,
     );
     db.prepare(`UPDATE account_receivables SET open_amount_cents=? WHERE id=?`).run(amount, arId);
+    applyDueScheduleForOpenItem(db, {
+      side: 'AR', openItemId: arId, termCode: body.termCode || body.term_code || null,
+      businessDate, amountCents: amount, actor,
+    });
     audit(db, actor.id, 'CREATE', 'ACCOUNT_RECEIVABLE', arId, reason);
   });
   refreshOpenAmount(db, arId);
@@ -98,6 +103,10 @@ export function createProvisionalAR(db, source, amountCents, businessDate, party
     amountCents, amountCents, businessDate, businessDate, actor.id, now, now,
   );
   db.prepare(`UPDATE account_receivables SET open_amount_cents=? WHERE id=?`).run(amountCents, arId);
+  applyDueScheduleForOpenItem(db, {
+    side: 'AR', openItemId: arId, termCode: source.termCode || null,
+    businessDate, amountCents: amountCents, actor,
+  });
   audit(db, actor.id, 'CREATE_PROVISIONAL', 'ACCOUNT_RECEIVABLE', arId, source.sourceType);
   return arId;
 }

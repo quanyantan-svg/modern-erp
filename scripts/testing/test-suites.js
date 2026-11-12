@@ -366,6 +366,8 @@ const FULL = [
   'server/planning-closure-remediation.test.js',
   // ----- 治理守卫：跨域错误码耦合 + 历史验收记录有效性（2026-11-12）-----
   'server/qa-governance-checks.test.js',
+  // ----- B3120 Finance Operations closure wiring (2026-11-12) -----
+  'server/v22-finance-closure-wiring.test.js',
 
   // ----- Domain Alignment — canonical 8 Domains + Platform ownership -----
   'server/v17-domain-alignment.test.js',

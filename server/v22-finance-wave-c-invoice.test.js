@@ -3,8 +3,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { readFileSync, readdirSync } from 'node:fs';
 import { createDatabase } from './db.js';
-import { upsertInvoiceSourceLink } from './modules/finance-invoice-cardinality.js';
+import { recognizeFinanceExposure } from './modules/finance-recognition.js';
+import { RECOGNITION_MODES } from './modules/finance-recognition-policy.js';
 import { convertProvisionalToFinancial } from './modules/finance-provisional-conversion.js';
 
 function bootstrap() {
@@ -57,19 +59,30 @@ function mkAP(db, id, supplierId, amount, status = 'PENDING') {
   db.prepare(`UPDATE account_payables SET open_amount_cents=? WHERE id=?`).run(amount, id);
 }
 
-test('finance_invoice_source_links: INSERT creates cardinality link', async () => {
+// FO31 -- the invoice source cardinality is written by the CANONICAL invoice
+// path (the invoice POST), which is also where the capacity guard lives.
+// There is no second, unrouted write path for finance_invoice_source_links.
+function insertSalesInvoice(db, id, amount) {
+  const now = new Date().toISOString();
+  db.prepare(`INSERT INTO sales_invoices(id,invoice_no,customer_id,invoice_date,status,tax_mode,net_cents,tax_cents,gross_cents,tax_snapshot_json,creator_id,created_at)
+    VALUES(?,?,'customer-001','2026-10-12','POSTED','NO_TAX',?,0,?,'[]','user-admin',?)`)
+    .run(id, `SI-${id}`, amount, amount, now);
+}
+
+test('FO31: the canonical invoice path records the source cardinality link', () => {
   const db = bootstrap();
-  const res = mkRes();
-  const req = await mkReq({
-    invoiceId: 'inv-1', invoiceSide: 'SALES_INVOICE',
-    sourceType: 'SALES_DELIVERY', sourceId: 'sd-1', sourceLineId: 'sdl-1',
-    invoicedQuantity: 5, invoicedAmountCents: 50000,
+  insertSalesInvoice(db, 'inv-1', 50000);
+  recognizeFinanceExposure(db, {
+    side: 'AR', recognitionMode: RECOGNITION_MODES.INVOICE_DRIVEN,
+    source: { sourceType: 'SALES_DELIVERY', sourceId: 'sd-1', sourceNo: 'SD-1' },
+    sources: [{ sourceType: 'SALES_DELIVERY', sourceId: 'sd-1', sourceNo: 'SD-1', sourceLineId: 'sdl-1', invoicedQuantity: 5, invoicedAmountCents: 50000, fullyInvoiced: true }],
+    invoice: { id: 'inv-1', no: 'SI-inv-1', type: 'SALES_INVOICE' },
+    amountCents: 50000, businessDate: '2026-10-12', partyId: 'customer-001', actorId: 'user-admin',
   });
-  await upsertInvoiceSourceLink(db, req, res, actor());
-  assert.equal(res.statusCode, 200);
   const links = db.prepare(`SELECT * FROM finance_invoice_source_links WHERE invoice_id='inv-1'`).all();
   assert.equal(links.length, 1);
   assert.equal(links[0].invoiced_quantity, 5);
+  assert.equal(links[0].source_line_id, 'sdl-1');
 });
 
 test('sales_invoices: additive credit_state / credited_amount_cents columns exist', () => {
@@ -104,23 +117,37 @@ test('provisional AR → financial AR conversion flips conversion_state', () => 
   assert.equal(after.converted_open_item_id, 'afinal-1');
 });
 
-test('finance_invoice_source_links: multiple partial lines', async () => {
+test('FO31: several partial source lines of one invoice are recorded', () => {
   const db = bootstrap();
-  const res = mkRes();
-  // line 1
-  await upsertInvoiceSourceLink(db, await mkReq({
-    invoiceId: 'inv-2', invoiceSide: 'SALES_INVOICE',
-    sourceType: 'SALES_DELIVERY', sourceId: 'sd-2', sourceLineId: 'sdl-2a',
-    invoicedQuantity: 3, invoicedAmountCents: 30000,
-  }), res, actor());
-  // line 2 (partial)
-  await upsertInvoiceSourceLink(db, await mkReq({
-    invoiceId: 'inv-2', invoiceSide: 'SALES_INVOICE',
-    sourceType: 'SALES_DELIVERY', sourceId: 'sd-2', sourceLineId: 'sdl-2b',
-    invoicedQuantity: 2, invoicedAmountCents: 20000,
-  }), res, actor());
-  const links = db.prepare(`SELECT * FROM finance_invoice_source_links WHERE invoice_id='inv-2'`).all();
+  insertSalesInvoice(db, 'inv-2', 50000);
+  recognizeFinanceExposure(db, {
+    side: 'AR', recognitionMode: RECOGNITION_MODES.INVOICE_DRIVEN,
+    source: { sourceType: 'SALES_DELIVERY', sourceId: 'sd-2', sourceNo: 'SD-2' },
+    sources: [
+      { sourceType: 'SALES_DELIVERY', sourceId: 'sd-2', sourceNo: 'SD-2', sourceLineId: 'sdl-2a', invoicedQuantity: 3, invoicedAmountCents: 30000, fullyInvoiced: false },
+      { sourceType: 'SALES_DELIVERY', sourceId: 'sd-2', sourceNo: 'SD-2', sourceLineId: 'sdl-2b', invoicedQuantity: 2, invoicedAmountCents: 20000, fullyInvoiced: false },
+    ],
+    invoice: { id: 'inv-2', no: 'SI-inv-2', type: 'SALES_INVOICE' },
+    amountCents: 50000, businessDate: '2026-10-12', partyId: 'customer-001', actorId: 'user-admin',
+  });
+  const links = db.prepare(`SELECT * FROM finance_invoice_source_links WHERE invoice_id='inv-2' ORDER BY source_line_id`).all();
   assert.equal(links.length, 2);
+  assert.equal(links[0].invoiced_quantity, 3);
+  assert.equal(links[1].invoiced_quantity, 2);
+  assert.equal(links[0].invoiced_amount_cents + links[1].invoiced_amount_cents, 50000);
+});
+
+test('FO31: the source cardinality table has exactly one write path', () => {
+  // The unrouted second writer was removed: the invoice POST is the only
+  // place that may create a finance_invoice_source_links row.
+  const modulesDir = new URL('./modules/', import.meta.url);
+  const writers = [];
+  for (const entry of readdirSync(modulesDir)) {
+    if (!entry.endsWith('.js')) continue;
+    const text = readFileSync(new URL(`./modules/${entry}`, import.meta.url), 'utf8');
+    if (text.includes('INSERT INTO finance_invoice_source_links')) writers.push(entry);
+  }
+  assert.deepEqual(writers, ['finance-recognition.js'], 'only the canonical recognition path may write the cardinality rows');
 });
 
 test('credit_state default is NONE on sales_invoices and supplier_bills', () => {

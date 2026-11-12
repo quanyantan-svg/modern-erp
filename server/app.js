@@ -9,13 +9,13 @@ import {
   listCurrencies, listVoucherWords, createVoucherWord, listVoucherTemplates,
 } from './modules/accounting-config.js';
 import {
-  createAlertRule, createAuxProject, createBankReconciliation, createBankStatement,
+  createAlertRule, createAuxProject, createBankStatement,
   createDepartment, createExpenseClaim, createLaborRecord,
   createLeaveRequest, createPeriodClosure,
   createSupplierEvaluation,
   getBalanceSheet, getFinancialSummary, getIncomeStatement,
   getInventoryStatus, getSalesAnalysis, getTrialBalance,
-  listAlertRecords, listAlertRules, listAuxProjects, listBankReconciliations,
+  listAlertRecords, listAlertRules, listAuxProjects,
   listBankStatements, listDepartments, listExpenseClaims,
   listLaborRecords, listLeaveRequests,
   listPeriodClosures,
@@ -3567,8 +3567,9 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/reports/sales-analysis' && req.method === 'GET') return getSalesAnalysis(db, res, actor, url);
   if (pathname === '/api/bank-statements' && req.method === 'GET') return listBankStatements(db, res, actor, url);
   if (pathname === '/api/bank-statements' && req.method === 'POST') return createBankStatement(db, req, res, actor);
-  if (pathname === '/api/bank-reconciliations' && req.method === 'GET') return listBankReconciliations(db, res, actor, url);
-  if (pathname === '/api/bank-reconciliations' && req.method === 'POST') return createBankReconciliation(db, req, res, actor);
+  // The legacy /api/bank-reconciliations ledger is retired: the canonical
+  // reconciliation is /api/finance/bank-reconciliations (FO48). The legacy
+  // bank_reconciliations table stays as history and is never written again.
   if (pathname === '/api/reports/trial-balance' && req.method === 'GET') return getTrialBalance(db, res, actor, url);
   if (pathname === '/api/accounting-vouchers' && req.method === 'POST') return createAccountingVoucher(db, req, res, actor);
   // Accounting Voucher Workflow

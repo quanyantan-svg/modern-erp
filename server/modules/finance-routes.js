@@ -13,7 +13,7 @@ import { postCounterpartyTransfer } from './finance-counterparty-transfer.js';
 import { postBadDebtProvision } from './finance-bad-debt-provision.js';
 import { postTreasuryTransfer } from './finance-treasury-movement.js';
 import { closeBusiness, listBusinessCloseHistory, listBusinessCloseState, reopenBusiness } from './finance-business-close.js';
-import { apSummary, arAging, arSummary, settlementAccountBalance, treasuryGlReconcile, treasuryMovementLedger } from './finance-reports.js';
+import { apSummary, arAging, arSummary, settlementAccountBalance, treasuryGlReconcile, treasuryMovementLedger, invoiceOperationalReport} from './finance-reports.js';
 import {
   actOnNote, actOnPaymentRequest, bankReconciliationUnmatched, confirmCashCount,
   createBankReconciliation, createCashCount, createNote, createPaymentRequest,
@@ -83,6 +83,7 @@ export async function handleFinanceRoute(db, req, res, actor, url) {
   if (path === '/api/finance/reports/ar/aging' && req.method === 'GET') { arAging(db, res, actor); return true; }
   if (path === '/api/finance/reports/ap/summary' && req.method === 'GET') { apSummary(db, res, actor); return true; }
   if (path === '/api/finance/reports/treasury/movements' && req.method === 'GET') { treasuryMovementLedger(db, res, actor); return true; }
+  if (path === '/api/finance/reports/invoices' && req.method === 'GET') { invoiceOperationalReport(db, res, actor, url); return true; }
   if ((match = path.match(/^\/api\/finance\/reports\/treasury\/accounts\/([^/]+)$/)) && req.method === 'GET') { settlementAccountBalance(db, res, actor, match[1]); return true; }
   if ((match = path.match(/^\/api\/finance\/reports\/treasury\/gl-reconciliation\/([^/]+)$/)) && req.method === 'GET') { treasuryGlReconcile(db, res, actor, match[1]); return true; }
   return false;

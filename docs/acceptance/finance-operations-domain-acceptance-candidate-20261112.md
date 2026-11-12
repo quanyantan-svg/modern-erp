@@ -21,9 +21,10 @@ FINANCE_OPERATIONS_DOMAIN_ACCEPTANCE_CANDIDATE_READY_FOR_OWNER_DECISION
 | Domain | Finance Operations（产品架构第 7 个业务域） |
 | 手册对标 | B3108 业务应付、B3109 暂估应付、B3110 业务应收、B3111 暂估应收、B3112 发票管理、B3113 出纳管理 |
 | 能力集合 | FO01～FO58，共 **58 项**（55 Domain-Owned + 3 Integration-Backed：FO50 / FO57 / FO58，不得互相升降级 —— Requirement §33.4） |
-| 覆盖判定 | `COVERED` **51** 项；`PARTIAL` **6** 项（FO03 / 04 / 05 / 19 / 31 / 48）；`MISSING` **1** 项（FO36）；`OUT_OF_SCOPE` **0** 项 |
+| 覆盖判定（整改前） | `COVERED` **51** 项；`PARTIAL` **6** 项（FO03 / 04 / 05 / 19 / 31 / 48）；`MISSING` **1** 项（FO36）；`OUT_OF_SCOPE` **0** 项 |
+| 覆盖判定（整改后） | `COVERED` **58** 项；`PARTIAL` **0**；`MISSING` **0**；`OUT_OF_SCOPE` **0** |
 | 合同基线 | Requirement §33.1～§33.50（§33.39 的真实 MySQL 条款已按 `MYSQL-EV-01` 修正）；Design §28 |
-| 本轮已实施 | 消除死代码模块、修正能力矩阵 5 处事实错误、增强 UAT 的能力证据断言、Requirement §33.39 / §33.50 的 MySQL 口径修正 |
+| 本轮已实施 | 消除死代码模块、修正能力矩阵 5 处事实错误、增强 UAT 的能力证据断言、Requirement §33.39 / §33.50 的 MySQL 口径修正；**整改轮**：接线 FO03/FO04/FO05/FO19（新增 `finance-due-plan.js` 与 `finance_payment_term_installments`）、实现 FO36 发票运营报表、删除 FO31 的第二写入口、退役 FO48 的 legacy 对账账本、修复 3 项新发现缺陷 |
 | 不在本次范围 | Release Readiness、发布、部署、真实环境 migration、业务数据库写入、远端 Git 操作、其他域的 Acceptance |
 
 ## 2. Gate 证据（当前 HEAD `22ba875`）
@@ -32,8 +33,9 @@ FINANCE_OPERATIONS_DOMAIN_ACCEPTANCE_CANDIDATE_READY_FOR_OWNER_DECISION
 |---|---|
 | `pnpm test:finance:uat`（`finance-operations-final-uat.mjs`） | **32/32 PASS**；能力检查 **58/58 PASS**（矩阵形状 + **每行证据列非空**且引用的 UAT 身份存在） |
 | `pnpm test:finance:responsive`（真实 Edge） | **24/24 PASS**（6 工作面 × 320/390/430/680） |
-| 域内 focused（`--filter finance`） | **71/71 PASS** |
-| 共享基线 | FAST **632/632**、FULL **3718/3718**、HEAVY **67/67**、build、`git diff --check` 全 PASS |
+| 域内 focused（`--filter finance`） | **78/78 PASS** |
+| 整改轮新增合同套件 `server/v22-finance-closure-wiring.test.js` | **6/6 PASS**（含 FO03 未知条款 409、无方案时行为不变等负例） |
+| 共享基线 | FAST **632/632**、FULL **3727/3727**、HEAVY **67/67**、build、`git diff --check` 全 PASS |
 | 文档一致性 | `current` N1、N3～N6、N8、N9 PASS、N2 `RETIRED`、**N7 FAIL**（既有 4 个历史提交的追溯债务）；`migration` C1～C6 全 PASS |
 
 ### 2.1 非空洞证明（变异实验）
@@ -44,22 +46,21 @@ FINANCE_OPERATIONS_DOMAIN_ACCEPTANCE_CANDIDATE_READY_FOR_OWNER_DECISION
 
 ## 3. 必须随验收一并接受的事实
 
-### 3.1 6 项 `PARTIAL`
+### 3.1 整改轮已闭合的 6 项 `PARTIAL` 与 1 项 `MISSING`
 
-| 能力 | 事实 |
-|---|---|
-| FO03 Collection / Payment Terms | `finance_payment_terms` **只被自己的 CRUD 读取**，结算路径不消费它 —— 付款条件不驱动到期日；`list/upsert` **0 测试调用点** |
-| FO04 Multi-Due-Date Schedule | `upsertDueSchedules` 与 `assertOpenItemSide` **只有路由调用点、没有业务路径调用点** —— AR/AP 建立不产生到期计划，不变式在生产中不被强制 |
-| FO05 Settlement / Reconciliation Scheme | 表与 CRUD 齐备，但模块自述「no economic effect」；**Design §28 把 FO19 自动对账的规则行指向该表** —— Design 规定的下游效果未实现 |
-| FO19 Automatic / Scheduled Reconciliation | 因 FO05 无消费者，自动对账目前**不按方案规则运行** |
-| FO31 Invoice Source Cardinality | 生产写入口成立（`finance-recognition.js:222`）；但有**第二个未路由的写入口** `finance-invoice-cardinality::upsertInvoiceSourceLink` 与之重复（潜在双写） |
-| FO48 Bank Reconciliation | 存在**两套活的银行对账账本**：canonical `finance_bank_reconciliations` 与 legacy `bank_reconciliations`（`extended.js:335` 仍在写，`/api/bank-reconciliations` 仍可写）；legacy 无 UI 消费者但 API 开放 |
+| 能力 | 整改前事实 | 整改轮实施 |
+|---|---|---|
+| FO03 | 付款条款主数据只被自己的 CRUD 读取，结算路径不消费它 | `finance-due-plan.js` 把条款接入 open item 建立路径；条款支持 1..n 分期；未知条款码 409 fail closed |
+| FO04 | `upsertDueSchedules` / `assertOpenItemSide` 只有路由调用点 | AR/AP 建立即写到期计划行（`SUM(scheduled_amount_cents) == amount_cents`），单一 `due_date` 降级为最后一行投影 |
+| FO05 | 对账方案表自述「no economic effect」，无生产消费者 | `match_method` 决定该侧自动对账是否运行 |
+| FO19 | Design §28 指向方案规则行，但表无消费者 | 自动对账按该侧活动方案运行；无方案时行为不变 |
+| FO31 | 存在未路由的第二写入口（无容量守卫、审计实体位错误） | 删除该写入口，发票过账路径成为唯一写入口（源码扫描用例固定） |
+| FO36 | 发票运营报表**完全无实现** | 实现 `GET /api/finance/reports/invoices`，按 §33.17 读取发票事实与源基数 |
+| FO48 | 两套活的银行对账账本 | 退役 legacy 账本：删除其读写路由与写入口，表保留为历史且不再写入 |
 
-### 3.2 1 项 `MISSING`
+整改轮另修复 3 项新发现缺陷：`FIN-DEF-08`（到期计划状态词表与表 CHECK 不一致，导致该路由每次都失败）、`FIN-DEF-09`（审计实体位错误）、`FIN-DEF-10`（第二写入口没有容量守卫）。
 
-**FO36 Invoice Operational Reports** —— `finance-reports` 只有 arSummary / apSummary / arAging / treasuryMovementLedger / settlementAccountBalance / treasuryGlReconcile，**没有任何发票报表函数**；Design §28 把 FO36 定为 `finance-reports` 的「invoice operational reports (report projection)」，实现完全缺席。UAT-32 只覆盖 AR/AP/Treasury 报表。
-
-### 3.3 真实 MySQL 证据边界（按 `MYSQL-EV-01`）
+### 3.2 真实 MySQL 证据边界（按 `MYSQL-EV-01`）
 
 | 段 | 覆盖 | 证据 |
 |---|---|---|
@@ -78,18 +79,20 @@ Requirement §33.39 的义务**未被取消**：15 个 race 仍是必须交付�
 
 ## 5. 未解决矛盾（需要业务所有者裁定）
 
-| 编号 | 事项 | 可选处置 |
+| 编号 | 事项 | 处置 |
 |---|---|---|
-| `FIN-DEC-01` | FO36 发票运营报表**无实现** | ① 进入 Implementation 补齐；② 按 §33.7 显式排除；③ 作为随冻结接受的残余 |
-| `FIN-DEC-02` | FO03 / FO04 / FO05 三个 master 无业务消费者（连带 FO19 的方案规则行缺失） | ① 进入 Implementation 接线；② 按 Design §28 显式缩小范围；③ 作为残余接受 |
-| `FIN-DEC-03` | FO31 的第二个写入口、FO48 的 legacy 对账账本 | ① 删除重复写入口并退役 legacy 账本（需 zero-caller / 消费者证明）；② 保留并显式登记为已知双轨 |
-| `FIN-DEC-04` | 真实 MySQL race 行为等价未取证 | ① 按 `MYSQL-EV-01` 接受为显式残余（§3.3 已写明边界）；② 授权新建 `FINANCE_MYSQL_V1` campaign |
+| `FIN-DEC-01` | FO36 发票运营报表无实现 | **已裁定并实施**：补齐实现 |
+| `FIN-DEC-02` | FO03 / FO04 / FO05 三个 master 无业务消费者（连带 FO19） | **已裁定并实施**：接线三个 master |
+| `FIN-DEC-03` | FO31 的第二个写入口与 FO48 的 legacy 对账账本 | **已裁定并实施**：删除重复写入口并退役 legacy 账本 |
+| `FIN-DEC-04` | 真实 MySQL race 行为等价未取证 | **已裁定**：按 `MYSQL-EV-01` 接受为显式残余（§3.2 已写明边界）；不新建 `FINANCE_MYSQL_V1` campaign |
+
+**尚需业主在签发时确认的两项**：
+
+1. 随冻结接受的残余：`PLAN` 侧的 `FIN-RES-01`（RACE-01..15 的真实 MySQL 行为等价未取证）、`FIN-RES-02`（FO02 的管理面 list/upsert 仍无专门用例，其消费路径有）、`FIN-RES-03`（N7 文档追溯债务，与本域无关）。
+2. 域级 Acceptance 与 Capability Freeze 的签发范围。
 
 ## 6. 本次候签**不**主张的内容
 
-- 不主张 FO03 / FO04 / FO05 三个 master 的业务效果已实现；
-- 不主张 FO19 按方案规则自动对账已运行；
-- 不主张 FO36 发票运营报表已实现；
 - 不主张真实 MySQL 上的 RACE-01..15 行为等价已证明；
 - 不主张 58/58 的矩阵检查等于 58 项能力各自有端到端证据；
 - 不主张 B3108–B3113 手册级关闭（Manual Closure）；
@@ -101,10 +104,6 @@ Requirement §33.39 的义务**未被取消**：15 个 race 仍是必须交付�
 | 项 | 值 |
 |---|---|
 | 域级 Acceptance | ☐ 通过（`FINANCE_OPERATIONS_DOMAIN_ACCEPTANCE_PASS`）　☐ 有条件通过　☐ 退回 |
-| Capability Freeze | ☐ 签发（`FINANCE_OPERATIONS_CAPABILITY_FREEZE`）　☐ 部分签发（能力清单：______）　☐ 不签发 |
-| `FIN-DEC-01` | ☐ 补齐 FO36　☐ 排除范围　☐ 接受为残余（理由：______） |
-| `FIN-DEC-02` | ☐ 接线三个 master　☐ 缩小范围　☐ 接受为残余（理由：______） |
-| `FIN-DEC-03` | ☐ 删除重复写入口并退役 legacy 账本　☐ 保留并登记双轨 |
-| `FIN-DEC-04` | ☐ 接受 §3.3 残余　☐ 授权新建 `FINANCE_MYSQL_V1` campaign |
-| 随冻结接受的残余 | 型号：______ |
+| Capability Freeze | ☐ 签发（`FINANCE_OPERATIONS_CAPABILITY_FREEZE`，58 项 `COVERED` 能力）　☐ 部分签发（能力清单：______）　☐ 不签发 |
+| 随冻结接受的残余 | `FIN-RES-01`（RACE-01..15 真实 MySQL 行为等价未取证）、`FIN-RES-02`、`FIN-RES-03`　☐ 全部接受　☐ 部分（说明：______） |
 | 未解决矛盾（须显式记录） | ______ |

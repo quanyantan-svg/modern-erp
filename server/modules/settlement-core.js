@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
+import { applyDueScheduleForOpenItem } from './finance-due-plan.js';
+
 const now = () => new Date().toISOString();
 
 function addColumn(db, sql) {
@@ -89,6 +91,20 @@ function ensureSubledger(db, kind, source) {
     VALUES(?,?,?,?,?,?,0,0,'PENDING',?,?,?,?,?,?,?, ?,0,?,?)`)
     .run(itemId, `${prefix}-${source.sourceNo}`, source.partyId, source.sourceType, source.id, positive,
       dueDate, source.creatorId, createdAt, source.sourceNo, source.businessDate, adjustment, createdAt, termsDays, positive, itemClass);
+  // FO03 / FO04: the open item's due schedule is derived from the payment
+  // term master and written through the canonical schedule lines. The single
+  // due_date column stays the projection of the last schedule line.
+  if (positive > 0) {
+    applyDueScheduleForOpenItem(db, {
+      side: kind,
+      openItemId: itemId,
+      termCode: source.termCode || null,
+      businessDate: source.businessDate,
+      amountCents: positive,
+      fallbackOffsetDays: termsDays,
+      actor: { id: source.creatorId },
+    });
+  }
   return itemId;
 }
 
@@ -209,12 +225,31 @@ export function unappliedBalanceSnapshot(db, balanceId) {
     remainingCents: Number(row.original_amount_cents) - applied - refunded - reversed };
 }
 
+// FO05 — the active settlement / reconciliation scheme for one side. The
+// scheme's match_method decides whether the automatic reconciliation runs:
+// 'MANUAL' means the side is matched by a planner, not automatically.
+export function activeSettlementScheme(db, side) {
+  try {
+    return db.prepare("SELECT * FROM finance_settlement_schemes WHERE side=? AND active=1 ORDER BY scheme_code LIMIT 1").get(side) || null;
+  } catch (error) {
+    // The scheme master does not exist yet while the legacy settlement
+    // migration is still running. No scheme means the automatic
+    // reconciliation behaves exactly as it did before the master existed.
+    if (!/no such table|does not exist|unknown table/i.test(String(error?.message || error))) throw error;
+    return null;
+  }
+}
+
 export function reconcileSettlementSubledgers(db) {
   const specs = [
-    ['sales_deliveries', 'delivery_no', 'customer_id', 'delivery_date', 'SALES_DELIVERY', ensureReceivableSource],
-    ['purchase_receipts', 'receipt_no', 'supplier_id', 'receipt_date', 'PURCHASE_RECEIPT', ensurePayableSource],
+    ['sales_deliveries', 'delivery_no', 'customer_id', 'delivery_date', 'SALES_DELIVERY', ensureReceivableSource, 'AR'],
+    ['purchase_receipts', 'receipt_no', 'supplier_id', 'receipt_date', 'PURCHASE_RECEIPT', ensurePayableSource, 'AP'],
   ];
-  for (const [table, noColumn, partyColumn, dateColumn, sourceType, ensure] of specs) {
+  for (const [table, noColumn, partyColumn, dateColumn, sourceType, ensure, side] of specs) {
+    // FO05 / FO19: the scheme decides whether this side is reconciled
+    // automatically. A MANUAL scheme turns the automatic pass off for it.
+    const scheme = activeSettlementScheme(db, side);
+    if (scheme && String(scheme.match_method || '').toUpperCase() === 'MANUAL') continue;
     const rows = db.prepare(`SELECT id,${noColumn} sourceNo,${partyColumn} partyId,${dateColumn} businessDate,total_cents totalCents,creator_id creatorId,created_at createdAt FROM ${table} WHERE status='CONFIRMED' AND COALESCE(billing_mode,'LEGACY_DIRECT')='LEGACY_DIRECT'`).all();
     for (const row of rows) ensure(db, { ...row, sourceType, effectCents: row.totalCents });
   }

@@ -77,6 +77,61 @@ export function settlementAccountBalance(db, res, actor, accountId) {
 // Compare operational balance (from finance_treasury_movements) against
 // mapped Accounting & Analytics GL cash/bank subject balance.
 // Returns PASS / MISMATCH. No auto repair.
+// FO36 — Invoice Operational Reports.
+//
+// The operational invoice is independent of AR / AP, cash settlement and the
+// voucher (Requirement §33.17). The report therefore reads the invoice
+// headers and their source cardinality, and never re-derives an open-item or
+// cash figure.
+export function invoiceOperationalReport(db, res, actor, url) {
+  allow(actor, 'FINANCE_INVOICE_VIEW');
+  const side = String(url?.searchParams?.get('side') || '').toUpperCase();
+  const status = String(url?.searchParams?.get('status') || '').toUpperCase();
+  const limit = Math.min(Number(url?.searchParams?.get('limit')) || 200, 500);
+  const sales = side !== 'AP' ? db.prepare(`
+    SELECT 'SALES_INVOICE' side, i.id, i.invoice_no document_no, i.customer_id counterparty_id,
+           c.code counterparty_code, c.name counterparty_name, i.invoice_date document_date,
+           i.status, i.tax_mode, i.net_cents, i.tax_cents, i.gross_cents,
+           i.tax_snapshot_json, i.recognition_mode, i.open_item_id, i.provisional_origin_id,
+           COALESCE(i.credit_state,'') credit_state,
+           COALESCE(i.credited_amount_cents,0) credited_amount_cents,
+           (SELECT COUNT(*) FROM finance_invoice_source_links l WHERE l.invoice_id=i.id) source_line_count,
+           (SELECT COALESCE(SUM(l.invoiced_amount_cents),0) FROM finance_invoice_source_links l WHERE l.invoice_id=i.id) linked_amount_cents
+      FROM sales_invoices i LEFT JOIN customers c ON c.id=i.customer_id
+     WHERE (? = '' OR i.status = ?)
+     ORDER BY i.invoice_date DESC, i.id DESC LIMIT ?`).all(status, status, limit) : [];
+  const purchases = side !== 'AR' ? db.prepare(`
+    SELECT 'SUPPLIER_BILL' side, b.id, b.bill_no document_no, b.supplier_id counterparty_id,
+           s.code counterparty_code, s.name counterparty_name, b.bill_date document_date,
+           b.status, b.tax_mode, b.net_cents, b.tax_cents, b.gross_cents,
+           b.tax_snapshot_json, b.recognition_mode, b.open_item_id, NULL provisional_origin_id,
+           COALESCE(b.verification_state,'') credit_state,
+           COALESCE(b.credited_amount_cents,0) credited_amount_cents,
+           (SELECT COUNT(*) FROM finance_invoice_source_links l WHERE l.invoice_id=b.id) source_line_count,
+           (SELECT COALESCE(SUM(l.invoiced_amount_cents),0) FROM finance_invoice_source_links l WHERE l.invoice_id=b.id) linked_amount_cents
+      FROM supplier_bills b LEFT JOIN suppliers s ON s.id=b.supplier_id
+     WHERE (? = '' OR b.status = ?)
+     ORDER BY b.bill_date DESC, b.id DESC LIMIT ?`).all(status, status, limit) : [];
+  const rows = [...sales, ...purchases].map((row) => ({
+    ...row,
+    tax_snapshot: safeJson(row.tax_snapshot_json),
+    tax_snapshot_json: undefined,
+  }));
+  const totals = rows.reduce((accumulator, row) => ({
+    invoices: accumulator.invoices + 1,
+    net_cents: accumulator.net_cents + Number(row.net_cents || 0),
+    tax_cents: accumulator.tax_cents + Number(row.tax_cents || 0),
+    gross_cents: accumulator.gross_cents + Number(row.gross_cents || 0),
+    credited_cents: accumulator.credited_cents + Number(row.credited_amount_cents || 0),
+  }), { invoices: 0, net_cents: 0, tax_cents: 0, gross_cents: 0, credited_cents: 0 });
+  return send(res, 200, { side: side || 'ALL', status: status || 'ALL', totals, rows });
+}
+
+function safeJson(value) {
+  if (!value) return null;
+  try { return JSON.parse(value); } catch { return null; }
+}
+
 export function treasuryGlReconcile(db, res, actor, accountId) {
   allow(actor, 'FINANCE_TREASURY_VIEW', 'ACCOUNTING_VIEW');
   if (!accountId) throw new HttpError(400, 'accountId 必填');

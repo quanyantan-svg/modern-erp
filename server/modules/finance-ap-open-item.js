@@ -9,6 +9,7 @@ import { id, transaction } from '../db.js';
 import { resolveRecognitionPolicy } from './finance-recognition-policy.js';
 import { refreshOpenAmount, assertOpenAmountReconciled } from './finance-refresh-open-amount.js';
 import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
+import { applyDueScheduleForOpenItem } from './finance-due-plan.js';
 
 export function listAccountPayables(db, res, actor, query = {}) {
   allow(actor, 'FINANCE_AP_VIEW');
@@ -59,6 +60,10 @@ export async function createManualAccountPayable(db, req, res, actor) {
       amount, amount, businessDate, businessDate, policy.mode, actor.id, now, now,
     );
     db.prepare(`UPDATE account_payables SET open_amount_cents=? WHERE id=?`).run(amount, apId);
+    applyDueScheduleForOpenItem(db, {
+      side: 'AP', openItemId: apId, termCode: body.termCode || body.term_code || null,
+      businessDate, amountCents: amount, actor,
+    });
     audit(db, actor.id, 'CREATE', 'ACCOUNT_PAYABLE', apId, reason);
   });
   refreshOpenAmount(db, apId);
@@ -86,6 +91,10 @@ export function createProvisionalAP(db, source, amountCents, businessDate, party
     amountCents, amountCents, businessDate, businessDate, actor.id, now, now,
   );
   db.prepare(`UPDATE account_payables SET open_amount_cents=? WHERE id=?`).run(amountCents, apId);
+  applyDueScheduleForOpenItem(db, {
+    side: 'AP', openItemId: apId, termCode: source.termCode || null,
+    businessDate, amountCents: amountCents, actor,
+  });
   audit(db, actor.id, 'CREATE_PROVISIONAL', 'ACCOUNT_PAYABLE', apId, source.sourceType);
   return apId;
 }
