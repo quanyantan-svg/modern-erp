@@ -3,7 +3,7 @@
 > **决策 ID**：`XDC-01`
 > **归属**：Platform（治理）／各 Domain Owner（自己域内的判定）
 > **状态**：`APPROVED`
-> **规范来源锚点**：[`AGENTS.md`](../../AGENTS.md) §6（代码规则）与 §4.5（验收）；守卫实现 [`scripts/qa/verify-error-code-coupling.mjs`](../../scripts/qa/verify-error-code-coupling.mjs)。
+> **规范来源锚点**：[`AGENTS.md`](../../AGENTS.md) §6（代码规则）与 §4.5（验收）；守卫实现 `scripts/qa/verify-error-code-coupling.mjs`。
 > **不授权**：任何 Implementation、发布、部署或远端 Git 操作。
 
 ## 1. 背景
@@ -27,7 +27,7 @@
 ## 3. 强制要求
 
 1. 新增或修改任何跨域错误码耦合，必须同步更新
-   [`scripts/qa/verify-error-code-coupling.mjs`](../../scripts/qa/verify-error-code-coupling.mjs) 的 `APPROVED_COUPLINGS` 登记表，并写明理由。
+   `scripts/qa/verify-error-code-coupling.mjs` 的 `APPROVED_COUPLINGS` 登记表，并写明理由。
 2. `DECISION` 类耦合在登记表中**不被接受** —— 必须先在消费方模块内自包含地判定。
 3. 守卫必须纳入常规门禁：未登记的耦合或死引用会让门禁失败。
 4. 域级验收审计必须把「本域错误码是否被其他域 catch 并翻译」列为**必查项**。
