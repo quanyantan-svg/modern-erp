@@ -89,11 +89,29 @@ for (const [id, label, evidence] of cases) {
 console.log(`FINANCE_OPERATIONS_UAT ${passed}/32 ${passed === 32 ? 'PASS' : 'FAIL'}`);
 if (passed !== 32) process.exit(1);
 
+// The capability check must prove more than the matrix SHAPE. A matrix with
+// 58 ordered rows and a valid status vocabulary can still leave a capability
+// without any evidence. Every row therefore has to declare a non-empty
+// evidence cell, and every UAT identity it references has to exist in the
+// frozen UAT manifest above.
 const matrix = readFileSync(resolve(repoRoot, 'docs/operations/finance-operations-capability-matrix.md'), 'utf8');
-const rows = [...matrix.matchAll(/^\| (FO\d{2}) \|.*\| (EXISTING_REUSE|CONVERGED|IMPLEMENTED_NEW|INTEGRATION_BACKED) \|$/gm)];
+const rows = [...matrix.matchAll(/^\| (FO\d{2}) \| ([^|]*) \| ([^|]*) \| ([^|]*) \| ([^|]*) \| ([^|]*) \| (EXISTING_REUSE|CONVERGED|IMPLEMENTED_NEW|INTEGRATION_BACKED) \|$/gm)];
 const ids = rows.map((match) => match[1]);
 const expected = Array.from({ length: 58 }, (_, index) => `FO${String(index + 1).padStart(2, '0')}`);
 if (rows.length !== 58 || ids.some((id, index) => id !== expected[index])) {
   throw new Error(`Finance capability matrix invalid: rows=${rows.length}, ordered=${ids.join(',')}`);
 }
-console.log('FINANCE_OPERATIONS_CAPABILITIES 58/58 PASS');
+const knownIdentities = new Set(cases.map(([id]) => id));
+const evidenceProblems = [];
+for (const match of rows) {
+  const id = match[1];
+  const evidence = (match[6] || '').trim();
+  if (!evidence) { evidenceProblems.push(`${id}: 证据列为空`); continue; }
+  for (const identity of evidence.match(/UAT-\d{2}/g) || []) {
+    if (!knownIdentities.has(identity)) evidenceProblems.push(`${id}: 引用了不存在的 ${identity}`);
+  }
+}
+if (evidenceProblems.length) {
+  throw new Error(`Finance capability matrix 的证据列不成立:\n  ${evidenceProblems.join('\n  ')}`);
+}
+console.log('FINANCE_OPERATIONS_CAPABILITIES 58/58 PASS（矩阵形状 + 每行证据列非空且引用的 UAT 身份存在）');

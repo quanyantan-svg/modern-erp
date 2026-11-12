@@ -52,8 +52,10 @@ const POINTER_RESOLUTIONS = {
 
 // 记录中被**明确说明为不存在**的路径（负向引用），不是断掉的指针。
 const NEGATIVE_REFERENCES = new Set([
+  // 记录中明确说明「不存在」或「已删除」的路径：它们是历史事实的引用，不是断掉的指针。
   'src/pages/returns.js',
   'server/modules/planning-reservation.js',
+  'server/modules/finance-manual-ar-ap.js',
 ]);
 
 function git(args) {

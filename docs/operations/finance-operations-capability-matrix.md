@@ -5,7 +5,7 @@ Frozen source: `document.md §33`; design: `solution.md §28`. Status vocabulary
 | ID | Capability | Primary service | API / UI / config surface | Canonical schema | Test / UAT evidence | Status |
 |---|---|---|---|---|---|---|
 | FO01 | Finance parameters | finance-parameters | `/api/finance/parameters` | finance_parameters | wave-a / UAT-01 | IMPLEMENTED_NEW |
-| FO02 | Recognition policy | finance-recognition-policy | `/api/finance/recognition-policies` | finance_recognition_policies | recognition-production / UAT-04..09 | IMPLEMENTED_NEW |
+| FO02 | Recognition policy | finance-recognition-policy | `/api/finance/recognition-policy` | finance_recognition_policy | recognition-production / UAT-04..09 | IMPLEMENTED_NEW |
 | FO03 | Payment terms | finance-terms | `/api/finance/payment-terms` | finance_payment_terms | wave-a / UAT-01..02 | IMPLEMENTED_NEW |
 | FO04 | Due schedule | finance-due-schedule | `/api/finance/due-schedules` | finance_due_schedule_lines | wave-a / UAT-10 | IMPLEMENTED_NEW |
 | FO05 | Settlement scheme | finance-settlement-scheme | `/api/finance/settlement-schemes` | finance_settlement_schemes | wave-a / UAT-14 | IMPLEMENTED_NEW |
@@ -17,7 +17,7 @@ Frozen source: `document.md §33`; design: `solution.md §28`. Status vocabulary
 | FO11 | Provisional AR | finance-ar-open-item | source adapter | account_receivables | wave-c / UAT-06 | IMPLEMENTED_NEW |
 | FO12 | Provisional AP | finance-ap-open-item | source adapter | account_payables | recognition-production / UAT-09 | IMPLEMENTED_NEW |
 | FO13 | Provisional conversion | finance-provisional-conversion | invoice/bill post | account_receivables, account_payables | recognition-production / UAT-06,09 | IMPLEMENTED_NEW |
-| FO14 | Manual AR/AP | finance-manual-ar-ap | AR/AP actions | account_receivables, account_payables | wave-a / UAT-01..02 | CONVERGED |
+| FO14 | Manual AR/AP | finance-ar-open-item / finance-ap-open-item | AR/AP actions | account_receivables, account_payables | wave-a / UAT-01..02 | CONVERGED |
 | FO15 | Counterparty transfer | finance-counterparty-transfer | `/api/finance/transfers` | finance_counterparty_transfers | wave-b / UAT-22..23 | IMPLEMENTED_NEW |
 | FO16 | Collection | settlement | `/api/payment-collections` | payment_collections | m8 / UAT-11 | EXISTING_REUSE |
 | FO17 | Payment | settlement | `/api/payment-disbursements` | payment_disbursements | m8 / UAT-12 | EXISTING_REUSE |
@@ -41,8 +41,8 @@ Frozen source: `document.md §33`; design: `solution.md §28`. Status vocabulary
 | FO35 | Input verification | commercial-golive | bill verify/certify/reject | supplier_bills.verification_state | invoice-lifecycle / UAT-25 | IMPLEMENTED_NEW |
 | FO36 | Invoice reports | finance-reports | invoice hub/reports | invoice projections | wave-e / UAT-32 | CONVERGED |
 | FO37 | Settlement account | finance-treasury-movement | `/api/finance/settlement-accounts` | bank_accounts | wave-d / UAT-26 | CONVERGED |
-| FO38 | Settlement method/purpose | finance routes | Treasury editor/config | canonical document fields | recovery-api / UAT-26 | CONVERGED |
-| FO39 | Treasury movement | finance-treasury-movement | `/api/finance/treasury/movements` | finance_treasury_movements | wave-d / UAT-27 | IMPLEMENTED_NEW |
+| FO38 | Settlement method/purpose | finance-settlement-account | Treasury editor/config | bank_accounts.account_type / accounting_role / accounting_subject_id | recovery-api / UAT-26 | CONVERGED |
+| FO39 | Treasury movement | finance-treasury-movement | `/api/finance/treasury-movements` | finance_treasury_movements | wave-d / UAT-27 | IMPLEMENTED_NEW |
 | FO40 | Cash deposit/withdrawal | finance-treasury-operations | Treasury cash action | finance_treasury_movements | wave-d / UAT-27 | CONVERGED |
 | FO41 | Internal transfer | finance-treasury-movement | Treasury transfer action | finance_treasury_movements | wave-d / UAT-27 | IMPLEMENTED_NEW |
 | FO42 | Notes receivable | finance-treasury-operations | `/api/finance/notes` | finance_notes | recovery-api / UAT-28 | IMPLEMENTED_NEW |
@@ -61,4 +61,4 @@ Frozen source: `document.md §33`; design: `solution.md §28`. Status vocabulary
 | FO55 | AP reports | finance-reports | `/api/finance/reports/ap/*` | canonical AP projections | wave-e / UAT-32 | IMPLEMENTED_NEW |
 | FO56 | Treasury reports | finance-reports | `/api/finance/reports/treasury/*` | canonical movement projections | wave-e / UAT-32 | IMPLEMENTED_NEW |
 | FO57 | Source adapter | finance-recognition | delivery/receipt/invoice/bill adapters | canonical source links | recognition-production / UAT-04..09 | INTEGRATION_BACKED |
-| FO58 | Accounting adapter | financial-inventory | canonical voucher adapter | accounting_vouchers, entries | commercial UAT / UAT-24..25,32 | INTEGRATION_BACKED |
+| FO58 | Accounting adapter | accounting-posting（Accounting 域 owner） | canonical voucher adapter | accounting_vouchers, entries | commercial UAT / UAT-24..25,32 | INTEGRATION_BACKED |

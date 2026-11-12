@@ -980,6 +980,13 @@ real MySQL
 
 SQLite-only evidence 不计入。
 
+**2026-11-12 修正（项目级统一口径 `MYSQL-EV-01`，见 [`docs/decisions/mysql-evidence-policy-20261112.md`](../decisions/mysql-evidence-policy-20261112.md)）**：本仓库当前只有三个已批准的 ACK-4 campaign 可以运行 —— `test:mysql:m1-core`、`test:mysql:accounting-analytics`、`test:mysql:out001`；其余 MySQL 入口（含 `scripts/gates/mysql-finance-concurrency-gate.mjs`）由 `blockUnmigratedAck4Entry` **永久阻断**。因此本条按两段口径执行：
+
+1. **schema / migration 对等** —— Finance 的迁移链与表结构在真实 MySQL 8 上被接受，由 `test:mysql:accounting-analytics` 的 `BOOTSTRAP_CURRENT_SCHEMA`（在**全量当前迁移集**上运行）证明。
+2. **RACE-01..RACE-15 的行为等价** —— 15 个 race 场景的实现位于 `server/mysql-finance-operations-concurrency.integration.js`（16 个用例），**当前尚未在真实 MySQL 上执行**；SQLite 并发套件只能作为行为等价的部分证据，**不构成**「真实 MySQL 上已实证」。
+
+本条的义务**不被取消**：RACE-01..RACE-15 仍是本域必须交付并执行的契约项，其「真实 MySQL 未取证」状态必须作为**显式残余**登记在域级 Acceptance 中，不得被表述为已证明。建立 `FINANCE_MYSQL_V1` 域级 campaign（新 manifest、launcher 条目，并由业务所有者逐次签发 ACK-4 capability）是把它升级为真实 MySQL 证据的**唯一**路径；本修正**不**授权该新建工作。
+
 ### 33.40 Frozen Functional UAT
 
 Freeze exactly **32** functional UAT scenarios。
@@ -1410,6 +1417,8 @@ Cross-domain dependency 是 acceptance dependency metadata，**不是** capabili
 本节 Requirement 包含 **58** 项 Capability / Owner accounting = **55 Domain-Owned + 3 Integration-Backed**（FO50 Treasury ↔ GL Reconciliation / FO57 Source Business Document Adapter / FO58 Accounting Event / Voucher Adapter）。
 
 本节 Requirement 包含 **14** Non-Negotiable Invariants（F1–F14）/ **3** Canonical Recognition Models / **32** Frozen Functional UAT / **15** Finance-Specific MySQL Races。
+
+**2026-11-12 状态说明**：32 项 Frozen Functional UAT 与 24 项响应式 UAT 在当前 HEAD 全部通过；15 项 Finance-Specific MySQL Races 的**实现**齐备，但**真实 MySQL 执行尚未取得**（门禁被 ACK-4 永久阻断），按 §33.39 的 2026-11-12 修正处理。
 
 本节 Requirement 完成；下游 Design 见 `solution.md §28`（本阶段未开始）。等待用户 PASS。
 
