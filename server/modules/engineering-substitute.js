@@ -116,11 +116,11 @@ export async function deleteSubstitute(db, res, actor, subId) {
   return send(res, 200, { ok: true });
 }
 
-export function resolveSubstitutesForPrimary(db, res, url) {
-  const primaryProductId = url.searchParams.get('product_id');
-  const businessDate = url.searchParams.get('business_date') || new Date().toISOString().slice(0, 10);
-  if (!primaryProductId) throw new HttpError(400, '缺少 product_id');
-  const results = db.prepare(`SELECT s.*, sc.code scheme_code, sc.strategy, sc.method,
+// The canonical substitute resolver. Planning consumes it (Design §25.8);
+// this module keeps ownership of the substitute facts.
+export function findSubstitutesForPrimary(db, primaryProductId, businessDate) {
+  const date = String(businessDate || new Date().toISOString().slice(0, 10)).slice(0, 10);
+  return db.prepare(`SELECT s.*, sc.code scheme_code, sc.strategy, sc.method,
     substitute_p.code substitute_product_code, substitute_p.name substitute_product_name
     FROM engineering_substitutes s
     JOIN engineering_substitute_schemes sc ON sc.id=s.scheme_id
@@ -128,6 +128,13 @@ export function resolveSubstitutesForPrimary(db, res, url) {
     WHERE s.primary_product_id=? AND s.active=1 AND sc.active=1
       AND (s.effective_from IS NULL OR s.effective_from <= ?)
       AND (s.effective_to IS NULL OR s.effective_to >= ?)
-    ORDER BY s.priority ASC`).all(primaryProductId, businessDate, businessDate);
+    ORDER BY s.priority ASC`).all(primaryProductId, date, date);
+}
+
+export function resolveSubstitutesForPrimary(db, res, url) {
+  const primaryProductId = url.searchParams.get('product_id');
+  const businessDate = url.searchParams.get('business_date') || new Date().toISOString().slice(0, 10);
+  if (!primaryProductId) throw new HttpError(400, '缺少 product_id');
+  const results = findSubstitutesForPrimary(db, primaryProductId, businessDate);
   return send(res, 200, { product_id: primaryProductId, business_date: businessDate, substitutes: results });
 }

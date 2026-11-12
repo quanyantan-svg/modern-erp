@@ -284,8 +284,47 @@ export function migratePlanningDomainSchema(db) {
   addColumn(db, "ALTER TABLE mrp_runs ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0");
   addColumn(db, "ALTER TABLE mrp_run_results ADD COLUMN supply_type TEXT NOT NULL DEFAULT ''");
   addColumn(db, "ALTER TABLE mrp_run_results ADD COLUMN safety_stock REAL NOT NULL DEFAULT 0");
+  addColumn(db, "ALTER TABLE mrp_run_results ADD COLUMN open_planned_supply REAL NOT NULL DEFAULT 0");
   addColumn(db, "ALTER TABLE production_instruction_items ADD COLUMN planned_order_id TEXT");
   addColumn(db, "ALTER TABLE purchase_instruction_items ADD COLUMN planned_order_id TEXT");
+  addColumn(db, "ALTER TABLE planning_reservations ADD COLUMN expected_supply_quantity REAL NOT NULL DEFAULT 0");
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS planning_substitute_suggestions (
+      id TEXT PRIMARY KEY,
+      run_id TEXT,
+      planned_order_id TEXT,
+      primary_product_id TEXT NOT NULL,
+      substitute_product_id TEXT NOT NULL,
+      scheme_id TEXT,
+      strategy TEXT NOT NULL DEFAULT '',
+      method TEXT NOT NULL DEFAULT '',
+      quantity_basis TEXT NOT NULL DEFAULT '',
+      available_quantity REAL NOT NULL DEFAULT 0,
+      suggested_quantity REAL NOT NULL DEFAULT 0,
+      source_type TEXT NOT NULL DEFAULT '',
+      source_id TEXT,
+      business_date TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'SUGGESTED',
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(primary_product_id) REFERENCES products(id),
+      FOREIGN KEY(substitute_product_id) REFERENCES products(id)
+    );
+    CREATE TABLE IF NOT EXISTS planning_planned_order_batches (
+      id TEXT PRIMARY KEY,
+      batch_no TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'PREVIEWED',
+      action TEXT NOT NULL,
+      payload TEXT NOT NULL DEFAULT '{}',
+      preview_hash TEXT NOT NULL,
+      versions TEXT NOT NULL DEFAULT '{}',
+      result TEXT NOT NULL DEFAULT '{}',
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
 
   const now = new Date().toISOString();
   db.prepare(`INSERT OR IGNORE INTO planning_parameters(id,reservation_enabled,created_at,updated_at)

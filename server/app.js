@@ -79,6 +79,7 @@ import {
   planningReport, planningWorkbench, previewCascade, releasePlannedOrder,
   releaseReservation, splitPlannedOrder, updateMaterialPolicy,
   updatePlanningParameters, updatePlanningScheme, assertStrongReservationAvailability,
+  applyPlannedOrderBatch, getPlanningReservation, previewPlannedOrderBatch,
 } from './modules/planning-domain.js';
 import { applyCreditAdjustment, ensurePayableSource, ensureReceivableSource } from './modules/settlement-core.js';
 import {
@@ -2885,11 +2886,14 @@ const planningRoutes = [
   ['POST', /^\/api\/planning\/planned-orders\/([^/]+)\/target$/, ({ db, req, res, actor, params }) => changePlannedOrderTarget(db, req, res, actor, params[0])],
   ['POST', /^\/api\/planning\/planned-orders\/([^/]+)\/split$/, ({ db, req, res, actor, params }) => splitPlannedOrder(db, req, res, actor, params[0])],
   ['POST', '/api/planning/planned-orders/merge', ({ db, req, res, actor }) => mergePlannedOrders(db, req, res, actor)],
+  ['POST', '/api/planning/planned-orders/batch/preview', ({ db, req, res, actor }) => previewPlannedOrderBatch(db, req, res, actor)],
+  ['POST', /^\/api\/planning\/planned-orders\/batch\/([^/]+)\/apply$/, ({ db, req, res, actor, params }) => applyPlannedOrderBatch(db, req, res, actor, params[0])],
   ['POST', /^\/api\/planning\/planned-orders\/([^/]+)\/release$/, ({ db, res, actor, params }) => releasePlannedOrder(db, res, actor, params[0])],
   ['POST', /^\/api\/planning\/planned-orders\/([^/]+)\/(close|cancel)$/, ({ db, res, actor, params }) => closeOrCancelPlannedOrder(db, res, actor, params[0], params[1] === 'close' ? 'CLOSED' : 'CANCELLED')],
   ['GET', '/api/planning/reservations', ({ db, res, actor, url }) => listReservations(db, res, actor, url)],
   ['POST', '/api/planning/reservations', ({ db, req, res, actor }) => createReservation(db, req, res, actor)],
   ['POST', /^\/api\/planning\/reservations\/([^/]+)\/release$/, ({ db, res, actor, params }) => releaseReservation(db, res, actor, params[0])],
+  ['GET', /^\/api\/planning\/reservations\/([^/]+)$/, ({ db, res, actor, params }) => getPlanningReservation(db, res, actor, params[0])],
   ['GET', '/api/planning/workbench', ({ db, res, actor, url }) => planningWorkbench(db, res, actor, url)],
   ['POST', '/api/planning/cascade/preview', ({ db, req, res, actor }) => previewCascade(db, req, res, actor)],
   ['POST', /^\/api\/planning\/cascade\/([^/]+)\/apply$/, ({ db, req, res, actor, params }) => applyCascade(db, req, res, actor, params[0])],

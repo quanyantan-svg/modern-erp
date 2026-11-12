@@ -10,6 +10,8 @@
 .planning-pulse{display:grid;grid-template-columns:1fr 1fr 2fr;border:1px solid var(--planning-line);margin-bottom:1.5rem}.planning-pulse div{display:flex;flex-direction:column;gap:.5rem;padding:1.1rem;border-right:1px solid var(--planning-line)}.planning-pulse div:last-child{border:0}.planning-pulse span{font-size:.75rem;color:var(--planning-muted)}.planning-pulse strong{font-size:1.35rem}.planning-pulse .is-danger strong{color:#b42318}.planning-pulse .is-warn strong{color:#b7791f}
 .planning-balance.is-shortage{border-left:3px solid #b42318;padding-left:1rem}.planning-balance.is-excess{border-left:3px solid #b7791f;padding-left:1rem}
 .planning-balance__actions{display:flex;flex-wrap:wrap;gap:.5rem;justify-content:flex-end;margin-top:1rem}
+.planning-balance__actions a{min-height:44px;display:inline-flex;align-items:center;padding:0 .85rem;border-radius:10px;border:1px solid var(--planning-line);background:#fff;font-weight:600;font-size:.9rem}
+.planning-balance__actions a.secondary{color:var(--planning-ink)}
 .planning-toolbar{display:flex;align-items:center;justify-content:space-between;gap:.75rem;margin:1rem 0 1.5rem;flex-wrap:wrap}
 .planning-toolbar__actions{display:flex;gap:.5rem;flex-wrap:wrap}
 .planning-toolbar__actions a{min-height:44px;display:inline-flex;align-items:center;padding:0 .85rem;border-radius:10px;border:1px solid var(--planning-line);background:#fff;font-weight:600;font-size:.9rem}

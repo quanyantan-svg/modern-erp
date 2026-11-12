@@ -8,7 +8,7 @@ import {
   createSupplierBill, createTaxCode, createUomConversion, matchSupplierBill, postSalesInvoice, postSupplierBill,
   quantitySnapshot, stageCsvImport, transitionOpeningBatch, validateImport, validateOpeningBatch,
 } from './modules/commercial-golive.js';
-import { consumeForecastDemand } from './modules/planning.js';
+import { allocateForecastConsumption } from './modules/planning-domain.js';
 
 let handle; let db;
 const date = '2026-09-25'; const at = `${date}T08:00:00.000Z`;
@@ -90,8 +90,23 @@ describe('V1.3 Phase 6E commercial billing, tax, UOM and go-live', () => {
     const source = readFileSync(new URL('./modules/commercial-golive.js', import.meta.url), 'utf8'); const allocator=source.slice(source.indexOf('export function allocateDocumentNumber'),source.indexOf('function atomic')); assert.doesNotMatch(allocator, /COUNT\(\*\).*\+\s*1|MAX\([^)]*\).*\+\s*1/i);
   });
 
-  test('MRP forecast consumption uses the deterministic MAX rule', () => {
-    assert.equal(consumeForecastDemand(60,100),100);assert.equal(consumeForecastDemand(120,100),120);
+  test('MRP forecast consumption uses the canonical allocation and no longer keeps the MAX rule', () => {
+    // Requirement §30.2 PL-11 replaces the superseded MAX(total) rule with an
+    // explicit consumption allocation: the top demand is Sales + remaining
+    // Forecast and the consumed portion is never counted twice.
+    const allocation = allocateForecastConsumption(
+      [{ productId: 'P1', orderId: 'SO1', needDate: '2026-09-25', quantity: 60 }],
+      [{ productId: 'P1', itemId: 'F1', needDate: '2026-09-25', quantity: 100 }],
+    );
+    assert.equal(allocation.allocations.length, 1);
+    assert.equal(allocation.allocations[0].quantity, 60);
+    assert.equal(allocation.forecastRemainders[0].remaining, 40);
+    assert.equal(allocation.salesRemainders[0].unconsumedQuantity, 0);
+    const topDemand = 60 + allocation.forecastRemainders[0].remaining;
+    assert.equal(topDemand, 100, 'top demand = Sales + remaining Forecast, the consumed portion is not counted twice');
+    // The legacy MAX helper has left active authority (Requirement §30.4).
+    const planningSource = readFileSync(new URL('./modules/planning.js', import.meta.url), 'utf8');
+    assert.doesNotMatch(planningSource, /consumeForecastDemand/);
   });
 
   test('CSV preview is non-mutating, row errors block commit, valid commit is atomic/idempotent', () => {

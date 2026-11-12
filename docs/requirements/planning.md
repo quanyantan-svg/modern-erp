@@ -124,7 +124,9 @@ Planning 负责 Forecast、Consumption、Demand/Supply calculation、MRP、Peggi
 
 - focused：foundation、forecast、MRP modes/time phase/BOM/substitute、planned order、reservation/execution guards、workbench/report/cascade、downstream command、legacy convergence；
 - canonical：`pnpm test:fast`、`pnpm test`、`pnpm test:heavy`、`pnpm build`、`git diff --check`；
-- database：受保护 disposable MySQL 环境运行 `pnpm test:mysql` 与 `pnpm test:mysql:concurrency`，证明 release/reservation 不双发、不超分配；
+- database：受保护 disposable MySQL 环境的**真实门禁**。本仓库当前只有三个已批准的 ACK-4 campaign 可以运行：`pnpm test:mysql:m1-core`、`pnpm test:mysql:accounting-analytics`、`pnpm test:mysql:out001`；其余 MySQL 入口（`test:mysql`、`test:mysql:concurrency`、`test:mysql:legacy`、各 Sales Wave 门禁）由 `blockUnmigratedAck4Entry` **永久阻断**，不得被引用为证据。本域据此把数据库证据拆成两段，并明确各自证明什么：
+  1. **schema / migration 对等**：由 `pnpm test:mysql:accounting-analytics` 的 `BOOTSTRAP_CURRENT_SCHEMA` 覆盖 —— 该步骤在真实 MySQL 8 上运行**全量当前迁移集**，因此 Planning 的全部迁移与表结构在真实 MySQL 上的可接受性由该 campaign 证明；
+  2. **release / reservation 行为对等（不双发、不超分配）**：由本域 focused 套件（含并发与幂等反例）覆盖。**本域当前没有专属 ACK-4 campaign**，因此「真实 MySQL 上的 release/reservation 行为等价」**未被单独取证**；域级 Acceptance 必须把它显式登记为残余，不得表述为已证明。若业务所有者要求该证据，须先新增 `PLANNING_MYSQL_V1` manifest 与域级 campaign；在此之前本域不得声称已取得真实 MySQL 行为证据。
 - browser：Forecast、MRP、Planned Orders、Planner Workbench、Instruction flow、Planning Configuration/Reservation 在 320/390/430/680 CSS px 无 document overflow，主要动作、长编码、time bucket、trace、split/merge、source selection 可用。
 
 ### 30.7 Explicitly deferred / out of scope

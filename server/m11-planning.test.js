@@ -944,7 +944,7 @@ describe('M11 atomicity, idempotency, and immutability', () => {
     assert.match(result.data.error, /已生效/);
   });
 
-  test('45. SALES_PLUS_FORECAST consumes forecast with MAX(sales, forecast)', async () => {
+  test('45. SALES_PLUS_FORECAST demand is Sales + remaining Forecast; the consumed part is not counted twice', async () => {
     const productId = ensureProduct('CB1', '组合需求');
     const fc = await createForecast({
       name: 'combo',
@@ -957,8 +957,41 @@ describe('M11 atomicity, idempotency, and immutability', () => {
     const detail = await request(`/api/planning/mrp/runs/${run.id}`);
     const row = detail.data.run.results.find((r) => r.product_id === productId);
     assert.equal(Number(row.gross_sales_demand), 6);
-    assert.equal(Number(row.gross_forecast_demand), 4);
+    // Requirement §30.3: the top demand is Sales + REMAINING Forecast. The
+    // sales demand consumed the whole bucket, so the remaining forecast
+    // demand is 0 and the top demand is 6 — never 6 + 4.
+    assert.equal(Number(row.gross_forecast_demand), 0);
     assert.equal(Number(row.gross_requirement), 6);
+    // The allocation stays queryable as original / consumed / remaining.
+    assert.equal(detail.data.run.consumptions.length, 1);
+    assert.equal(Number(detail.data.run.consumptions[0].quantity), 4);
+    assert.equal(Number(detail.data.run.consumptions[0].original_quantity), 4);
+    assert.equal(Number(detail.data.run.consumptions[0].remaining_quantity), 0);
+    // The demand ledger carries the effective demand, not the gross bucket.
+    const forecastDemand = detail.data.run.demands.filter((d) => d.source_type === 'FORECAST');
+    assert.equal(forecastDemand.length, 0, 'a fully consumed forecast bucket leaves no demand row');
+  });
+
+  test('45b. a partially consumed forecast bucket keeps only its remainder as demand', async () => {
+    const productId = ensureProduct('CB2', '部分消耗组合需求');
+    const fc = await createForecast({
+      name: 'combo partial',
+      items: [{ productId, needDate: plusDays(todayIso(), 7), quantity: 10 }],
+    });
+    await request(`/api/planning/forecasts/${fc.id}/activate`, { method: 'POST', token: adminToken });
+    seedSalesOrder({ productId, quantity: 4 });
+    const run = await createMrpRun({ name: 'combo partial run', mode: 'SALES_PLUS_FORECAST', forecastId: fc.id });
+    await executeRun(run.id);
+    const detail = await request(`/api/planning/mrp/runs/${run.id}`);
+    const row = detail.data.run.results.find((r) => r.product_id === productId);
+    assert.equal(Number(row.gross_sales_demand), 4);
+    assert.equal(Number(row.gross_forecast_demand), 6, 'only the unconsumed remainder stays demand');
+    assert.equal(Number(row.gross_requirement), 10, 'top demand = Sales + remaining Forecast');
+    assert.equal(Number(detail.data.run.consumptions[0].quantity), 4);
+    assert.equal(Number(detail.data.run.consumptions[0].remaining_quantity), 6);
+    const forecastDemand = detail.data.run.demands.filter((d) => d.source_type === 'FORECAST');
+    assert.equal(forecastDemand.length, 1);
+    assert.equal(Number(forecastDemand[0].quantity), 6);
   });
 
   test('46. non-admin cannot execute / cancel MRP runs (403)', async () => {
@@ -1026,7 +1059,7 @@ describe('M11 net-before-explosion (HOTFIX)', () => {
     const fgRow = detail.data.run.results.find((r) => r.product_id === fgId);
     assert.ok(fgRow);
     assert.equal(Number(fgRow.gross_sales_demand), 10);
-    assert.equal(Number(fgRow.gross_forecast_demand), 10);
+    assert.equal(Number(fgRow.gross_forecast_demand), 0, 'the sales demand consumed the whole forecast bucket');
     assert.equal(Number(fgRow.gross_requirement), 10);
     assert.equal(Number(fgRow.on_hand), 3);
     assert.equal(Number(fgRow.open_production_supply), 2);

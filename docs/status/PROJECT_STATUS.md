@@ -4212,3 +4212,76 @@ M0 验收后，**后续业务包的启动仍需各自的显式授权**；W11-A �
   **不**覆盖本域全部 85 条契约用例（以本地 SQLite 套件为准），也**不**覆盖 MySQL 下的库存估值并发（属 Inventory 域）。
 - **残余 4**：N7 仍 FAIL，成因是四个既有历史提交的追溯债务，与本域无关；本域**未**把它写成 PASS。
 - 本轮**未**执行真实环境 migration、业务数据库写入、push / merge / tag / 发布 / 部署。
+
+## 54. Planning 计划域：域级审计与验收候签（2026-11-12）
+
+### 54.1 授权、范围与状态
+
+- **授权来源**：业务所有者 2026-11-12 指示「现在我们要进行整个项目最后的收尾，请对八个业务域进行验收」；同轮裁定执行顺序为**就绪度优先**（Planning → Finance Operations → Master & Engineering → Manufacturing & Quality → Inventory & Warehouse → Sales & Customer）、真实 MySQL 证据**复用现有门禁**、**每域停下签发 + 逐域提交**。
+- **本轮范围**：域 1 —— Planning 的域级 AUDIT 与验收候签。**未签发**任何 Acceptance / Freeze，**未修改任何实现代码**。
+- **状态**：`PENDING_APPROVAL` —— 候签材料已产出，等待业务所有者裁定。
+
+### 54.2 共享基线（当前 HEAD `22ba875`）
+
+| Gate | 结果 |
+|---|---|
+| `pnpm test:fast` | **632/632 PASS** |
+| `pnpm test`（FULL） | **3708/3708 PASS**，0 失败 |
+| `pnpm test:heavy` | **67/67 PASS** |
+| `pnpm build` / `git diff --check` | PASS |
+| 文档一致性 `current` | N1、N3～N6、N8、N9 **PASS**；N2 `RETIRED`；**N7 FAIL**（既有历史提交 `a40e356` / `59eccd5` / `171ade5` / `4403a80` 的追溯债务，与本域无关） |
+| 文档一致性 `migration` | C1～C6 全 PASS |
+
+该基线为**全部 6 个待验收域共用**，各域只需补域内 focused / 浏览器 / MySQL 证据，不重复消耗。
+
+### 54.3 Planning 逐项复核结论与整改轮
+
+业务所有者在审计候签后裁定：**开一轮整改**（补齐 11 项未达标能力）、**修订 Requirement 门禁指向**、**全部修复**（4 项契约/实现不一致）。整改轮已实施完成。
+
+- 逐项复核台账：[`docs/audits/planning-capability-audit-20261112.md`](../audits/planning-capability-audit-20261112.md)；候签材料：[`docs/acceptance/planning-domain-acceptance-candidate-20261112.md`](../acceptance/planning-domain-acceptance-candidate-20261112.md)。
+- 整改前：PL-01～PL-45 共 45 项 = `COVERED` **34** / `PARTIAL` **7**（PL-07 / 17 / 19 / 31 / 42 / 44 / 45）/ `MISSING` **4**（PL-24 / 25 / 36 / 38）。
+- 整改后：45 项全部 **`COVERED`**（`PARTIAL` **0** / `MISSING` **0** / `OUT_OF_SCOPE` **0**）。
+- 整改轮新增：`server/modules/planning-time-phased.js`（时间分段净额引擎、时间桶 read model、供需事件来源）；`server/planning-closure-remediation.test.js`（9 条合同用例，已登记进 FULL 套件清单）；4 个 additive schema 对象（`planning_substitute_suggestions`、`planning_planned_order_batches`、`planning_reservations.expected_supply_quantity`、`mrp_run_results.open_planned_supply`）。
+- 合同修正：Requirement §30.6 的 database 条款、Design §25.1（模块归属）、§25.17 与 §25.19（MySQL 证据边界）按裁定与实现事实修正。
+
+### 54.4 整改轮修复的真实缺陷
+
+| 编号 | 事实 | 状态 |
+|---|---|---|
+| `PLAN-DEF-01` | `.planning-balance__actions` 缺 44px 触控目标规则，工作台卡片两个动作链接渲染为 **22.5px**（四档宽度实测一致） | **已修复** |
+| `PLAN-DEF-02` | `b3120-planning-frontend.mjs` 在整改前 **FAIL**；2026-10-07 的历史 PASS 已随 `c3fa520` 失效 | **已修复** |
+| `PLAN-DEF-03` | `b3120-planning-final-acceptance.mjs` 不等待数据加载，工作台断言从未在卡片渲染状态下执行（空洞证据） | **已修复**（等待 READY 态 + 变异实验） |
+| `PLAN-DEF-04` | Design §25.1 指向**不存在**的 `server/modules/planning-reservation.js` | **已修复**（按实现事实更正） |
+| `PLAN-DEF-05` | legacy `consumeForecastDemand`（MAX 语义）仍 export，生产无调用方 | **已修复**（删除 export，legacy 测试改为断言 canonical 合同） |
+| `PLAN-DEF-06` | **新发现**：BOM 展开按父级递归，共享组件库存被多次净额，下层需求被低估（14 被算成 6） | **已修复**（按层级推进 + 回归用例） |
+| `PLAN-DEF-07` | **新发现**：已消费 Forecast 仍以全额进入需求台账与结果行，需求被重复计算 | **已修复**（统一使用有效 Forecast + 判别性用例） |
+| `PLAN-DEF-08` | **新发现（跨域）**：Sales 已签发的 Wave 7 行为依赖 Planning 内部错误码 | **已修复**（Sales 守卫自包含，已签发行为与错误码逐字不变；Sales Wave 7 两套件 87/87 PASS） |
+
+**非空洞证明（变异实验）**：移除 `.planning-balance__actions a{min-height:44px}` 后重跑 `b3120-planning-frontend.mjs`，脚本按预期 **FAIL** 并命中同样 10 个 22.5px 目标 —— 该门禁真正承担了重量。
+
+### 54.5 真实 MySQL 证据的现状与边界
+
+整改轮实测：本仓库只有三个已批准的 ACK-4 campaign 可运行（`test:mysql:m1-core`、`test:mysql:accounting-analytics`、`test:mysql:out001`），其余 MySQL 入口由 `blockUnmigratedAck4Entry` **永久阻断**；且 `M1_CORE_PARITY_TABLES`（16 张采购/库存表）与 `AA_PARITY_TABLES`（47 张会计与分析表）都**不含** Planning 表。Planning 域因此**没有专属 campaign**。
+
+- **已取证**：Planning 的全量迁移与表结构在真实 MySQL 8 上被 `test:mysql:accounting-analytics` 的 `BOOTSTRAP_CURRENT_SCHEMA` 步骤接受。
+- **未取证**：release / reservation 在真实 MySQL 上的行为等价（不双发、不超分配），当前只由本域 focused 套件的并发与幂等反例覆盖。
+- Requirement §30.6 与 Design §25.17 / §25.19 已按此边界修正，**明确不得**把该残余表述为已证明。
+
+### 54.6 与历史结论的关系
+
+`log/2026-10-08.md:283..289` 记录过 Planning Domain "Final Acceptance: PASS / Freeze: YES"，但仓库无对应签发记录与机器可读 token，且其浏览器证据已因 `c3fa520` 失效、MySQL 证据在当前门禁下不可复现。能力矩阵 B3120 行据此由 `VERIFIED` 下调为 `HISTORICAL_EVIDENCE`，并保留原结论来源。整改轮已闭合该历史结论留下的能力与缺陷缺口；历史记录本身保留不改写，但**不作为**当前 Acceptance 的依据。
+
+### 54.7 域级 Acceptance 与 Capability Freeze 签发
+
+- **授权来源**：业务所有者 2026-11-12 在整改轮完成后裁定「接受为残余并签发」与「签发域级 Acceptance + Freeze」。
+- **决定**：**域级 Acceptance 通过**（`PLANNING_DOMAIN_ACCEPTANCE_PASS`）与 **Capability Freeze 签发**（`PLANNING_CAPABILITY_FREEZE`，冻结 45 项 `COVERED` 能力）。
+- **签发记录**：[`docs/acceptance/planning-domain-acceptance-20261112.md`](../acceptance/planning-domain-acceptance-20261112.md)。同日的候签材料标记为 `SUPERSEDED`，保留为决定过程的证据。
+- **`PLAN-DEC-02` 处置**：真实 MySQL 上的 release/reservation 行为等价**未单独取证**（本域无专属 ACK-4 campaign），**业务所有者已裁定接受为随冻结的显式残余**；本记录不主张该行为等价已证明。
+- **随冻结接受的残余**：`PLAN-RES-01`～`PLAN-RES-04`。
+- **不签发**：Manual Closure（B3120 手册级关闭）、Release Readiness、发布、部署。
+
+### 54.8 未解决事项与暂停点
+
+- `PLAN-DEC-02` 已裁定（接受为残余）；`PLAN-RES-01`～`PLAN-RES-04` 已随冻结接受。
+- **下一域**：按就绪度顺序继续域 2 —— **Finance Operations**（FO01～FO58）。
+- 本轮**未**执行真实环境 migration、业务数据库写入、push / merge / tag / 发布 / 部署。

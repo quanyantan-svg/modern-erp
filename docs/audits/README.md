@@ -18,6 +18,7 @@
 | B3121 委外核心执行工作面审计（2026-11-10） | B3121 委外管理 | Procurement & Outsourcing | `v1.0` | `bbacab0` | `AUDIT_COMPLETE / COVERAGE_REVIEWED`（有界范围） | [`b3121-outsourcing-core-workbench-audit-20261110.md`](./b3121-outsourcing-core-workbench-audit-20261110.md) |
 | B3121 域级验收逐项复核（2026-11-10） | B3121 委外管理 | Procurement & Outsourcing | `v1.0` | `1ad7eaf` | `AUDIT_COMPLETE / COVERAGE_REVIEWED`（PRC-01..26 / VMI-01..05 / OUT-01..23 共 54 项 + 14 条 Issue 处置） | [`b3121-domain-acceptance-audit-20261110.md`](./b3121-domain-acceptance-audit-20261110.md) |
 | Accounting & Analytics 域级能力审计基线（2026-11-10） | B3106 存货核算、B3107 固定资产、B3114 智能会计平台、B3115 总账、B3116 报表、B3117 经营会计 | Accounting & Analytics | `v0.2` | `d9e7319` | `AUDIT_COMPLETE / COVERAGE_REVIEWED`（2026-11-11 实施后逐项复核：**42 COVERED / 1 PARTIAL（AA-07）/ 0 MISSING / 1 OUT_OF_SCOPE**；§2 实施前判定保留不变） | [`accounting-analytics-capability-audit-20261110.md`](./accounting-analytics-capability-audit-20261110.md) |
+| Planning 计划域级能力审计基线（2026-11-12） | B3120 计划管理 | Planning | `v1.0` | `22ba875` | `AUDIT_COMPLETE / COVERAGE_REVIEWED`（PL-01～PL-45 共 45 项：**34 COVERED / 7 PARTIAL / 4 MISSING / 0 OUT_OF_SCOPE**；登记 5 项真实缺陷与 Requirement §30.6 真实 MySQL 条款不可满足的事实） | [`planning-capability-audit-20261112.md`](./planning-capability-audit-20261112.md) |
 
 ## 登记条目
 

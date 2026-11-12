@@ -362,6 +362,8 @@ const FULL = [
 
   // ----- B3120 Planning Domain Capability Closure -----
   'server/planning-domain-closure.test.js',
+  // ----- B3120 Planning Domain Closure — remediation round (2026-11-12) -----
+  'server/planning-closure-remediation.test.js',
 
   // ----- Domain Alignment — canonical 8 Domains + Platform ownership -----
   'server/v17-domain-alignment.test.js',

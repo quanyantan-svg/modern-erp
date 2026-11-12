@@ -162,6 +162,16 @@ function releaseInventoryLockAdapter(db, actor, lockId) {
 }
 
 function createPlanningReservationAdapter(db, actor, args) {
+  // The Sales reservation intent never consumes an EXPECTED supply through
+  // Planning: the Sales contract computes that capacity itself. The guard
+  // lives here so that the approved Sales error contract does not depend on a
+  // Planning-internal error code (Planning owns its own validation taxonomy
+  // and is free to change it).
+  if (args.supplySourceType === 'EXPECTED') {
+    throw new HttpError(409, 'EXPECTED 模式需要 Planning 端有界集成扩展以提供权威有限供给；当前 fail closed', {
+      code: 'SALES_RESERVATION_EXPECTED_BOUNDED_EXTENSION_REQUIRED',
+    });
+  }
   try {
     const result = createPlanningReservationCanonical(db, actor, {
       reservationType: args.reservationType,

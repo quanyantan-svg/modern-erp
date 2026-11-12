@@ -17,7 +17,8 @@
 | `server/modules/planning-domain.js` | 参数、物料策略、Scheme、Forecast Consumption、event/read model、Planned Order、Reservation、Workbench/Reports、Cascade |
 | `server/modules/planning-documents.js` | Instruction/Requisition bridge；只接收 Planned Order/release contract，不再构造 Production Order |
 | `server/modules/manufacturing-orders.js` | 提供唯一 `createProductionOrderCommand`；HTTP manual create 与 Planning conversion 共同调用 |
-| `server/modules/planning-reservation.js` | centralized strong-reservation availability/consumption guard；Sales Delivery 与 Production Issue 复用 |
+| `server/modules/planning-time-phased.js` | 时间分段净额引擎、安全库存 floor 投影、时间桶 read model 与供需事件来源（2026-11-12 整改轮新增） |
+| `server/modules/planning-domain.js`（strong-reservation 守卫） | centralized strong-reservation availability/consumption guard；Sales Delivery 与 Production Issue 复用。**2026-11-12 修正**：原表所列 `server/modules/planning-reservation.js` 从未存在，守卫一直归属 `planning-domain.js`，此处按实现事实更正，不新建第二个模块 |
 | `server/migrations/planning-domain-schema.js` | Planning Closure additive schema；SQLite/MySQL canonical snapshot source |
 
 `server/app.js` 只做 route facts/dispatch；permission、transaction、audit 保持 handler runtime authority。
@@ -162,6 +163,8 @@ Migration additive、`CREATE TABLE/INDEX IF NOT EXISTS`、缺列才 add；SQLite
 
 MySQL concurrency gate增加：同一 Planned Order并发 release至多一次；同 supply并发 strong reservation总量不超 eligible；split/merge版本冲突一方失败且无半应用。
 
+**2026-11-12 修正**：本仓库只有三个已批准的 ACK-4 campaign 可以运行，其余 MySQL 入口被 `blockUnmigratedAck4Entry` 永久阻断，因此上述并发断言**当前只能由本域 focused 套件的并发与幂等反例覆盖**，在真实 MySQL 上未被单独取证。域级 Acceptance 必须把这一条登记为残余；建立 `PLANNING_MYSQL_V1` 域级 campaign 是把它升级为真实 MySQL 证据的唯一路径。
+
 ### 25.18 Frontend information architecture
 
 Planning Launcher保持紧凑：Forecast、MRP、Planned Orders、Planner Workbench、Production Instruction、Purchase Instruction。Configuration/Reservation/Reports作为 Workbench/MRP contextual surface，不新增大量一级入口。
@@ -185,6 +188,8 @@ ERP Design Read: Planning daily work; primary task: diagnose shortage and safely
 8. Wave H：Manufacturing command、Purchase/Outsource handoff、legacy convergence。
 
 每 Wave focused tests；最终运行 FAST/FULL/HEAVY/MySQL/MySQL concurrency/build/diff/browser responsive。MySQL环境缺失时最终状态必须为 `NOT READY — MYSQL VERIFICATION PENDING`。
+
+**2026-11-12 修正**：MySQL **环境**并未缺失（受保护 disposable MySQL 8 可用且三个 ACK-4 campaign 可运行），缺失的是**本域专属**的 ACK-4 campaign。因此本域的最终状态不是 `NOT READY — MYSQL VERIFICATION PENDING`，而是「真实 MySQL 环境与 schema 对等已取证、本域行为等价未单独取证」，后者必须作为显式残余登记在域级 Acceptance 中，不得省略，也不得改写成已证明。
 
 ---
 

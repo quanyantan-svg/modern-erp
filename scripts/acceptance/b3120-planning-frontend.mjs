@@ -19,6 +19,12 @@ let browser;
 async function assertSurface(page, route, width) {
   const surface = page.getByTestId(`mobile-application-view-${route}`);
   await surface.waitFor({ timeout: 8000 });
+  // The Planner Workbench renders its cards only after the read model has
+  // loaded (state READY). Asserting before that would measure the loading
+  // state, and the touch-target check would never see the rendered actions.
+  if (route === 'planner-workbench') {
+    await page.waitForSelector('[data-testid="mobile-application-view-planner-workbench"] .planning-pulse', { timeout: 8000 });
+  }
   const metrics = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
     scrollWidth: document.documentElement.scrollWidth,

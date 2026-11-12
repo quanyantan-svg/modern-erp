@@ -8,6 +8,11 @@ import { id, transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, readJson, requiredText, send } from '../lib/http.js';
 import { getPurchaseOrderExecution, listStandardPurchaseSupplyByProduct } from './procurement-orders.js';
+import { findSubstitutesForPrimary } from './engineering-substitute.js';
+import {
+  buildPlanningDemandEvents, buildPlanningSupplyEvents, PLANNING_BUCKETS,
+  planningBucketStart, planningOnHandQuantity, projectBucketedNetting,
+} from './planning-time-phased.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const STRATEGIES = new Set(['AUTO', 'MAKE', 'BUY', 'OUTSOURCE']);
@@ -312,6 +317,7 @@ export async function createPlannedOrder(db, req, res, actor) {
       String(body.notes || '').slice(0, 500), actor.id, actor.id, now, now);
     db.prepare(`INSERT INTO planned_order_source_links(id,planned_order_id,source_type,source_id,quantity,created_at) VALUES(?,?,'MANUAL',?,?,?)`)
       .run(id(), orderId, orderId, quantity, now);
+    replacePlannedOrderByproducts(db, orderId, body.byproducts ?? body.by_products ?? [], actor.id, now);
     audit(db, actor.id, 'CREATE', 'PLANNED_ORDER', orderId, orderNo);
   });
   return send(res, 201, { id: orderId, orderNo });
@@ -337,18 +343,24 @@ export function materializePlannedOrders(db, runId, actor) {
   return created;
 }
 
+// The state transitions live in their own helpers so that the single-order
+// endpoints and the batch maintenance (Design §25.10) share ONE set of
+// guards. There is no second implementation of the lifecycle.
+export function confirmPlannedOrderCore(db, actor, orderId) {
+  lockRow(db, 'planned_orders', orderId);
+  const row = db.prepare('SELECT * FROM planned_orders WHERE id=?').get(orderId);
+  if (!row) throw new HttpError(404, '计划订单不存在');
+  if (row.status === 'CONFIRMED') return row;
+  if (row.status !== 'DRAFT') throw new HttpError(409, '只有草稿计划订单可以确认');
+  const now = nowIso();
+  db.prepare("UPDATE planned_orders SET status='CONFIRMED',confirmed_at=?,updated_by=?,updated_at=?,version=version+1 WHERE id=?").run(now, actor.id, now, orderId);
+  audit(db, actor.id, 'CONFIRM', 'PLANNED_ORDER', orderId, row.order_no);
+  return row;
+}
+
 export function confirmPlannedOrder(db, res, actor, orderId) {
   allow(actor, 'MRP_MANAGE');
-  transaction(db, () => {
-    lockRow(db, 'planned_orders', orderId);
-    const row = db.prepare('SELECT * FROM planned_orders WHERE id=?').get(orderId);
-    if (!row) throw new HttpError(404, '计划订单不存在');
-    if (row.status === 'CONFIRMED') return;
-    if (row.status !== 'DRAFT') throw new HttpError(409, '只有草稿计划订单可以确认');
-    const now = nowIso();
-    db.prepare("UPDATE planned_orders SET status='CONFIRMED',confirmed_at=?,updated_by=?,updated_at=?,version=version+1 WHERE id=?").run(now, actor.id, now, orderId);
-    audit(db, actor.id, 'CONFIRM', 'PLANNED_ORDER', orderId, row.order_no);
-  });
+  transaction(db, () => { confirmPlannedOrderCore(db, actor, orderId); });
   return send(res, 200, { ok: true, status: 'CONFIRMED' });
 }
 
@@ -426,21 +438,24 @@ export async function mergePlannedOrders(db, req, res, actor) {
   return send(res, 200, { ok: true, id: targetId });
 }
 
+export function closeOrCancelPlannedOrderCore(db, actor, orderId, target) {
+  const status = String(target).toUpperCase();
+  lockRow(db, 'planned_orders', orderId);
+  const row = db.prepare('SELECT * FROM planned_orders WHERE id=?').get(orderId);
+  if (!row) throw new HttpError(404, '计划订单不存在');
+  if (!['CLOSED', 'CANCELLED'].includes(status)) throw new HttpError(400, '目标状态无效');
+  if (status === 'CANCELLED' && Number(row.released_quantity) > EPS) throw new HttpError(409, '已有下游释放的计划订单不能取消');
+  if (['CLOSED', 'CANCELLED'].includes(row.status)) return row;
+  const now = nowIso();
+  db.prepare('UPDATE planned_orders SET status=?,updated_by=?,updated_at=?,version=version+1 WHERE id=?').run(status, actor.id, now, orderId);
+  audit(db, actor.id, status, 'PLANNED_ORDER', orderId, row.order_no);
+  return row;
+}
+
 export async function closeOrCancelPlannedOrder(db, res, actor, orderId, target) {
   allow(actor, 'MRP_MANAGE');
-  const status = String(target).toUpperCase();
-  transaction(db, () => {
-    lockRow(db, 'planned_orders', orderId);
-    const row = db.prepare('SELECT * FROM planned_orders WHERE id=?').get(orderId);
-    if (!row) throw new HttpError(404, '计划订单不存在');
-    if (!['CLOSED', 'CANCELLED'].includes(status)) throw new HttpError(400, '目标状态无效');
-    if (status === 'CANCELLED' && Number(row.released_quantity) > EPS) throw new HttpError(409, '已有下游释放的计划订单不能取消');
-    if (['CLOSED', 'CANCELLED'].includes(row.status)) return;
-    const now = nowIso();
-    db.prepare('UPDATE planned_orders SET status=?,updated_by=?,updated_at=?,version=version+1 WHERE id=?').run(status, actor.id, now, orderId);
-    audit(db, actor.id, status, 'PLANNED_ORDER', orderId, row.order_no);
-  });
-  return send(res, 200, { ok: true, status });
+  transaction(db, () => { closeOrCancelPlannedOrderCore(db, actor, orderId, target); });
+  return send(res, 200, { ok: true, status: String(target).toUpperCase() });
 }
 
 function ensureInstructionCompatibilitySnapshot(db, row, actorId, now) {
@@ -520,7 +535,12 @@ function physicalSupplyQuantity(db, sourceType, sourceId, productId, warehouseId
       .reduce((total, item) => total + Number(item.remaining || 0), 0);
   }
   if (sourceType === 'PRODUCTION_ORDER') return Number(db.prepare(`SELECT CASE WHEN status IN ('RELEASED','IN_PROGRESS') THEN quantity ELSE 0 END quantity FROM production_orders WHERE id=? AND product_id=?`).get(sourceId, productId)?.quantity || 0);
-  if (sourceType === 'EXPECTED') return Number.POSITIVE_INFINITY;
+  if (sourceType === 'EXPECTED') {
+    const row = db.prepare(`SELECT expected_supply_quantity FROM planning_reservations
+      WHERE product_id=? AND supply_source_type='EXPECTED' AND COALESCE(supply_source_id,'')=COALESCE(?,'') LIMIT 1`)
+      .get(productId, sourceId);
+    return Number(row?.expected_supply_quantity || 0);
+  }
   return 0;
 }
 
@@ -550,11 +570,22 @@ export function createPlanningReservationCanonical(db, actor, args) {
     throw new HttpError(400, '供应来源类型无效', { code: 'PLANNING_RESERVATION_SOURCE_UNSUPPORTED' });
   }
   const supplyId = args.supplySourceId ?? args.supply_source_id ?? null;
-  if (supplyType === 'EXPECTED') {
-    throw new HttpError(409, 'EXPECTED 缺少权威有限供给来源', { code: 'PLANNING_EXPECTED_FINITE_SOURCE_REQUIRED' });
-  }
   if (supplyType !== 'ON_HAND' && !supplyId) {
     throw new HttpError(400, '请选择供应来源', { code: 'PLANNING_RESERVATION_SOURCE_REQUIRED' });
+  }
+  // A MANUAL reservation may reserve against an EXPECTED supply when no
+  // supply exists yet. The expected quantity is the bounded capacity of that
+  // supply identity, so the over-reserve guard stays effective: a second
+  // reservation may not inflate the capacity of the same identity.
+  let expectedQuantity = 0;
+  if (supplyType === 'EXPECTED') {
+    expectedQuantity = finitePositive(args.expectedSupplyQuantity ?? args.expected_supply_quantity, '预期供应数量');
+    const declared = db.prepare(`SELECT expected_supply_quantity FROM planning_reservations
+      WHERE product_id=? AND supply_source_type='EXPECTED' AND COALESCE(supply_source_id,'')=COALESCE(?,'') LIMIT 1`)
+      .get(productId, supplyId);
+    if (declared && Math.abs(Number(declared.expected_supply_quantity || 0) - expectedQuantity) > EPS) {
+      throw new HttpError(409, '该预期供应的可用数量已由其他预留确定，不能变更', { code: 'PLANNING_EXPECTED_SUPPLY_QUANTITY_CONFLICT' });
+    }
   }
   const quantity = finitePositive(args.quantity, '预留数量');
   const warehouseId = args.warehouseId ?? args.warehouse_id ?? null;
@@ -563,7 +594,7 @@ export function createPlanningReservationCanonical(db, actor, args) {
   // existing Planning cross-dialect protocol (UPDATE id=id): it obtains a row
   // write lock in MySQL and participates in SQLite's enclosing write tx.
   let sourceRow = null;
-  if (supplyId) {
+  if (supplyId && supplyType !== 'EXPECTED') {
     const table = { PLANNED_ORDER: 'planned_orders', PURCHASE_ORDER: 'purchase_orders', PRODUCTION_ORDER: 'production_orders' }[supplyType];
     lockRow(db, table, supplyId);
     if (supplyType === 'PLANNED_ORDER') {
@@ -581,7 +612,9 @@ export function createPlanningReservationCanonical(db, actor, args) {
     }
   }
 
-  const available = physicalSupplyQuantity(db, supplyType, supplyId, productId, warehouseId);
+  const available = supplyType === 'EXPECTED'
+    ? expectedQuantity
+    : physicalSupplyQuantity(db, supplyType, supplyId, productId, warehouseId);
   if (!Number.isFinite(available) || available <= EPS) {
     throw new HttpError(409, '权威供给没有可预留容量', { code: 'PLANNING_RESERVATION_CAPACITY_EXHAUSTED' });
   }
@@ -600,13 +633,13 @@ export function createPlanningReservationCanonical(db, actor, args) {
   const reservationId = args.id || id();
   const number = args.reservationNo || makeNumber(db, 'planning_reservations', 'RSV');
   const stamp = nowIso();
-  db.prepare(`INSERT INTO planning_reservations(id,reservation_no,reservation_type,demand_source_type,demand_source_id,demand_source_line_id,supply_source_type,supply_source_id,supply_source_line_id,product_id,warehouse_id,quantity,priority,release_date,status,mrp_run_id,scheme_id,notes,created_by,created_at,updated_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,?,?,?)`).run(
+  db.prepare(`INSERT INTO planning_reservations(id,reservation_no,reservation_type,demand_source_type,demand_source_id,demand_source_line_id,supply_source_type,supply_source_id,supply_source_line_id,product_id,warehouse_id,quantity,priority,release_date,status,mrp_run_id,scheme_id,notes,created_by,created_at,updated_at,expected_supply_quantity)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,?,?,?,?)`).run(
     reservationId, number, type, demandType, demandId, args.demandSourceLineId ?? args.demand_source_line_id ?? null,
     supplyType, supplyId, args.supplySourceLineId ?? args.supply_source_line_id ?? null,
     productId, warehouseId, quantity, Number(args.priority ?? 100),
     dateOrNull(args.releaseDate ?? args.release_date, '释放日期'), args.mrpRunId ?? null, args.schemeId ?? null,
-    String(args.notes || '').slice(0, 500), actor.id, stamp, stamp,
+    String(args.notes || '').slice(0, 500), actor.id, stamp, stamp, expectedQuantity,
   );
   audit(db, actor.id, 'CREATE', 'PLANNING_RESERVATION', reservationId, `${number} ${type} ${quantity} source=${supplyType}:${supplyId || ''} remaining=${remaining}`);
   return { id: reservationId, reservationNo: number, available, reserved, remainingBefore: remaining, remainingAfter: remaining - quantity };
@@ -676,7 +709,16 @@ export function assertStrongReservationAvailability(db, { productId, warehouseId
   return { physical, blocked, available: Math.max(0, physical - blocked) };
 }
 
-export function buildPlanningBalanceReadModel(db, { from, to, productId = null }) {
+// The warehouses a Planning Scheme participates in. A scheme without any
+// participation row plans across every warehouse.
+export function planningSchemeWarehouseScope(db, schemeId) {
+  if (!schemeId) return null;
+  const rows = db.prepare('SELECT warehouse_id FROM planning_scheme_warehouses WHERE scheme_id=? AND participates=1').all(schemeId);
+  if (!rows.length) return null;
+  return rows.map((row) => row.warehouse_id);
+}
+
+export function buildPlanningBalanceReadModel(db, { from, to, bucket = 'DAY', schemeId = null, productId = null }) {
   const start = from || nowIso().slice(0, 10);
   const end = to || new Date(Date.parse(`${start}T00:00:00Z`) + 90 * 86400000).toISOString().slice(0, 10);
   const productWhere = productId ? 'AND p.id=?' : '';
@@ -701,21 +743,53 @@ export function buildPlanningBalanceReadModel(db, { from, to, productId = null }
     const safety = Number(product.safety_stock || 0);
     const maximum = Number(product.maximum_stock || 0);
     const strongReserved = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) quantity FROM planning_reservations WHERE product_id=? AND reservation_type IN ('STRONG','MANUAL') AND status='ACTIVE'`).get(product.id).quantity);
+    // The dated projection of the same product: every demand and supply event
+    // with its date, projected bucket by bucket (Design §25.5 / §25.12).
+    const scope = planningSchemeWarehouseScope(db, schemeId);
+    const supply = buildPlanningSupplyEvents(db, product.id, {
+      horizonStart: start, horizonEnd: end, warehouseIds: scope, includePlannedOrders: true,
+    });
+    const demands = buildPlanningDemandEvents(db, product.id, { from: start, to: end });
+    const bucketRows = projectBucketedNetting({
+      openingOnHand: supply.onHand,
+      safetyStock: safety,
+      maximumStock: maximum,
+      bucket,
+      supplies: supply.events,
+      demands,
+    });
     rows.push({ ...product, onHand, demand, firmSupply, plannedSupply: planned, projectedBalance: projected, shortage: Math.max(0, safety - projected), excess: maximum > 0 ? Math.max(0, projected - maximum) : 0, strongReserved,
-      exception: projected < safety ? 'SHORTAGE' : (maximum > 0 && projected > maximum ? 'EXCESS' : '') });
+      exception: projected < safety ? 'SHORTAGE' : (maximum > 0 && projected > maximum ? 'EXCESS' : ''),
+      buckets: bucketRows,
+      events: {
+        demand: demands.map((event) => ({ ...event })),
+        supply: supply.events.map((event) => ({ ...event })),
+      },
+    });
   }
-  return { from: start, to: end, rows };
+  return { from: start, to: end, bucket, schemeId, rows };
 }
 
 export function planningWorkbench(db, res, actor, url) {
   allowAny(actor, ['MRP_VIEW', 'MRP_MANAGE']);
-  return send(res, 200, { workbench: buildPlanningBalanceReadModel(db, { from: url.searchParams.get('from'), to: url.searchParams.get('to'), productId: url.searchParams.get('productId') }) });
+  return send(res, 200, { workbench: buildPlanningBalanceReadModel(db, {
+    from: url.searchParams.get('from'),
+    to: url.searchParams.get('to'),
+    bucket: url.searchParams.get('bucket') || 'DAY',
+    schemeId: url.searchParams.get('schemeId') || url.searchParams.get('scheme_id') || null,
+    productId: url.searchParams.get('productId'),
+  }) });
 }
 
 export function planningReport(db, res, actor, url, report) {
   allowAny(actor, ['MRP_VIEW', 'MRP_MANAGE']);
   if (report === 'forecast-consumption') return listForecastConsumption(db, res, actor, url);
-  if (report === 'reservations' || report === 'reservation-trace') return listReservations(db, res, actor, url);
+  if (report === 'reservations') return listReservations(db, res, actor, url);
+  if (report === 'reservation-trace') return planningReservationTrace(db, res, actor, url);
+  if (report === 'substitute-suggestions') return planningSubstituteSuggestions(db, res, actor, url);
+  if (['supply-demand-status', 'supply-demand-summary', 'supply-demand-detail', 'order-supply-demand'].includes(report)) {
+    return planningSupplyDemandReport(db, res, actor, url, report);
+  }
   if (report === 'mrp-log') {
     const runId = url.searchParams.get('runId');
     const rows = runId ? db.prepare('SELECT * FROM mrp_run_logs WHERE run_id=? ORDER BY created_at,id').all(runId) : db.prepare('SELECT * FROM mrp_run_logs ORDER BY created_at DESC LIMIT 500').all();
@@ -770,3 +844,369 @@ export async function applyCascade(db, req, res, actor, changeId) {
 }
 
 export const __test__ = { allocateForecastConsumption, buildPlanningBalanceReadModel, physicalSupplyQuantity };
+
+// ---------------------------------------------------------------------------
+// Planned Order byproducts (Design §25.10)
+// ---------------------------------------------------------------------------
+//
+// Planning owns the PLANNED byproduct quantity of a planned order. The cost
+// of a byproduct stays in Finance, so no cost field is written here.
+export function replacePlannedOrderByproducts(db, plannedOrderId, byproducts, actorId, now = nowIso()) {
+  const rows = Array.isArray(byproducts) ? byproducts : [];
+  db.prepare('DELETE FROM planned_order_byproducts WHERE planned_order_id=?').run(plannedOrderId);
+  for (const row of rows) {
+    const productId = requiredText(row.productId ?? row.product_id, '副产品产品', 100);
+    if (!db.prepare('SELECT 1 FROM products WHERE id=? AND active=1').get(productId)) {
+      throw new HttpError(400, `副产品产品不存在或已停用 ${productId}`);
+    }
+    const quantity = finitePositive(row.quantity, '副产品数量');
+    db.prepare(`INSERT INTO planned_order_byproducts(id,planned_order_id,product_id,quantity,created_at)
+      VALUES(?,?,?,?,?)`).run(id(), plannedOrderId, productId, quantity, now);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Planned Order batch maintenance (Design §25.10)
+// ---------------------------------------------------------------------------
+
+const BATCH_ACTIONS = new Set(['CONFIRM', 'CLOSE', 'CANCEL', 'TARGET']);
+
+function plannedOrderBatchState(db, orderId) {
+  return db.prepare('SELECT id, order_no, status, version, released_quantity, quantity, supply_type, product_id, need_date FROM planned_orders WHERE id=?').get(orderId) || null;
+}
+
+export async function previewPlannedOrderBatch(db, req, res, actor) {
+  allow(actor, 'MRP_MANAGE');
+  const body = await readJson(req);
+  const action = String(body.action || '').toUpperCase();
+  if (!BATCH_ACTIONS.has(action)) throw new HttpError(400, '批量维护动作无效');
+  const orderIds = [...new Set((Array.isArray(body.orderIds) ? body.orderIds : []).map((value) => requiredText(value, '计划订单', 100)))];
+  if (!orderIds.length) throw new HttpError(400, '请选择要批量维护的计划订单');
+  if (orderIds.length > 200) throw new HttpError(400, '单次批量维护不得超过 200 张计划订单');
+  const target = action === 'TARGET'
+    ? { supplyType: String(body.supplyType ?? body.supply_type ?? '').toUpperCase(), reason: requiredText(body.reason, '变更原因', 300) }
+    : null;
+  if (target && !SUPPLY_TYPES.has(target.supplyType)) throw new HttpError(400, '供应类型无效');
+  const versions = {};
+  const orders = [];
+  for (const orderId of orderIds) {
+    const row = plannedOrderBatchState(db, orderId);
+    if (!row) throw new HttpError(404, `计划订单不存在 ${orderId}`);
+    versions[orderId] = { version: Number(row.version || 0), status: row.status };
+    orders.push({ id: row.id, orderNo: row.order_no, status: row.status, version: Number(row.version || 0), supplyType: row.supply_type, quantity: row.quantity, releasedQuantity: row.released_quantity });
+  }
+  const payload = { action, orderIds, target };
+  const encoded = JSON.stringify(payload);
+  const hash = createHash('sha256').update(encoded).digest('hex');
+  const batchId = id(); const now = nowIso();
+  const batchNo = `POB-${now.slice(0, 10).replaceAll('-', '')}-${batchId.slice(0, 6)}`;
+  db.prepare(`INSERT INTO planning_planned_order_batches(id,batch_no,status,action,payload,preview_hash,versions,result,created_by,created_at,updated_at)
+    VALUES(?,?,'PREVIEWED',?,?,?,?,'{}',?,?,?)`).run(batchId, batchNo, action, encoded, hash, JSON.stringify(versions), actor.id, now, now);
+  audit(db, actor.id, 'PREVIEW', 'PLANNED_ORDER_BATCH', batchId, `${action} ${orderIds.length} 张计划订单`);
+  return send(res, 201, { id: batchId, batchNo, hash, action, orders, versions });
+}
+
+export async function applyPlannedOrderBatch(db, req, res, actor, batchId) {
+  allow(actor, 'MRP_MANAGE');
+  const body = await readJson(req);
+  const applied = transaction(db, () => {
+    lockRow(db, 'planning_planned_order_batches', batchId);
+    const batch = db.prepare('SELECT * FROM planning_planned_order_batches WHERE id=?').get(batchId);
+    if (!batch) throw new HttpError(404, '批量维护预览不存在');
+    if (batch.status !== 'PREVIEWED') throw new HttpError(409, '批量维护预览已处理');
+    if (body.hash !== batch.preview_hash) throw new HttpError(409, '批量预览已失效，请重新预览');
+    const payload = parseJson(batch.payload, {});
+    const versions = parseJson(batch.versions, {});
+    // Re-read every row. Any version or state drift fails the WHOLE batch.
+    for (const orderId of payload.orderIds || []) {
+      const row = plannedOrderBatchState(db, orderId);
+      if (!row) throw new HttpError(409, `计划订单不存在 ${orderId}`);
+      const expected = versions[orderId] || {};
+      if (Number(row.version || 0) !== Number(expected.version || 0) || row.status !== expected.status) {
+        throw new HttpError(409, `计划订单 ${row.order_no} 已被其他操作修改，批量维护未执行`, { code: 'PLANNING_BATCH_VERSION_CONFLICT' });
+      }
+    }
+    const appliedIds = [];
+    for (const orderId of payload.orderIds || []) {
+      if (payload.action === 'CONFIRM') confirmPlannedOrderCore(db, actor, orderId);
+      else if (payload.action === 'CLOSE') closeOrCancelPlannedOrderCore(db, actor, orderId, 'CLOSED');
+      else if (payload.action === 'CANCEL') closeOrCancelPlannedOrderCore(db, actor, orderId, 'CANCELLED');
+      else if (payload.action === 'TARGET') {
+        const target = payload.target || {};
+        lockRow(db, 'planned_orders', orderId);
+        const row = db.prepare('SELECT * FROM planned_orders WHERE id=?').get(orderId);
+        if (!['DRAFT', 'CONFIRMED'].includes(row.status) || Number(row.released_quantity) > EPS) {
+          throw new HttpError(409, '已释放的计划订单不能改变供应类型');
+        }
+        const now = nowIso();
+        db.prepare('UPDATE planned_orders SET supply_type=?,target_change_reason=?,updated_by=?,updated_at=?,version=version+1 WHERE id=?')
+          .run(target.supplyType, target.reason, actor.id, now, orderId);
+        audit(db, actor.id, 'TARGET_CHANGE', 'PLANNED_ORDER', orderId, `${row.supply_type}→${target.supplyType}; ${target.reason}`);
+      }
+      appliedIds.push(orderId);
+    }
+    db.prepare("UPDATE planning_planned_order_batches SET status='APPLIED',result=?,updated_at=? WHERE id=?")
+      .run(JSON.stringify({ applied: appliedIds }), nowIso(), batchId);
+    return appliedIds;
+  });
+  audit(db, actor.id, 'APPLY', 'PLANNED_ORDER_BATCH', batchId, `${applied.length} 张计划订单`);
+  return send(res, 200, { ok: true, applied });
+}
+
+// ---------------------------------------------------------------------------
+// Reservation trace (Design §25.11 / §25.12)
+// ---------------------------------------------------------------------------
+
+function reservationDemandContext(db, row) {
+  const type = String(row.demand_source_type || '');
+  if (type === 'SALES_ORDER') {
+    const order = db.prepare('SELECT id, order_no, status, customer_id FROM sales_orders WHERE id=?').get(row.demand_source_id);
+    return { type, document: order || null };
+  }
+  if (type === 'PRODUCTION_ORDER') {
+    const order = db.prepare('SELECT id, order_no, status, product_id FROM production_orders WHERE id=?').get(row.demand_source_id);
+    return { type, document: order || null };
+  }
+  if (type === 'PLANNED_ORDER') {
+    const order = db.prepare('SELECT id, order_no, status, product_id, quantity FROM planned_orders WHERE id=?').get(row.demand_source_id);
+    return { type, document: order || null };
+  }
+  return { type, document: null };
+}
+
+function reservationSupplyContext(db, row) {
+  const type = String(row.supply_source_type || '');
+  if (type === 'ON_HAND') {
+    return { type, document: { product_id: row.product_id, warehouse_id: row.warehouse_id } };
+  }
+  if (type === 'PLANNED_ORDER') {
+    const order = db.prepare('SELECT id, order_no, status, product_id, quantity, released_quantity FROM planned_orders WHERE id=?').get(row.supply_source_id);
+    return { type, document: order || null };
+  }
+  if (type === 'PRODUCTION_ORDER') {
+    const order = db.prepare('SELECT id, order_no, status, product_id, quantity FROM production_orders WHERE id=?').get(row.supply_source_id);
+    return { type, document: order || null };
+  }
+  if (type === 'PURCHASE_ORDER') {
+    const order = db.prepare('SELECT id, order_no, status, business_type FROM purchase_orders WHERE id=?').get(row.supply_source_id);
+    return { type, document: order || null };
+  }
+  if (type === 'EXPECTED') {
+    return { type, document: { expected_supply_quantity: Number(row.expected_supply_quantity || 0), release_date: row.release_date } };
+  }
+  return { type, document: null };
+}
+
+export function getPlanningReservation(db, res, actor, reservationId) {
+  allowAny(actor, ['MRP_VIEW', 'MRP_MANAGE']);
+  const row = db.prepare(`SELECT r.*, p.code product_code, p.name product_name, w.code warehouse_code
+    FROM planning_reservations r
+    JOIN products p ON p.id = r.product_id
+    LEFT JOIN warehouses w ON w.id = r.warehouse_id
+    WHERE r.id = ?`).get(reservationId);
+  if (!row) throw new HttpError(404, '预留不存在');
+  return send(res, 200, {
+    reservation: row,
+    demand: reservationDemandContext(db, row),
+    supply: reservationSupplyContext(db, row),
+  });
+}
+
+// The reverse trace: every supply that carries ACTIVE reservations and the
+// demands that reserved against it (Requirement §30.2 PL-45).
+export function planningReservationTrace(db, res, actor, url) {
+  allowAny(actor, ['MRP_VIEW', 'MRP_MANAGE']);
+  const productId = url.searchParams.get('productId') || null;
+  const params = productId ? [productId] : [];
+  const where = productId
+    ? "WHERE r.product_id = ? AND r.status = 'ACTIVE'"
+    : "WHERE r.status = 'ACTIVE'";
+  const rows = db.prepare(`SELECT r.*, p.code product_code, p.name product_name
+    FROM planning_reservations r JOIN products p ON p.id = r.product_id
+    ${where} ORDER BY r.supply_source_type, r.supply_source_id, r.created_at, r.id`).all(...params);
+  const grouped = new Map();
+  for (const row of rows) {
+    const key = `${row.supply_source_type}|${row.supply_source_id || ''}|${row.product_id}|${row.warehouse_id || ''}`;
+    const group = grouped.get(key) || {
+      supplySourceType: row.supply_source_type,
+      supplySourceId: row.supply_source_id,
+      productId: row.product_id,
+      productCode: row.product_code,
+      productName: row.product_name,
+      warehouseId: row.warehouse_id,
+      reservedQuantity: 0,
+      expectedSupplyQuantity: Number(row.expected_supply_quantity || 0),
+      demands: [],
+    };
+    group.reservedQuantity += Number(row.quantity || 0);
+    group.demands.push({
+      reservationId: row.id,
+      reservationNo: row.reservation_no,
+      reservationType: row.reservation_type,
+      demandSourceType: row.demand_source_type,
+      demandSourceId: row.demand_source_id,
+      quantity: Number(row.quantity || 0),
+      priority: Number(row.priority || 0),
+      releaseDate: row.release_date,
+      status: row.status,
+    });
+    grouped.set(key, group);
+  }
+  return send(res, 200, { traces: [...grouped.values()] });
+}
+
+// ---------------------------------------------------------------------------
+// Substitute suggestions (Design §25.8)
+// ---------------------------------------------------------------------------
+
+// Conservative substitute consumption: a shortage of the primary product may
+// produce a SUGGESTION for an effective substitute. Nothing is ever
+// substituted automatically — the suggestion is a Planning fact the planner
+// decides on.
+export function writeSubstituteSuggestions(db, { runId, actorId, businessDate, schemeId = null, shortages = [] }) {
+  const now = nowIso();
+  let written = 0;
+  for (const shortage of shortages) {
+    const substitutes = findSubstitutesForPrimary(db, shortage.productId, businessDate);
+    for (const substitute of substitutes) {
+      const strategy = String(substitute.strategy || 'MIXED').toUpperCase();
+      const method = String(substitute.method || 'REPLACE').toUpperCase();
+      const available = planningOnHandQuantity(db, substitute.substitute_product_id, null);
+      // MANUAL only records the suggestion; the other strategies may offset
+      // the shortage, but only when the substitute really has availability.
+      const canOffset = strategy !== 'MANUAL' && available > EPS;
+      const ratio = Number(substitute.ratio || 0);
+      const basis = ratio > EPS ? `RATIO ${ratio}` : 'RATIO UNKNOWN';
+      const suggested = canOffset && ratio > EPS
+        ? Math.min(shortage.quantity * ratio, available)
+        : 0;
+      db.prepare(`INSERT INTO planning_substitute_suggestions(id,run_id,planned_order_id,primary_product_id,substitute_product_id,scheme_id,strategy,method,quantity_basis,available_quantity,suggested_quantity,source_type,source_id,business_date,status,created_by,created_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        id(), runId, shortage.plannedOrderId || null, shortage.productId, substitute.substitute_product_id, schemeId,
+        strategy, method, basis, available, suggested, 'ENGINEERING_SUBSTITUTE', substitute.id,
+        String(businessDate || '').slice(0, 10), canOffset ? 'OFFERED' : 'SUGGESTED', actorId, now,
+      );
+      written += 1;
+    }
+  }
+  return written;
+}
+
+export function planningSubstituteSuggestions(db, res, actor, url) {
+  allowAny(actor, ['MRP_VIEW', 'MRP_MANAGE']);
+  const runId = url.searchParams.get('runId') || null;
+  const productId = url.searchParams.get('productId') || null;
+  const where = [];
+  const params = [];
+  if (runId) { where.push('s.run_id = ?'); params.push(runId); }
+  if (productId) { where.push('s.primary_product_id = ?'); params.push(productId); }
+  const rows = db.prepare(`SELECT s.*, p.code primary_product_code, p.name primary_product_name,
+      sp.code substitute_product_code, sp.name substitute_product_name
+    FROM planning_substitute_suggestions s
+    JOIN products p ON p.id = s.primary_product_id
+    JOIN products sp ON sp.id = s.substitute_product_id
+    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    ORDER BY s.created_at DESC, primary_product_code, substitute_product_code`).all(...params);
+  return send(res, 200, { suggestions: rows });
+}
+
+// ---------------------------------------------------------------------------
+// Supply / demand reports (Design §25.12)
+// ---------------------------------------------------------------------------
+
+// The bounded order trace: demand source -> planned order -> instruction ->
+// execution. It is deliberately bounded to the products and the window of the
+// request; it never scans the whole history.
+function planningOrderSupplyDemandTrace(db, model) {
+  return model.rows.map((row) => {
+    const plannedOrders = db.prepare(`SELECT id, order_no, status, supply_type, quantity, released_quantity, need_date, source_type, mrp_result_id
+      FROM planned_orders WHERE product_id = ? ORDER BY created_at, id`).all(row.id);
+    const plannedIds = plannedOrders.map((order) => order.id);
+    const placeholders = plannedIds.length ? plannedIds.map(() => '?').join(',') : "''";
+    const instructions = plannedIds.length ? db.prepare(`
+      SELECT 'PRODUCTION' kind, h.id, h.instruction_no, h.status FROM production_instructions h
+        JOIN production_instruction_items i ON i.instruction_id = h.id
+       WHERE i.planned_order_id IN (${placeholders})
+      UNION ALL
+      SELECT 'PURCHASE' kind, h.id, h.instruction_no, h.status FROM purchase_instructions h
+        JOIN purchase_instruction_items i ON i.instruction_id = h.id
+       WHERE i.planned_order_id IN (${placeholders})`).all(...plannedIds, ...plannedIds) : [];
+    const executions = plannedIds.length ? db.prepare(`
+      SELECT 'PRODUCTION' kind, o.id, o.order_no, o.status FROM production_orders o
+        WHERE o.production_instruction_id IN (SELECT id FROM production_instructions WHERE id IN (SELECT DISTINCT instruction_id FROM production_instruction_items WHERE planned_order_id IN (${placeholders})))
+      UNION ALL
+      SELECT 'PURCHASE' kind, o.id, o.order_no, o.status FROM purchase_orders o
+        WHERE o.id IN (SELECT poi.order_id FROM purchase_order_items poi
+          WHERE poi.purchase_requisition_item_id IN (SELECT pri.id FROM purchase_requisition_items pri
+            WHERE pri.purchase_instruction_item_id IN (SELECT id FROM purchase_instruction_items WHERE planned_order_id IN (${placeholders}))))`)
+      .all(...plannedIds, ...plannedIds) : [];
+    return {
+      product: { id: row.id, code: row.code, name: row.name, unit: row.unit },
+      demandSources: row.events.demand.map((event) => ({
+        sourceType: event.sourceType, sourceId: event.sourceId, sourceLabel: event.sourceLabel,
+        eventDate: event.eventDate, quantity: event.quantity,
+      })),
+      plannedOrders: plannedOrders.map((order) => ({
+        id: order.id, orderNo: order.order_no, status: order.status, supplyType: order.supply_type,
+        quantity: order.quantity, releasedQuantity: order.released_quantity, needDate: order.need_date,
+        sourceType: order.source_type, mrpResultId: order.mrp_result_id,
+      })),
+      instructions: instructions.map((instruction) => ({
+        kind: instruction.kind, id: instruction.id, instructionNo: instruction.instruction_no, status: instruction.status,
+      })),
+      executions: executions.map((execution) => ({
+        kind: execution.kind, id: execution.id, orderNo: execution.order_no, status: execution.status,
+      })),
+    };
+  });
+}
+
+export function planningSupplyDemandReport(db, res, actor, url, report) {
+  const model = buildPlanningBalanceReadModel(db, {
+    from: url.searchParams.get('from'),
+    to: url.searchParams.get('to'),
+    bucket: url.searchParams.get('bucket') || 'DAY',
+    schemeId: url.searchParams.get('schemeId') || url.searchParams.get('scheme_id') || null,
+    productId: url.searchParams.get('productId'),
+  });
+  const header = { report, from: model.from, to: model.to, bucket: model.bucket, schemeId: model.schemeId };
+  if (report === 'supply-demand-detail') {
+    return send(res, 200, { ...header, rows: model.rows });
+  }
+  if (report === 'order-supply-demand') {
+    return send(res, 200, { ...header, traces: planningOrderSupplyDemandTrace(db, model) });
+  }
+  if (report === 'supply-demand-summary') {
+    // The summary view is quantitative: the window totals per product plus
+    // the totals of the window. It is deliberately NOT the status view.
+    const rows = model.rows.map((row) => ({
+      id: row.id, code: row.code, name: row.name, unit: row.unit,
+      onHand: row.onHand, demand: row.demand, firmSupply: row.firmSupply, plannedSupply: row.plannedSupply,
+      projectedBalance: row.projectedBalance, shortage: row.shortage, excess: row.excess,
+      strongReserved: row.strongReserved,
+    }));
+    const totals = rows.reduce((accumulator, row) => ({
+      products: accumulator.products + 1,
+      onHand: accumulator.onHand + row.onHand,
+      demand: accumulator.demand + row.demand,
+      firmSupply: accumulator.firmSupply + row.firmSupply,
+      plannedSupply: accumulator.plannedSupply + row.plannedSupply,
+      shortage: accumulator.shortage + row.shortage,
+      excess: accumulator.excess + row.excess,
+      strongReserved: accumulator.strongReserved + row.strongReserved,
+    }), { products: 0, onHand: 0, demand: 0, firmSupply: 0, plannedSupply: 0, shortage: 0, excess: 0, strongReserved: 0 });
+    const shortageProducts = model.rows.filter((row) => row.exception === 'SHORTAGE').length;
+    const excessProducts = model.rows.filter((row) => row.exception === 'EXCESS').length;
+    return send(res, 200, { ...header, totals: { ...totals, shortageProducts, excessProducts }, rows });
+  }
+  // The status view answers "where is the exception and when does it start".
+  const rows = model.rows.map((row) => ({
+    id: row.id, code: row.code, name: row.name, unit: row.unit,
+    projectedBalance: row.projectedBalance, shortage: row.shortage, excess: row.excess,
+    exception: row.exception,
+    bucketCount: row.buckets.length,
+    firstShortageBucket: row.buckets.find((bucket) => bucket.exception === 'SHORTAGE')?.bucket || null,
+    firstExcessBucket: row.buckets.find((bucket) => bucket.exception === 'EXCESS')?.bucket || null,
+  }));
+  return send(res, 200, { ...header, rows });
+}

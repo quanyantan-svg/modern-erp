@@ -30,8 +30,11 @@ import { resolveEffectiveBomForCaller } from './engineering-bom.js';
 import { listStandardPurchaseSupplyByProduct } from './procurement-orders.js';
 import {
   allocateForecastConsumption, loadSchemeSnapshot, materializePlannedOrders,
-  releaseWeakReservationsForScheme,
+  releaseWeakReservationsForScheme, writeSubstituteSuggestions,
 } from './planning-domain.js';
+import {
+  buildPlanningSupplyEvents, projectTimePhasedNetting,
+} from './planning-time-phased.js';
 
 const FORECAST_STATUS = { DRAFT: '草稿', ACTIVE: '已生效', CANCELLED: '已取消' };
 const MRP_RUN_STATUS = { DRAFT: '草稿', COMPLETED: '已计算', CANCELLED: '已取消' };
@@ -41,6 +44,10 @@ const MAX_FORECAST_NAME = 80;
 const MAX_NOTE = 200;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_BOM_DEPTH = 12;
+
+const parseJson = (value, fallback = null) => {
+  try { return value ? JSON.parse(value) : fallback; } catch { return fallback; }
+};
 
 function normalizePositiveQuantity(value, label) {
   if (value === undefined || value === null || value === '') throw new HttpError(400, `${label}不能为空`);
@@ -261,40 +268,12 @@ export function cancelPlanningForecast(db, res, actor, forecastId) {
 // MRP
 // =================================================================
 
-function productOnHand(db, productId) {
-  const product = db.prepare('SELECT tracking_policy FROM products WHERE id=?').get(productId);
-  const today = new Date().toISOString().slice(0, 10);
-  if (product?.tracking_policy === 'SERIAL') return Number(db.prepare("SELECT COUNT(*) total FROM inventory_serials WHERE product_id=? AND lifecycle_state='AVAILABLE' AND (expiry_date IS NULL OR expiry_date>=?)").get(productId, today).total);
-  if (product?.tracking_policy === 'LOT') return Number(db.prepare(`SELECT COALESCE(SUM(v.quantity),0) total FROM inventory_valuation_balances v JOIN inventory_lots l ON l.id=v.lot_id WHERE v.product_id=? AND l.status='AVAILABLE' AND (l.expiry_date IS NULL OR l.expiry_date>=?)`).get(productId, today).total);
-  const row = db.prepare("SELECT COALESCE(SUM(quantity), 0) total FROM inventory WHERE product_id=?").get(productId);
-  return Number(row?.total || 0);
-}
-
-function openPurchaseSupply(db, productId) {
-  return listStandardPurchaseSupplyByProduct(db, productId)
-    .reduce((total, item) => total + Number(item.remaining || 0), 0);
-}
-
-function openProductionSupply(db, productId) {
-  // Frozen Manufacturing contract: only RELEASED / IN_PROGRESS are firm
-  // execution supply. APPROVED is not yet released to execution.
-  // receipts (header-level linkage via production_order_id). COMPLETED
-  // and CANCELLED orders do not contribute to future supply.
-  const ordered = db.prepare(`
-    SELECT COALESCE(SUM(quantity), 0) total
-      FROM production_orders
-     WHERE product_id = ? AND status IN ('RELEASED','IN_PROGRESS')
-  `).get(productId);
-  const received = db.prepare(`
-    SELECT COALESCE(SUM(pr.quantity), 0) total
-      FROM production_receipts pr
-      JOIN production_orders po ON po.id = pr.production_order_id
-     WHERE po.product_id = ?
-       AND pr.status = 'CONFIRMED'
-       AND po.status IN ('RELEASED','IN_PROGRESS')
-  `).get(productId);
-  return Math.max(0, Number(ordered?.total || 0) - Number(received?.total || 0));
-}
+// On-hand, open purchase supply and open production supply are read by
+// server/modules/planning-time-phased.js so that the MRP run and the
+// dynamic read model cannot drift into two different supply definitions.
+//
+// Frozen Manufacturing contract: only RELEASED / IN_PROGRESS are firm
+// execution supply. APPROVED is not yet released to execution.
 
 // SALES open demand (product-level) over APPROVED sales orders minus
 // CONFIRMED delivery items joined to those orders. Returns
@@ -361,10 +340,6 @@ function aggregateDemand(rows) {
   return [...map.values()];
 }
 
-export function consumeForecastDemand(salesDemand, forecastDemand) {
-  return Math.max(Number(salesDemand || 0), Number(forecastDemand || 0));
-}
-
 function productBom(db, productId, businessDate) {
   return resolveEffectiveBomForCaller(db, productId, 'SELF_MAKE', businessDate)
     || resolveEffectiveBomForCaller(db, productId, 'GENERAL', businessDate);
@@ -407,46 +382,88 @@ function productActiveRouting(db, productId) {
 //          recurse into the child using childGross as the new gross
 //   3. else: no contribution; do not recurse
 //
-// cycle detection is enforced via `state.active` (DFS ancestors); depth
-// is bounded by MAX_BOM_DEPTH. On violation: HttpError 400 and the
-// outer transaction does not commit any rows.
+// The walk is LEVEL based (not per-parent recursion) on purpose: a
+// component that several parents share must be netted ONCE against its
+// fully accumulated demand. A per-parent recursion nets the shared
+// component's own stock once per parent, which understates the demand of
+// the level below it. Requirement §30.3 keeps aggregate-before-netting and
+// shared-component aggregation as invariants, so the shared component is
+// netted after every parent of its level has contributed.
+//
+// Cycle detection uses the ancestor set of each product: a product that
+// reappears among its own ancestors is a cycle. Depth is bounded by
+// MAX_BOM_DEPTH. On violation: HttpError 400 and the outer transaction
+// does not commit any rows.
 //
 // componentGross[childId] accumulates the TOTAL child component demand
 // from all parents and levels — this is the value reported as
 // gross_component_demand and as the child's gross_requirement.
 // componentParents[childId] records one entry per (parent, child) edge
 // for both BOM components persistence and BOM_EXPLOSION pegging.
-function explodeBomNet(db, pid, gross, path, depth, state, componentGross, componentParents) {
-  if (depth > MAX_BOM_DEPTH) {
-    throw new HttpError(400, 'BOM 展开深度超过限制，可能存在循环');
-  }
-  if (state.active.has(pid)) {
-    throw new HttpError(400, 'BOM 存在循环引用，无法计算');
-  }
-  state.active.add(pid);
-  try {
-    if (!Number.isFinite(gross) || gross <= 0) return;
-    const netting = computeNetting(db, pid, gross);
-    if (netting.net <= 0) return;
-    if (decideSupplyType(db, pid, state.scheme, state.businessDate) !== 'MAKE') return;
-    const bom = productBom(db, pid, state.businessDate);
-    if (!bom) return;
-    const items = productBomItems(db, bom.id);
-    if (items.length === 0) return;
-    for (const item of items) {
-      assertActiveProduct(db, item.product_id);
-      const childPid = item.product_id;
-      const childGross = netting.net * Number(item.quantity) * (1 + Number(item.scrap_rate || 0));
-      const childPath = path ? `${path} > ${childPid}` : `${pid} > ${childPid}`;
-      componentGross.set(childPid, (componentGross.get(childPid) || 0) + childGross);
-      const parents = componentParents.get(childPid) || [];
-      parents.push({ parentId: pid, qty: childGross, path: childPath, level: depth + 1 });
-      componentParents.set(childPid, parents);
-      explodeBomNet(db, childPid, childGross, childPath, depth + 1, state, componentGross, componentParents);
+function explodeBomLevels(db, rootProducts, state, componentGross, componentParents) {
+  const exploded = new Set();
+  const ancestorsOf = new Map();
+  let level = [...rootProducts];
+  let depth = 0;
+  while (level.length) {
+    if (depth > MAX_BOM_DEPTH) {
+      throw new HttpError(400, 'BOM 展开深度超过限制，可能存在循环');
     }
-  } finally {
-    state.active.delete(pid);
+    const nextLevel = [];
+    for (const pid of level) {
+      if (exploded.has(pid)) continue;
+      exploded.add(pid);
+      const demandDates = state.demandByDate.get(pid) || new Map();
+      const gross = [...demandDates.values()].reduce((total, quantity) => total + quantity, 0);
+      if (!Number.isFinite(gross) || gross <= 0) continue;
+      const netting = computeNetting(db, pid, gross, {
+        warehouseScope: state.warehouseScope,
+        cache: state.supplyCache,
+        horizonStart: state.businessDate,
+      });
+      if (netting.net <= 0) continue;
+      if (decideSupplyType(db, pid, state.scheme, state.businessDate) !== 'MAKE') continue;
+      const bom = productBom(db, pid, state.businessDate);
+      if (!bom) continue;
+      const items = productBomItems(db, bom.id);
+      if (items.length === 0) continue;
+      const parentDate = [...demandDates.keys()].sort()[0] || state.businessDate;
+      for (const item of items) {
+        assertActiveProduct(db, item.product_id);
+        const childPid = item.product_id;
+        const ancestors = ancestorsOf.get(pid) || new Set();
+        if (ancestors.has(childPid)) {
+          throw new HttpError(400, 'BOM 存在循环引用，无法计算');
+        }
+        const childGross = netting.net * Number(item.quantity) * (1 + Number(item.scrap_rate || 0));
+        const parentPath = state.pathOf.get(pid) || pid;
+        const childPath = `${parentPath} > ${childPid}`;
+        state.pathOf.set(childPid, childPath);
+        componentGross.set(childPid, (componentGross.get(childPid) || 0) + childGross);
+        addPlanningDemand(state, childPid, parentDate, childGross);
+        const parents = componentParents.get(childPid) || [];
+        parents.push({ parentId: pid, qty: childGross, path: childPath, level: depth + 1, needDate: parentDate });
+        componentParents.set(childPid, parents);
+        const childAncestors = new Set(ancestors);
+        childAncestors.add(pid);
+        for (const ancestor of ancestorsOf.get(childPid) || []) childAncestors.add(ancestor);
+        ancestorsOf.set(childPid, childAncestors);
+        if (!exploded.has(childPid)) nextLevel.push(childPid);
+      }
+    }
+    level = [...new Set(nextLevel)];
+    depth += 1;
   }
+}
+
+// Dated demand index. The aggregate gross of a product is the sum of its
+// dated demand, so the BOM explosion and the time-phased projection always
+// read the same demand.
+export function addPlanningDemand(state, productId, date, quantity) {
+  if (!date || !(quantity > 0)) return;
+  const map = state.demandByDate.get(productId) || new Map();
+  map.set(date, (map.get(date) || 0) + quantity);
+  state.demandByDate.set(productId, map);
 }
 
 export function listMrpRuns(db, res, actor, url) {
@@ -493,7 +510,7 @@ export function getMrpRun(db, res, actor, runId) {
   run.results = db.prepare(`
     SELECT r.id, r.product_id, r.gross_sales_demand, r.gross_forecast_demand,
            r.gross_component_demand, r.gross_requirement, r.on_hand,
-           r.open_purchase_supply, r.open_production_supply, r.net_requirement,
+           r.open_purchase_supply, r.open_production_supply, r.open_planned_supply, r.net_requirement,
            r.suggestion_type, r.suggested_quantity, r.need_by_date, r.bom_level, r.warning,
            r.supply_type, r.safety_stock,
            p.code product_code, p.name product_name, p.unit product_unit
@@ -529,6 +546,29 @@ export function getMrpRun(db, res, actor, runId) {
       result.remaining_quantity = Number(result.suggested_quantity);
     }
   }
+  // The time-phased event stream is part of the run's evidence: every demand
+  // and supply event with its date, direction and the projected balance that
+  // the bucket ended on.
+  run.events = db.prepare(`
+    SELECT e.id, e.product_id, e.event_date, e.direction, e.source_type, e.source_id,
+           e.source_line_id, e.warehouse_id, e.quantity, e.status, e.firm, e.metadata,
+           p.code product_code, p.name product_name
+      FROM mrp_run_events e
+      LEFT JOIN products p ON p.id = e.product_id
+     WHERE e.run_id = ?
+     ORDER BY e.product_id, e.event_date, e.direction, e.source_type, e.source_id
+  `).all(runId).map((event) => ({ ...event, metadata: parseJson(event.metadata, event.metadata) }));
+  // The consumption allocation is the original / consumed / remaining
+  // evidence of the forecast buckets the run consumed.
+  run.consumptions = db.prepare(`
+    SELECT fc.id, fc.forecast_item_id, fc.sales_order_id, fc.product_id, fc.sales_need_date, fc.quantity,
+           f.quantity original_quantity, so.order_no
+      FROM forecast_consumptions fc
+      JOIN planning_forecast_items f ON f.id = fc.forecast_item_id
+      LEFT JOIN sales_orders so ON so.id = fc.sales_order_id
+     WHERE fc.run_id = ?
+     ORDER BY fc.created_at, fc.id
+  `).all(runId).map((row) => ({ ...row, remaining_quantity: Math.max(0, Number(row.original_quantity || 0) - Number(row.quantity || 0)) }));
   run.components = db.prepare(`
     SELECT c.id, c.parent_product_id, c.product_id, c.gross_required, c.bom_path, c.level,
            pp.code parent_code, pp.name parent_name,
@@ -667,6 +707,20 @@ function buildForecastDemandRows(db, forecastId, horizonStart, horizonEnd) {
   }));
 }
 
+// The dated explanation that travels with every demand / supply event of a
+// run: the projected balance at that bucket, the gap to the safety-stock
+// floor and how much of the requirement was already created.
+function planningEventMetadata(projection, date) {
+  if (!projection) return '';
+  const bucket = projection.buckets.find((item) => item.date === date);
+  return JSON.stringify({
+    projectedBalance: bucket ? bucket.projectedBalance : null,
+    floorGap: bucket ? bucket.shortage : null,
+    netRequirementToDate: bucket ? bucket.netRequirementToDate : null,
+    timePhasedNetRequirement: projection.netRequirement,
+  });
+}
+
 function upsertDemandRow(db, runId, row, productMap) {
   if (!Number.isFinite(row.quantity) || row.quantity <= 0) return;
   const product = productMap.get(row.productId);
@@ -712,6 +766,7 @@ function insertOrUpdateResult(db, runId, partial) {
              on_hand = ?,
              open_purchase_supply = ?,
              open_production_supply = ?,
+             open_planned_supply = ?,
              net_requirement = ?,
              suggestion_type = ?,
              suggested_quantity = ?,
@@ -729,6 +784,7 @@ function insertOrUpdateResult(db, runId, partial) {
       partial.on_hand,
       partial.open_purchase_supply,
       partial.open_production_supply,
+      partial.open_planned_supply || 0,
       partial.net_requirement,
       partial.suggestion_type,
       partial.suggested_quantity,
@@ -741,8 +797,8 @@ function insertOrUpdateResult(db, runId, partial) {
     );
   } else {
     db.prepare(`
-      INSERT INTO mrp_run_results(id, run_id, product_id, gross_sales_demand, gross_forecast_demand, gross_component_demand, gross_requirement, on_hand, open_purchase_supply, open_production_supply, net_requirement, suggestion_type, suggested_quantity, need_by_date, bom_level, warning,supply_type,safety_stock)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO mrp_run_results(id, run_id, product_id, gross_sales_demand, gross_forecast_demand, gross_component_demand, gross_requirement, on_hand, open_purchase_supply, open_production_supply, open_planned_supply, net_requirement, suggestion_type, suggested_quantity, need_by_date, bom_level, warning,supply_type,safety_stock)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id(), runId, partial.productId,
       partial.gross_sales_demand,
@@ -752,6 +808,7 @@ function insertOrUpdateResult(db, runId, partial) {
       partial.on_hand,
       partial.open_purchase_supply,
       partial.open_production_supply,
+      partial.open_planned_supply || 0,
       partial.net_requirement,
       partial.suggestion_type,
       partial.suggested_quantity,
@@ -776,12 +833,35 @@ function insertBomComponentEdges(db, runId, componentParents) {
   }
 }
 
-function computeNetting(db, productId, gross) {
-  const onHand = productOnHand(db, productId);
-  const openPo = openPurchaseSupply(db, productId);
-  const openProd = openProductionSupply(db, productId);
-  const net = Math.max(0, gross - onHand - openPo - openProd);
-  return { onHand, openPo, openProd, net };
+function computeNetting(db, productId, gross, options = {}) {
+  const { warehouseScope = null, cache = null, horizonStart = null } = options;
+  let supply = cache ? cache.get(productId) : null;
+  if (!supply) {
+    supply = buildPlanningSupplyEvents(db, productId, {
+      horizonStart,
+      warehouseIds: warehouseScope,
+      includePlannedOrders: true,
+    });
+    if (cache) cache.set(productId, supply);
+  }
+  const net = Math.max(0, gross - supply.onHand - supply.openPurchase - supply.openProduction - supply.openPlanned);
+  return {
+    onHand: supply.onHand,
+    openPo: supply.openPurchase,
+    openProd: supply.openProduction,
+    openPlanned: supply.openPlanned,
+    net,
+  };
+}
+
+// The warehouses a Planning Scheme participates in. A scheme without any
+// participation row plans across every warehouse, which is the behaviour of
+// a run that has no scheme at all.
+function planningSchemeWarehouseScope(db, schemeId) {
+  if (!schemeId) return null;
+  const rows = db.prepare('SELECT warehouse_id FROM planning_scheme_warehouses WHERE scheme_id=? AND participates=1').all(schemeId);
+  if (!rows.length) return null;
+  return rows.map((row) => row.warehouse_id);
 }
 
 function decideSupplyType(db, productId, scheme, businessDate) {
@@ -871,9 +951,17 @@ async function runMrpCalculation(db, run, actor, nowIso) {
   const consumption = run.demand_source_mode === 'SALES_PLUS_FORECAST'
     ? allocateForecastConsumption(salesDemand, forecastDemand)
     : { allocations: [], forecastRemainders: forecastDemand.map((row) => ({ ...row, remaining: row.quantity })) };
+  // The effective forecast demand is the part of every forecast bucket that
+  // the Sales demand did NOT consume (Requirement §30.3: "最终 top demand =
+  // Sales + remaining Forecast，而不是 MAX(total) 隐藏关系"). The
+  // allocation itself stays in forecast_consumptions, which keeps the
+  // original / consumed / remaining triple queryable.
+  const effectiveForecastRows = consumption.forecastRemainders
+    .map((row) => ({ ...row, quantity: Math.max(0, Number(row.remaining || 0)) }))
+    .filter((row) => row.quantity > 0);
   const remainingForecastByProduct = new Map();
-  for (const row of consumption.forecastRemainders) {
-    remainingForecastByProduct.set(row.productId, (remainingForecastByProduct.get(row.productId) || 0) + Number(row.remaining));
+  for (const row of effectiveForecastRows) {
+    remainingForecastByProduct.set(row.productId, (remainingForecastByProduct.get(row.productId) || 0) + row.quantity);
   }
   const consumedTopGross = (productId, info) => run.demand_source_mode === 'SALES_PLUS_FORECAST'
     ? info.sales + (remainingForecastByProduct.get(productId) || 0)
@@ -888,7 +976,7 @@ async function runMrpCalculation(db, run, actor, nowIso) {
     if (!cur.needDate || row.needDate < cur.needDate) cur.needDate = row.needDate;
     topGross.set(row.productId, cur);
   }
-  for (const row of forecastDemand) {
+  for (const row of effectiveForecastRows) {
     const cur = topGross.get(row.productId) || { sales: 0, forecast: 0, needDate: null };
     cur.forecast += row.quantity;
     if (!cur.needDate || row.needDate < cur.needDate) cur.needDate = row.needDate;
@@ -901,19 +989,65 @@ async function runMrpCalculation(db, run, actor, nowIso) {
   }
   // Net-before-explosion walk: each top-level MAKE parent drives its
   // BOM only with its net requirement (gross - on_hand - open_po -
-  // open_prod). If parent has no BOM or net <= 0, it contributes
-  // nothing to child demand. Children that are themselves MAKE
-  // continue the walk using their accumulated component gross as the
-  // next-level gross, and the same netting rule applies recursively.
+  // open_prod - open_planned). If parent has no BOM or net <= 0, it
+  // contributes nothing to child demand. The walk is level based so a
+  // component shared by several parents is netted ONCE against its fully
+  // accumulated demand.
   const componentGross = new Map(); // productId -> total gross from BOM explosions
   const componentParents = new Map(); // productId -> [{parentId, qty, path, level}]
   const scheme = run.scheme_snapshot ? JSON.parse(run.scheme_snapshot) : null;
   const includesSafetyStock = Boolean(scheme?.demandSources?.some((source) => source.source_type === 'SAFETY_STOCK' && source.enabled));
-  const walkState = { active: new Set(), scheme, businessDate: run.horizon_start };
+  const warehouseScope = planningSchemeWarehouseScope(db, run.scheme_id);
+  const supplyCache = new Map();
+  const walkState = {
+    scheme,
+    businessDate: run.horizon_start,
+    warehouseScope,
+    supplyCache,
+    demandByDate: new Map(),
+    pathOf: new Map(),
+  };
+  const rootProducts = [];
+  for (const row of salesDemand) {
+    addPlanningDemand(walkState, row.productId, row.needDate, row.quantity);
+  }
+  for (const row of effectiveForecastRows) {
+    addPlanningDemand(walkState, row.productId, row.needDate, row.quantity);
+  }
   for (const [pid, info] of topGross.entries()) {
-    const totalGross = consumedTopGross(pid, info) + (includesSafetyStock ? Number(planningPolicy(db, pid).safety_stock || 0) : 0);
+    const totalGross = consumedTopGross(pid, info);
     if (totalGross <= 0) continue;
-    explodeBomNet(db, pid, totalGross, pid, 0, walkState, componentGross, componentParents);
+    if (!walkState.demandByDate.has(pid)) continue;
+    walkState.pathOf.set(pid, pid);
+    rootProducts.push(pid);
+  }
+  explodeBomLevels(db, rootProducts, walkState, componentGross, componentParents);
+  // Time-phased projection per product (Design §25.5 / §25.6). The aggregate
+  // netting stays the AUTHORITATIVE requirement — Requirement §25.6 keeps
+  // aggregate-before-netting and net-before-explosion deciding the BOM
+  // explosion quantity — while the projection is the dated explanation of
+  // that requirement: it says WHEN the projected balance turns short.
+  const allProductIds = new Set();
+  for (const [pid] of topGross) allProductIds.add(pid);
+  for (const [pid] of componentGross) allProductIds.add(pid);
+  const projections = new Map();
+  for (const pid of allProductIds) {
+    const demandDates = walkState.demandByDate.get(pid) || new Map();
+    const gross = [...demandDates.values()].reduce((total, quantity) => total + quantity, 0);
+    if (gross <= 0) continue;
+    const netting = computeNetting(db, pid, gross, {
+      warehouseScope, cache: supplyCache, horizonStart: run.horizon_start,
+    });
+    const supply = supplyCache.get(pid);
+    const projection = projectTimePhasedNetting({
+      openingOnHand: netting.onHand,
+      safetyStock: includesSafetyStock ? Number(planningPolicy(db, pid).safety_stock || 0) : 0,
+      supplies: supply.events,
+      demands: [...demandDates.entries()].map(([eventDate, quantity]) => ({
+        eventDate, quantity, sourceType: 'DEMAND', sourceId: pid,
+      })),
+    });
+    projections.set(pid, { netting, projection, gross });
   }
   // Persist demands, BOM components, results, and pegging inside a
   // single transaction so a cycle / validation failure leaves no
@@ -945,9 +1079,9 @@ async function runMrpCalculation(db, run, actor, nowIso) {
         quantity: row.quantity,
       }, productMap);
       upsertPegg(db, run.id, row.productId, 'SALES_ORDER', row.orderId, `销售订单 ${row.orderNo}`, row.quantity, '');
-      insertEvent.run(id(), run.id, row.productId, row.needDate, 'DEMAND', 'SALES_ORDER', row.orderId, row.quantity, 'APPROVED', 1, '', nowIso);
+      insertEvent.run(id(), run.id, row.productId, row.needDate, 'DEMAND', 'SALES_ORDER', row.orderId, row.quantity, 'APPROVED', 1, planningEventMetadata(projections.get(row.productId)?.projection, row.needDate), nowIso);
     }
-    for (const row of forecastDemand) {
+    for (const row of effectiveForecastRows) {
       upsertDemandRow(db, run.id, {
         productId: row.productId,
         needDate: row.needDate,
@@ -957,28 +1091,54 @@ async function runMrpCalculation(db, run, actor, nowIso) {
         quantity: row.quantity,
       }, productMap);
       upsertPegg(db, run.id, row.productId, 'FORECAST', row.orderId, '计划预测', row.quantity, '');
-      insertEvent.run(id(), run.id, row.productId, row.needDate, 'DEMAND', 'FORECAST', row.itemId, row.quantity, 'ACTIVE', 0, '', nowIso);
+      insertEvent.run(id(), run.id, row.productId, row.needDate, 'DEMAND', 'FORECAST', row.itemId, row.quantity, 'ACTIVE', 0, planningEventMetadata(projections.get(row.productId)?.projection, row.needDate), nowIso);
+    }
+    // Component demand is part of the run's demand ledger: the quantity the
+    // parent shortage drove into the child, dated at the parent's need date.
+    for (const [pid, parents] of componentParents.entries()) {
+      for (const parent of parents) {
+        insertEvent.run(id(), run.id, pid, parent.needDate || run.horizon_start, 'DEMAND', 'BOM_COMPONENT',
+          parent.parentId, parent.qty, 'DERIVED', 0, JSON.stringify({ path: parent.path, level: parent.level, ...JSON.parse(planningEventMetadata(projections.get(pid)?.projection, parent.needDate) || '{}') }), nowIso);
+      }
+    }
+    // Supply events complete the time-phased event stream: every supply
+    // source that the netting consumed is recorded with its date, so the
+    // projected balance of a bucket can be replayed from the run alone.
+    for (const [pid, projection] of projections.entries()) {
+      const supply = supplyCache.get(pid);
+      if (!supply) continue;
+      for (const event of supply.events) {
+        insertEvent.run(id(), run.id, pid, event.eventDate || run.horizon_start, 'SUPPLY', event.sourceType,
+          event.sourceId, event.quantity, 'OPEN', event.firm ? 1 : 0,
+          planningEventMetadata(projection.projection, event.eventDate), nowIso);
+      }
     }
     // Walk end-item demands first so that any product that appears
     // both as a parent and as a component gets its MAKE/BUY decision
     // from the parent side.
-    const allProductIds = new Set();
-    for (const [pid] of topGross) allProductIds.add(pid);
-    for (const [pid] of componentGross) allProductIds.add(pid);
     let totalProducts = 0;
     let makeSuggestions = 0;
     let buySuggestions = 0;
     let shortageProducts = 0;
+    const shortages = [];
     for (const pid of allProductIds) {
       const topInfo = topGross.get(pid) || { sales: 0, forecast: 0, needDate: null };
       const parents = componentParents.get(pid);
       const grossFromComponents = parents ? parents.reduce((sum, p) => sum + p.qty, 0) : 0;
       const policy = planningPolicy(db, pid);
       const safetyStock = includesSafetyStock ? Number(policy.safety_stock || 0) : 0;
-      const gross = consumedTopGross(pid, topInfo) + grossFromComponents + safetyStock;
+      // Safety stock is a FLOOR on the projected balance, never an extra
+      // demand: it does not inflate the transactional gross requirement and
+      // it creates exactly ONE replenishment per product and horizon.
+      const gross = consumedTopGross(pid, topInfo) + grossFromComponents;
       if (gross <= 0) continue;
-      const netting = computeNetting(db, pid, gross);
-      const supplyType = netting.net > 0 ? decideSupplyType(db, pid, scheme, run.horizon_start) : '';
+      const netting = projections.get(pid)?.netting
+        || computeNetting(db, pid, gross, { warehouseScope, cache: supplyCache, horizonStart: run.horizon_start });
+      const available = netting.onHand + netting.openPo + netting.openProd + netting.openPlanned;
+      const balanceAfterDemand = Math.max(0, available - gross + netting.net);
+      const floorRequirement = safetyStock > 0 ? Math.max(0, safetyStock - balanceAfterDemand) : 0;
+      const netRequirement = netting.net + floorRequirement;
+      const supplyType = netRequirement > 0 ? decideSupplyType(db, pid, scheme, run.horizon_start) : '';
       const suggestionType = supplyType === 'MAKE' ? 'MAKE' : (supplyType ? 'BUY' : '');
       const warning = warningFor(db, pid, supplyType);
       const bomLevel = parents ? parents.reduce((m, p) => Math.max(m, p.level || 0), 0) : 0;
@@ -991,9 +1151,10 @@ async function runMrpCalculation(db, run, actor, nowIso) {
         on_hand: netting.onHand,
         open_purchase_supply: netting.openPo,
         open_production_supply: netting.openProd,
-        net_requirement: netting.net,
+        open_planned_supply: netting.openPlanned,
+        net_requirement: netRequirement,
         suggestion_type: suggestionType,
-        suggested_quantity: netting.net,
+        suggested_quantity: netRequirement,
         need_by_date: topInfo.needDate || null,
         bom_level: bomLevel,
         warning,
@@ -1008,11 +1169,24 @@ async function runMrpCalculation(db, run, actor, nowIso) {
         }
       }
       totalProducts += 1;
-      if (netting.net > 0) {
+      if (netRequirement > 0) {
         if (suggestionType === 'MAKE') makeSuggestions += 1;
         else if (supplyType === 'BUY' || supplyType === 'OUTSOURCE') buySuggestions += 1;
         shortageProducts += 1;
+        shortages.push({ productId: pid, quantity: netRequirement, plannedOrderId: null });
       }
+    }
+    // Conservative substitute consumption: a shortage may produce a Planning
+    // suggestion for an effective substitute. Nothing is ever substituted
+    // automatically (Design §25.8).
+    if (shortages.length) {
+      writeSubstituteSuggestions(db, {
+        runId: run.id,
+        actorId: actor.id,
+        businessDate: run.horizon_start,
+        schemeId: run.scheme_id || null,
+        shortages,
+      });
     }
     summary = { totalProducts, makeSuggestions, buySuggestions, shortageProducts };
     db.prepare("UPDATE mrp_runs SET status='COMPLETED', completed_at=?, summary=?, updated_at=? WHERE id=?")
