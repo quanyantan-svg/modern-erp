@@ -84,7 +84,16 @@ export function createTempDb({
     if (mysqlCleanupDeferralState()) {
       throw new Error('TEMP DB: createTempDb must not bootstrap inside an already-bootstrapped protected gate');
     }
-    assertActivePortableChildOperation(['BOOTSTRAP_CURRENT_SCHEMA', 'RUN_M1_HTTP_FIXTURES', 'CLEANUP_SCHEMA_POST_RUN']);
+    // The operation names are the ACK-4 campaign fixture operations that may
+    // create a temporary MySQL database. Each name is bound to its own
+    // campaign's manifest, target and commit, so adding one campaign's
+    // operation does not widen any other campaign's scope.
+    assertActivePortableChildOperation([
+      'BOOTSTRAP_CURRENT_SCHEMA',
+      'RUN_M1_HTTP_FIXTURES',
+      'RUN_FINANCE_RACES',
+      'CLEANUP_SCHEMA_POST_RUN',
+    ]);
     const config = resolveDatabaseConfig({ backend: 'mysql' });
     if (mysqlLifecycle) mysqlLifecycle.beforeCreate(config);
     else assertAuthorizedDisposableMySqlTarget(config);
