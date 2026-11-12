@@ -153,10 +153,21 @@
 
 ### 6.4 门禁数字
 
-本节在域级 Acceptance 签发前由最终一次实测填��；本文件不预填未实测的数字。
+| Gate | 结果 |
+|---|---|
+| `pnpm test:fast` | **632/632 PASS**（整改轮后连续三次通过；期间出现过一次瞬时失败，复跑未复现，如实登记） |
+| `pnpm test`（FULL） | **3749/3749 PASS**，0 失败（3740 基线 + 9 条新合同用例） |
+| `pnpm test:heavy` | **67/67 PASS** |
+| `pnpm build` / `git diff --check` | PASS |
+| 整改轮新增合同套件 `server/v23-manufacturing-quality-closure.test.js` | **9/9 PASS**（含全部负例） |
+| 浏览器 · 响应式（`v18-manufacturing-quality-frontend.mjs`，7 路由 × 四档宽度） | **28/28 PASS** |
+| 浏览器 · 最终验收（`v18-manufacturing-quality-final-acceptance.mjs`，7 路由 + 2 详情面 × 四档宽度） | **36/36 PASS**（含真实质量门禁正反例） |
+| 非空洞证明（变异实验） | 按钮强制 20px → 28/28 FAIL 并指名选择器与实测尺寸；清空渲染记录 → 每个界面 FAIL 并指名缺失标识符 |
+| 真实 MySQL 8.0.37（专属 campaign） | **PASS**：run `210f31c4-f76f-45f1-a90a-2d909846ed1a`、commit `eceadc5`，`RESULT = PASS`、`ACK-4 STATE = FINISHED`（清理由 Root 的 `CLEANUP_SCHEMA_POST_RUN` 子进程独立 post-flight 证明；只读复核 `tables=0 views=0`），竞态套件 **4/4 PASS** |
 
 ## 7. 变更历史
 
 | 日期 | 变更 |
 |---|---|
+| 2026-11-12（第二轮） | 建立专属 ACK-4 campaign `MANUFACTURING_QUALITY_MYSQL_V1` 并在真实 MySQL 8.0.37 上取得 `PASS` / `FINISHED`（4/4 race）；期间六次 campaign 失败运行全部如实登记：前五次为**测试装置**缺陷（参数顺序、重复主键、外键指向不存在的工单、演示种子依赖、模板插值、值数），均为夹具问题而非被测生产行为；第六次为 MQ-RACE-02 断言过强（假定审核必胜），已改为按审计与实际值一致性判定 |
 | 2026-11-12 | 建立本审计基线并完成整改轮：43 项能力由 22 `COVERED` / 15 `PARTIAL` / 1 `MISSING` / 5 `OUT_OF_SCOPE` 变为 **37 `COVERED` / 1 `PARTIAL` / 5 `OUT_OF_SCOPE` / 0 `MISSING`**；修复 `MQ-DEF-01..14`；新增 1 个合同套件（9 条用例，含负例）与 1 个专属 ACK-4 campaign。**仍未签发域级 Acceptance。** |

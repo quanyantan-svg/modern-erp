@@ -4427,3 +4427,50 @@ Requirement §33.39 的 **15 个 Finance race**（RACE-01..15）实现齐备（`
 
 - **下一域**：按就绪度顺序继续域 4 —— **Manufacturing & Quality**（MQ-01..43）。该域的 Requirement 阶段修订已在本轮登记（提交 `4584f22`）：§29.4 补入 Operation Transfer Scan、Nonconforming 改为本轮 `COVERED`、Production Scan 增加 Transfer 动作；§29.8 新增 A.1「强制执行点」与 A.2「前端工作面覆盖」；§29.8 D 补入专属 campaign `MANUFACTURING_QUALITY_MYSQL_V1` 与浏览器证据条款；§29.6 按 registry 实况更正 route 数量口径。
 - 本轮**未**执行真实环境 migration、业务数据库写入、push / merge / tag / 发布 / 部署。
+
+## 58. Manufacturing & Quality 制造与质量域：域级整改、专属 campaign 与 Acceptance 签发（2026-11-12）
+
+### 58.1 授权与范围
+
+- **授权来源**：业务所有者 2026-11-12 指示「现在完成剩下几个业务域的收尾工作」「最终目标是该 mobile erp 系统各业务域的 acceptance 完成整个项目验收」，并裁定「逐域新建专属 ACK-4 campaign」。
+- **本轮范围**：域 4 —— Manufacturing & Quality（§22.19 共 43 项能力，MQ-01..MQ-43）的域级审计、Requirement 阶段修订、整改轮、专属 campaign 取证、域级 Acceptance 与 Capability Freeze 签发。
+- **共享基线**：FAST **632/632**、FULL **3749/3749**（3740 基线 + 9 条新合同用例）、HEAVY **67/67**、build PASS、`git diff --check` PASS；文档一致性 `current` N1、N3～N6、N8、N9 PASS、N2 `RETIRED`、**N7 FAIL**（既有历史提交的追溯债务，与本域无关）、`migration` C1～C6 全 PASS。
+
+### 58.2 审计结论
+
+- 台账：[`docs/audits/manufacturing-quality-capability-audit-20261112.md`](../audits/manufacturing-quality-capability-audit-20261112.md) —— 仓库内**第一份** MQ-01..43 逐项台账（此前该编号只以区间标签 `MQ-01..43` 存在于仓库）。
+- 整改前 43 项 = **22 `COVERED` / 15 `PARTIAL` / 5 `OUT_OF_SCOPE` / 1 `MISSING`**；整改轮后 = **37 `COVERED` / 1 `PARTIAL` / 5 `OUT_OF_SCOPE` / 0 `MISSING`**。
+- 修复 **14 项真实缺陷**（`MQ-DEF-01..14`），其中最关键的四项：
+  - 拓扑与委外边界**只在报工草稿创建时** fail closed —— 报工确认与工序完工不检查，工序在草稿之后被改为非 LINEAR 或委外时仍可完工；
+  - Design §24.12 要求的 `markOperationOutsourcedHandoff` **根本不存在** —— 委外工序只有「不能报工」，没有合法的离开路径；
+  - 收货质量门禁**只有「必须 PASS」一条路径** —— WAIVED 无实现、FAIL 无不合格例外、**从不读取 QCP**（「when / what」关系在代码中不存在），生产侧**从不抽样**；
+  - `production_receipts.nonconforming` 列**从不被写入**，且 LOT / SERIAL 扫码查询读取**不存在的列**（`lot_no` / `serial_no` / `status` / `quantity_remaining` / `warehouse_id`），IDENTITY 扫码必然抛 SQL 错误。
+- 另有 **8 项已实现能力没有任何前端入口**（补料 / 退料 / 批拣 / 用料清单受控编辑 / 工序计划三动作 / 排程 / Wave-H 两张分析 / 副产品），制令单详情此前不是 Requirement §29.8 E 要求的 execution hub。
+
+### 58.3 浏览器验收去空洞与其暴露的移动端缺陷
+
+- 原两个浏览器脚本只断言「元素存在」与「正文非空」，属空洞证据；去空洞后覆盖全部 7 条注册路由，断言**真实数据已渲染且被非零尺寸元素绘制**，并度量每个可点元素的触控目标。
+- 去空洞暴露并修复：
+  - **全站**移动端卡片栅格缺陷 —— 第二轨道原为 `auto`（按 max-content 定尺），一个长单号即可吃满整行并把另一列压成 **0 宽**，导致单号在文本里却不可读；修复前后 `v16-sitewide-rollout` 脚本结果一致（76/79），**无回归**，该脚本的 3 项失败是 Sales 域既有的「重复主标题」缺陷；
+  - 出库单与入库单列表**单号单元格是空的** —— 界面读驼峰字段而服务端只返回下划线字段；
+  - 页签按钮 36px、制造与质量各工作面的文档链接 65×17px，低于 44px 触控目标下限。
+
+### 58.4 专属 ACK-4 campaign
+
+- Manifest `MANUFACTURING_QUALITY_MYSQL_V1`，操作序列 `RESET_SCHEMA_PRE_RUN → BOOTSTRAP_CURRENT_SCHEMA → RUN_MANUFACTURING_QUALITY_RACES → CLEANUP_SCHEMA_POST_RUN`；竞态套件 4 条：并发双审核、并发受控编辑与审核、并发双委外交接、并发双工序转移。
+- **通过**：run `210f31c4-f76f-45f1-a90a-2d909846ed1a`、commit `eceadc5`，`RESULT = PASS`、`ACK-4 STATE = FINISHED`（清理由 Root 的独立 post-flight 证明，只读复核 `tables=0 views=0`），竞态套件 **4/4 PASS**。
+- **失败运行全部如实登记**（共 6 次）：5 次为**测试装置**缺陷（参数顺序、重复主键、外键指向不存在的工单、演示种子用户依赖、模板插值、插入值数），1 次为 MQ-RACE-02 **断言过强**（假定审核必胜；生产行为本身无缺陷）。每一次失败的 ACK-4 终态均为 `FAILED`，cleanup 均被证明，disposable 目标均经只读复核确认为空。
+
+### 58.5 域级 Acceptance 与 Capability Freeze 签发
+
+- **决定**：**域级 Acceptance 通过**（`MANUFACTURING_QUALITY_DOMAIN_ACCEPTANCE_PASS`）与 **Capability Freeze 签发**（`MANUFACTURING_QUALITY_CAPABILITY_FREEZE`，37 项 `COVERED` 能力）。
+- **签发记录**：[`docs/acceptance/manufacturing-quality-domain-acceptance-20261112.md`](../acceptance/manufacturing-quality-domain-acceptance-20261112.md)。
+- **能力判定**：43 项 = `COVERED` **37**、`PARTIAL` **1**（MQ-43 Dispatch）、`OUT_OF_SCOPE` **5**、`MISSING` **0**。
+- **`MQ-DEC-01`（MQ-43 Dispatch 的范围归属）未裁定**：该项只出现在 `document.md §21` 的领域级缺口概览，**不在 §22.19 的 B3119 目标能力基线内**，也不在 Requirement §29.4 的目标闭环表内。按 §4.1 判定纪律登记为显式范围问题，**既不静默实现，也不静默丢弃**。
+- **随冻结接受的残余**：`MQ-RES-01` 逐列 schema parity 未取证、`MQ-RES-02` 跨单据并发幂等未取证、`MQ-RES-03` Dispatch 范围未裁定、`MQ-RES-04` 副产品成本归会计域、`MQ-RES-05` N7 文档追溯债务。
+- **不签发**：Manual Closure（B3119 手册级关闭）、Release Readiness、发布、部署。
+
+### 58.6 未解决事项与暂停点
+
+- **下一域**：按就绪度顺序继续域 5 —— **Inventory & Warehouse**（INV-01..44）。该域的已知缺口在审计中已定位：8 个模块未在 `server/app.js` 注册路由、5 个死引用未接线、INV-17 组装拆卸未实现、条码无生成与打印、ABC 无写入、盘点走 legacy tuple 写入、`INV-27` 过滤集缺列、`inventory-hub.jsx` / `inventory-overview.jsx` 为调用不存在 API 的孤儿页。
+- 本轮**未**执行真实环境 migration、业务数据库写入、push / merge / tag / 发布 / 部署。
