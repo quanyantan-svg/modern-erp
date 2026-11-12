@@ -980,12 +980,17 @@ real MySQL
 
 SQLite-only evidence 不计入。
 
-**2026-11-12 修正（项目级统一口径 `MYSQL-EV-01`，见 [`docs/decisions/mysql-evidence-policy-20261112.md`](../decisions/mysql-evidence-policy-20261112.md)）**：本仓库当前只有三个已批准的 ACK-4 campaign 可以运行 —— `test:mysql:m1-core`、`test:mysql:accounting-analytics`、`test:mysql:out001`；其余 MySQL 入口（含 `scripts/gates/mysql-finance-concurrency-gate.mjs`）由 `blockUnmigratedAck4Entry` **永久阻断**。因此本条按两段口径执行：
+**2026-11-12 真实 MySQL 实证已取得**：本条不再是残余。Finance Operations 域级 ACK-4 campaign `FINANCE_MYSQL_V1`（manifest 操作 `RESET_SCHEMA_PRE_RUN / BOOTSTRAP_CURRENT_SCHEMA / RUN_FINANCE_RACES / CLEANUP_SCHEMA_POST_RUN`）在受保护 disposable MySQL 8.0.37 上执行了 15 个 race 场景：
 
-1. **schema / migration 对等** —— Finance 的迁移链与表结构在真实 MySQL 8 上被接受，由 `test:mysql:accounting-analytics` 的 `BOOTSTRAP_CURRENT_SCHEMA`（在**全量当前迁移集**上运行）证明。
-2. **RACE-01..RACE-15 的行为等价** —— 15 个 race 场景的实现位于 `server/mysql-finance-operations-concurrency.integration.js`（16 个用例），**当前尚未在真实 MySQL 上执行**；SQLite 并发套件只能作为行为等价的部分证据，**不构成**「真实 MySQL 上已实证」。
+| 项 | 值 |
+|---|---|
+| 套件 | `server/mysql-finance-operations-concurrency.integration.js`（16 个用例：RACE-01..15A/15B） |
+| run id | `74b21f14-0e82-42fa-a302-c0359f6cef4f` |
+| commit | `7a205e86995ceb205213dc1b5f6d83a6fb5614d0` |
+| 结果 | `PASS`；`ACK-4 STATE = FINISHED`（清理由 Root 的 `CLEANUP_SCHEMA_POST_RUN` 子进程独立 post-flight 证明） |
+| 目标 | `modern_erp_domain_test` @ `127.0.0.1:3306`，server uuid `256c7a4e-d275-11f1-885b-b025aa71d167`，grants sha256 `bef61617d1b96913f479c7642176eca53f60410b003773707cd56355e4ce807e` |
 
-本条的义务**不被取消**：RACE-01..RACE-15 仍是本域必须交付并执行的契约项，其「真实 MySQL 未取证」状态必须作为**显式残余**登记在域级 Acceptance 中，不得被表述为已证明。建立 `FINANCE_MYSQL_V1` 域级 campaign（新 manifest、launcher 条目，并由业务所有者逐次签发 ACK-4 capability）是把它升级为真实 MySQL 证据的**唯一**路径；本修正**不**授权该新建工作。
+`SQLite-only evidence 不计入` 的口径保持不变：本条由**真实 MySQL** 满足。门禁入口为 `pnpm test:mysql:finance`（本机统一启动器 `run-mysql-local-gate.ps1`），未获一次性 ACK-4 capability 时 fail closed。
 
 ### 33.40 Frozen Functional UAT
 
@@ -1418,7 +1423,7 @@ Cross-domain dependency 是 acceptance dependency metadata，**不是** capabili
 
 本节 Requirement 包含 **14** Non-Negotiable Invariants（F1–F14）/ **3** Canonical Recognition Models / **32** Frozen Functional UAT / **15** Finance-Specific MySQL Races。
 
-**2026-11-12 状态说明**：32 项 Frozen Functional UAT 与 24 项响应式 UAT 在当前 HEAD 全部通过；15 项 Finance-Specific MySQL Races 的**实现**齐备，但**真实 MySQL 执行尚未取得**（门禁被 ACK-4 永久阻断），按 §33.39 的 2026-11-12 修正处理。
+**2026-11-12 状态说明**：32 项 Frozen Functional UAT 与 24 项响应式 UAT 在当前 HEAD 全部通过；15 项 Finance-Specific MySQL Races 已在真实 MySQL 8.0.37 上取得实证（§33.39 的 2026-11-12 证据记录），本节不再保留该类残余。
 
 本节 Requirement 完成；下游 Design 见 `solution.md §28`（本阶段未开始）。等待用户 PASS。
 

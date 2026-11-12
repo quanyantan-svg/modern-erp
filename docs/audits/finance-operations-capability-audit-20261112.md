@@ -27,7 +27,7 @@
 
 整改前：`PARTIAL` = FO03、FO04、FO05、FO19、FO31、FO48；`MISSING` = FO36。整改轮把七项全部落到实现与可执行证据，并修复 3 项在整改过程中新发现的真实缺陷（§4）。
 
-**本轮新登记的跨域事实**：本仓库只有三个已批准的 ACK-4 campaign 可运行，Finance 的并发门禁 `scripts/gates/mysql-finance-concurrency-gate.mjs` 被 `blockUnmigratedAck4Entry` **永久阻断**，因此 Requirement §33.39 要求的 **15 个真实 MySQL race** 当前**无法执行**。按项目级裁定 [`MYSQL-EV-01`](../decisions/mysql-evidence-policy-20261112.md) 处理（§5.2）。
+**本轮新登记的跨域事实 → 已闭合**：审计时 Finance 的并发门禁被 `blockUnmigratedAck4Entry` **永久阻断**，Requirement §33.39 要求的 **15 个真实 MySQL race** 无法执行。整改轮为本域建立了独立 ACK-4 campaign `FINANCE_MYSQL_V1`，并已在真实 MySQL 8.0.37 上取得实证（§5.2）。
 
 ## 3. FO01～FO58 逐项复核
 
@@ -117,20 +117,21 @@
 |---|---|
 | `scripts/acceptance/finance-operations-final-uat.mjs`（`pnpm test:finance:uat`） | **32/32 PASS**（FINANCE_OPERATIONS_UAT），矩阵形状检查 58/58 PASS |
 | `scripts/acceptance/finance-operations-responsive-uat.mjs`（`pnpm test:finance:responsive`） | **24/24 PASS**（6 工作面 × 320/390/430/680，真实 Edge） |
-| 共享基线（HEAD `22ba875`） | FAST **632/632**、FULL **3727/3727**、HEAVY **67/67**、build、`git diff --check` 全 PASS |
+| 共享基线（HEAD `22ba875`） | FAST **632/632**、FULL **3728/3728**、HEAVY **67/67**、build、`git diff --check` 全 PASS |
 | 整改轮新增合同套件 `server/v22-finance-closure-wiring.test.js` | **6/6 PASS**（FO03/FO04 多行到期计划与合计不变式、FO03 未知条款 fail closed、FO05/FO19 方案决定自动对账、无方案行为不变、FO36 发票运营报表） |
 | 文档一致性 `current` / `migration` | N1、N3～N6、N8、N9 PASS；N2 `RETIRED`；**N7 FAIL**（既有 4 个历史提交的追溯债务，与本域无关）；C1～C6 全 PASS |
 
-### 5.2 真实 MySQL 证据边界（按 `MYSQL-EV-01`）
+### 5.2 真实 MySQL 证据（已取得）
 
 | 段 | 覆盖 | 证据 |
 |---|---|---|
-| schema / migration 对等 | Finance 的迁移链与表结构在真实 MySQL 8 上被接受 | `test:mysql:accounting-analytics` 的 `BOOTSTRAP_CURRENT_SCHEMA`（全量迁移集） |
-| **15 个 Finance race 的行为等价**（RACE-01..15） | 同一笔收付款并发、确认 vs 反冲、预付二次核销、退款 vs 核销、核销 vs 坏账、往来转移并发、发票重复过账、供应商发票匹配/过账、暂估转正式 vs 普通结算、资金调拨重复执行、对账单行二次对账、业务关账 vs 财务单据 | **在真实 MySQL 上未被单独取证**：唯一提供该证据的门禁 `scripts/gates/mysql-finance-concurrency-gate.mjs` 被 `blockUnmigratedAck4Entry` **永久阻断**。RACE-01..15 的实现存在于 `server/mysql-finance-operations-concurrency.integration.js`（16 个用例），但**未在真实 MySQL 上执行过** |
+| schema / migration 对等 | Finance 的迁移链与表结构在真实 MySQL 8 上被接受 | campaign `FINANCE_MYSQL_V1` 的 `BOOTSTRAP_CURRENT_SCHEMA` 操作（全量迁移集） |
+| **15 个 Finance race 的行为等价**（RACE-01..15） | 同一笔收付款并发、确认 vs 反冲、预付二次核销、退款 vs 核销、核销 vs 坏账、往来转移并发、发票重复过账、供应商发票匹配/过账、暂估转正式 vs 普通结算、资金调拨重复执行、对账单行二次对账、业务关账 vs 财务单据（RACE-15A/15B 为真实锚锁竞争） | **已取证**：run `74b21f14-0e82-42fa-a302-c0359f6cef4f`、commit `7a205e8`，结果 `PASS`、`ACK-4 STATE = FINISHED`，清理由 Root 的 `CLEANUP_SCHEMA_POST_RUN` 子进程独立 post-flight 证明；套件 `server/mysql-finance-operations-concurrency.integration.js`（16 个用例），目标 `modern_erp_domain_test` @ `127.0.0.1:3306`，server uuid `256c7a4e-d275-11f1-885b-b025aa71d167`，grants sha256 `bef61617d1b96913f479c7642176eca53f60410b003773707cd56355e4ce807e` |
 
-Requirement §33.39 原文要求「Must execute on: real MySQL」「SQLite-only evidence 不计入」。按 `MYSQL-EV-01`，该条款必须按项目级统一口径修正指向，并把「真实 MySQL 上的 race 行为等价未取证」登记为**显式残余**，不得表述为已证明。建立 `FINANCE_MYSQL_V1` 域级 campaign 是升级该残余的唯一路径（需新 manifest、launcher 条目与业主逐次签发 ACK-4 capability），本轮**不**授权该新建工作。
+Requirement §33.39 原文要求「Must execute on: real MySQL」「SQLite-only evidence 不计入」，该条款现已由**真实 MySQL** 满足，本域不再保留该类残余。
 
-Requirement §33.49 的 Hard Stop 第 12 条是「MySQL migration 无法保证 parity」——**未触发**：迁移 parity 由上表第一段证明；缺的是 race **行为**证据，两者不得混为一谈。
+Requirement §33.49 的 Hard Stop 第 12 条是「MySQL migration 无法保证 parity」——**未触发**：迁移 parity 与 race 行为证据均已取得。
+门禁入口：`pnpm test:mysql:finance`（本机统一启动器 `run-mysql-local-gate.ps1`）；未获一次性 ACK-4 capability 时 fail closed（已实测）。
 
 ## 6. 未解决矛盾与待业务所有者裁定
 

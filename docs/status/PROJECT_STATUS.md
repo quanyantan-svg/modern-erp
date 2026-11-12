@@ -4361,7 +4361,7 @@ Requirement §33.39 的 **15 个 Finance race**（RACE-01..15）实现齐备（`
 | Gate | 结果 |
 |---|---|
 | `pnpm test:fast` | **632/632 PASS** |
-| `pnpm test`（FULL） | **3727/3727 PASS**，0 失败 |
+| `pnpm test`（FULL） | **3728/3728 PASS**，0 失败 |
 | `pnpm test:heavy` | **67/67 PASS** |
 | `pnpm build` / `git diff --check` | PASS |
 | 域内 focused（`--filter finance`） | **78/78 PASS** |
@@ -4370,8 +4370,18 @@ Requirement §33.39 的 **15 个 Finance race**（RACE-01..15）实现齐备（`
 | `pnpm test:finance:responsive` | **24/24 PASS**（真实 Edge 六工作面 × 四档宽度） |
 | 治理守卫（跨域错误码耦合 / 验收记录有效性） | 双 PASS |
 
-### 56.6 未解决事项与暂停点
+### 56.6 域级 Acceptance 与 Capability Freeze 签发
 
-- 待业务所有者签发：域级 Acceptance 与 Capability Freeze，以及随冻结接受的残余 `FIN-RES-01`（RACE-01..15 真实 MySQL 行为等价未取证）、`FIN-RES-02`（FO02 管理面 list/upsert 无专门用例，其消费路径有）、`FIN-RES-03`（N7 文档追溯债务，与本域无关）。
+- **授权来源**：业务所有者 2026-11-12 指示「签发域级 Acceptance 与 Capability Freeze」，并要求「FIN-RES-01、02、03 能够解决吗？最好是解决了再开始下一域」。
+- **决定**：**域级 Acceptance 通过**（`FINANCE_OPERATIONS_DOMAIN_ACCEPTANCE_PASS`）与 **Capability Freeze 签发**（`FINANCE_OPERATIONS_CAPABILITY_FREEZE`，58 项 `COVERED` 能力）。
+- **签发记录**：[`docs/acceptance/finance-operations-domain-acceptance-20261112.md`](../acceptance/finance-operations-domain-acceptance-20261112.md)。同日候签材料标记为 `SUPERSEDED`。
+- **三项残余的处置**：
+  - `FIN-RES-01`（RACE-01..15 真实 MySQL 行为等价未取证）→ **已解决**：为本域建立独立 ACK-4 campaign `FINANCE_MYSQL_V1`，run `74b21f14-0e82-42fa-a302-c0359f6cef4f`、commit `7a205e8`，结果 `PASS`、`ACK-4 STATE = FINISHED`、清理由 Root 的 `CLEANUP_SCHEMA_POST_RUN` 子进程独立 post-flight 证明。Requirement §33.39 的「real MySQL / SQLite-only 不计入」由此满足；整改轮中途对该条款的临时修正已撤销，原合同条款恢复为唯一正文。
+  - `FIN-RES-02`（FO02 管理面 list/upsert 无专门用例）→ **已解决**：新增合同用例覆盖写入、读取、解析器消费与「非法模式被拒且不留行」负例。
+  - `FIN-RES-03`（N7 文档追溯债务）→ **不解决**：成因是四个**已推送**历史提交的 message 缺少变更章节引用；消除它需改写已发布 Git 历史，本轮不授权。该债务与本域能力无关，**作为显式残余随冻结接受**。
+- **不签发**：Manual Closure（B3108–B3113 手册级关闭）、Release Readiness、发布、部署。
+
+### 56.7 未解决事项与暂停点
+
 - **下一域**：按就绪度顺序继续域 3 —— **Master & Engineering**（ME-01..31）。
 - 本轮**未**执行真实环境 migration、业务数据库写入、push / merge / tag / 发布 / 部署。

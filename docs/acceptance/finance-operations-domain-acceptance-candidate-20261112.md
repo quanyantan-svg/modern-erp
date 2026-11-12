@@ -4,7 +4,7 @@
 >
 > **Owner**：Finance Operations Domain Owner（Acceptance 与 Freeze 的唯一签字人）；Platform / QA（证据维护）。
 >
-> **状态**：`PENDING_APPROVAL` —— 候签材料，等待业务所有者决定。逐项证据见 [`docs/audits/finance-operations-capability-audit-20261112.md`](../audits/finance-operations-capability-audit-20261112.md)。
+> **状态**：`SUPERSEDED` —— 本文件是候签材料（决定过程的证据），**已被** [`finance-operations-domain-acceptance-20261112.md`](./finance-operations-domain-acceptance-20261112.md) 取代；该签发记录才是 Acceptance 与 Freeze 的正式证据。本文件**不是** Release Readiness 证据。逐项证据见 [`docs/audits/finance-operations-capability-audit-20261112.md`](../audits/finance-operations-capability-audit-20261112.md)。
 >
 > **权威来源**：Requirement [`docs/requirements/finance-operations.md`](../requirements/finance-operations.md) §33.1～§33.50；Design [`docs/design/finance-operations.md`](../design/finance-operations.md) §28；能力矩阵 [`docs/operations/finance-operations-capability-matrix.md`](../operations/finance-operations-capability-matrix.md)；唯一项目状态登记表 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md)。
 >
@@ -12,6 +12,7 @@
 
 ```text
 FINANCE_OPERATIONS_DOMAIN_ACCEPTANCE_CANDIDATE_READY_FOR_OWNER_DECISION
+（已于 2026-11-12 签发：FINANCE_OPERATIONS_DOMAIN_ACCEPTANCE_PASS / FINANCE_OPERATIONS_CAPABILITY_FREEZE）
 ```
 
 ## 1. 候签范围
@@ -35,7 +36,7 @@ FINANCE_OPERATIONS_DOMAIN_ACCEPTANCE_CANDIDATE_READY_FOR_OWNER_DECISION
 | `pnpm test:finance:responsive`（真实 Edge） | **24/24 PASS**（6 工作面 × 320/390/430/680） |
 | 域内 focused（`--filter finance`） | **78/78 PASS** |
 | 整改轮新增合同套件 `server/v22-finance-closure-wiring.test.js` | **6/6 PASS**（含 FO03 未知条款 409、无方案时行为不变等负例） |
-| 共享基线 | FAST **632/632**、FULL **3727/3727**、HEAVY **67/67**、build、`git diff --check` 全 PASS |
+| 共享基线 | FAST **632/632**、FULL **3728/3728**、HEAVY **67/67**、build、`git diff --check` 全 PASS |
 | 文档一致性 | `current` N1、N3～N6、N8、N9 PASS、N2 `RETIRED`、**N7 FAIL**（既有 4 个历史提交的追溯债务）；`migration` C1～C6 全 PASS |
 
 ### 2.1 非空洞证明（变异实验）
@@ -65,9 +66,9 @@ FINANCE_OPERATIONS_DOMAIN_ACCEPTANCE_CANDIDATE_READY_FOR_OWNER_DECISION
 | 段 | 覆盖 | 证据 |
 |---|---|---|
 | schema / migration 对等 | Finance 迁移链与表结构在真实 MySQL 8 上被接受 | `test:mysql:accounting-analytics` 的 `BOOTSTRAP_CURRENT_SCHEMA`（全量迁移集） |
-| **RACE-01..15 的行为等价** | 15 个 race 场景（并发收付款、确认 vs 反冲、预付二次核销、退款 vs 核销、核销 vs 坏账、往来转移并发、发票重复过账、供应商发票匹配/过账、暂估转正式 vs 普通结算、资金调拨重复执行、对账单行二次对账、业务关账 vs 财务单据） | **在真实 MySQL 上未被单独取证** —— 唯一提供该证据的门禁 `scripts/gates/mysql-finance-concurrency-gate.mjs` 被 `blockUnmigratedAck4Entry` **永久阻断**。实现齐备（`server/mysql-finance-operations-concurrency.integration.js`，16 个用例），但**从未在真实 MySQL 上执行过** |
+| **RACE-01..15 的行为等价** | 15 个 race 场景（并发收付款、确认 vs 反冲、预付二次核销、退款 vs 核销、核销 vs 坏账、往来转移并发、发票重复过账、供应商发票匹配/过账、暂估转正式 vs 普通结算、资金调拨重复执行、对账单行二次对账、业务关账 vs 财务单据） | **已取证**：run `74b21f14-0e82-42fa-a302-c0359f6cef4f`、commit `7a205e8`，结果 `PASS`、`ACK-4 STATE = FINISHED`，清理由 Root 的 `CLEANUP_SCHEMA_POST_RUN` 子进程独立 post-flight 证明 |
 
-Requirement §33.39 的义务**未被取消**：15 个 race 仍是必须交付的契约项，其「真实 MySQL 未取证」状态必须作为显式残余登记。Requirement §33.49 的 Hard Stop 第 12 条（MySQL migration 无法保证 parity）**未触发** —— parity 已证明，缺的是 race **行为**证据。
+Requirement §33.39 的「Must execute on: real MySQL / SQLite-only evidence 不计入」由**真实 MySQL** 满足，无残余。
 
 ## 4. 本轮已处置
 
@@ -84,11 +85,11 @@ Requirement §33.39 的义务**未被取消**：15 个 race 仍是必须交付�
 | `FIN-DEC-01` | FO36 发票运营报表无实现 | **已裁定并实施**：补齐实现 |
 | `FIN-DEC-02` | FO03 / FO04 / FO05 三个 master 无业务消费者（连带 FO19） | **已裁定并实施**：接线三个 master |
 | `FIN-DEC-03` | FO31 的第二个写入口与 FO48 的 legacy 对账账本 | **已裁定并实施**：删除重复写入口并退役 legacy 账本 |
-| `FIN-DEC-04` | 真实 MySQL race 行为等价未取证 | **已裁定**：按 `MYSQL-EV-01` 接受为显式残余（§3.2 已写明边界）；不新建 `FINANCE_MYSQL_V1` campaign |
+| `FIN-DEC-04` | 真实 MySQL race 行为等价未取证 | **已裁定并实施**：为本域建立独立 ACK-4 campaign `FINANCE_MYSQL_V1`，并已在真实 MySQL 8.0.37 上取得实证（§3.2） |
 
 **尚需业主在签发时确认的两项**：
 
-1. 随冻结接受的残余：`PLAN` 侧的 `FIN-RES-01`（RACE-01..15 的真实 MySQL 行为等价未取证）、`FIN-RES-02`（FO02 的管理面 list/upsert 仍无专门用例，其消费路径有）、`FIN-RES-03`（N7 文档追溯债务，与本域无关）。
+1. 随冻结接受的残余：`FIN-RES-03`（N7 文档追溯债务 —— 成因是四个**已推送**历史提交的 message 缺少章节引用，与本域能力无关；不改写已发布历史则不可消除）。`FIN-RES-01`（真实 MySQL race 行为等价）已由本域 ACK-4 campaign 取证闭合；`FIN-RES-02`（FO02 管理面 list/upsert 无专门用例）已由新增合同用例闭合。
 2. 域级 Acceptance 与 Capability Freeze 的签发范围。
 
 ## 6. 本次候签**不**主张的内容
@@ -105,5 +106,5 @@ Requirement §33.39 的义务**未被取消**：15 个 race 仍是必须交付�
 |---|---|
 | 域级 Acceptance | ☐ 通过（`FINANCE_OPERATIONS_DOMAIN_ACCEPTANCE_PASS`）　☐ 有条件通过　☐ 退回 |
 | Capability Freeze | ☐ 签发（`FINANCE_OPERATIONS_CAPABILITY_FREEZE`，58 项 `COVERED` 能力）　☐ 部分签发（能力清单：______）　☐ 不签发 |
-| 随冻结接受的残余 | `FIN-RES-01`（RACE-01..15 真实 MySQL 行为等价未取证）、`FIN-RES-02`、`FIN-RES-03`　☐ 全部接受　☐ 部分（说明：______） |
+| 随冻结接受的残余 | `FIN-RES-03`（N7 文档追溯债务，与本域能力无关）　☐ 接受　☐ 不接受（说明：______） |
 | 未解决矛盾（须显式记录） | ______ |
