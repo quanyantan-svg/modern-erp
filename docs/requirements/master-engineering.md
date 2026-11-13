@@ -25,6 +25,9 @@
 - 委外订单执行 / AP 加工费（Procurement & Outsourcing）；
 - 库存 mutation、计价、AR/AP、GL（Inventory / Finance / Accounting）；
 - Multi-Organization（OUT_OF_SCOPE — CURRENT PRODUCT BASELINE）；
+  - **2026-11-13 裁定（`PL-DEC-02`）**：Organization 主数据（组织注册表、组织层级、作用域登记）的所有权**正式移交 Platform 域**，见 [`docs/requirements/platform.md` §36.5](platform.md) 与 [`docs/decisions/platform-domain-closure-decisions-20261113.md`](../decisions/platform-domain-closure-decisions-20261113.md)。
+    本行的 `OUT_OF_SCOPE` 判定**仅**指"多组织**业务数据隔离**（向业务表铺开 `org_id` 并按组织分流业务数据）"仍不在 Master & Engineering 范围内 —— 该判定**不因所有权移交而改变**。
+    Platform 建立组织主数据**不构成**对 Master & Engineering 的多组织业务解锁；两域均不得在未获新的业务所有者裁定前实施多组织业务数据隔离。
 - 完整 APS 调度 / HMI / 完整 MES（OUT_OF_SCOPE）。
 
 ### 28.2 Manual Evidence Baseline（摘要）
@@ -191,7 +194,9 @@
 
 遇下列情况停止对应 sub-capability（不影响其它 sub-capability 推进）：
 
-1. Multi-Organization 需求出现；
+1. Multi-Organization **业务数据隔离**需求出现（向业务表铺开 `org_id` 并按组织分流业务数据）。
+   - **2026-11-13 裁定（`PL-DEC-02`）**：Organization 主数据所有权已移交 Platform 域，Platform 建立组织注册表与作用域登记**不触发**本条 Hard Stop；本条仅约束**多组织业务数据隔离**这一具体形态，该形态仍 `OUT_OF_SCOPE`；
+   - Master & Engineering 若需为组织主数据提供只读查询或解析契约，走 Platform 的 canonical 组织接口，不另建第二套组织模型；
 2. 需要重写完整 MRP；
 3. 需要实现完整 Production Scheduling / APS；
 4. 需要实现完整 Outsourcing / 加工费 AP；

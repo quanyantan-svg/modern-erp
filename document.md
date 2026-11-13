@@ -28,7 +28,7 @@
 | Finance Operations | [`docs/requirements/finance-operations.md`](docs/requirements/finance-operations.md) | §33 |
 | Sales & Customer | [`docs/requirements/sales-customer/README.md`](docs/requirements/sales-customer/README.md) | §34 + Wave 8/9/10/11 修订 |
 | Accounting & Analytics | [`docs/requirements/accounting-analytics.md`](docs/requirements/accounting-analytics.md) | §35（Accounting & Analytics Domain Closure Requirement，2026-11-10 建立；AA-W1..AA-W7 全部纳入，AA-31 多币种 `OUT_OF_SCOPE`） |
-| Platform | **尚无 Domain Closure Requirement** | — |
+| Platform | [`docs/requirements/platform.md`](docs/requirements/platform.md) | §36（Platform 平台层域 Domain Closure Requirement，2026-11-13 建立；PL-01..PL-13 共 13 项平台长期能力 + WF-01..WF-08 共 8 项 B3122 手册能力，合计 21 项，目标 17 `COVERED` / 4 `OUT_OF_SCOPE`；`PL-DEC-01`～`PL-DEC-03` 已由业务所有者裁定） |
 
 ### 0.2 章节编号迁移规则
 
@@ -147,13 +147,16 @@ Modern ERP 是 mobile-first 制造业 ERP。长期目标不是复制传统桌面
 | WAREHOUSE | 收发货、退货、IQC/OQC、盘点、调拨、调整、报废、生产领退料与生产入库 |
 | ACCOUNTING | AR/AP、收付款、贷项/退款/核销、手工凭证、财务报表 |
 
-当前审批中心五类授权事件仍为：
+当前审批中心六类授权事件仍为：
 
 - `SALES_ORDER`
 - `PURCHASE_ORDER`
 - `PURCHASE_REQUISITION`
 - `INVENTORY_CHECK`
 - `ACCOUNTING_VOUCHER`
+- `PRODUCTION_ORDER`
+
+另有信用特批（`CREDIT_SPECIAL_APPROVAL`），是 Sales & Customer 域拥有的独立审批机制，不进入上述审批中心聚合。
 
 在 B3122 Generic Workflow 完成之前，不得用半成品 Workflow 取代这些 canonical 审批合同。
 
@@ -570,7 +573,7 @@ Platform 最终承担：
 
 Document Conversion 的抽象必须服务来源追溯，但不能覆盖各 Domain 自己的业务校验。
 
-Generic Workflow 由 B3122 驱动；在完成前，现有五审批族保持 canonical。
+Generic Workflow 由 B3122 驱动；在完成前，现有六类授权事件审批族保持 canonical。
 
 ---
 

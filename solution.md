@@ -1237,7 +1237,7 @@ Definition
 → Business Callback
 ```
 
-现有五 approval families 在完成前继续 canonical。
+现有六类授权事件 approval families 在完成前继续 canonical。
 
 #### Numbering / Audit / Period
 

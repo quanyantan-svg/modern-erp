@@ -19,7 +19,7 @@
 | [`finance-operations.md`](./finance-operations.md) | Finance Operations | `document.md` §33 | Requirement 完成；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12，`FINANCE_OPERATIONS_DOMAIN_ACCEPTANCE_PASS`，58 项 `COVERED`） |
 | [`sales-customer/`](./sales-customer/) | Sales & Customer | `document.md` §34 + Wave 8/9/10/11 修订 | Requirement 完成；整域已冻结（2026-11-13，`SALES_CUSTOMER_DOMAIN_ACCEPTANCE_PASS`，CAP-1..36 全部 `COVERED`） |
 | [`accounting-analytics.md`](./accounting-analytics.md) | Accounting & Analytics | `document.md` §35 | Requirement 完成并获批准（`APPROVED`，2026-11-10）；AA-W1..AA-W7 全部纳入 Domain Closure，AA-31 多币种 `OUT_OF_SCOPE`；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12，`ACCOUNTING_ANALYTICS_DOMAIN_ACCEPTANCE_PASS`，43 项 `COVERED`） |
-| — | Platform | — | **尚无 Domain Closure Requirement** |
+| [`platform.md`](./platform.md) | Platform | `document.md` §36 | Requirement 完成并获批准（`APPROVED`，2026-11-13）；覆盖 PL-01..PL-13 共 13 项平台长期能力 + WF-01..WF-08 共 8 项 B3122 手册能力共 21 项，目标 **17 `COVERED` / 4 `OUT_OF_SCOPE`**（PL-06 通用化增量、PL-07、PL-08、PL-13 收敛增量）；`PL-DEC-01`～`PL-DEC-03` 已由业务所有者裁定 —— **Implementation 未授权**，且 Platform 域级 Acceptance 与 Capability Freeze 尚未签发 |
 
 > 状态列的完整依据见 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §35.3；
 > M1-Core 首期包级 Acceptance 的当前状态见同表 §37.55，B3101 / B3121 静态代码审计基线见同表 §38
