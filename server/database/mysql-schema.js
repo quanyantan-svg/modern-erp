@@ -3,6 +3,26 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { WAVE10_MYSQL_COLUMN_TYPES } from '../migrations/sales-customer-wave10-credit-check.js';
+import { WAVE11_EVALUATION_FOUNDATION_MYSQL_COLUMN_TYPES } from '../migrations/sales-customer-wave11-credit-evaluation-foundation.js';
+import { WAVE11_EVALUATION_RESULT_MYSQL_COLUMN_TYPES } from '../migrations/sales-customer-wave11-credit-evaluation-result-application.js';
+import { WAVE11_RECONCILIATION_MYSQL_COLUMN_TYPES } from '../migrations/sales-customer-wave11-credit-reconciliation.js';
+
+// The tables that carry a hand-written canonical MySQL DDL. Their physical
+// type is fixed by that DDL and NOT by the generic heuristic below, so both
+// materialization paths — the SQLite snapshot bootstrap and the live migration
+// — have to produce the same physical schema.
+//
+// Wave 10 and the Wave 11 Sales tables are pinned here. A second,
+// hand-maintained copy of a type map is exactly how the two paths drift
+// apart: the snapshot path derives the type from the SQLite column, while the
+// live path takes the migration's own literal, and the mismatch is only
+// visible on a real MySQL server. Pinning removes the second copy.
+const PINNED_MYSQL_COLUMN_TYPES = Object.freeze({
+  ...WAVE10_MYSQL_COLUMN_TYPES,
+  ...WAVE11_EVALUATION_FOUNDATION_MYSQL_COLUMN_TYPES,
+  ...WAVE11_EVALUATION_RESULT_MYSQL_COLUMN_TYPES,
+  ...WAVE11_RECONCILIATION_MYSQL_COLUMN_TYPES,
+});
 
 const quote = (name) => `\`${String(name).replaceAll('`', '``')}\``;
 
@@ -111,11 +131,11 @@ function extractChecks(sql) {
 function mysqlType(column, indexed, tableName) {
   const declared = String(column.type || '').toUpperCase();
   const name = String(column.name).toLowerCase();
-  // The Wave 10 tables are the only ones with a hand-written canonical MySQL
-  // DDL, so their physical type is fixed by that DDL and not by the generic
-  // heuristic below. Both paths must materialize the same physical schema.
-  const wave10 = WAVE10_MYSQL_COLUMN_TYPES[tableName]?.[name];
-  if (wave10) return wave10;
+  // The pinned tables above carry a hand-written canonical MySQL DDL, so
+  // their physical type is fixed by that DDL and not by the generic heuristic
+  // below. Both paths must materialize the same physical schema.
+  const pinned = PINNED_MYSQL_COLUMN_TYPES[tableName]?.[name];
+  if (pinned) return pinned;
   // Inventory mutation keys preserve the complete source event, item and
   // LOT/SERIAL identity. Current outsourcing UUIDv4 keys can exceed the
   // generic 128-character indexed-text bound, while remaining below 191.
@@ -150,6 +170,18 @@ export function mysqlTypeFamily(column, indexed, tableName) {
   const type = mysqlType(column, indexed, tableName);
   const family = String(type).split('(')[0].trim().toUpperCase().split(' ')[0];
   return family.toLowerCase();
+}
+
+// The exact MySQL type the snapshot bootstrap materializes for one column.
+//
+// A migration that also carries a hand-written MySQL DDL MUST declare the same
+// type here: the snapshot path and the live-migration path have to materialize
+// ONE physical schema, and this function is the single place that decides it.
+// Exported so the migration-side contract can be DERIVED from the canonical
+// rule instead of keeping a second, hand-maintained copy of it — a second copy
+// is exactly how the two paths drift apart.
+export function resolveMySqlColumnType(column, indexed, tableName) {
+  return mysqlType(column, indexed, tableName);
 }
 
 function mysqlDefault(value, type) {

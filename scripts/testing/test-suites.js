@@ -192,6 +192,11 @@ const FULL = [
   // the unsafe-legacy-amount normalisation. It is not FAST because every case
   // runs the production migration chain and a real SQLite database.
   'server/sales-customer-wave11-d-reconciliation.test.js',
+  // Wave 11 — the MySQL physical type contract of the three new Sales tables.
+  // The pinned type map, the SQLite snapshot materialization and the
+  // hand-written MySQL DDL are ONE fact; this guard proves it offline, so the
+  // drift that only a real MySQL server can expose cannot come back.
+  'server/sales-customer-wave11-mysql-type-contract.test.js',
   // W11-B / W11-C — SC103..SC107 Credit Evaluation foundation, bounded
   // multi-scorer and rating application. Disposable SQLite proof for the
   // effective-dated configuration contract (version exists, interval overlap,
