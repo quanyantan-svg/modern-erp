@@ -290,9 +290,20 @@ describe('Sales & Customer domain real MySQL concurrency invariants (7 races)', 
     const ids = threadIds.map((value) => Number(value));
     for (let attempt = 0; attempt < 400; attempt += 1) {
       const rows = observer.prepare(`SELECT REQUESTING_THREAD_ID waiter, BLOCKING_THREAD_ID blocker
-        FROM performance_schema.data_lock_waits WHERE REQUESTING_THREAD_ID IN (?, ?)`).all(...ids);
+        FROM performance_schema.data_lock_waits
+        WHERE REQUESTING_THREAD_ID IN (?, ?) OR BLOCKING_THREAD_ID IN (?, ?)`).all(...ids, ...ids);
       const waiters = new Set(rows.map((row) => Number(row.waiter)));
-      if (ids.every((id) => waiters.has(id))) {
+      // Contention means: at least one contender is genuinely BLOCKED, and the
+      // other one is either blocked as well or is the blocker. Both shapes are
+      // a real race — the second contender is held by the first one's
+      // in-flight transaction. A contender that is neither waiting nor
+      // blocking has already finished, and the race degenerated into two
+      // sequential calls, which is exactly what must be rejected.
+      const blocked = ids.filter((id) => waiters.has(id));
+      const blocking = new Set(rows.map((row) => Number(row.blocker)));
+      const contended = blocked.length > 0
+        && ids.every((id) => waiters.has(id) || blocking.has(id));
+      if (contended) {
         return { observed: true, attempts: attempt + 1, waiters: rows.map((row) => ({ waiter: Number(row.waiter), blocker: Number(row.blocker) })) };
       }
       // The wait must not block this process's event loop: the HTTP server

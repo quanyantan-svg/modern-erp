@@ -21,6 +21,7 @@ import { decideCreditSpecialApproval, requestCreditSpecialApproval } from '../..
 import { createCreditEvaluationSheet, finalizeCreditEvaluationSheet, scoreCreditEvaluationSheet } from '../../server/modules/credit-evaluation.js';
 import { salesOrderAction } from '../../server/modules/sales-orders.js';
 import { applySalesOrderChange } from '../../server/modules/sales-order-changes.js';
+import { transaction } from '../../server/db.js';
 import { convertSalesQuotation, createSalesQuotation, salesQuotationAction } from '../../server/modules/sales-quotations.js';
 import {
   consumeReservationIntent, grantReservationIntent, releaseReservationIntent,
@@ -180,10 +181,18 @@ async function execute(command) {
   }
   if (command.action === 'order-change-apply') {
     try {
-      const result = applySalesOrderChange(
-        db, command.changeId, Number(command.expectedBaseVersion), command.key,
-        command.actorId ? { ...ACTOR, id: command.actorId } : ACTOR,
-      );
+      // The production route applies the change INSIDE a transaction, and the
+      // transaction helper takes the L0 coordination gate first. Calling the
+      // function bare would bypass that gate, and the two contenders would
+      // then be free to run one after the other — the race would degenerate
+      // into two sequential calls and prove nothing.
+      let result;
+      transaction(db, () => {
+        result = applySalesOrderChange(
+          db, command.changeId, Number(command.expectedBaseVersion), command.key,
+          command.actorId ? { ...ACTOR, id: command.actorId } : ACTOR,
+        );
+      });
       return { status: 200, statusCode: 200, body: result, connectionId: connectionId() };
     } catch (error) {
       return { ...failure(error), connectionId: connectionId() };
