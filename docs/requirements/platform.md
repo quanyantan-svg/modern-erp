@@ -1,9 +1,10 @@
 # Platform — Requirement
 
-> 状态：`APPROVED`
+> 状态：`ACTIVE`
 > Owner：Platform
 > 权威来源：`document.md` §0.1 Domain Requirement 入口 + 本文件 `§36`
 > 来源：新增正文（2026-11-13 建立 Platform Domain Closure Requirement）。
+> **本文件已获业务所有者批准（`APPROVED`，2026-11-13）**；Implementation 尚未授权。
 > 上游依据：[`docs/audits/platform-capability-audit-20261113.md`](../audits/platform-capability-audit-20261113.md)（`v1.0`，基准 SHA `63bb7c5`）。
 > 手册能力基线来源：`document.md` §17（Platform 长期能力）、`document.md` §22.22（B3122 工作流设计与配置）。
 > 业务所有者 2026-11-13 裁定（详见 [`docs/decisions/platform-domain-closure-decisions-20261113.md`](../decisions/platform-domain-closure-decisions-20261113.md)）：
