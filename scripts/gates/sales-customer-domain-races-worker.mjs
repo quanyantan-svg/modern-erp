@@ -166,13 +166,11 @@ async function execute(command) {
     return { dialect: db.dialect, connectionId: connectionId(), threadId: threadId(), processId: process.pid };
   }
   if (command.action === 'hold-gate') {
-    // The L0 coordination gate: the production transaction() helper acquires
-    // this row first, so every contender is observably pending here before it
-    // touches a business row.
-    //
-    // The gate row is a MySQL-only object. On SQLite the offline validation
-    // mode cannot hold it; the suite skips the gate in that mode and the
-    // result is explicitly NOT contention evidence.
+    // The L0 coordination gate. The production transaction() helper acquires
+    // this row FIRST, so holding it queues the contenders behind the control
+    // instead of letting them contend with each other. The suite therefore
+    // releases the contenders through a FILE gate instead; this action is kept
+    // for the offline mode's explicit refusal and for any future use.
     if (db.dialect !== 'mysql') {
       return { held: false, unsupported: true, connectionId: connectionId() };
     }
