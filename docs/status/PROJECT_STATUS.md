@@ -4661,8 +4661,34 @@ Requirement §33.39 的 **15 个 Finance race**（RACE-01..15）实现齐备（`
 
 ### 61.8 未解决事项与暂停点
 
-- **`PL-OPEN-01`**：`audit_logs` schema 升级影响 Finance Operations 等 8 个已冻结域的既有验收证据当前有效性，须按 AGENTS.md §4.6 在 Platform 域级 Acceptance 轮逐域复核登记。
-- **`PL-D-OPEN-02`**：SOD 与通知的跨域接线点变更触及 6 个业务域，各域的域级 Acceptance 证据同样须复核登记。
-- **`PL-D-OPEN-03`**：采购申请单号格式变更（`PREQ-YYYYMMDD-N` → `PRQ-YYYYMM-00001`）需 Planning 域 Owner 确认无外部依赖。
+- **`PL-OPEN-01`**：**已预验证消解**（2026-11-13 矛盾消解轮，见 §61.9）。真实风险不在 8 个已冻结域的断言 —— 全仓库 `audit_logs` 断言一律为 `COUNT(*)` 或 `SELECT *` + 既有字段读取，无一处断言列集合或列数；**已冻结的验收记录不钉死任何数据库摘要或表计数**（唯一 `tables=0` 是 campaign 后 disposable 库清空证明）→ 新增列与新增表**不使任何已签发结论失效**。真实风险在**三个已批准 campaign 的 Schema Parity**（`compareTableParity` 比较列集合与列序，`audit_logs` 在三个 campaign 的表清单内）→ 4 个新列必须 SQLite / MySQL **双侧同批**落地。已写入 Design §32.2.7 补充段与 §32.11 约束 #11。剩余：Acceptance 轮按 §4.6 登记**测试计数变化**（冻结时点快照值，非能力结论）。
+- **`PL-D-OPEN-02`**：**行为影响已消解**（2026-11-13 矛盾消解轮，见 §61.9）。原 Design 把 SOD 写作「前置统一闸门」，经核查发现**既有 5 族的自审批防护状态码与文案各不相同**（4 族 409 + 凭证族 403，5 种中文文案）—— 前置会改变既有行为，违反 Requirement §36.4 与 Design §32.11 约束 #1。已修正为**置于既有防护之后**（Design §32.4.3 接线规则表），并新增跨域回归专项测试 `server/platform-frozen-domain-regression.test.js`。通知接线不写 `audit_logs`、无测试统计 `notifications` 行数 → 不受影响。剩余：Acceptance 轮复核登记。
+- **`PL-D-OPEN-03`**：**已由证据关闭**（2026-11-13 矛盾消解轮，见 §61.9）。全仓库**无任何生产代码解析 `requisition_no` 格式** —— `makeCode`（`server/modules/planning-documents.js:85-92`）是唯一生成点；其余命中（`server/uat-r6-procurement-batching.test.js:51`、`server/v12-lifecycle-cleanup.test.js:62`、`server/v12-lifecycle-foundation.test.js:61`、`scripts/acceptance/v161-procurement-batching.mjs:23`）均为字面量夹具，不依赖格式。
 - **`PL-D-OPEN-05`**：本域专属 ACK-4 campaign 清单需业务所有者批准（受保护入口限制见 `docs/decisions/mysql-evidence-policy-20261112.md`）。
+- **N7 门禁既有 FAIL**：4 个历史提交（`a40e356` / `59eccd5` / `171ade5` / `4403a80`）提交信息缺 §id 或完整路径，且**均已推送到 `github/master`**。修复需改写已发布历史 → 需业务所有者单独裁定（见 §61.9）。
+- **`PL-DEF-08` / `PL-DEF-09`**：期间控制三闸门并存、`operating` / `finance` 关闭对 canonical 闸门不可见 —— 已按 `PL-DEC-01` 归入 `OUT_OF_SCOPE`，作为显式残余随冻结接受；仅能由后续版本的域解冻立项解决。
+- **Manual Closure 与 Release Readiness**：对全部 22 本手册仍未签发 —— 是业务所有者对每本手册的独立决定，不由域级 Acceptance 跟随。
 - **HARD STOP**：Design 已完成，**不得自动进入 Implementation**（AGENTS.md §4.3 / §4.0）。下一可推进项是业务所有者明确批准 Platform 域 Implementation。
+
+### 61.9 矛盾消解轮（2026-11-13）：三项由证据关闭，一项发现并修正设计缺陷，一项升级为所有者裁定
+
+**授权来源**：业务所有者 2026-11-13 指示「能否解决这些未解决矛盾」。
+
+**本轮结论**：7 项未解决矛盾按可解性分三类。
+
+| 矛盾 | 处置 | 依据 |
+|---|---|---|
+| `PL-D-OPEN-03` 采购申请单号格式 | **已关闭** | 无生产代码解析该格式 |
+| `PL-OPEN-01` 审计 schema 的验收证据影响 | **已消解**（真实风险改判为三个 campaign 的 Schema Parity） | 全仓库 `audit_logs` 断言不依赖列集合；冻结记录不钉死摘要或表计数 |
+| `PL-D-OPEN-02` 跨域接线 | **已消解**（并**发现并修正一处设计缺陷**） | 5 族既有防护状态码/文案不一致 → SOD 接线位置由「前置」改为「既有防护之后」 |
+| `PL-DEF-08` / `PL-DEF-09` 期间控制 | **不可解**（已裁定 `OUT_OF_SCOPE`） | 需先对 Finance Operations / Accounting & Analytics 解冻 |
+| `PL-D-OPEN-05` ACK-4 campaign 清单 | **待所有者批准** | 受保护入口限制 |
+| Manual Closure / Release Readiness | **待所有者对 22 本手册逐一决定** | 冻结层级七层中的独立两层 |
+| N7 既有 FAIL | **待所有者裁定**（4 个提交已推送，改写已发布历史需批准） | AGENTS.md §11.5 |
+
+**本轮实际修改**：`docs/design/platform.md` §32.4.3（SOD 接线位置修正 + 既有防护状态码文案对照表）、
+§32.2.7（parity 与摘要机制影响补充段）、§32.11（新增兼容约束 #11～#13）、
+§32.12.1（新增跨域回归专项测试）、§32.14（`PL-D-OPEN-02` / `PL-D-OPEN-03` 状态更新）。
+
+**未发生**：未修改 `server/`、`src/`、`scripts/` 任何代码；未执行真实环境 migration、
+业务数据库写入、真实 MySQL Gate、push / merge / tag / 发布 / 部署；未签发任何 Acceptance 或 Freeze 标识。

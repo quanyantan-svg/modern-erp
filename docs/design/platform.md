@@ -354,11 +354,27 @@ SOD 求值必须在**审批决策点**被调用。既有 6 族的决策点分布
 | `PRODUCTION_ORDER` | `server/modules/manufacturing-orders.js:156 transitionOrder` 的 `target === 'APPROVED'` 分支 | Manufacturing & Quality |
 | `CREDIT_SPECIAL_APPROVAL` | `server/modules/credit-special-approval.js:230 decideCreditSpecialApproval` | Sales & Customer |
 
-**这 7 处是 Platform 域发起的、对 6 个业务域的有界变更**，必须在本 Design 中显式登记。每个调用点为**一行插入**（`assertSodCompliance(db, {...})`），语义等价于既有 5 族的自审批防护：
+**这 7 处是 Platform 域发起的、对 6 个业务域的有界变更**，必须在本 Design 中显式登记。每个调用点为**一行插入**（`assertSodCompliance(db, {...})`）。
 
-- 既有 5 族已各自实现"发起人不得审批自己"（`sales-orders.js:773`、`:838`、`:893`；`app.js:4971`、`:5244`、`:5249`；`planning-documents.js:830`、`:846`；`inventory-stocktake.js:301`；`app.js:5978-5981`）。接入引擎后**保留**这些既有检查（引擎作为前置统一闸门），**不得**删除既有检查 —— 引擎无规则时既有检查仍然生效，行为不变。
-- `PRODUCTION_ORDER` **没有**自审批防护（`manufacturing-orders.js:164-169`）→ 引擎在此补齐（`PL-DEF-01`）。这一处**行为发生变化**，属于 Requirement §36.4 明确授权的增量。
-- `CREDIT_SPECIAL_APPROVAL` 已有 `CREDIT_SPECIAL_APPROVAL_SOD`（`credit-special-approval.js:255-261`）→ 接入引擎作为前置闸门，既有检查保留。
+**接线位置（2026-11-13 修正）**：SOD 调用必须置于**既有自审批防护之后**，**不得**作为前置闸门。原因：既有 5 族的自审批防护**状态码与文案各不相同**——
+
+| 族 | 既有防护位置 | 状态码 | 文案 |
+|---|---|---|---|
+| `SALES_ORDER` | `server/modules/sales-orders.js:773`、`:838`、`:893`；`server/app.js:4971` | **409** | 创建人不能审批自己的订单 |
+| `PURCHASE_ORDER` | `server/app.js:5244`、`:5249` | **409** | 创建人不能审核自己的订单 |
+| `PURCHASE_REQUISITION` | `server/modules/planning-documents.js:830`、`:846` | **409** | 创建人不能审核自己的请购单 |
+| `INVENTORY_CHECK` | `server/modules/inventory-stocktake.js:301` | **409** | 盘点单创建人不能审批自己的单据 |
+| `ACCOUNTING_VOUCHER` | `server/app.js:5978-5981` | **403** | 不能审核自己录入的凭证 |
+
+若引擎前置，它会以统一的 `409 PLATFORM_SOD_RULE_VIOLATION` **抢先**触发，从而改变既有族的**状态码**（凭证族 403 → 409）与**文案**，违反 Requirement §36.4「不改变既有行为」与本文件 §32.11 约束 #1。
+
+**因此接线规则为**：
+
+- 既有 5 族：调用点插在**既有防护之后**（既有防护先抛错并返回，引擎不执行）→ 状态码、文案、副作用**完全不变**；引擎在该族实际不参与判定，仅作为规则登记与求值留痕的旁路。
+- `PRODUCTION_ORDER`：**没有**既有防护（`server/modules/manufacturing-orders.js:164-169`）→ 引擎在此唯一生效，补齐 `PL-DEF-01`。这一处**行为发生变化**（新增 409 `PLATFORM_SOD_RULE_VIOLATION`），属 Requirement §36.4 明确授权的增量。
+- `CREDIT_SPECIAL_APPROVAL`：既有 `CREDIT_SPECIAL_APPROVAL_SOD`（`server/modules/credit-special-approval.js:255-261`）→ 置于其后，既有检查保留、状态码不变。
+
+**既有防护一律不得删除**（引擎无规则时既有检查仍然生效，行为不变）。
 
 **种子的规则**：为 7 个 business_type 各种一条 `SAME_PERSON_FORBIDDEN` / `REJECT` 规则（`action='APPROVE'`）。这使 5 个既有族的既有行为**完全不变**（引擎判定与既有检查同结论），并为生产订单族补齐缺口。
 
@@ -554,6 +570,17 @@ transaction(db):
 - 迁移：`ALTER TABLE audit_logs ADD COLUMN ...`（SQLite 与 MySQL 双分支），并 `CREATE INDEX`。**不改写任何历史行**。
 - `auditBusinessRejection` 的测试覆盖（`PL-DEF-06`）：正例（409 → 写入拒绝审计）与反例（非 409 → 不写）。
 
+**2026-11-13 补充 —— 对既有 parity 门禁与摘要机制的影响（`PL-OPEN-01` 预验证结论）**：
+
+1. **列集合被比较**：schema parity 比较器 `compareTableParity`（`server/test-utils/m1-core-schema-parity.js:766-770`）比较 SQLite 快照与实时 MySQL 目录的**列集合、列序、可空性、默认值、索引与 CHECK**。`audit_logs` 在三个已批准 campaign 的表清单内（`server/test-utils/mysql-out001-target.js:34`、`server/test-utils/wave10-mysql-acceptance-fixture.js:672`）→ **新增的 4 列必须同时出现在 SQLite 与 MySQL 两侧**，否则三个 campaign 的 Schema Parity 会判 `COLUMN_MISSING` / `COLUMN_SEQUENCE`。
+   - 全新 disposable MySQL：由 `bootstrapMySql`（`server/database/mysql-schema.js:459`）从 SQLite 快照派生 → 两侧同源，自动一致。
+   - 既有 MySQL 库：必须走 `planMySqlAdditiveReconciliation`（`:374`）与 `planMySqlIndexReconciliation`（`:389`）的显式分支 → 迁移文件的 MySQL 分支不可省。
+2. **既有测试不依赖列集合**：全仓库 `audit_logs` 断言一律为 `COUNT(*)` 或 `SELECT *` + 既有字段读取（`accounting-analytics-w1-w2.test.js:174`、`:175`；`accounting-analytics-w3.test.js:537`；`accounting-analytics-w7.test.js:256`；`business-integrity-stabilization.test.js:266`、`:274`；`buyers.test.js:25`；`m1c-outsourcing-gl-policy-guard.test.js:69`、`:192`；`m1c-processing-po.test.js:57`、`:63`、`:145`、`:156`、`:322`、`:326`、`:328`、`:343`；`inventory-demo-seed-position-identity.test.js:250`、`:462`）。**无一处断言列集合或列数** → 新增可空列不改变任何既有断言的结果。
+3. **数据库摘要会改变，但既有断言不因此失效**：`databaseSnapshot`（`server/test-utils/wave11-a-credit-query-fixture.js:181-196`）枚举**全部**基表并对每表算摘要。→ ① `audit_logs` 的摘要会因新增列而改变；② **本域 17 张新表会进入每一个域的摘要**。但全部既有摘要断言都是**同一数据库实例内的 before/after 比较**（`sales-customer-wave11-a-credit-query.test.js:180-182`、`:388-401`；`sales-customer-wave11-a-overdue-evidence.test.js:168-178`；`sales-customer-wave11-a-search-semantics.test.js:381-385`、`:614-620`；`sales-customer-wave11-a-credit-query-ui.test.js:199-202`），两侧同 schema → 仍然相等。**已冻结的验收记录不钉死任何数据库摘要或表计数**（唯一出现的 `tables=0` 是 campaign 后 disposable 库清空证明，非 schema 固定值）→ 新增表与新增列**不使任何已签发结论失效**。
+4. **受影响的只有测试计数**：各域已签发记录中的 `FULL 3881/3881`、`FAST 638/638` 等计数会因新增测试文件而变。这是**冻结时点的快照值**，不是能力结论；按 AGENTS.md §4.6，其结论有效性不受影响，只需在 Acceptance 轮登记计数变化。
+
+**结论**：`PL-OPEN-01` 的真实风险不在 8 个已冻结域的断言，而在**三个 campaign 的 Schema Parity**。处置见 §32.2.7 第 1 项（双侧同批）与 §32.12.1 的 parity 门禁条目。
+
 ### 32.10 既有能力封顶的具体改动
 
 | 能力 | 改动 | 文件 |
@@ -578,6 +605,9 @@ transaction(db):
 | 8 | `approval_workflows` 表**保留不删**；`/api/workflows` 退役为 410 | 新增断言；`server/teacher-acceptance-matrix.test.js:285`、`:873` 的 smoke 断言改为 410 |
 | 9 | `voucher_sequences` / `voucher_words` 不动 | Accounting & Analytics 既有测试全绿 |
 | 10 | `production_orders` / `sales_orders` 等 6 张既有表的**结构不变** | schema parity 断言 |
+| 11 | **`audit_logs` 新增 4 列必须 SQLite 与 MySQL 双侧同批落地** —— `compareTableParity` 比较列集合与列序（`server/test-utils/m1-core-schema-parity.js:766-770`），且 `audit_logs` 在三个已批准 campaign 的表清单内 | 三个 campaign 的 Schema Parity 全部 PASS |
+| 12 | **既有 6 族自审批防护的状态码与文案逐字不变**（4 族 409 + 凭证族 403 + 5 种不同文案）—— SOD 调用置于既有防护**之后** | 5 个族的自审批断言状态码与文案逐字比对 |
+| 13 | 既有**数据库摘要**断言（before/after）保持相等 —— 新表与新列进入摘要但两侧同 schema | 各域 `databaseDigest` 断言全绿 |
 
 ### 32.12 测试计划
 
@@ -592,7 +622,8 @@ transaction(db):
 | `server/platform-notifications.test.js` | FAST + FULL | 六类生产者各一例；去重；未读计数与列表同源；通知失败不影响审批 |
 | `server/platform-numbering.test.js` | FAST + FULL | 既有 6 种单号格式不变；并发同幂等键返回同号；事务内分配；PRQ 号删除后不冲突 |
 | `server/platform-audit-upgrade.test.js` | FAST + FULL | 新列写入；既有调用点不传新参数仍为绿；`auditBusinessRejection` 正例 + 反例；历史行未改写 |
-| `server/platform-domain-schema-parity.test.js` | HEAVY | SQLite / MySQL 表目录、列、索引、约束对等 |
+| `server/platform-domain-schema-parity.test.js` | HEAVY | SQLite / MySQL 表目录、列、索引、约束对等；**必须包含 `audit_logs` 的 4 个新列** |
+| `server/platform-frozen-domain-regression.test.js` | FAST + FULL | **跨域回归专项**：① 5 个既有族的自审批拒绝**状态码与文案逐字比对**（409×4 + 403×1）；② 既有 `audit_logs` 断言全绿；③ 既有 `databaseDigest` before/after 断言全绿；④ 既有 6 族审批结果与待办序列不变 |
 
 **MySQL 专属 campaign**：新增 `server/mysql-platform-domain.integration.js`，受保护 disposable MySQL 8.0.37 上跑：工作流实例并发启动、任务并发完成、编号并发取号、附件上传下载、SOD 并发求值。ACK-4 清单须新增本域 campaign（受保护入口限制见 `docs/decisions/mysql-evidence-policy-20261112.md`，本仓库只有三个已批准 ACK-4 campaign 可运行）。
 
@@ -627,8 +658,8 @@ transaction(db):
 | ID | 事项 | 状态 |
 |---|---|---|
 | `PL-D-OPEN-01` | MySQL `allocateSequence` 的分离 SELECT 竞态窗口的最终修法（`LAST_INSERT_ID` 技巧 vs 单语句 upsert） | 待 Implementation 定稿（Requirement §36.8 已约束"两库行为等价"） |
-| `PL-D-OPEN-02` | 6 个业务域的 SOD 与通知接线点属**跨域代码变更**，各域的域级 Acceptance 证据须按 AGENTS.md §4.6 复核当前有效性 | 待 Acceptance 轮复核登记 |
-| `PL-D-OPEN-03` | 采购申请单号格式变更（`PREQ-YYYYMMDD-N` → `PRQ-YYYYMM-00001`）需 Planning 域确认无外部依赖 | 待 Planning 域 Owner 确认 |
+| `PL-D-OPEN-02` | 6 个业务域的 SOD 与通知接线点属**跨域代码变更**。**2026-11-13 预验证**：① SOD 若前置会改变 5 个既有族的自审批状态码与文案（凭证族 403 → 409），已改为置于既有防护**之后**（§32.4.3）；② 通知接线**不写** `audit_logs`、且当前无任何测试统计 `notifications` 行数 → 既有断言不受影响。剩余范围：各域域级 Acceptance 证据按 AGENTS.md §4.6 的复核登记 | **行为影响已消解**；仅余 Acceptance 轮复核登记 |
+| `PL-D-OPEN-03` | 采购申请单号格式变更（`PREQ-YYYYMMDD-N` → `PRQ-YYYYMM-00001`）。**2026-11-13 预验证已关闭**：全仓库**无任何生产代码解析 `requisition_no` 格式**（`grep` 命中为空）—— `makeCode`（`server/modules/planning-documents.js:85-92`）是唯一生成点；其余命中（`server/uat-r6-procurement-batching.test.js:51`、`server/v12-lifecycle-cleanup.test.js:62`、`server/v12-lifecycle-foundation.test.js:61`、`scripts/acceptance/v161-procurement-batching.mjs:23`）均为**字面量夹具**，不依赖格式 | **已由证据关闭**；实施时保持夹具不变 |
 | `PL-D-OPEN-04` | 通用工作流"业务回调"的允许域集合与调用契约（Requirement `PL-OPEN-03`） | 本 Design 定为"仅允许调用被调域已存在的 canonical HTTP API，注册式白名单"，具体名单在 Implementation 逐域登记 |
 | `PL-D-OPEN-05` | 本域专属 ACK-4 campaign 的清单需要业务所有者批准（受保护入口限制） | 待批准 |
 
