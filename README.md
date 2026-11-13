@@ -169,6 +169,7 @@ MySQL destructive/reset 测试只能运行于明确标识为 disposable/test 且
 | `pnpm test:mysql:wave11-a` | W11-A Credit Query / Exception History 真实 MySQL 验收门禁（受保护，单 suite） |
 | `pnpm test:mysql:wave11-a:selector` | W11-A U3 Selector 搜索语义真实 MySQL 门禁（受保护，独立 campaign 与 suite 标签） |
 | `pnpm test:mysql:inventory-demo-seed` | W11-A U3 Demo Seed 库存规范位置真实 MySQL 门禁（受保护，独立 campaign 与 suite 标签，M-INV-01..08） |
+| `pnpm test:mysql:inventory-warehouse` | Inventory & Warehouse 域专属 ACK-4 campaign（`INVENTORY_WAREHOUSE_MYSQL_V1`，受保护，独立 campaign 与 suite 标签，INV-RACE-01..04 竞态矩阵） |
 | `pnpm test:mysql:local` | 统一本机 MySQL Gate launcher：读取 DPAPI 凭据、核验固定身份基线、串行执行受保护 Gate、复核清理归零 |
 | `pnpm test:mysql:local:setup` | 一次性建立统一本机 MySQL 测试目标：掩码提示输入测试账号口令、DPAPI 加密保存、建立固定身份基线 |
 | `pnpm test:mysql:finance-concurrency` | Finance Operations 域 15 路 MySQL 真并发回归（RACE-01..15） |
@@ -229,6 +230,10 @@ log/
 - `src/pages/engineering-reference.jsx` / `engineering-substitute.jsx` / `engineering-change.jsx`：Master & Engineering 工程资料、替代/配置、ECO 工作面；
 - `src/pages/planning-workbench.jsx`：Planning 计划订单与计划员例外工作台；
 - `src/pages/finance-operations.jsx`：Finance Operations 发票与资金 hub；应收、收款、应付、付款沿用各自 canonical 工作面；
+- `src/pages/inventory-work.jsx`：Inventory & Warehouse 库存与仓储的**单一** canonical 工作面（21 个页签：即时库存、仓位、库存状态、所有权、库存参数、盘点、批号调整、形态转换、组装拆卸、ABC、条码、容器、扫码、调拨、调整、初始化与期初、其他出入库、分步调拨、状态调整、锁库、库存报表）；
+- `server/modules/inventory-stocktake.js` / `inventory-transfer.js` / `inventory-container.js`：盘点、调拨、容器（装箱 / 拆包）的**唯一**写入口；
+- `server/modules/inventory-abc-classifications.js` / `inventory-assembly-disassembly.js` / `inventory-barcode-generation.js`：ABC 分类、组装拆卸、条码生成与标签渲染；
+- `server/lib/inventory-mutation.js`：`applyInventoryMutation` canonical 物理变更合同（负库存策略、库存锁、期间闸门、幂等键与 mutation log）；
 - `src/components/BomGovernancePanel.jsx`：BOM lifecycle、tree/analysis 与 batch preview→apply 可复用工作面；
 - `src/navigation/routeLocation.js`：hash RouteLocation 解析/序列化/规范化；
 - `server/app.js`：HTTP 生命周期、认证分发和仍未拆出的 handler；
