@@ -12,7 +12,7 @@ import { normalizeRouteLocation, parseRouteLocation, serializeRouteLocation, val
 
 const read = (path) => readFileSync(resolve(path), 'utf8');
 
-test('P0-A registry owns 74 active and 4 disabled unique routes with valid screens, access and parents', () => {
+test('P0-A registry owns 85 active and 4 disabled unique routes with valid screens, access and parents', () => {
   // Finance Operations closure adds invoice and treasury hubs while keeping
   // the prior deep-link routes available.
   // inventory mobile routes are merged into the canonical inventory hub
@@ -25,7 +25,12 @@ test('P0-A registry owns 74 active and 4 disabled unique routes with valid scree
   // Procurement & Outsourcing Domain Closure adds 2 surfaces
   // (sourcing-pricing, outsourcing). Wave 7 adds 2 contextual sales-customer
   // surfaces (sales-prepayment-gates, sales-reservation-intents).
-  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 79);
+  // The Sales & Customer domain closure adds six contextual surfaces and no
+  // tile: credit-evaluation (Wave 11-B/C) plus the SC01 / SC06 / SC07 / SC19
+  // operator work faces (sales-parameters, sales-group-memberships,
+  // sellable-scope-rules, product-classifications,
+  // sales-price-override-authorizations). 79 + 6 = 85.
+  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 85);
   assert.equal(DISABLED_APPLICATION_ROUTES.length, 4);
   assert.equal(new Set(APPLICATION_ROUTES.map((route) => route.key)).size, APPLICATION_ROUTES.length);
   assert.deepEqual(DISABLED_APPLICATION_ROUTES.map((route) => route.key), ['cash-journals','bills','workflows','data-cleanup']);
@@ -49,7 +54,7 @@ test('P0-A aliases and launcher entries are conflict-free registry projections',
     assert.equal(entry.group, group.key, `${entry.key} parent group`);
     assert.equal(groupKeys.has(entry.group), true, `${entry.key} valid group`);
   }
-  assert.equal(ROUTE_PRESENTATIONS.length, 79);
+  assert.equal(ROUTE_PRESENTATIONS.length, 85);
   assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 4);
   assert.deepEqual(MOBILE_APPLICATION_GROUPS.map((group) => group.key), APPLICATION_LAUNCHER_GROUPS.map((group) => group.key));
   const corePages = MOBILE_APPLICATION_GROUPS.filter((group) => group.kind === 'domain').flatMap((group) => group.items.map((item) => item.page));
@@ -60,7 +65,10 @@ test('P0-A aliases and launcher entries are conflict-free registry projections',
 
 test('P0-A registry preserves V1.6 rollout classification and application groups', () => {
   const internal = ['manufacturing-analytics','material-requirements-plan'];
-  const contextual = ['bank-accounts','consignment-commercial','cost-rates','credit-check','credit-foundation','credit-query','credit-special-approvals','dashboard','delivery-notices','iqc','notifications','oqc','planning-configuration','planning-reservations','product-costs','purchase-discounts','quality-control-points','sales-discounts','sales-invoices','sales-order-changes','sales-prepayment-gates','sales-pricing','sales-reservation-intents','service-fulfillments','supplier-bills'];
+  // The Sales & Customer domain closure adds six contextual surfaces and no
+  // tile: credit-evaluation (Wave 11-B/C) plus the SC01 / SC06 / SC07 / SC19
+  // operator work faces.
+  const contextual = ['bank-accounts','consignment-commercial','cost-rates','credit-check','credit-evaluation','credit-foundation','credit-query','credit-special-approvals','dashboard','delivery-notices','iqc','notifications','oqc','planning-configuration','planning-reservations','product-classifications','product-costs','purchase-discounts','quality-control-points','sales-discounts','sales-group-memberships','sales-invoices','sales-order-changes','sales-parameters','sales-prepayment-gates','sales-price-override-authorizations','sales-pricing','sales-reservation-intents','sellable-scope-rules','service-fulfillments','supplier-bills'];
   assert.deepEqual(ACTIVE_APPLICATION_ROUTES.filter((route) => route.classification === 'INTERNAL').map((route) => route.key).sort(), internal);
   assert.deepEqual(ACTIVE_APPLICATION_ROUTES.filter((route) => route.classification === 'CONTEXTUAL').map((route) => route.key).sort(), contextual);
   assert.deepEqual(

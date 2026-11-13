@@ -208,10 +208,10 @@ export function PrepaymentGates({ query = {} } = {}) {
           <tbody>
             {filteredRequirements.map((row) => (
               <tr key={row.id}>
-                <td>{row.sales_order_id}</td>
-                <td>{formatCents(row.required_amount_cents)}</td>
-                <td>{row.ratio_basis}</td>
-                <td>{row.effective_from || '起'} → {row.effective_to || '∞'}</td>
+                <td data-label="订单">{row.sales_order_id}</td>
+                <td data-label="金额">{formatCents(row.required_amount_cents)}</td>
+                <td data-label="比例基础">{row.ratio_basis}</td>
+                <td data-label="生效期间">{row.effective_from || '起'} → {row.effective_to || '∞'}</td>
               </tr>
             ))}
           </tbody>
@@ -237,16 +237,16 @@ export function PrepaymentGates({ query = {} } = {}) {
           <tbody>
             {gateResults.data.results.map((row) => (
               <tr key={row.id}>
-                <td>{row.stage}</td>
-                <td><strong>{GATE_DECISION_LABELS[row.gateDecision] || row.gateDecision}</strong></td>
-                <td>
+                <td data-label="阶段">{row.stage}</td>
+                <td data-label="决定"><strong>{GATE_DECISION_LABELS[row.gateDecision] || row.gateDecision}</strong></td>
+                <td data-label="已应用/已退款/剩余">
                   <div>要求剩余 {formatCents(row.requiredRemainingCents)}</div>
                   <div>可参与 {formatCents(row.eligibleAdvanceCents)}</div>
                   <div className="muted">已应用 {formatCents(row.appliedAmountCents)} / 已退款 {formatCents(row.refundedAmountCents)}</div>
                 </td>
-                <td>{row.overrideReason || <span className="muted">—</span>}</td>
-                <td><code>{row.snapshotKey}</code></td>
-                <td>
+                <td data-label="原因/特批">{row.overrideReason || <span className="muted">—</span>}</td>
+                <td data-label="快照键"><code>{row.snapshotKey}</code></td>
+                <td data-label="动作">
                   {row.gateDecision !== 'PASS' && row.gateDecision !== 'OVERRIDE_REQUIRED' ? (
                     <div className="inline-form">
                       <input placeholder="覆盖原因" value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} />
@@ -440,26 +440,26 @@ export function ReservationIntents({ query = {} } = {}) {
           <tbody>
             {intents.data.intents.map((row) => (
               <tr key={row.id}>
-                <td>
+                <td data-label="订单 / 行">
                   <div>{row.salesOrderId}</div>
                   <div className="muted">{row.salesOrderItemId || '—'}</div>
                 </td>
-                <td>{RESERVATION_MODE_LABELS[row.reservationMode] || row.reservationMode}</td>
-                <td>{INTENT_STATE_LABELS[row.intentState] || row.intentState}</td>
-                <td>
+                <td data-label="模式">{RESERVATION_MODE_LABELS[row.reservationMode] || row.reservationMode}</td>
+                <td data-label="状态">{INTENT_STATE_LABELS[row.intentState] || row.intentState}</td>
+                <td data-label="申请 / 授信 / 消耗 / 释放">
                   <div>申请 {formatNumber(row.requestedQty)}</div>
                   <div>授信 {formatNumber(row.grantedQty)}</div>
                   <div>消耗 {formatNumber(row.consumedQty)}</div>
                   <div>释放 {formatNumber(row.releasedQty)}</div>
                 </td>
-                <td>
+                <td data-label="规划预留 / 库存锁">
                   <div>{row.planningReservationId ? `规划 ${row.planningReservationId}` : <span className="muted">—</span>}</div>
                   <div>{row.inventoryLockId ? `锁 ${row.inventoryLockId}` : <span className="muted">—</span>}</div>
                   {row.expectedSupplyCapacity != null && (
                     <div className="muted">期望容量 {formatNumber(row.expectedSupplyCapacity)}</div>
                   )}
                 </td>
-                <td>
+                <td data-label="动作">
                   <div className="action-stack">
                     {['REQUESTED', 'NONE'].includes(row.intentState) && (
                       <button type="button" disabled={busy} onClick={() => act(row.id, 'grant')}>GRANT</button>

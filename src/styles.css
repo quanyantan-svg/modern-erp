@@ -395,6 +395,65 @@ tfoot td {
   padding: 10px 14px;
 }
 
+/* data-table — the Sales wave 7 work surfaces (预付款门 / 预留意图).
+   The table carries six columns of long identifiers, so it owns its own
+   horizontal scroll instead of letting the PAGE scroll. A table that is
+   wider than the viewport is therefore a scroll container, not a page-level
+   horizontal scroll. Below 680px the columns collapse to their label so the
+   row stays readable without a sideways scroll at all. */
+.data-table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+.data-table > thead,
+.data-table > tbody { display: table; width: 100%; min-width: 100%; table-layout: fixed; }
+.data-table th,
+.data-table td { overflow-wrap: anywhere; word-break: break-word; }
+.data-table td > div { overflow-wrap: anywhere; }
+.data-table .action-stack { display: flex; flex-wrap: wrap; gap: 8px; }
+.data-table .action-stack button { min-height: 44px; }
+/* The inline editor of the prepayment gate override cell. */
+.data-table .inline-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.data-table .inline-form input { flex: 1 1 8rem; min-width: 0; min-height: 44px; }
+.data-table .inline-form button { min-height: 44px; }
+/* The three prepayment gate stages are mutually exclusive transitions, so they
+   are laid out as one row of equal-width buttons and wrap below 680px. */
+.stage-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.stage-row button { flex: 1 1 10rem; min-height: 44px; }
+@media (max-width: 680px) {
+  /* The six-column layout does not fit a 320px viewport. Each cell carries its
+     own column label, so the row becomes a stacked card and the page never
+     scrolls sideways. */
+  .data-table,
+  .data-table > thead,
+  .data-table > tbody { display: block; width: 100%; }
+  .data-table > thead { display: none; }
+  .data-table > tbody > tr { display: grid; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border-subtle); }
+  .data-table > tbody > tr:last-child { border-bottom: none; }
+  .data-table > tbody > tr > td {
+    display: grid;
+    grid-template-columns: minmax(0, 8rem) minmax(0, 1fr);
+    gap: 10px;
+    align-items: start;
+    padding: 4px 0;
+    border-bottom: none;
+    background: transparent;
+  }
+  .data-table > tbody > tr > td::before {
+    content: attr(data-label);
+    color: var(--text-tertiary);
+    font-size: 12px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+}
+
 /* line-table used inside modals */
 .line-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
 .line-table th {
@@ -4826,4 +4885,46 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
   .credit-query__workspace,
   .credit-query__detail { padding: 12px; }
   .credit-query__detail-header { flex-direction: column; }
+}
+
+/* Sales & Customer SC01/SC06/SC07/SC08/SC19 operator work surfaces.
+   Audit defect SC-DEF-08 (Sales & Customer capability audit 2026-11-13).
+   Mobile-first: 390px is the primary baseline; the grids collapse to one
+   column at 680px and every tappable target is at least 44px tall. */
+.sales-parameters-list,
+.sales-parameters-detail,
+.sales-memberships-list,
+.sales-sellable-list,
+.sales-classification-list,
+.sales-price-override { min-width: 0; }
+.sales-parameters-form { display: grid; gap: var(--section-spacing); }
+.sales-parameters-form .form-grid { min-width: 0; }
+.sales-parameters-detail .detail-grid,
+.sales-price-override .detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.sales-parameters-detail .detail-grid > div,
+.sales-price-override .detail-grid > div { display: grid; gap: 2px; min-width: 0; }
+.sales-parameters-detail .detail-grid span,
+.sales-price-override .detail-grid span { color: var(--text-muted); font-size: 12px; }
+.sales-parameters-detail .detail-grid strong,
+.sales-price-override .detail-grid strong { overflow-wrap: anywhere; }
+.sales-price-override code { font-size: 12px; overflow-wrap: anywhere; }
+.sales-parameters-editor .sheet__body,
+.sales-memberships-editor .sheet__body,
+.sales-sellable-editor .sheet__body,
+.sales-classification-editor .sheet__body { padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
+.sales-parameters-editor .bottom-action-bar,
+.sales-memberships-editor .bottom-action-bar,
+.sales-sellable-editor .bottom-action-bar,
+.sales-classification-editor .bottom-action-bar { position: sticky; bottom: 0; z-index: 2; }
+.sales-memberships-list .record-card .bottom-action-bar,
+.sales-sellable-list .record-card .bottom-action-bar,
+.sales-classification-list .record-card .bottom-action-bar { position: static; }
+.sales-parameters-list .record-card,
+.sales-memberships-list .record-card,
+.sales-sellable-list .record-card,
+.sales-classification-list .record-card { min-height: 44px; }
+@media (max-width: 680px) {
+  .sales-parameters-form .form-grid { grid-template-columns: minmax(0, 1fr); }
+  .sales-parameters-detail .detail-grid,
+  .sales-price-override .detail-grid { grid-template-columns: minmax(0, 1fr); }
 }

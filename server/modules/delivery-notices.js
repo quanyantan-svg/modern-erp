@@ -2,6 +2,7 @@ import { id, transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { HttpError, normalizeBusinessDate, readJson, send } from '../lib/http.js';
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
+import { assertDeliveryScheduleEnabled, resolveDeliveryQuantityControl } from './sales-parameters.js';
 import { actorHas, assertGroupScope, lockSuffix, requireSalesPermission } from './sales-scope.js';
 import { toleranceBoundsMicros } from './sales-delivery-source.js';
 
@@ -31,22 +32,34 @@ function scopedOrder(db, orderId, actor, lock = false) {
 
 function normalizedLines(db, orderId, lines) {
   if (!Array.isArray(lines) || !lines.length) throw new HttpError(422, '至少需要一条发货通知明细'); const seen = new Set();
+  // SC01 `delivery_quantity_control_enabled` — when the control is OFF the
+  // over-/under-delivery tolerance bound is NOT enforced on the notice. The
+  // resolved value is read once so every line of this notice runs in the same
+  // mode (audit defect SC-DEF-01).
+  const quantityControl = resolveDeliveryQuantityControl(db, 'DELIVERY_NOTICE');
   return lines.map((source, index) => {
     const itemId = String(source.salesOrderItemId || ''); if (!itemId || seen.has(itemId)) throw new HttpError(422, '订单明细身份缺失或重复'); seen.add(itemId);
     const item = db.prepare('SELECT * FROM sales_order_items WHERE id=? AND order_id=?').get(itemId, orderId); if (!item) throw new HttpError(422, '销售订单明细不存在');
     const quantity = safe(source.scheduledQtyMicros, '通知数量', 1);
     const { upper } = toleranceBoundsMicros(item.quantity, item.upper_delivery_tolerance_bps, item.lower_delivery_tolerance_bps);
-    if (quantity > upper) throw new HttpError(409, '通知数量超过订单行上限'); return { item, quantity, upper, lineNo: index + 1 };
+    if (quantityControl.enabled && quantity > upper) throw new HttpError(409, '通知数量超过订单行上限', { code: 'DELIVERY_NOTICE_TOLERANCE_EXCEEDED' }); return { item, quantity, upper, lineNo: index + 1 };
   });
 }
 
 function validateCapacity(db, noticeId, lines) {
+  // SC01 `delivery_quantity_control_enabled` — the cumulative tolerance bound
+  // is only enforced while the control is ON. The parameter is resolved
+  // again here because this function runs at CONFIRM time, which is a
+  // different transaction from the DRAFT write: the effective parameter may
+  // have changed in between and the confirm path must use the CURRENT
+  // effective value.
+  const quantityControl = resolveDeliveryQuantityControl(db, 'DELIVERY_NOTICE');
   for (const line of lines) {
     db.prepare(`SELECT id FROM sales_order_items WHERE id=?${lockSuffix(db)}`).get(line.item.id);
     const committed = Number(db.prepare(`SELECT COALESCE(SUM(l.scheduled_qty_micros),0) value FROM delivery_notice_lines l
       JOIN delivery_notices n ON n.id=l.delivery_notice_id WHERE l.sales_order_item_id=? AND l.delivery_notice_id<>?
         AND n.state IN ('CONFIRMED','CLOSED')`).get(line.item.id, noticeId).value);
-    if (committed + line.quantity > line.upper) throw new HttpError(409, '累计发货通知数量超过订单行容差上限', { code: 'DELIVERY_NOTICE_CAPACITY_EXCEEDED' });
+    if (quantityControl.enabled && committed + line.quantity > line.upper) throw new HttpError(409, '累计发货通知数量超过订单行容差上限', { code: 'DELIVERY_NOTICE_CAPACITY_EXCEEDED' });
   }
 }
 
@@ -71,6 +84,12 @@ export async function createDeliveryNotice(db, req, res, actor) {
     const warehouse = db.prepare('SELECT id FROM warehouses WHERE id=? AND active=1').get(body.warehouseId); if (!warehouse) throw new HttpError(422, '仓库不存在或已停用');
     const noticeId = id(); const noticeNo = makeNo(); const stamp = NOW(); const businessDate = normalizeBusinessDate(body.businessDate || DAY(), '通知业务日期');
     const plannedDate = normalizeBusinessDate(body.plannedDeliveryDate || order.requested_delivery_date || businessDate, '计划交货日期');
+    // SC01 `delivery_schedule_enabled` — the Delivery Notice is a delivery
+    // schedule carrier. While the control is OFF a notice that carries a
+    // planned delivery date (or that is built against an order line which
+    // already carries one) is refused. The refusal happens inside the
+    // transaction and BEFORE the INSERT, so the side effect is zero.
+    assertDeliveryScheduleEnabled(db, 'DELIVERY_NOTICE', { deliveryNoticeId: null, salesOrderId: order.id });
     const ship = { name: order.ship_to_contact_name || order.customer_contact || '', phone: order.ship_to_phone || order.customer_phone || '', address: order.ship_to_address || order.customer_address || '' };
     const customer = { id: order.customer_id, code: order.customer_code, name: order.customer_name };
     db.prepare(`INSERT INTO delivery_notices(id,notice_no,sales_order_id,state,warehouse_id,ship_to_snapshot_json,planned_delivery_date,
@@ -88,6 +107,9 @@ export async function updateDeliveryNotice(db, req, res, actor, noticeId) {
   transaction(db, () => {
     const notice = db.prepare(`SELECT * FROM delivery_notices WHERE id=?${lockSuffix(db)}`).get(noticeId); if (!notice) throw new HttpError(404, '发货通知不存在'); if (notice.state !== 'DRAFT') throw new HttpError(409, '只有草稿发货通知可以编辑');
     const order = scopedOrder(db, notice.sales_order_id, actor, true); const lines = normalizedLines(db, order.id, body.lines);
+    // SC01 `delivery_schedule_enabled` — same refusal as the create path, so
+    // a notice cannot acquire a delivery schedule while the control is off.
+    assertDeliveryScheduleEnabled(db, 'DELIVERY_NOTICE', { deliveryNoticeId: noticeId, salesOrderId: order.id });
     db.prepare('DELETE FROM delivery_notice_lines WHERE delivery_notice_id=?').run(noticeId); const insert = db.prepare(`INSERT INTO delivery_notice_lines(id,delivery_notice_id,sales_order_item_id,scheduled_qty_micros,notified_qty_micros,cancelled_notified_qty_micros,line_no) VALUES(?,?,?,?,0,0,?)`);
     lines.forEach((line) => insert.run(id(), noticeId, line.item.id, line.quantity, line.lineNo)); db.prepare('UPDATE delivery_notices SET planned_delivery_date=?,updated_at=? WHERE id=?').run(normalizeBusinessDate(body.plannedDeliveryDate || notice.planned_delivery_date, '计划交货日期'), NOW(), noticeId);
     audit(db, actor.id, 'UPDATE', 'DELIVERY_NOTICE', noticeId, 'draft lines'); result = { notice: detail(db, noticeId) };

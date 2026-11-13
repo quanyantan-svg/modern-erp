@@ -100,6 +100,25 @@ function findActiveIntent(db, { salesOrderId, salesOrderItemId, mode, locked = f
   return row || null;
 }
 
+// Every LIVE intent (REQUESTED / GRANTED) of an order line. `mode` narrows the
+// result to one reservation mode; without it every mode of the line is
+// returned, because one SO line may legitimately hold several intents (one
+// per reservation mode) and every one of them must react to an SO change.
+function findLiveIntents(db, { salesOrderId, salesOrderItemId, mode = null }) {
+  const args = [salesOrderId];
+  let clause = `sales_order_id=? AND intent_state IN ('REQUESTED','GRANTED')`;
+  if (salesOrderItemId) {
+    clause += ` AND COALESCE(sales_order_item_id,'')=COALESCE(?,'')`;
+    args.push(salesOrderItemId);
+  }
+  if (mode) {
+    clause += ` AND reservation_mode=?`;
+    args.push(mode);
+  }
+  return db.prepare(`SELECT * FROM sales_reservation_intent
+    WHERE ${clause} ORDER BY created_at ASC, id ASC`).all(...args);
+}
+
 function summarizeIntent(row) {
   if (!row) return null;
   return {
@@ -419,6 +438,7 @@ export async function requestReservationIntent(db, req, res, actor) {
           null, null, stamp, null, null, stamp, actor.id,
         );
         audit(db, actor.id, 'REQUEST', 'SALES_RESERVATION_INTENT', intentId, `${salesOrderId} ${mode} ${quantity}`);
+        syncOrderReservationIntentState(db, salesOrderId);
         result = summarizeIntent(db.prepare('SELECT * FROM sales_reservation_intent WHERE id=?').get(intentId));
       });
       return send(res, 201, result);
@@ -454,10 +474,29 @@ export async function grantReservationIntent(db, req, res, actor, intentId) {
   if (grantedQty > Number(intent.requested_qty) + 1e-9) throw new HttpError(409, 'grantedQty 超过 requested_qty');
   const stamp = now();
   transaction(db, () => {
-    db.prepare(`UPDATE sales_reservation_intent
+    // The state guard is re-read and re-asserted INSIDE the transaction, and
+    // the UPDATE carries the expected state as a compare-and-set condition.
+    // Without it two concurrent grants both observe REQUESTED and both commit
+    // GRANTED, so the state machine is not load-bearing and a second GRANT
+    // audit is written for the same intent.
+    const locked = db.prepare(`SELECT * FROM sales_reservation_intent WHERE id=?${lockSuffix(db)}`).get(intentId);
+    if (!locked) throw new HttpError(404, '预留意图不存在');
+    if (!['REQUESTED', 'NONE'].includes(locked.intent_state)) {
+      throw new HttpError(409, `当前状态 ${locked.intent_state} 不可 GRANTS`, {
+        code: 'SALES_RESERVATION_INTENT_STATE_INVALID',
+      });
+    }
+    if (grantedQty > Number(locked.requested_qty) + 1e-9) throw new HttpError(409, 'grantedQty 超过 requested_qty');
+    const updated = db.prepare(`UPDATE sales_reservation_intent
       SET intent_state='GRANTED', granted_qty=?, granted_at=?
-      WHERE id=?`).run(grantedQty, stamp, intentId);
+      WHERE id=? AND intent_state=?`).run(grantedQty, stamp, intentId, locked.intent_state);
+    if (updated.changes !== 1) {
+      throw new HttpError(409, '预留意图状态已被并发变更，请重试', {
+        code: 'SALES_RESERVATION_INTENT_STATE_INVALID',
+      });
+    }
     audit(db, actor.id, 'GRANT', 'SALES_RESERVATION_INTENT', intentId, `grantedQty=${grantedQty}`);
+    syncOrderReservationIntentState(db, intent.sales_order_id);
   });
   return send(res, 200, summarizeIntent(db.prepare('SELECT * FROM sales_reservation_intent WHERE id=?').get(intentId)));
 }
@@ -477,13 +516,37 @@ export async function consumeReservationIntent(db, req, res, actor, intentId) {
   requireSalesGroupScope(db, actor, { salesGroupId: order.sales_group_id, businessDate: body.businessDate || now().slice(0, 10) });
   const stamp = now();
   transaction(db, () => {
-    const newConsumed = Number(intent.consumed_qty) + consumeQty;
-    const newState = newConsumed >= Number(intent.granted_qty) - 1e-9 ? 'CONSUMED' : 'GRANTED';
-    db.prepare(`UPDATE sales_reservation_intent
+    // The state and the consumed quantity are re-read inside the transaction,
+    // and the UPDATE carries the expected state AND the expected consumed
+    // quantity as compare-and-set conditions. A concurrent consume that
+    // already moved the intent therefore loses the race instead of silently
+    // overwriting the other consumption.
+    const locked = db.prepare(`SELECT * FROM sales_reservation_intent WHERE id=?${lockSuffix(db)}`).get(intentId);
+    if (!locked) throw new HttpError(404, '预留意图不存在');
+    if (locked.intent_state !== 'GRANTED') {
+      throw new HttpError(409, `当前状态 ${locked.intent_state} 不可消费`, {
+        code: 'SALES_RESERVATION_INTENT_STATE_INVALID',
+      });
+    }
+    if (consumeQty > Number(locked.granted_qty) - Number(locked.consumed_qty) + 1e-9) {
+      throw new HttpError(409, 'consume 超过可消费数量', { code: 'SALES_RESERVATION_INTENT_STATE_INVALID' });
+    }
+    const newConsumed = Number(locked.consumed_qty) + consumeQty;
+    const newState = newConsumed >= Number(locked.granted_qty) - 1e-9 ? 'CONSUMED' : 'GRANTED';
+    const updated = db.prepare(`UPDATE sales_reservation_intent
       SET consumed_qty=?, intent_state=?, consumer_event=?, released_at=?
-      WHERE id=?`).run(newConsumed, newState, body.consumerEvent || body.consumer_event || 'DELIVERY_CONFIRMED', newState === 'CONSUMED' ? stamp : null, intentId);
-    consumePlanningReservationAdapter(db, actor, intent.planning_reservation_id, consumeQty);
+      WHERE id=? AND intent_state=? AND consumed_qty=?`).run(
+      newConsumed, newState, body.consumerEvent || body.consumer_event || 'DELIVERY_CONFIRMED',
+      newState === 'CONSUMED' ? stamp : null, intentId, locked.intent_state, Number(locked.consumed_qty),
+    );
+    if (updated.changes !== 1) {
+      throw new HttpError(409, '预留意图已被并发变更，请重试', {
+        code: 'SALES_RESERVATION_INTENT_STATE_INVALID',
+      });
+    }
+    consumePlanningReservationAdapter(db, actor, locked.planning_reservation_id, consumeQty);
     audit(db, actor.id, 'CONSUME', 'SALES_RESERVATION_INTENT', intentId, `consumed=${consumeQty}`);
+    syncOrderReservationIntentState(db, locked.sales_order_id);
   });
   return send(res, 200, summarizeIntent(db.prepare('SELECT * FROM sales_reservation_intent WHERE id=?').get(intentId)));
 }
@@ -498,68 +561,329 @@ export async function releaseReservationIntent(db, req, res, actor, intentId) {
   requireSalesGroupScope(db, actor, { salesGroupId: order.sales_group_id, businessDate: body.businessDate || now().slice(0, 10) });
   const stamp = now();
   transaction(db, () => {
-    if (intent.inventory_lock_id) releaseInventoryLockAdapter(db, actor, intent.inventory_lock_id);
-    if (intent.planning_reservation_id) releasePlanningReservationAdapter(db, actor, intent.planning_reservation_id);
-    db.prepare(`UPDATE sales_reservation_intent
+    // The release state is re-read inside the transaction and the UPDATE
+    // carries the expected state as a compare-and-set condition, so two
+    // concurrent releases cannot both release the same canonical
+    // reservation / lock.
+    const locked = db.prepare(`SELECT * FROM sales_reservation_intent WHERE id=?${lockSuffix(db)}`).get(intentId);
+    if (!locked) throw new HttpError(404, '预留意图不存在');
+    if (locked.intent_state === 'RELEASED') {
+      throw new HttpError(409, '意图已释放', { code: 'SALES_RESERVATION_INTENT_STATE_INVALID' });
+    }
+    // The intent row is locked before the canonical reservation / lock is
+    // released, so two concurrent releases cannot both release the same
+    // canonical object. The lock order (intent row -> canonical object) is
+    // the same one the bulk react-to-event release uses.
+    if (locked.inventory_lock_id) releaseInventoryLockAdapter(db, actor, locked.inventory_lock_id);
+    if (locked.planning_reservation_id) releasePlanningReservationAdapter(db, actor, locked.planning_reservation_id);
+    const releasedQty = Number(locked.granted_qty) - Number(locked.consumed_qty);
+    const updated = db.prepare(`UPDATE sales_reservation_intent
       SET intent_state='RELEASED', released_qty=?, released_at=?, consumer_event=?
-      WHERE id=?`).run(
-      Number(intent.granted_qty) - Number(intent.consumed_qty),
+      WHERE id=? AND intent_state=?`).run(
+      releasedQty,
       stamp,
       body.consumerEvent || body.consumer_event || 'MANUAL',
       intentId,
+      locked.intent_state,
     );
+    if (updated.changes !== 1) {
+      throw new HttpError(409, '预留意图已被并发变更，请重试', {
+        code: 'SALES_RESERVATION_INTENT_STATE_INVALID',
+      });
+    }
     audit(db, actor.id, 'RELEASE', 'SALES_RESERVATION_INTENT', intentId, `${body.consumerEvent || 'MANUAL'}`);
+    syncOrderReservationIntentState(db, locked.sales_order_id);
   });
   return send(res, 200, summarizeIntent(db.prepare('SELECT * FROM sales_reservation_intent WHERE id=?').get(intentId)));
 }
 
-// React-to-event helper: SO change. Adjust by releasing existing intent, then
-// create a new REQUESTED intent for the delta. Used by SO change handlers.
-export async function adjustReservationIntentOnChange(db, actor, { salesOrderId, salesOrderItemId, mode, newQty, consumerEvent = 'SO_CHANGED' }) {
-  const existing = findActiveIntent(db, { salesOrderId, salesOrderItemId, mode });
-  if (!existing) return null;
-  const previous = summarizeIntent(existing);
-  if (newQty == null) return previous;
-  if (Math.abs(Number(newQty) - Number(existing.requested_qty)) < 1e-9) return previous;
-  if (existing.intent_state !== 'REQUESTED' && existing.intent_state !== 'GRANTED') {
-    return previous;
-  }
-  let result = previous;
-  transaction(db, () => {
-    if (existing.inventory_lock_id) releaseInventoryLockAdapter(db, actor, existing.inventory_lock_id);
-    if (existing.planning_reservation_id) releasePlanningReservationAdapter(db, actor, existing.planning_reservation_id);
-    db.prepare(`UPDATE sales_reservation_intent
-      SET intent_state='RELEASED', released_qty=?, released_at=?, consumer_event=?
-      WHERE id=?`).run(
-      Number(existing.granted_qty) - Number(existing.consumed_qty),
-      now(),
-      consumerEvent,
-      existing.id,
-    );
-    audit(db, actor.id, 'RELEASE_ON_CHANGE', 'SALES_RESERVATION_INTENT', existing.id, consumerEvent);
-  });
-  return result;
+// ---------------------------------------------------------------------------
+// SC32 / SC68 — order-side reservation state and react-to-event wiring.
+//
+// `sales_orders.reservation_intent_state` is the Sales-owned projection of the
+// reservation fact carried by the order (SC32). It is derived from
+// `sales_reservation_intent` rows and MUST never be written by anything other
+// than `syncOrderReservationIntentState`.
+//
+// The react-to-event contract (solution.md §29.17.2) is implemented here as
+// transaction-BODY helpers: the caller owns the transaction so that the
+// reservation change and the SO change / cancel / close that caused it commit
+// or roll back together. They therefore never open their own transaction.
+//
+// The executed-history invariant (Requirement SC40 / S05) is enforced by
+// consumption-based guards: an intent whose obligation has already been
+// executed (delivered / invoiced / financially recognized) is never rewritten,
+// and only the still-open remainder of an obligation is adjusted or released.
+// The consumption — not the mere presence of a delivery fact — is the
+// authority, because the canonical Planning reservation / Inventory lock is
+// released as a whole row while the consumed quantity stays recorded on the
+// Sales intent. This matches the frozen Wave 7 public release path, which
+// records `released_qty = granted - consumed`.
+// ---------------------------------------------------------------------------
+
+const ORDER_RESERVATION_STATES = Object.freeze(['NONE', 'REQUESTED', 'GRANTED', 'RELEASED']);
+
+// The executed quantity of one SO line, in the same unit as the intent qty.
+//
+// UNIT CONTRACT: a reservation intent quantity is always in the product's BASE
+// unit, because it is what the canonical Inventory lock and the canonical
+// Planning reservation hold. The SO line quantity, by contrast, is in the
+// line's DOCUMENT unit. The two only coincide when the document UoM equals
+// the base UoM, so every comparison between a line quantity and an intent
+// quantity must go through the line's canonical base-quantity snapshot.
+//
+// A confirmed Delivery is the canonical Sales-visible execution fact; a
+// confirmed Return is a reversal of an executed obligation and therefore does
+// NOT re-open the obligation.
+export function executedQuantityForLine(db, salesOrderItemId) {
+  if (!salesOrderItemId) return 0;
+  const row = db.prepare(`SELECT COALESCE(SUM(CASE WHEN d.status='CONFIRMED'
+      THEN COALESCE(di.base_quantity_num, di.quantity) / COALESCE(di.base_quantity_den, 1)
+      ELSE 0 END),0) value
+    FROM sales_delivery_items di JOIN sales_deliveries d ON d.id=di.delivery_id
+    WHERE di.sales_order_item_id=?`).get(salesOrderItemId);
+  return Number(row?.value || 0);
 }
 
-export async function releaseReservationIntentsForOrder(db, actor, { salesOrderId, consumerEvent }) {
-  const rows = db.prepare(`SELECT * FROM sales_reservation_intent
-    WHERE sales_order_id=? AND intent_state IN ('REQUESTED','GRANTED')`).all(salesOrderId);
-  for (const row of rows) {
-    transaction(db, () => {
-      if (row.inventory_lock_id) releaseInventoryLockAdapter(db, actor, row.inventory_lock_id);
-      if (row.planning_reservation_id) releasePlanningReservationAdapter(db, actor, row.planning_reservation_id);
-      db.prepare(`UPDATE sales_reservation_intent
-        SET intent_state='RELEASED', released_qty=?, released_at=?, consumer_event=?
-        WHERE id=?`).run(
-        Number(row.granted_qty) - Number(row.consumed_qty),
-        now(),
-        consumerEvent,
-        row.id,
-      );
-      audit(db, actor.id, 'RELEASE_BULK', 'SALES_RESERVATION_INTENT', row.id, consumerEvent);
+// The canonical BASE quantity of one SO line, derived from the line's own
+// base-quantity snapshot (`base_quantity_num` / `base_quantity_den`). Lines
+// created before the UoM snapshot existed fall back to the document quantity,
+// which equals the base quantity when no conversion is configured.
+export function baseQuantityForOrderLine(db, salesOrderItemId) {
+  if (!salesOrderItemId) return 0;
+  const row = db.prepare(`SELECT base_quantity_num, base_quantity_den, quantity
+    FROM sales_order_items WHERE id=?`).get(salesOrderItemId);
+  if (!row) return 0;
+  if (row.base_quantity_num != null && Number(row.base_quantity_num) > 0) {
+    return Number(row.base_quantity_num) / Number(row.base_quantity_den || 1);
+  }
+  return Number(row.quantity || 0);
+}
+
+// Recompute `sales_orders.reservation_intent_state` from the order's intents.
+// The order-level projection follows the most advanced live intent:
+//   * no intent at all                      → NONE
+//   * any live GRANTED intent               → GRANTED
+//   * otherwise any live REQUESTED intent   → REQUESTED
+//   * only closed intents remain            → RELEASED
+// A CONSUMED intent is executed history: the reservation obligation is closed
+// (nothing is held any more), so it projects as RELEASED, never as REQUESTED or
+// GRANTED. A partially consumed intent is still GRANTED because it still holds
+// a live remainder.
+function syncOrderReservationIntentState(db, salesOrderId) {
+  const rows = db.prepare(`SELECT intent_state, consumed_qty, granted_qty FROM sales_reservation_intent
+    WHERE sales_order_id=?`).all(salesOrderId);
+  let next = 'NONE';
+  if (rows.length) {
+    const live = rows.filter((row) => {
+      if (row.intent_state === 'GRANTED') return true;
+      if (row.intent_state === 'REQUESTED') return true;
+      return false;
+    });
+    const closed = rows.filter((row) => row.intent_state === 'RELEASED' || row.intent_state === 'CONSUMED');
+    if (live.some((row) => row.intent_state === 'GRANTED')) next = 'GRANTED';
+    else if (live.some((row) => row.intent_state === 'REQUESTED')) next = 'REQUESTED';
+    else if (closed.length) next = 'RELEASED';
+    else next = 'NONE';
+  }
+  const current = db.prepare('SELECT reservation_intent_state FROM sales_orders WHERE id=?').get(salesOrderId);
+  if (!current) throw new HttpError(404, '销售订单不存在');
+  if (current.reservation_intent_state === next) return next;
+  db.prepare('UPDATE sales_orders SET reservation_intent_state=?,updated_at=? WHERE id=?')
+    .run(next, now(), salesOrderId);
+  return next;
+}
+
+// Release exactly one intent's canonical reservation / lock and mark the Sales
+// intent RELEASED. Transaction-body only. Fails closed when the intent is
+// already consumed (executed history must never be silently rewritten).
+function releaseIntentRow(db, actor, intent, { consumerEvent, auditAction }) {
+  const consumed = Number(intent.consumed_qty);
+  const granted = Number(intent.granted_qty);
+  if (consumed > 1e-9 && intent.intent_state === 'CONSUMED') {
+    throw new HttpError(409, '预留意图已消费，不能释放已执行的历史', {
+      code: 'SALES_RESERVATION_INTENT_ALREADY_CONSUMED',
     });
   }
-  return rows.length;
+  // The intent row is locked first, so the lock order (intent row -> canonical
+  // reservation / lock) matches the single-release path and two concurrent
+  // releases cannot both release the same canonical object.
+  const locked = db.prepare(`SELECT * FROM sales_reservation_intent WHERE id=?${lockSuffix(db)}`).get(intent.id);
+  if (!locked) throw new HttpError(404, '预留意图不存在');
+  if (locked.intent_state === 'RELEASED') {
+    throw new HttpError(409, '预留意图已释放', { code: 'SALES_RESERVATION_INTENT_STATE_INVALID' });
+  }
+  if (intent.inventory_lock_id) releaseInventoryLockAdapter(db, actor, intent.inventory_lock_id);
+  if (intent.planning_reservation_id) releasePlanningReservationAdapter(db, actor, intent.planning_reservation_id);
+  const updated = db.prepare(`UPDATE sales_reservation_intent
+    SET intent_state='RELEASED', released_qty=?, released_at=?, consumer_event=?
+    WHERE id=? AND intent_state=?`).run(
+    Math.max(0, granted - consumed),
+    now(),
+    consumerEvent,
+    intent.id,
+    locked.intent_state,
+  );
+  if (updated.changes !== 1) {
+    throw new HttpError(409, '预留意图已被并发变更，请重试', {
+      code: 'SALES_RESERVATION_INTENT_STATE_INVALID',
+    });
+  }
+  audit(db, actor.id, auditAction, 'SALES_RESERVATION_INTENT', intent.id, consumerEvent);
+}
+
+// React-to-event helper: SO change. The intent covering the changed line is
+// released so the canonical reservation / lock no longer covers a quantity the
+// order no longer carries; the operator re-requests the delta explicitly.
+//
+// Transaction-body only — the caller owns the transaction.
+//
+// `executedQty` is the already-executed quantity of the line (delivered /
+// invoiced / financially recognized). When the intent has already consumed at
+// least that much, the intent is left untouched: executed history is corrected
+// only through the existing reversal / return / credit-adjustment mechanisms
+// (Requirement SC40 / S05).
+export function adjustReservationIntentOnChange(db, actor, {
+  salesOrderId, salesOrderItemId, mode = null, newQty, consumerEvent = 'SO_CHANGED', executedQty = 0,
+}) {
+  const live = findLiveIntents(db, { salesOrderId, salesOrderItemId, mode });
+  if (!live.length) return null;
+  const executed = Number(executedQty || 0);
+  const adjusted = [];
+  for (const existing of live) {
+    const consumed = Number(existing.consumed_qty);
+    if (consumed > 1e-9) {
+      // The consumed portion is executed history (delivered / invoiced /
+      // financially recognized). It is never silently rewritten. Only an intent
+      // whose whole obligation is still open may be adjusted.
+      continue;
+    }
+    if (newQty == null) { adjusted.push(summarizeIntent(existing)); continue; }
+    if (Math.abs(Number(newQty) - Number(existing.requested_qty)) < 1e-9) {
+      adjusted.push(summarizeIntent(existing));
+      continue;
+    }
+    if (Number(newQty) + 1e-9 < executed) {
+      throw new HttpError(409, '变更后数量低于已执行事实，不能调整预留', {
+        code: 'SALES_RESERVATION_INTENT_EXECUTED_FLOOR',
+      });
+    }
+    releaseIntentRow(db, actor, existing, { consumerEvent, auditAction: 'RELEASE_ON_CHANGE' });
+    adjusted.push(summarizeIntent(existing));
+  }
+  syncOrderReservationIntentState(db, salesOrderId);
+  return adjusted.length ? adjusted : null;
+}
+
+// React-to-event helper: SO cancel / close. Every intent of the order that is
+// still open is released.
+//
+// Transaction-body only — the caller owns the transaction.
+//
+// The executed-history guard (Requirement SC40 / S05) is CONSUMPTION based,
+// not line based. A fully consumed intent is executed history: the delivery
+// already happened against it, so neither the Sales intent nor the canonical
+// Planning reservation / Inventory lock it owns may be rewritten by a close.
+// A partially consumed intent still holds an open remainder; the frozen
+// public release path (Wave 7 `releaseReservationIntent`) releases exactly
+// that remainder — it records `released_qty = granted - consumed` — so the
+// react-to-event release follows the same frozen semantics.
+//
+// `executedItemIds` names the SO lines whose obligation is already executed.
+// It is an ADDITIONAL guard: an intent on such a line is never released when
+// it is fully consumed, so a close can never silently rewrite an executed
+// (delivered / invoiced / financially recognized) history.
+export function releaseReservationIntentsForOrder(db, actor, {
+  salesOrderId, consumerEvent, executedItemIds = [],
+}) {
+  const executed = new Set(executedItemIds.map((value) => String(value)));
+  const rows = db.prepare(`SELECT * FROM sales_reservation_intent
+    WHERE sales_order_id=? AND intent_state IN ('REQUESTED','GRANTED')`).all(salesOrderId);
+  let released = 0;
+  for (const row of rows) {
+    const consumed = Number(row.consumed_qty);
+    const granted = Number(row.granted_qty);
+    if (consumed > 1e-9 && consumed + 1e-9 >= granted) {
+      // Fully consumed: the reservation obligation is executed history.
+      continue;
+    }
+    if (row.sales_order_item_id && executed.has(String(row.sales_order_item_id)) && consumed > 1e-9) {
+      // The line carries an execution fact AND the intent already consumed
+      // part of it: releasing now would rewrite that executed portion.
+      continue;
+    }
+    releaseIntentRow(db, actor, row, { consumerEvent, auditAction: 'RELEASE_BULK' });
+    released += 1;
+  }
+  syncOrderReservationIntentState(db, salesOrderId);
+  return released;
+}
+
+// React-to-event helper: Delivery.
+//
+// solution.md §29.17.2: "Delivery → consume or release delivered portion;
+// never exceed canonical grant". The confirmed Delivery is the canonical
+// execution fact, so the delivered portion of the line's live GRANTED
+// reservation is consumed here. The consumed quantity never exceeds the
+// canonical grant (`granted_qty - consumed_qty`); a delivery that would
+// exceed it is refused, not silently clamped.
+//
+// UNIT CONTRACT: `quantity` is the delivered quantity in the product's BASE
+// unit, the same unit the intent quantity uses (the intent quantity is what
+// the canonical Inventory lock and the canonical Planning reservation hold).
+//
+// Transaction-body only — the caller owns the transaction, so a refused
+// consumption rolls the Delivery confirmation back with it.
+export function consumeReservationIntentsForDelivery(db, actor, {
+  salesOrderId, salesOrderItemId, quantity, consumerEvent = 'DELIVERY_CONFIRMED',
+}) {
+  const delivered = Number(quantity || 0);
+  if (!Number.isFinite(delivered) || delivered <= 0) return [];
+  const live = db.prepare(`SELECT * FROM sales_reservation_intent
+    WHERE sales_order_id=? AND intent_state='GRANTED'
+      AND COALESCE(sales_order_item_id,'')=COALESCE(?,'')
+    ORDER BY created_at ASC, id ASC`).all(salesOrderId, salesOrderItemId || null);
+  if (!live.length) return [];
+  const stamp = now();
+  const consumed = [];
+  let remaining = delivered;
+  for (const intent of live) {
+    if (remaining <= 1e-9) break;
+    const grantable = Number(intent.granted_qty) - Number(intent.consumed_qty);
+    if (grantable <= 1e-9) continue;
+    if (remaining > grantable + 1e-9) {
+      throw new HttpError(409, '出货数量超过预留授权数量', {
+        code: 'SALES_RESERVATION_DELIVERY_EXCEEDS_GRANT',
+        intentId: intent.id,
+        deliverable: grantable,
+        delivered: remaining,
+      });
+    }
+    const newConsumed = Number(intent.consumed_qty) + remaining;
+    const newState = newConsumed + 1e-9 >= Number(intent.granted_qty) ? 'CONSUMED' : 'GRANTED';
+    db.prepare(`UPDATE sales_reservation_intent
+      SET consumed_qty=?, intent_state=?, consumer_event=?, released_at=?
+      WHERE id=?`).run(newConsumed, newState, consumerEvent, newState === 'CONSUMED' ? stamp : null, intent.id);
+    consumePlanningReservationAdapter(db, actor, intent.planning_reservation_id, remaining);
+    audit(db, actor.id, 'CONSUME', 'SALES_RESERVATION_INTENT', intent.id, `consumed=${remaining}`);
+    consumed.push({ intentId: intent.id, quantity: remaining, state: newState });
+    remaining -= remaining;
+  }
+  syncOrderReservationIntentState(db, salesOrderId);
+  return consumed;
+}
+
+// React-to-event helper: SO return / replacement. A Return does NOT recreate a
+// reservation (solution.md §29.17.2 "Return → no automatic recreation"), and a
+// Replacement opens a NEW source-linked obligation, so it does not reopen the
+// original intent silently. What both share is the order-side projection: the
+// order-side state must reflect the intents that actually exist.
+//
+// Transaction-body only — the caller owns the transaction.
+export function reactReservationIntentToReturn(db, actor, { salesOrderId, consumerEvent = 'RETURNED' }) {
+  const state = syncOrderReservationIntentState(db, salesOrderId);
+  audit(db, actor.id, 'REACT_RETURN', 'SALES_RESERVATION_INTENT', salesOrderId, `${consumerEvent} state=${state}`);
+  return state;
 }
 
 export function __salesReservationIntentInternals() {
@@ -567,6 +891,7 @@ export function __salesReservationIntentInternals() {
     RESERVATION_MODES,
     INTENT_STATES,
     CONSUMER_EVENTS,
+    ORDER_RESERVATION_STATES,
     isPositiveNumber,
     isNonNegativeNumber,
     loadOrder,
@@ -579,5 +904,8 @@ export function __salesReservationIntentInternals() {
     createPlanningReservationAdapter,
     releasePlanningReservationAdapter,
     consumePlanningReservationAdapter,
+    syncOrderReservationIntentState,
+    executedQuantityForLine,
+    releaseIntentRow,
   };
 }

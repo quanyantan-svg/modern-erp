@@ -6,7 +6,12 @@ import { APPROVAL_FAMILIES, ROUTE_PRESENTATIONS } from '../src/navigation/presen
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
 test('D9 closes every active route on the shared 680px application rail', () => {
-  assert.equal(ROUTE_PRESENTATIONS.length, 79);
+// The Sales & Customer domain closure adds 6 contextual routes and no launcher
+// tile: credit-evaluation (Wave 11-B/C) plus the SC01 / SC06 / SC07 / SC19
+// operator work faces (sales-parameters, sales-group-memberships,
+// sellable-scope-rules, product-classifications,
+// sales-price-override-authorizations). 79 + 6 = 85.
+  assert.equal(ROUTE_PRESENTATIONS.length, 85);
   const styles = read('src/styles.css');
   assert.match(styles, /\.mobile-shell \{[\s\S]*--app-max-width: 680px;[\s\S]*--page-max-width: 680px;/);
   assert.match(styles, /\.mobile-application-view \{[\s\S]*max-width: 680px;/);

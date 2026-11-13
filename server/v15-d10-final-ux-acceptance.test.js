@@ -13,14 +13,19 @@ import { ACTIVE_APPLICATION_ROUTES, DISABLED_APPLICATION_ROUTES } from '../src/n
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
-test('D10 baseline plus W11-A U3 enumerates 79 active user-facing routes', () => {
+// The Sales & Customer domain closure adds 6 contextual routes and no launcher
+// tile: credit-evaluation (Wave 11-B/C) plus the SC01 / SC06 / SC07 / SC19
+// operator work faces (sales-parameters, sales-group-memberships,
+// sellable-scope-rules, product-classifications,
+// sales-price-override-authorizations). 79 + 6 = 85.
+test('D10 baseline plus W11-A U3 enumerates 85 active user-facing routes', () => {
   // Finance Operations Domain Closure added finance-invoices + finance-treasury
   // as dedicated primary routes on top of the Core Scope Cleanup +
   // Planning + Procurement & Outsourcing state.
   // The Accounting & Analytics Domain Closure (AA-W4 / AA-W6 / AA-W7) added
   // 5 more domain routes on top of that baseline.
-  assert.equal(ROUTE_PRESENTATIONS.length, 79, 'ROUTE_PRESENTATIONS must contain 79 entries');
-  assert.equal(new Set(ROUTE_PRESENTATIONS.map((item) => item.route)).size, 79, 'All 79 routes must be unique');
+  assert.equal(ROUTE_PRESENTATIONS.length, 85, 'ROUTE_PRESENTATIONS must contain 85 entries');
+  assert.equal(new Set(ROUTE_PRESENTATIONS.map((item) => item.route)).size, 85, 'All 85 routes must be unique');
 });
 
 test('D10 excludes 4 disabled routes and the mrp technical alias from the active set', () => {
@@ -40,7 +45,7 @@ test('D10 excludes 4 disabled routes and the mrp technical alias from the active
 test('D10 active routes reconcile exactly with canonical application registry', () => {
   const active = new Set(ACTIVE_APPLICATION_ROUTES.map((entry) => entry.key));
   const disabled = new Set(DISABLED_APPLICATION_ROUTES.map((entry) => entry.key));
-  assert.equal(active.size, 79, 'application registry must contain 79 active routes');
+  assert.equal(active.size, 85, 'application registry must contain 85 active routes');
   assert.deepEqual(active, new Set(ROUTE_PRESENTATIONS.map((item) => item.route)), 'active routes must match presentation projection');
   assert.deepEqual(disabled, new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)), 'disabled routes must match presentation projection');
 });
@@ -180,8 +185,8 @@ test('D10 routes visit manifest: 67 records, each ending in PASS', () => {
   // Closure added finance-invoices + finance-treasury as primary routes.
   // Planning Domain Closure added 2 contextual routes: planning-reservations,
   // planning-configuration.
-  assert.equal(manifest.length, 79, 'manifest contains 79 records');
-  assert.equal(manifest.filter((entry) => entry.finalResult === "PASS").length, 79, 'all 79 records PASS');
+  assert.equal(manifest.length, 85, 'manifest contains 85 records');
+  assert.equal(manifest.filter((entry) => entry.finalResult === "PASS").length, 85, 'all 85 records PASS');
   assert.equal(manifest.filter((entry) => entry.finalResult === 'FIXED_DURING_D10').length, 0, 'no routes required D10 fix');
   assert.equal(manifest.filter((entry) => entry.finalResult === 'UNRESOLVED').length, 0, 'no unresolved routes');
 });

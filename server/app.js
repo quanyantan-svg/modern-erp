@@ -259,6 +259,14 @@ import {
 import { getCreditException, getCreditExposure, listCreditExceptions } from './modules/credit-query.js';
 import { listCreditQueryOptions } from './modules/credit-query-options.js';
 import {
+  applyCreditEvaluationResult, createCreditEvaluationIndicator, createCreditEvaluationModel,
+  createCreditEvaluationScheme, createCreditEvaluationSheet, finalizeCreditEvaluationSheet,
+  getCreditEvaluationSheet, listCreditEvaluationIndicators, listCreditEvaluationModels,
+  listCreditEvaluationSchemes, listCreditEvaluationSheets, retireCreditEvaluationConfiguration,
+  scoreCreditEvaluationSheet,
+} from './modules/credit-evaluation.js';
+import { checkCreditReconciliation, recalculateCreditExposure } from './modules/credit-reconciliation.js';
+import {
   listSalesGroups, listSalespersonMemberships, listSalespersons,
   saveSalesGroup, saveSalesperson, saveSalespersonMembership,
 } from './modules/sales-foundation.js';
@@ -298,8 +306,8 @@ import {
 } from './modules/sales-prepayment-gate.js';
 import { isGateRetryAdmissionExpired, startGateRetryAdmission } from './modules/sales-gate-retry-admission.js';
 import {
-  consumeReservationIntent, getReservationIntent, grantReservationIntent, listReservationIntents,
-  releaseReservationIntent, requestReservationIntent,
+  consumeReservationIntent, consumeReservationIntentsForDelivery, getReservationIntent, grantReservationIntent,
+  listReservationIntents, releaseReservationIntent, requestReservationIntent,
 } from './modules/sales-reservation-intent.js';
 import {
   createServiceFulfillment, getServiceFulfillment, listServiceFulfillments, serviceFulfillmentAction,
@@ -707,6 +715,30 @@ ownedRouteTable.register({ method: 'POST', path: '/api/credit/special-approvals'
 ownedRouteTable.register({ method: 'GET', path: '/api/credit/special-approvals', handler: ({ db,res,actor,url }) => listCreditSpecialApprovals(db,res,actor,url), owner: 'server/modules/credit-special-approval.js' });
 ownedRouteTable.register({ method: 'GET', path: /^\/api\/credit\/special-approvals\/([^/]+)$/, handler: ({ db,res,actor,params }) => getCreditSpecialApproval(db,res,actor,params[0]), owner: 'server/modules/credit-special-approval.js' });
 ownedRouteTable.register({ method: 'POST', path: /^\/api\/credit\/special-approvals\/([^/]+)\/decide$/, handler: ({ db,req,res,actor,params }) => decideCreditSpecialApproval(db,req,res,actor,params[0]), owner: 'server/modules/credit-special-approval.js' });
+// W11-D — SC99 CHECK-only reconciliation / SC100 deterministic recalculation.
+// Both are CREDIT_EVALUATE operations; neither produces a Credit Check
+// Decision. Design §37.54.11 specifies NO UI for W11-D, so neither route is
+// registered in src/navigation/applicationRegistry.js.
+ownedRouteTable.register({ method: 'POST', path: '/api/credit/reconciliation/check', handler: ({ db,req,res,actor }) => checkCreditReconciliation(db,req,res,actor), owner: 'server/modules/credit-reconciliation.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/credit/reconciliation/recalculate', handler: ({ db,req,res,actor }) => recalculateCreditExposure(db,req,res,actor), owner: 'server/modules/credit-reconciliation.js' });
+// W11-B / W11-C — Credit Evaluation foundation (SC103..SC105) and the
+// multi-scorer / rating application (SC106..SC107).
+// Design §37.54.9.5 fixes the endpoint set. The rating application requires
+// write-class CREDIT_MANAGE; `CREDIT_EVALUATE` alone is NOT sufficient
+// (R-D3-1 / A-D3-1). No new permission codes are introduced.
+ownedRouteTable.register({ method: 'GET', path: '/api/credit/evaluation/indicators', handler: ({ db,res,actor,url }) => listCreditEvaluationIndicators(db,res,actor,url), owner: 'server/modules/credit-evaluation.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/credit/evaluation/indicators', handler: ({ db,req,res,actor }) => createCreditEvaluationIndicator(db,req,res,actor), owner: 'server/modules/credit-evaluation.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/credit/evaluation/schemes', handler: ({ db,res,actor,url }) => listCreditEvaluationSchemes(db,res,actor,url), owner: 'server/modules/credit-evaluation.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/credit/evaluation/schemes', handler: ({ db,req,res,actor }) => createCreditEvaluationScheme(db,req,res,actor), owner: 'server/modules/credit-evaluation.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/credit/evaluation/models', handler: ({ db,res,actor,url }) => listCreditEvaluationModels(db,res,actor,url), owner: 'server/modules/credit-evaluation.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/credit/evaluation/models', handler: ({ db,req,res,actor }) => createCreditEvaluationModel(db,req,res,actor), owner: 'server/modules/credit-evaluation.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/credit\/evaluation\/(INDICATOR|SCHEME|MODEL)\/([^/]+)\/retire$/, handler: ({ db,req,res,actor,params }) => retireCreditEvaluationConfiguration(db,req,res,actor,params[0],params[1]), owner: 'server/modules/credit-evaluation.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/credit/evaluation/sheets', handler: ({ db,res,actor,url }) => listCreditEvaluationSheets(db,res,actor,url), owner: 'server/modules/credit-evaluation.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/credit/evaluation/sheets', handler: ({ db,req,res,actor }) => createCreditEvaluationSheet(db,req,res,actor), owner: 'server/modules/credit-evaluation.js' });
+ownedRouteTable.register({ method: 'GET', path: /^\/api\/credit\/evaluation\/sheets\/([^/]+)$/, handler: ({ db,res,actor,params }) => getCreditEvaluationSheet(db,res,actor,params[0]), owner: 'server/modules/credit-evaluation.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/credit\/evaluation\/sheets\/([^/]+)\/score$/, handler: ({ db,req,res,actor,params }) => scoreCreditEvaluationSheet(db,req,res,actor,params[0]), owner: 'server/modules/credit-evaluation.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/credit\/evaluation\/sheets\/([^/]+)\/finalize$/, handler: ({ db,req,res,actor,params }) => finalizeCreditEvaluationSheet(db,req,res,actor,params[0]), owner: 'server/modules/credit-evaluation.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/credit\/evaluation\/results\/([^/]+)\/apply$/, handler: ({ db,req,res,actor,params }) => applyCreditEvaluationResult(db,req,res,actor,params[0]), owner: 'server/modules/credit-evaluation.js' });
 // W11-A U2-1 — SC101 Credit Query / SC102 Credit Exception History (read-only).
 ownedRouteTable.register({ method: 'GET', path: '/api/credit/exposure', handler: ({ db,res,actor,url }) => getCreditExposure(db,res,actor,url), owner: 'server/modules/credit-query.js' });
 ownedRouteTable.register({ method: 'GET', path: '/api/credit/exceptions', handler: ({ db,res,actor,url }) => listCreditExceptions(db,res,actor,url), owner: 'server/modules/credit-query.js' });
@@ -6884,6 +6916,22 @@ export async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
         const balance = adjustInventory(db, locked.warehouse_id, item.product_id, -baseQuantity, now);
         const transactionId=id();
         db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,\'OUT\',?,\'SALES_DELIVERY\',?,?,?,?,?,?)').run(transactionId, locked.warehouse_id, item.product_id, baseQuantity, balance, deliveryId, locked.delivery_no, '销售出库', actor.id, now, locked.delivery_date);
+        // SC68 — Delivery reacts to the reservation: the delivered portion of
+        // the line's live GRANTED reservation is consumed here
+        // (solution.md §29.17.2 "Delivery → consume or release delivered
+        // portion; never exceed canonical grant"). The quantity is the BASE
+        // quantity, the same unit the intent quantity uses. A delivery that
+        // would exceed the canonical grant is refused, so this can never
+        // clamp silently. The reaction runs inside the same transaction as the
+        // inventory movement, so a refusal rolls the whole confirmation back.
+        if (item.sales_order_item_id) {
+          consumeReservationIntentsForDelivery(db, actor, {
+            salesOrderId: so.id,
+            salesOrderItemId: item.sales_order_item_id,
+            quantity: baseQuantity,
+            consumerEvent: 'DELIVERY_CONFIRMED',
+          });
+        }
         const lineCogs=issueSourceValue(db,{ businessDate:locked.delivery_date,productId:item.product_id,warehouseId:locked.warehouse_id,quantity:baseQuantity,movementType:'SALES_DELIVERY_COGS',sourceType:'SALES_DELIVERY',sourceId:deliveryId,sourceItemId:item.id,inventoryTransactionId:transactionId }).reduce((s,x)=>s-x.valueDeltaCents,0); cogsCents+=lineCogs; cogsInventoryEntries.push({role:inventoryAccountRole(db,item.product_id),direction:'CREDIT',amountCents:lineCogs,summary:'销售出库成本 '+locked.delivery_no});
       }
       db.prepare('UPDATE sales_deliveries SET total_cents=?,status=\'CONFIRMED\', confirmed_at=?, confirmed_by=?, updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, deliveryId);

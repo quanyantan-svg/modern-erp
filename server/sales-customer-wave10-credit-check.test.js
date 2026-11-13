@@ -19,7 +19,7 @@ import { Readable } from 'node:stream';
 import { test } from 'node:test';
 import { createDatabase, hashPassword, transaction } from './db.js';
 import { migrateSalesCustomerDomain } from './migrations/sales-customer-domain.js';
-import { SALES_WAVE10_TABLES } from './migrations/sales-customer-wave10-credit-check.js';
+import { migrateSalesCustomerWave10CreditCheck, SALES_WAVE10_TABLES } from './migrations/sales-customer-wave10-credit-check.js';
 import {
   CREDIT_POLICY_HASH_VERSIONS, computePolicySnapshotFingerprint, createCreditParameter, createCreditRule,
 } from './modules/credit-policy.js';
@@ -363,10 +363,26 @@ test('Wave 10 migration creates exactly two additive tables and replays idempote
   try {
     const present = handle.db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${SALES_WAVE10_TABLES.map(() => '?').join(',')})`).all(...SALES_WAVE10_TABLES);
     assert.deepEqual(present.map((row) => row.name), [...SALES_WAVE10_TABLES].sort());
-    const wave11 = handle.db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN
-      ('credit_evaluation_indicator','credit_evaluation_scheme','credit_evaluation_model',
-       'credit_evaluation_scoring_sheet','credit_evaluation_result','credit_recalculation_history')`).all();
-    assert.deepEqual(wave11, [], 'Wave 11 tables must not be created by the Wave 10 migration');
+    // The Wave 11 tables now legitimately exist, because the canonical
+    // registry runs the Wave 11 entries after Wave 10. This assertion
+    // therefore states its ACTUAL intent — the WAVE 10 MIGRATION must not
+    // create them — by running that migration on its own and checking that it
+    // leaves no Wave 11 table behind. Asserting against the full registry
+    // would only re-assert that Wave 11 exists.
+    const isolated = buildDb();
+    try {
+      // Remove every Wave 11 table so the isolated run starts from a state
+      // where the Wave 11 tables genuinely do not exist.
+      for (const table of [
+        'credit_evaluation_indicator', 'credit_evaluation_scheme', 'credit_evaluation_model',
+        'credit_evaluation_scoring_sheet', 'credit_evaluation_result', 'credit_recalculation_history',
+      ]) isolated.db.exec(`DROP TABLE IF EXISTS ${table}`);
+      migrateSalesCustomerWave10CreditCheck(isolated.db);
+      const wave11 = isolated.db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN
+        ('credit_evaluation_indicator','credit_evaluation_scheme','credit_evaluation_model',
+         'credit_evaluation_scoring_sheet','credit_evaluation_result','credit_recalculation_history')`).all();
+      assert.deepEqual(wave11, [], 'Wave 11 tables must not be created by the Wave 10 migration');
+    } finally { isolated.cleanup(); }
     // Replay is a no-op.
     migrateSalesCustomerDomain(handle.db);
     const again = handle.db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${SALES_WAVE10_TABLES.map(() => '?').join(',')})`).all(...SALES_WAVE10_TABLES);

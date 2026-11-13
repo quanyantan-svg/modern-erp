@@ -66,8 +66,13 @@ export function BusinessPageHeader({
   );
 }
 
-export function BusinessPageShell({ children, className = '', width = 'wide' }) {
-  return <main className={`business-page-shell business-page-shell--${width} ${className}`.trim()}>{children}</main>;
+// The shell forwards the rest of the props to its root element. A screen
+// contract is expressed through a `data-testid` on the screen root, and a
+// component that silently drops it makes the contract unassertable — the
+// acceptance gate could no longer tell "the screen rendered" from "the
+// screen never mounted".
+export function BusinessPageShell({ children, className = '', width = 'wide', ...props }) {
+  return <main {...props} className={`business-page-shell business-page-shell--${width} ${className}`.trim()}>{children}</main>;
 }
 
 export function BusinessStatusGroup({ items = [], label = '业务状态' }) {

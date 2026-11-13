@@ -18,6 +18,12 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('credit-check','信用检查','sales-customer','FLOW_INTERNAL_STEP','WORKFLOW','contextual','销售与客户','salesDiscount',{any:['CREDIT_VIEW','CREDIT_EVALUATE']},{parentRoute:'customers',desktopExposure:'contextual',mobileExposure:'contextual'}),
   route('credit-query','信用额度与例外查询','sales-customer','FLOW_SUPPORTING','WORKFLOW','contextual','销售与客户','reports',{permission:'CREDIT_VIEW'},{parentRoute:'customers',desktopExposure:'contextual',mobileExposure:'launcher'}),
   route('credit-special-approvals','信用特别审批','sales-customer','FLOW_INTERNAL_STEP','WORKFLOW','contextual','销售与客户','approvals',{any:['CREDIT_VIEW','CREDIT_SPECIAL_APPROVE','CREDIT_MANAGE']},{parentRoute:'customers',desktopExposure:'contextual',mobileExposure:'contextual'}),
+  route('credit-evaluation','信用评估','sales-customer','FLOW_INTERNAL_STEP','WORKFLOW','contextual','销售与客户','salesDiscount',{any:['CREDIT_VIEW','CREDIT_EVALUATE']},{parentRoute:'customers',desktopExposure:'contextual',mobileExposure:'contextual'}),
+  route('sales-parameters','销售参数','sales-customer','ADVANCED_CONFIGURATION','CONFIG','contextual','销售与客户','configuration',{any:['SALES_FOUNDATION_VIEW','SALES_PARAMETERS_MANAGE']},{parentRoute:'customers',desktopExposure:'contextual',mobileExposure:'contextual'}),
+  route('sales-group-memberships','销售组成员关系','sales-customer','ADVANCED_CONFIGURATION','CONFIG','contextual','销售与客户','configuration',{any:['SALES_FOUNDATION_VIEW','SALES_FOUNDATION_MANAGE']},{parentRoute:'customers',desktopExposure:'contextual',mobileExposure:'contextual'}),
+  route('sellable-scope-rules','可销范围规则','sales-customer','ADVANCED_CONFIGURATION','CONFIG','contextual','销售与客户','configuration',{any:['SALES_FOUNDATION_VIEW','SALES_COMMERCIAL_MANAGE']},{parentRoute:'customers',desktopExposure:'contextual',mobileExposure:'contextual'}),
+  route('product-classifications','产品商业分类','sales-customer','ADVANCED_CONFIGURATION','CONFIG','contextual','销售与客户','configuration',{any:['SALES_FOUNDATION_VIEW','SALES_COMMERCIAL_MANAGE']},{parentRoute:'customers',desktopExposure:'contextual',mobileExposure:'contextual'}),
+  route('sales-price-override-authorizations','价格覆盖授权','sales-customer','FLOW_INTERNAL_STEP','WORKFLOW','contextual','销售与客户','salesDiscount',{any:['SALES_PRICING_VIEW','SALES_PRICING_OVERRIDE']},{parentRoute:'orders',desktopExposure:'contextual',mobileExposure:'contextual'}),
   route('business-overview','业务总览','accounting-analytics','FLOW_SUPPORTING','WORKFLOW','primary','会计与分析','overview',{permission:'DASHBOARD_VIEW'},{mobileExposure:'launcher',desktopExposure:'global'}),
   route('dashboard','工作台','accounting-analytics','FLOW_SUPPORTING','WORKFLOW','secondary','会计与分析','dashboard',{permission:'DASHBOARD_VIEW'},{mobileExposure:'role-workspace',desktopExposure:'role-workspace'}),
   route('orders','销售订单','sales-customer','FLOW_PRIMARY','LIST','primary','销售与客户','orders',{any:['ORDERS_VIEW','ORDERS_CREATE']}),
@@ -144,6 +150,8 @@ const loadScreenModule = (path) => {
     case '../pages/credit-foundation.jsx': return import('../pages/credit-foundation.jsx');
     case '../pages/credit-check.jsx': return import('../pages/credit-check.jsx');
     case '../pages/credit-query.jsx': return import('../pages/credit-query.jsx');
+    case '../pages/sales-parameters.jsx': return import('../pages/sales-parameters.jsx');
+    case '../pages/credit-evaluation.jsx': return import('../pages/credit-evaluation.jsx');
     case '../pages/sales-batch-a.jsx': return import('../pages/sales-batch-a.jsx');
     case '../pages/wave8-sales.jsx': return import('../pages/wave8-sales.jsx');
     case '../pages/sourcing-pricing.jsx': return import('../pages/sourcing-pricing.jsx');
@@ -167,6 +175,12 @@ const SCREEN_DEFINITIONS = Object.freeze({
   'credit-check': named('../pages/credit-check.jsx','CreditCheck'),
   'credit-query': defaultScreen('../pages/credit-query.jsx'),
   'credit-special-approvals': named('../pages/credit-check.jsx','CreditSpecialApprovals'),
+  'credit-evaluation': defaultScreen('../pages/credit-evaluation.jsx'),
+  'sales-parameters': named('../pages/sales-parameters.jsx','SalesParameters'),
+  'sales-group-memberships': named('../pages/sales-parameters.jsx','SalesGroupMemberships'),
+  'sellable-scope-rules': named('../pages/sales-parameters.jsx','SellableScopeRules'),
+  'product-classifications': named('../pages/sales-parameters.jsx','ProductClassifications'),
+  'sales-price-override-authorizations': named('../pages/sales-parameters.jsx','PriceOverrideAuthorizations'),
   quotations: named('../pages/sales-batch-a.jsx','Quotations'),
   'delivery-notices': named('../pages/sales-batch-a.jsx','DeliveryNotices'),
   'sales-order-changes': named('../pages/sales-batch-a.jsx','SalesOrderChanges'),
@@ -251,6 +265,9 @@ const CONTEXTUAL_ROUTES = new Set([
   'credit-check',
   'credit-query',
   'credit-special-approvals',
+  'credit-evaluation',
+  'sales-parameters','sales-group-memberships','sellable-scope-rules','product-classifications',
+  'sales-price-override-authorizations',
   'delivery-notices','sales-order-changes',
   'dashboard','sales-discounts','purchase-discounts','sales-invoices','supplier-bills',
   'bank-accounts','product-costs','cost-rates','iqc','oqc','quality-control-points',

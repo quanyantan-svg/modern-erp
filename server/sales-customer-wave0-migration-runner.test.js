@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { createDatabase } from './db.js';
+import { createTempDb } from './test-utils/temp-db.js';
 import {
   SALES_CUSTOMER_MIGRATIONS,
   migrateSalesCustomerDomain,
@@ -85,9 +86,13 @@ function assertWave9ProductionSchema(db) {
   const wave10Placeholders = SALES_WAVE10_TABLES.map(() => '?').join(',');
   const wave10 = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${wave10Placeholders}) ORDER BY name`).all(...SALES_WAVE10_TABLES);
   assert.deepEqual(wave10.map((row) => row.name), [...SALES_WAVE10_TABLES].sort());
+  // The Wave 11 tables now legitimately exist: each is created by its own
+  // Wave 11 registry entry, which the canonical registry now runs. The
+  // protection is narrowed, not removed: the migrations BEFORE Wave 11 must
+  // still not create any Wave 11 table.
   const futurePlaceholders = WAVE11_SALES_TABLES.map(() => '?').join(',');
   const future = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${futurePlaceholders}) ORDER BY name`).all(...WAVE11_SALES_TABLES);
-  assert.deepEqual(future, [], 'no Wave 11 Sales table may exist before Wave 11');
+  assert.deepEqual(future.map((row) => row.name), [...WAVE11_SALES_TABLES].sort(), 'the Wave 11 tables exist once the Wave 11 migrations are registered');
   const extensionColumns = new Set(db.prepare('PRAGMA table_info(customer_commercial_extensions)').all().map((row) => row.name));
   assert.equal(extensionColumns.has('default_pricing_list_id'), true);
   assert.equal(extensionColumns.has('default_discount_scheme_id'), true);
@@ -106,10 +111,16 @@ function assertWave9ProductionSchema(db) {
 test('canonical production registry contains approved Wave 1 through Wave 11 steps and preserves the bounded Wave 8 fixture', () => {
   assert.equal(Object.values(BATCH_A_COLUMNS).flat().length, 27);
   assert.equal(Object.isFrozen(SALES_CUSTOMER_MIGRATIONS), true);
-  assert.equal(SALES_CUSTOMER_MIGRATIONS.length, 11);
+  // The Sales & Customer domain closure adds three Wave 11 registry entries:
+  // the Credit Evaluation foundation, the evaluation result application and
+  // the credit reconciliation history. The registry sorts by (wave, id), so
+  // the lexicographic order of the four wave-11 ids IS their dependency
+  // order: wave-11-a-credit-consumption < wave-11-credit-evaluation-foundation
+  // < wave-11-credit-evaluation-result-application < wave-11-credit-reconciliation.
+  assert.equal(SALES_CUSTOMER_MIGRATIONS.length, 14);
   assert.equal(SALES_CUSTOMER_MIGRATIONS[0].id, 'wave-1-commercial-foundation');
   assert.equal(SALES_CUSTOMER_MIGRATIONS[1].id, 'wave-2-pricing-discount');
-  assert.deepEqual(SALES_CUSTOMER_MIGRATIONS.slice(2).map((step) => step.id), ['wave-3-quotation','wave-4-canonical-sales-order','wave-5-delivery-notice','wave-6-return-replacement','wave-7-prepayment-reservation','wave-8-service-consignment','wave-9-credit-foundation','wave-10-credit-check','wave-11-a-credit-consumption']);
+  assert.deepEqual(SALES_CUSTOMER_MIGRATIONS.slice(2).map((step) => step.id), ['wave-3-quotation','wave-4-canonical-sales-order','wave-5-delivery-notice','wave-6-return-replacement','wave-7-prepayment-reservation','wave-8-service-consignment','wave-9-credit-foundation','wave-10-credit-check','wave-11-a-credit-consumption','wave-11-credit-evaluation-foundation','wave-11-credit-evaluation-result-application','wave-11-credit-reconciliation']);
   assert.equal(WAVE8_BOUNDED_STEPS.length, 8);
   assert.equal(WAVE8_BOUNDED_STEPS.at(-1).id, 'wave-8-service-consignment');
   assert.equal(WAVE8_BOUNDED_STEPS.some((step) => step.wave >= 9), false);
@@ -178,6 +189,24 @@ test('migration errors propagate and stop later steps', () => {
     (error) => error === expected,
   );
   assert.deepEqual(calls, ['before']);
+});
+
+test('no Wave 11 Sales table is created by the pre-Wave-11 migration set', () => {
+  // The Wave 11 tables exist in the production registry because each is
+  // created by its own Wave 11 entry. The protection this file carries is that
+  // the migrations BEFORE Wave 11 never create them, so the Wave 11 boundary
+  // stays meaningful. It is proven on an isolated database whose Wave 11
+  // tables have been removed and on which only the pre-Wave-11 steps are replayed.
+  const handle = createTempDb({ label: 'sales-wave11-boundary' });
+  try {
+    for (const table of WAVE11_SALES_TABLES) handle.db.exec(`DROP TABLE IF EXISTS ${table}`);
+    const steps = SALES_CUSTOMER_MIGRATIONS.filter((step) => step.wave < 11);
+    assert.ok(steps.length > 0, 'the pre-Wave-11 migration set must be non-empty');
+    runSalesCustomerMigrations(handle.db, steps);
+    const placeholders = WAVE11_SALES_TABLES.map(() => '?').join(',');
+    const after = handle.db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${placeholders}) ORDER BY name`).all(...WAVE11_SALES_TABLES);
+    assert.deepEqual(after, [], 'no Wave 11 Sales table may be created before Wave 11');
+  } finally { handle.cleanup(); }
 });
 
 test('fresh SQLite and existing SQLite reopen execute through Wave 9 idempotently', () => {

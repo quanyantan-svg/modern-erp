@@ -12,6 +12,7 @@ import { authorizeSalesPrepaymentGateWithPlan, discoverSalesPrepaymentGatePlan }
 import { assertCreditAllowsBusinessAction, lockCreditPrepaymentParents } from './credit-check.js';
 import { resolveRecognitionPolicy } from './finance-recognition-policy.js';
 import { isGateRetryAdmissionExpired, startGateRetryAdmission } from './sales-gate-retry-admission.js';
+import { releaseReservationIntentsForOrder } from './sales-reservation-intent.js';
 
 const DAY = () => new Date().toISOString().slice(0, 10);
 const NOW = () => new Date().toISOString();
@@ -898,7 +899,28 @@ export async function salesOrderAction(db, req, res, actor, orderId, action, { r
       if (action === 'close' && facts.some((line) => !line.controlledCloseEligible)) throw new HttpError(409, '交付数量未达到订单行下容差，不能受控关闭', { code: 'SALES_ORDER_LOWER_TOLERANCE_NOT_REACHED' });
       const nextState = action === 'close' ? 'CLOSED' : 'CANCELLED';
       db.prepare('UPDATE sales_orders SET commercial_close_state=?,remark=?,updated_at=? WHERE id=?').run(nextState, `${order.remark || ''}\n${reason}`.trim(), NOW(), orderId);
-      body.__closeAudit = { reason, before: { commercialCloseState: order.commercial_close_state, lines: facts.map((line) => ({ id: line.id, orderedMicros: line.orderedMicros, deliveredMicros: line.deliveredMicros, lowerToleratedMicros: line.lowerToleratedMicros, upperToleratedMicros: line.upperToleratedMicros })) }, after: { commercialCloseState: nextState } };
+      // SC68 — SO Cancel / Close releases the remaining canonical
+      // lock / reservation. The order's close state is persisted first so the
+      // reservation reaction reads the same commercial truth the close asserts;
+      // both writes live in this one transaction, so a failure rolls the close
+      // back together with the reservation release.
+      //
+      // The executed-history guard (Requirement SC40 / S05) is consumption
+      // based: a FULLY consumed reservation is executed history (the delivery
+      // already happened against it), so neither the Sales intent nor the
+      // canonical Planning reservation / Inventory lock it owns is rewritten by
+      // the close. A partially consumed reservation still holds an open
+      // remainder and IS released, exactly as the frozen Wave 7 public release
+      // path does (it records `released_qty = granted - consumed`). A cancel
+      // is already refused above when ANY line was delivered, so a cancel
+      // reaches this point only with no delivery fact at all.
+      const executedItemIds = facts.filter((line) => Number(line.deliveredMicros) > 0).map((line) => line.id);
+      const releasedReservations = releaseReservationIntentsForOrder(db, actor, {
+        salesOrderId: orderId,
+        consumerEvent: action === 'close' ? 'SO_CLOSED' : 'SO_CANCELLED',
+        executedItemIds,
+      });
+      body.__closeAudit = { reason, before: { commercialCloseState: order.commercial_close_state, lines: facts.map((line) => ({ id: line.id, orderedMicros: line.orderedMicros, deliveredMicros: line.deliveredMicros, lowerToleratedMicros: line.lowerToleratedMicros, upperToleratedMicros: line.upperToleratedMicros })) }, after: { commercialCloseState: nextState, releasedReservations } };
     } else throw new HttpError(400, '无效订单动作');
     result = { ok: true, id: orderId, action }; if (key) saveIdempotency(db, operation, orderId, key, fingerprint, result); audit(db, actor.id, action.toUpperCase(), 'SALES_ORDER', orderId, body.__closeAudit ? JSON.stringify(body.__closeAudit) : String(body.reason || ''));
   });

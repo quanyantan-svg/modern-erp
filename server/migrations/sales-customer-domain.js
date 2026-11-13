@@ -20,6 +20,9 @@ import { migrateSalesCustomerWave8ServiceConsignment } from './sales-customer-wa
 import { migrateSalesCustomerWave9CreditFoundation } from './sales-customer-wave9-credit-foundation.js';
 import { migrateSalesCustomerWave10CreditCheck } from './sales-customer-wave10-credit-check.js';
 import { migrateSalesCustomerWave11ACreditConsumption } from './sales-customer-wave11-a-credit-consumption.js';
+import { migrateSalesCustomerWave11CreditEvaluationFoundation } from './sales-customer-wave11-credit-evaluation-foundation.js';
+import { migrateSalesCustomerWave11CreditEvaluationResultApplication } from './sales-customer-wave11-credit-evaluation-result-application.js';
+import { migrateSalesCustomerWave11CreditReconciliation } from './sales-customer-wave11-credit-reconciliation.js';
 
 export const SALES_CUSTOMER_MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -44,6 +47,39 @@ export const SALES_CUSTOMER_MIGRATIONS = Object.freeze([
     id: 'wave-11-a-credit-consumption',
     wave: 11,
     migrate: migrateSalesCustomerWave11ACreditConsumption,
+  }),
+  // W11-B / W11-C — SC103..SC107 credit evaluation foundation, bounded
+  // multi-scorer and rating application. The registry sorts by (wave, id),
+  // and inside wave 11 the lexicographic order of the ids is exactly the
+  // dependency order required by §37.54.12.2:
+  //
+  //   wave-11-a-credit-consumption
+  //     < wave-11-credit-evaluation-foundation
+  //     < wave-11-credit-evaluation-result-application
+  //     < wave-11-credit-reconciliation
+  //
+  // ('f' < 'r' and 'e' < 'r'), so the target-first order
+  // (scheme -> model -> scoring_sheet -> result -> deferred FK ->
+  // credit_recalculation_history) holds without an explicit ordering table.
+  Object.freeze({
+    id: 'wave-11-credit-evaluation-foundation',
+    wave: 11,
+    migrate: migrateSalesCustomerWave11CreditEvaluationFoundation,
+  }),
+  Object.freeze({
+    id: 'wave-11-credit-evaluation-result-application',
+    wave: 11,
+    migrate: migrateSalesCustomerWave11CreditEvaluationResultApplication,
+  }),
+  // W11-D — SC99 / SC100 reconciliation & deterministic recalculation.
+  // The registry sorts by (wave, id), and inside wave 11 the lexicographic
+  // order of the ids is exactly the dependency order
+  // ('wave-11-a-credit-consumption' < 'wave-11-credit-reconciliation'),
+  // which satisfies §37.54.12.2 without an explicit ordering table.
+  Object.freeze({
+    id: 'wave-11-credit-reconciliation',
+    wave: 11,
+    migrate: migrateSalesCustomerWave11CreditReconciliation,
   }),
 ]);
 

@@ -136,6 +136,80 @@ function closePredecessorAndAssertNoOverlap(db, anchorId, effectiveFrom, effecti
   }
 }
 
+// ---------------------------------------------------------------------------
+// §37.54.10.6 — the ONE rating writer.
+//
+// `credit_profile.rating_grade` / `rating_effective_from` /
+// `rating_effective_to` and the `credit_profile_ratings` history are written
+// ONLY here, for BOTH business sources. There is no second formal rating
+// write path: the INITIAL_ASSIGNED path (a Credit Profile version being
+// created) and the EVALUATION_APPLIED path (a W11-C evaluation result being
+// applied) share this writer, the same physical columns, the same
+// post-condition invariant and the same audit identity.
+//
+// The Wave 9 CHECK on `credit_profile_ratings` permits exactly two physical
+// source types, `INITIAL_ASSIGNED` and `EVALUATED`. The business source name
+// `EVALUATION_APPLIED` is mapped explicitly onto the frozen physical value
+// `EVALUATED`; that CHECK is neither modified nor relaxed.
+//
+// Transaction-body only — the caller owns the transaction, so the profile row
+// and its rating history always commit or roll back together.
+// ---------------------------------------------------------------------------
+export function applyCreditRating(db, {
+  creditProfileId,
+  ratingGrade,
+  ratingEffectiveFrom = null,
+  ratingEffectiveTo = null,
+  businessSource,
+  ratingSourceKey = null,
+  evaluationResultId = null,
+  actorId,
+  appliedAt = null,
+  supersedePrevious = false,
+}) {
+  if (!['INITIAL_ASSIGNED', 'EVALUATION_APPLIED'].includes(businessSource)) {
+    throw new HttpError(400, '评级业务来源无效', { code: 'CREDIT_RATING_SOURCE_INVALID' });
+  }
+  const physicalSourceType = businessSource === 'EVALUATION_APPLIED' ? 'EVALUATED' : 'INITIAL_ASSIGNED';
+  const physicalSourceKey = businessSource === 'EVALUATION_APPLIED'
+    ? String(evaluationResultId || '')
+    : 'INITIAL_ASSIGNED';
+  if (businessSource === 'EVALUATION_APPLIED' && !evaluationResultId) {
+    throw new HttpError(409, '评估应用必须携带 evaluationResultId', { code: 'CREDIT_EVALUATION_RESULT_REQUIRED' });
+  }
+  if (businessSource === 'INITIAL_ASSIGNED' && ratingSourceKey && ratingSourceKey !== 'INITIAL_ASSIGNED') {
+    throw new HttpError(409, '初始评级的来源键必须是 INITIAL_ASSIGNED', { code: 'CREDIT_RATING_SOURCE_INVALID' });
+  }
+  const grade = requiredText(ratingGrade, '评级', 50);
+  const stamp = appliedAt || new Date().toISOString();
+  const ratingId = randomUUID();
+
+  if (supersedePrevious) {
+    // Only `superseded_at` moves. `rating_grade` / `applied_at` / `applied_by`
+    // / `evaluation_result_id` of the existing history are never rewritten.
+    db.prepare(`UPDATE credit_profile_ratings SET superseded_at=?
+      WHERE credit_profile_id=? AND superseded_at IS NULL`).run(stamp, creditProfileId);
+  }
+  db.prepare(`INSERT INTO credit_profile_ratings(id,credit_profile_id,rating_source_type,rating_source_key,
+    evaluation_result_id,rating_grade,applied_at,applied_by,superseded_at)
+    VALUES(?,?,?,?,?,?,?,?,NULL)`)
+    .run(ratingId, creditProfileId, physicalSourceType, physicalSourceKey,
+      businessSource === 'EVALUATION_APPLIED' ? String(evaluationResultId) : null,
+      grade, stamp, actorId);
+  db.prepare('UPDATE credit_profile SET rating_grade=?, rating_effective_from=?, rating_effective_to=? WHERE id=?')
+    .run(grade, ratingEffectiveFrom, ratingEffectiveTo, creditProfileId);
+
+  // Post-condition invariant: the profile's own rating columns always equal
+  // the current (not superseded) rating history row.
+  const current = db.prepare(`SELECT rating_grade FROM credit_profile_ratings
+    WHERE credit_profile_id=? AND superseded_at IS NULL`).get(creditProfileId);
+  const profile = db.prepare('SELECT rating_grade FROM credit_profile WHERE id=?').get(creditProfileId);
+  if (!profile || !current || profile.rating_grade !== current.rating_grade) {
+    throw new HttpError(500, '评级写入后档案与评级历史不一致', { code: 'CREDIT_RATING_INVARIANT_BROKEN' });
+  }
+  return { ratingId, ratingGrade: grade, appliedAt: stamp, businessSource, physicalSourceType, physicalSourceKey };
+}
+
 export async function createCreditProfile(db, req, res, actor) {
   requireCreditManagementAuthority(actor);
   const body = await readJson(req);
@@ -156,29 +230,42 @@ export async function createCreditProfile(db, req, res, actor) {
       });
       closePredecessorAndAssertNoOverlap(db, anchor.id, value.effectiveFrom, value.effectiveTo);
       const profileId = randomUUID();
-      const ratingId = randomUUID();
       const now = new Date().toISOString();
       // W11-A U3 — the derived Credit Object search keys are written in the
       // same statement, so a new Profile version is searchable at once. The
       // predecessor closure above never touches these fields.
+      //
+      // §37.54.10.6 — the three rating columns are deliberately NOT part of
+      // this INSERT: they are written by the single rating writer below, which
+      // is the only place in `server/modules/credit-*.js` where they appear in
+      // an INSERT or UPDATE. The committed row is field-identical to the
+      // Wave 9 shape.
       db.prepare(`INSERT INTO credit_profile(id,anchor_id,customer_id,salesperson_scope_key,salesperson_id,credit_object_type,
         credit_object_id,credit_object_type_search_key,credit_object_id_search_key,
-        credit_limit_cents,initial_state,status,rating_grade,rating_effective_from,rating_effective_to,
+        credit_limit_cents,initial_state,status,
         overdue_day_policy,rule_id,effective_from,effective_to,created_at,created_by)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(profileId, anchor.id, value.customerId, value.salespersonScopeKey,
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(profileId, anchor.id, value.customerId, value.salespersonScopeKey,
         value.salespersonId, value.creditObjectType, value.creditObjectId,
         foldSearchText(value.creditObjectType), foldSearchText(value.creditObjectId),
         value.creditLimitCents, value.initialState,
-        value.status, value.ratingGrade, value.ratingEffectiveFrom, value.ratingEffectiveTo, value.overdueDayPolicy,
+        value.status, value.overdueDayPolicy,
         value.ruleId, value.effectiveFrom, value.effectiveTo, now, actor.id);
-      db.prepare(`INSERT INTO credit_profile_ratings(id,credit_profile_id,rating_source_type,rating_source_key,
-        evaluation_result_id,rating_grade,applied_at,applied_by,superseded_at)
-        VALUES(?,?,'INITIAL_ASSIGNED','INITIAL_ASSIGNED',NULL,?,?,?,NULL)`)
-        .run(ratingId, profileId, value.ratingGrade, now, actor.id);
+      const rating = applyCreditRating(db, {
+        creditProfileId: profileId,
+        ratingGrade: value.ratingGrade,
+        ratingEffectiveFrom: value.ratingEffectiveFrom,
+        ratingEffectiveTo: value.ratingEffectiveTo,
+        businessSource: 'INITIAL_ASSIGNED',
+        ratingSourceKey: 'INITIAL_ASSIGNED',
+        evaluationResultId: null,
+        actorId: actor.id,
+        appliedAt: now,
+        supersedePrevious: false,
+      });
       const ratings = db.prepare('SELECT * FROM credit_profile_ratings WHERE credit_profile_id=? ORDER BY applied_at,id').all(profileId);
       response = { profile: present(db.prepare('SELECT * FROM credit_profile WHERE id=?').get(profileId), ratings) };
       audit(db, actor.id, 'CREATE_VERSION', 'CREDIT_PROFILE', profileId, `${anchor.anchor_key}:${value.effectiveFrom}`);
-      audit(db, actor.id, 'INITIAL_ASSIGNED', 'CREDIT_PROFILE_RATING', ratingId, `${profileId}:${value.ratingGrade}`);
+      audit(db, actor.id, 'INITIAL_ASSIGNED', 'CREDIT_PROFILE_RATING', rating.ratingId, `${profileId}:${value.ratingGrade}`);
       saveIdempotency(db, 'CREDIT_PROFILE_CREATE', documentId, key, fingerprint, response);
     });
   } catch (error) { translateConstraintError(error, '信用档案版本或初始评级冲突'); }

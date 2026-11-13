@@ -28,6 +28,12 @@
 //     longer supported and are rejected upstream.
 
 import { allowAny, HttpError, send } from '../lib/http.js';
+import {
+  SALES_RANKING_DIMENSIONS,
+  buildSalesGrossProfit,
+  buildSalesRanking,
+  lookupRankingEntity,
+} from './sales-reporting-gross-profit.js';
 
 const MAX_REPORT_ROWS = 500;
 const MAX_EXPORT_ROWS = 5000;
@@ -177,10 +183,160 @@ const SALES_DATE_BASIS = {
   order: '订单按订单日期（sales_orders.order_date）',
   shipment: '出货按出货日期（sales_deliveries.delivery_date）',
   return: '退货按退货日期（return_orders.return_date）',
+  quotation: '报价按生效日（sales_quotations.valid_from）',
+  deliveryNotice: '发货通知按业务日期（delivery_notices.business_date）',
+  replacement: '换货按换货行业务日期（sales_order_replacement_lines.business_date）',
 };
+
+// SC78 — Sales Execution Reports.
+//
+// SC78 names six document families: Quotation / SO / Delivery Notice /
+// Sales Delivery / Return / Replacement. The three families that already
+// existed (SO / Sales Delivery / Return) keep their original fields and
+// semantics; this block ONLY ADDS the three missing families so that no
+// existing consumer can regress.
+//
+// Reporting consumes canonical facts only. There is no reporting-side
+// ledger, no cached balance and no derived shadow table: every count and
+// amount below is a direct aggregate over the canonical document tables.
+const EXECUTION_DOCUMENT_FAMILIES = Object.freeze([
+  { key: 'quotation', label: '报价单' },
+  { key: 'salesOrder', label: '销售订单' },
+  { key: 'deliveryNotice', label: '发货通知' },
+  { key: 'salesDelivery', label: '销售出库' },
+  { key: 'return', label: '销售退货' },
+  { key: 'replacement', label: '销售换货' },
+]);
+
+// Quotation: EFFECTIVE quotations only (DRAFT is not an executed document,
+// CLOSED / EXPIRED / FULLY_CONVERTED are historical). Period placement uses
+// `valid_from` — the quotation's own business start date. There is no
+// `created_at` fallback: a quotation without `valid_from` cannot exist
+// (NOT NULL), so no legacy bucket is required for this family.
+function queryExecutionQuotations(db, filters) {
+  const where = ["q.status = 'EFFECTIVE'"];
+  const params = [];
+  if (filters.dateFrom) { where.push('q.valid_from >= ?'); params.push(filters.dateFrom); }
+  if (filters.dateTo) { where.push('q.valid_from <= ?'); params.push(filters.dateTo); }
+  if (filters.customerId) { where.push('q.customer_id = ?'); params.push(filters.customerId); }
+  const totals = db.prepare(`
+    SELECT COUNT(*) AS documentCount, COALESCE(SUM(q.total_cents), 0) AS amountCents
+    FROM sales_quotations q
+    WHERE ${where.join(' AND ')}
+  `).get(...params);
+  return { documentCount: Number(totals.documentCount), amountCents: Number(totals.amountCents) };
+}
+
+// Delivery Notice: CONFIRMED notices only. Period placement uses the
+// canonical `business_date` on the notice header (the date the notice
+// itself carries). DRAFT / CANCELLED notices are not executed documents.
+function queryExecutionDeliveryNotices(db, filters) {
+  const where = ["n.state = 'CONFIRMED'"];
+  const params = [];
+  if (filters.dateFrom) { where.push('n.business_date >= ?'); params.push(filters.dateFrom); }
+  if (filters.dateTo) { where.push('n.business_date <= ?'); params.push(filters.dateTo); }
+  if (filters.customerId) { where.push('n.customer_id = ?'); params.push(filters.customerId); }
+  const totals = db.prepare(`
+    SELECT COUNT(*) AS documentCount
+    FROM delivery_notices n
+    WHERE ${where.join(' AND ')}
+  `).get(...params);
+  // A delivery notice carries no monetary amount of its own — it schedules
+  // quantity, not money. The amount is therefore reported as 0 and the
+  // family is explicitly marked `amountBasis: 'NONE'` in the response so
+  // no consumer may read a 0 as "this document is worth nothing".
+  return { documentCount: Number(totals.documentCount), amountCents: 0, amountBasis: 'NONE' };
+}
+
+// Replacement: a replacement header has no business date and no amount of
+// its own; both live on the replacement lines (`business_date`,
+// `replacement_material_id`, `replacement_quantity`). The header links to
+// the originating sales return, which carries the customer. CANCELLED
+// replacements are excluded. The replacement amount is the original
+// return-item amount carried over — the canonical replacement document
+// records quantity and material, not a re-priced amount, so no amount is
+// fabricated here.
+function queryExecutionReplacements(db, filters) {
+  const where = ["r.cancellation_state = 'ACTIVE'"];
+  const params = [];
+  if (filters.dateFrom) { where.push('l.business_date >= ?'); params.push(filters.dateFrom); }
+  if (filters.dateTo) { where.push('l.business_date <= ?'); params.push(filters.dateTo); }
+  if (filters.customerId) { where.push('ro.customer_id = ?'); params.push(filters.customerId); }
+  const totals = db.prepare(`
+    SELECT COUNT(DISTINCT r.id) AS documentCount, COUNT(l.id) AS lineCount
+    FROM sales_order_replacements r
+    JOIN sales_order_replacement_lines l ON l.replacement_id = r.id
+    JOIN return_orders ro ON ro.id = r.source_return_id
+    WHERE ${where.join(' AND ')}
+  `).get(...params);
+  return {
+    documentCount: Number(totals.documentCount),
+    lineCount: Number(totals.lineCount),
+    amountCents: 0,
+    amountBasis: 'NONE',
+  };
+}
+
+function buildSalesExecution(db, filters) {
+  const quotation = queryExecutionQuotations(db, filters);
+  const deliveryNotice = queryExecutionDeliveryNotices(db, filters);
+  const replacement = queryExecutionReplacements(db, filters);
+  const orderWhere = ["so.order_date IS NOT NULL", "so.order_date <> ''"];
+  const orderParams = [];
+  if (filters.dateFrom) { orderWhere.push('so.order_date >= ?'); orderParams.push(filters.dateFrom); }
+  if (filters.dateTo) { orderWhere.push('so.order_date <= ?'); orderParams.push(filters.dateTo); }
+  if (filters.customerId) { orderWhere.push('so.customer_id = ?'); orderParams.push(filters.customerId); }
+  const salesOrder = db.prepare(`
+    SELECT COUNT(*) AS documentCount, COALESCE(SUM(so.total_cents), 0) AS amountCents
+    FROM sales_orders so
+    WHERE ${orderWhere.join(' AND ')}
+  `).get(...orderParams);
+  const deliveryWhere = ["sd.status = 'CONFIRMED'", "sd.delivery_date IS NOT NULL", "sd.delivery_date <> ''"];
+  const deliveryParams = [];
+  if (filters.dateFrom) { deliveryWhere.push('sd.delivery_date >= ?'); deliveryParams.push(filters.dateFrom); }
+  if (filters.dateTo) { deliveryWhere.push('sd.delivery_date <= ?'); deliveryParams.push(filters.dateTo); }
+  if (filters.customerId) { deliveryWhere.push('sd.customer_id = ?'); deliveryParams.push(filters.customerId); }
+  const salesDelivery = db.prepare(`
+    SELECT COUNT(*) AS documentCount, COALESCE(SUM(sd.total_cents), 0) AS amountCents
+    FROM sales_deliveries sd
+    WHERE ${deliveryWhere.join(' AND ')}
+  `).get(...deliveryParams);
+  const returnWhere = ["ro.source_type = 'SALES'", "ro.status = 'CONFIRMED'", "ro.return_date IS NOT NULL", "ro.return_date <> ''"];
+  const returnParams = [];
+  if (filters.dateFrom) { returnWhere.push('ro.return_date >= ?'); returnParams.push(filters.dateFrom); }
+  if (filters.dateTo) { returnWhere.push('ro.return_date <= ?'); returnParams.push(filters.dateTo); }
+  if (filters.customerId) { returnWhere.push('ro.customer_id = ?'); returnParams.push(filters.customerId); }
+  const salesReturn = db.prepare(`
+    SELECT COUNT(*) AS documentCount, COALESCE(SUM(ro.total_cents), 0) AS amountCents
+    FROM return_orders ro
+    WHERE ${returnWhere.join(' AND ')}
+  `).get(...returnParams);
+
+  const families = [
+    { key: 'quotation', label: '报价单', documentCount: quotation.documentCount, amountCents: quotation.amountCents, amountBasis: quotation.amountBasis || 'QUOTATION_TOTAL', dateBasis: 'valid_from' },
+    { key: 'salesOrder', label: '销售订单', documentCount: Number(salesOrder.documentCount), amountCents: Number(salesOrder.amountCents), amountBasis: 'ORDER_TOTAL', dateBasis: 'order_date' },
+    { key: 'deliveryNotice', label: '发货通知', documentCount: deliveryNotice.documentCount, amountCents: deliveryNotice.amountCents, amountBasis: deliveryNotice.amountBasis, dateBasis: 'business_date' },
+    { key: 'salesDelivery', label: '销售出库', documentCount: Number(salesDelivery.documentCount), amountCents: Number(salesDelivery.amountCents), amountBasis: 'DELIVERY_TOTAL', dateBasis: 'delivery_date' },
+    { key: 'return', label: '销售退货', documentCount: Number(salesReturn.documentCount), amountCents: Number(salesReturn.amountCents), amountBasis: 'RETURN_TOTAL', dateBasis: 'return_date' },
+    { key: 'replacement', label: '销售换货', documentCount: replacement.documentCount, lineCount: replacement.lineCount, amountCents: replacement.amountCents, amountBasis: replacement.amountBasis, dateBasis: 'business_date' },
+  ];
+  return {
+    families,
+    documentFamilies: EXECUTION_DOCUMENT_FAMILIES.map((family) => family.key),
+    documentCount: families.reduce((sum, family) => sum + family.documentCount, 0),
+    amountCents: families.reduce((sum, family) => sum + family.amountCents, 0),
+    moneyUnit: 'cents',
+  };
+}
 
 export function getSalesSummary(db, res, actor, url) {
   requireReportVisibilityWithSales(actor);
+  // SC80 / SC81 share the sales decision-report transport. The `report`
+  // query parameter selects a sub-report; when it is absent this endpoint
+  // keeps its historical sales-summary behaviour unchanged.
+  const subReport = readSalesSubReport(url);
+  if (subReport === 'gross-profit') return getSalesGrossProfit(db, res, actor, url);
+  if (subReport === 'ranking') return getSalesRanking(db, res, actor, url);
   const filters = buildOrderFilters(url);
 
   const orderWhere = ["so.order_date IS NOT NULL", "so.order_date <> ''"];
@@ -290,6 +446,10 @@ export function getSalesSummary(db, res, actor, url) {
       returnCents: summary.returnCents,
       netShipmentCents,
     },
+    // SC78 — six document families of sales execution evidence. This block
+    // is purely additive; the `summary` block above keeps its original
+    // fields and semantics.
+    execution: buildSalesExecution(db, filters),
     byCustomer,
     filters: buildFilterEcho(db, filters),
     dateBasis: SALES_DATE_BASIS,
@@ -307,6 +467,9 @@ export function getSalesSummary(db, res, actor, url) {
       '净出货金额 = 出货金额 - 退货金额；',
       '订单金额不等于已实现收入；',
       `业务日期缺失共 ${legacyMissingTotal} 条，未计入上方指标，已在 legacyMissing 字段按指标分解。`,
+      '执行证据（execution）覆盖 SC78 六类单据：报价单 / 销售订单 / 发货通知 / 销售出库 / 销售退货 / 销售换货；',
+      '发货通知与销售换货单据本身不承载金额，其 amountCents 恒为 0 且 amountBasis 标记为 NONE，不得解读为金额为零；',
+      '执行证据只汇总 canonical 单据本身，不构成收入确认依据。',
     ].join(''),
   });
 }
@@ -516,6 +679,98 @@ function fulfillmentResponse(db, reportKey, filters, limit) {
 export function getSalesOutstanding(db, res, actor, url) {
   requireReportVisibilityWithSales(actor);
   return send(res, 200, fulfillmentResponse(db, 'sales-outstanding', buildOrderFilters(url), MAX_REPORT_ROWS));
+}
+
+// ---------- 2b. Sales Gross Profit (SC80) / Sales Ranking (SC81) ----------
+//
+// SC80 and SC81 are exposed through the same decision-report transport as
+// the other sales reports. The `report` query parameter selects the
+// sub-report; when it is absent the endpoint keeps its historical
+// `sales-summary` behaviour byte-for-byte.
+//
+//   report=gross-profit  → SC80 Sales Gross Profit
+//   report=ranking       → SC81 Sales Ranking (dimension= required)
+
+const SALES_SUB_REPORTS = Object.freeze(['gross-profit', 'ranking']);
+
+function readSalesSubReport(url) {
+  const report = String(url.searchParams.get('report') || '').trim();
+  if (!report) return null;
+  if (!SALES_SUB_REPORTS.includes(report)) {
+    throw new HttpError(400, 'report 不是受支持的报表视图', {
+      code: 'UNSUPPORTED_REPORT_VIEW',
+      resolution: `可用视图：${SALES_SUB_REPORTS.join(' / ')}`,
+    });
+  }
+  return report;
+}
+
+export function getSalesGrossProfit(db, res, actor, url) {
+  requireReportVisibilityWithSales(actor);
+  const filters = buildOrderFilters(url);
+  const grossProfit = buildSalesGrossProfit(db, filters);
+  return send(res, 200, {
+    reportKey: 'sales-gross-profit',
+    capability: 'SC80',
+    summary: {
+      revenueCents: grossProfit.revenueCents,
+      costCents: grossProfit.costCents,
+      grossProfitCents: grossProfit.grossProfitCents,
+      lineCount: grossProfit.lineCount,
+    },
+    components: grossProfit.components,
+    lineCounts: grossProfit.lineCounts,
+    giftBearingLineCount: grossProfit.giftBearingLineCount,
+    zeroRevenueCostBearingLineCount: grossProfit.zeroRevenueCostBearingLineCount,
+    serviceLineCount: grossProfit.serviceLineCount,
+    noCogsApplicableLineCount: grossProfit.noCogsApplicableLineCount,
+    noCogsPostedLineCount: grossProfit.noCogsPostedLineCount,
+    accuracy: grossProfit.accuracy,
+    accuracyNotice: grossProfit.accuracyNotice,
+    componentSources: grossProfit.componentSources,
+    dateBasis: grossProfit.dateBasis,
+    filters: buildFilterEcho(db, filters),
+    moneyUnit: 'cents',
+    notes: [
+      '收入来自 canonical 销售出库（CONFIRMED，按 delivery_date）、服务履约（CONFIRMED，按 business_date）与销售退货（CONFIRMED，按 return_date）；',
+      '成本来自 Inventory / Finance 已过账的权威估值事件 inventory_valuation_movements（SALES_DELIVERY_COGS 与 SALES_RETURN_COGS_REVERSAL），本报表不建立第二套估值引擎；',
+      '赠品行收入为 0 但仍承担成本，因此毛利为负；报表不会把赠品当作免费库存；',
+      '纯服务履约不产生库存异动也不产生 COGS，其成本按 0 计入并显式标记为 NO_COGS_APPLICABLE；',
+      '毛利 = 收入 - 成本；所有金额均为整数分。',
+    ].join(''),
+  });
+}
+
+export function getSalesRanking(db, res, actor, url) {
+  requireReportVisibilityWithSales(actor);
+  const filters = buildOrderFilters(url);
+  const dimension = String(url.searchParams.get('dimension') || '').trim();
+  if (!SALES_RANKING_DIMENSIONS.includes(dimension)) {
+    throw new HttpError(400, 'dimension 不是受支持的排行维度', {
+      code: 'UNSUPPORTED_RANKING_DIMENSION',
+      resolution: `可用维度：${SALES_RANKING_DIMENSIONS.join(' / ')}`,
+    });
+  }
+  const ranking = buildSalesRanking(db, filters, dimension);
+  return send(res, 200, {
+    reportKey: 'sales-ranking',
+    capability: 'SC81',
+    dimension: ranking.dimension,
+    dimensionLabel: ranking.dimensionLabel,
+    metric: ranking.metric,
+    metricLabel: ranking.metricLabel,
+    rows: ranking.rows,
+    totalRowCount: ranking.totalRowCount,
+    truncated: ranking.truncated,
+    filters: buildFilterEcho(db, filters),
+    moneyUnit: 'cents',
+    notes: [
+      '排行复用与 SC80 相同的 canonical 行级事实，不建立任何排行缓存或影子台账；',
+      '排行指标为毛利（GROSS_PROFIT），同时给出收入与成本分解；',
+      '毛利相同者并列同一名次（稠密排名）；',
+      '缺少维度归属的行归入 UNASSIGNED 桶，不会被静默丢弃。',
+    ].join(''),
+  });
 }
 
 // ---------- 3. Purchase Statistics ----------
@@ -882,6 +1137,10 @@ function exportHeaderLines(title, filters, echo, dateBasis) {
 export function exportSalesSummaryReport(db, res, actor, url) {
   requireReportVisibilityWithSales(actor);
   readExportFormat(url);
+  // SC80 / SC81 export shares the sales decision-report export transport.
+  const subReport = readSalesSubReport(url);
+  if (subReport === 'gross-profit') return exportSalesGrossProfitReport(db, res, actor, url);
+  if (subReport === 'ranking') return exportSalesRankingReport(db, res, actor, url);
   const filters = buildOrderFilters(url);
   const echo = buildFilterEcho(db, filters);
 
@@ -937,8 +1196,115 @@ export function exportSalesSummaryReport(db, res, actor, url) {
   for (const row of deliveryRows) tableLines.push(['出货', row.deliveryNo, row.customerCode, row.customerName, row.status, row.totalCents, row.deliveryDate].map(csvEscape).join(','));
   for (const row of returnRows) tableLines.push(['退货', row.returnNo, row.customerCode, row.customerName, row.status, row.totalCents, row.returnDate].map(csvEscape).join(','));
 
+  // SC78 — the three execution families that were missing from the sales
+  // summary are exported as their own rows so the CSV carries the same six
+  // document families the JSON report does.
+  const quotationParams = [];
+  const quotationWhere = ["q.status = 'EFFECTIVE'"];
+  if (filters.dateFrom) { quotationWhere.push('q.valid_from >= ?'); quotationParams.push(filters.dateFrom); }
+  if (filters.dateTo) { quotationWhere.push('q.valid_from <= ?'); quotationParams.push(filters.dateTo); }
+  if (filters.customerId) { quotationWhere.push('q.customer_id = ?'); quotationParams.push(filters.customerId); }
+  const quotationRows = db.prepare(`
+    SELECT q.quotation_no AS quotationNo, c.code AS customerCode, c.name AS customerName,
+           q.status, q.total_cents AS totalCents, q.valid_from AS businessDate
+    FROM sales_quotations q
+    JOIN customers c ON c.id = q.customer_id
+    WHERE ${quotationWhere.join(' AND ')}
+    ORDER BY q.valid_from DESC
+    LIMIT ?
+  `).all(...quotationParams, MAX_EXPORT_ROWS);
+  for (const row of quotationRows) tableLines.push(['报价', row.quotationNo, row.customerCode, row.customerName, row.status, row.totalCents, row.businessDate].map(csvEscape).join(','));
+
+  const noticeParams = [];
+  const noticeWhere = ["n.state = 'CONFIRMED'"];
+  if (filters.dateFrom) { noticeWhere.push('n.business_date >= ?'); noticeParams.push(filters.dateFrom); }
+  if (filters.dateTo) { noticeWhere.push('n.business_date <= ?'); noticeParams.push(filters.dateTo); }
+  if (filters.customerId) { noticeWhere.push('n.customer_id = ?'); noticeParams.push(filters.customerId); }
+  const noticeRows = db.prepare(`
+    SELECT n.notice_no AS noticeNo, c.code AS customerCode, c.name AS customerName,
+           n.state AS status, n.business_date AS businessDate
+    FROM delivery_notices n
+    JOIN customers c ON c.id = n.customer_id
+    WHERE ${noticeWhere.join(' AND ')}
+    ORDER BY n.business_date DESC
+    LIMIT ?
+  `).all(...noticeParams, MAX_EXPORT_ROWS);
+  // A delivery notice carries no amount of its own; the amount column is
+  // left blank rather than 0 so it can never be read as "worth nothing".
+  for (const row of noticeRows) tableLines.push(['发货通知', row.noticeNo, row.customerCode, row.customerName, row.status, '', row.businessDate].map(csvEscape).join(','));
+
+  const replacementParams = [];
+  const replacementWhere = ["r.cancellation_state = 'ACTIVE'"];
+  if (filters.dateFrom) { replacementWhere.push('l.business_date >= ?'); replacementParams.push(filters.dateFrom); }
+  if (filters.dateTo) { replacementWhere.push('l.business_date <= ?'); replacementParams.push(filters.dateTo); }
+  if (filters.customerId) { replacementWhere.push('ro.customer_id = ?'); replacementParams.push(filters.customerId); }
+  const replacementRows = db.prepare(`
+    SELECT r.replacement_no AS replacementNo, c.code AS customerCode, c.name AS customerName,
+           l.business_date AS businessDate
+    FROM sales_order_replacements r
+    JOIN sales_order_replacement_lines l ON l.replacement_id = r.id
+    JOIN return_orders ro ON ro.id = r.source_return_id
+    JOIN customers c ON c.id = ro.customer_id
+    WHERE ${replacementWhere.join(' AND ')}
+    ORDER BY l.business_date DESC
+    LIMIT ?
+  `).all(...replacementParams, MAX_EXPORT_ROWS);
+  for (const row of replacementRows) tableLines.push(['换货', row.replacementNo, row.customerCode, row.customerName, 'ACTIVE', '', row.businessDate].map(csvEscape).join(','));
+
   writeCsv(res, 'sales-summary.csv',
-    exportHeaderLines('销售统计（V1.4-E5 期间业务活动）', filters, echo, '订单按 order_date；出货按 delivery_date；退货按 return_date；legacy 缺日期未纳入。'),
+    exportHeaderLines('销售统计（V1.4-E5 期间业务活动）', filters, echo, '订单按 order_date；出货按 delivery_date；退货按 return_date；报价按 valid_from；发货通知按 business_date；换货按换货行业务日期；legacy 缺日期未纳入。'),
+    tableLines);
+}
+
+// SC80 — Sales Gross Profit CSV. One row per canonical line fact so the
+// exported file can be reconciled against the same valuation evidence the
+// report consumed.
+function exportSalesGrossProfitReport(db, res, actor, url) {
+  requireReportVisibilityWithSales(actor);
+  const filters = buildOrderFilters(url);
+  const echo = buildFilterEcho(db, filters);
+  const grossProfit = buildSalesGrossProfit(db, filters, { includeLines: true });
+  const header = ['单据类型', '单号', '业务日期', '客户编码', '客户名称', '物料编码', '物料名称', '收入（分）', '成本（分）', '毛利（分）', '成本口径'];
+  const tableLines = [header.map(csvEscape).join(',')];
+  for (const line of grossProfit.lines) {
+    const customer = lookupRankingEntity(db, 'customers', line.customerId);
+    const product = lookupRankingEntity(db, 'products', line.productId);
+    tableLines.push([
+      line.kind, line.documentNo, line.businessDate,
+      customer?.code || '', customer?.name || '',
+      product?.code || '', product?.name || '',
+      line.revenueCents, line.costCents, line.revenueCents - line.costCents,
+      line.costBasis,
+    ].map(csvEscape).join(','));
+  }
+  writeCsv(res, 'sales-gross-profit.csv',
+    exportHeaderLines('销售毛利（SC80）', filters, echo, '出货按 delivery_date；服务履约按 business_date；退货按 return_date；成本来自已过账估值事件。'),
+    tableLines);
+}
+
+// SC81 — Sales Ranking CSV.
+function exportSalesRankingReport(db, res, actor, url) {
+  requireReportVisibilityWithSales(actor);
+  const filters = buildOrderFilters(url);
+  const echo = buildFilterEcho(db, filters);
+  const dimension = String(url.searchParams.get('dimension') || '').trim();
+  if (!SALES_RANKING_DIMENSIONS.includes(dimension)) {
+    throw new HttpError(400, 'dimension 不是受支持的排行维度', {
+      code: 'UNSUPPORTED_RANKING_DIMENSION',
+      resolution: `可用维度：${SALES_RANKING_DIMENSIONS.join(' / ')}`,
+    });
+  }
+  const ranking = buildSalesRanking(db, filters, dimension);
+  const header = ['名次', '维度', '编码', '名称', '收入（分）', '成本（分）', '毛利（分）', '行数'];
+  const tableLines = [header.map(csvEscape).join(',')];
+  for (const row of ranking.rows) {
+    tableLines.push([
+      row.rank, row.dimensionLabel, row.code || row.key, row.name || '未归属',
+      row.revenueCents, row.costCents, row.grossProfitCents, row.lineCount,
+    ].map(csvEscape).join(','));
+  }
+  writeCsv(res, 'sales-ranking.csv',
+    exportHeaderLines(`销售排行（SC81 · ${ranking.dimensionLabel}）`, filters, echo, '排行指标为毛利；毛利相同者并列同一名次。'),
     tableLines);
 }
 

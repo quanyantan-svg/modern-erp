@@ -59,9 +59,14 @@ test('P8 route inventory: 74 enabled + 4 disabled = 78 entries', () => {
   // Procurement & Outsourcing Domain Closure adds sourcing-pricing + outsourcing.
   // Finance Operations Domain Closure adds finance-invoices + finance-treasury
   // as dedicated primary routes, raising the count from 59 to 61.
-  assert.equal(ROUTE_PRESENTATIONS.length, 79, 'ROUTE_PRESENTATIONS must include the W11-A U3 route and the 5 AA domain closure routes');
+// The Sales & Customer domain closure adds 6 contextual routes and no launcher
+// tile: credit-evaluation (Wave 11-B/C) plus the SC01 / SC06 / SC07 / SC19
+// operator work faces (sales-parameters, sales-group-memberships,
+// sellable-scope-rules, product-classifications,
+// sales-price-override-authorizations). 79 + 6 = 85.
+  assert.equal(ROUTE_PRESENTATIONS.length, 85, 'ROUTE_PRESENTATIONS must include the W11-A U3 route and the 5 AA domain closure routes');
   assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 4, 'DISABLED_ROUTE_PRESENTATIONS must hold 4 removed/disabled routes');
-  assert.equal(ROUTE_PRESENTATIONS.length + DISABLED_ROUTE_PRESENTATIONS.length, 83);
+  assert.equal(ROUTE_PRESENTATIONS.length + DISABLED_ROUTE_PRESENTATIONS.length, 89);
 });
 
 test('P8 route inventory: enabled route keys are unique and no collision with disabled keys', () => {
@@ -188,7 +193,12 @@ test('P8 contextual: every route with parentRoute references an enabled parent r
   // Sales Wave 2 adds sales-pricing as a contextual child of customers.
   // Wave 7 adds sales-prepayment-gates + sales-reservation-intents as contextual
   // children of orders, bringing the total to 17.
-  assert.equal(contextualCount, 23, 'contextual routes with parentRoute must total 23 after W11-A U3');
+  // The Sales & Customer domain closure adds six contextual routes, all of
+  // them children of an enabled parent: credit-evaluation under customers,
+  // sales-parameters / sales-group-memberships / sellable-scope-rules /
+  // product-classifications under customers and
+  // sales-price-override-authorizations under orders. 23 + 6 = 29.
+  assert.equal(contextualCount, 29, 'contextual routes with parentRoute must total 29 after the Sales domain closure');
 });
 
 test('P8 contextual: frozen O2C/P2P settlement and quality children keep their route relationships', () => {
@@ -301,16 +311,28 @@ test('P8 transfer UI: current-action labels use 确认调拨 / 取消调拨 and 
 
 // ----- 6. Decision reports consistency -----
 
-test('P8 decision reports: P7 switcher only renders the 5 canonical reportKeys', () => {
+test('P8 decision reports: P7 switcher only renders the canonical reportKeys', () => {
   // Verify the 5 canonical reportKey strings are present.
   for (const key of ['sales-summary', 'sales-outstanding', 'purchase-summary', 'purchase-outstanding', 'inventory-movements']) {
     assert.match(decisionReports, new RegExp(`key:\\s*'${key}'`));
   }
-  // Verify REPORT_TABS export still has exactly 5 entries (no 6th report).
+  // SC80 (Sales Gross Profit) and SC81 (Sales Ranking) are DOMAIN_OWNED
+  // capabilities of the Sales & Customer domain (Requirement §34.3.16,
+  // UAT-S-38) and therefore join the switcher as canonical report keys.
+  // The guard stays exact: the switcher renders the canonical set and
+  // nothing else.
+  const CANONICAL_REPORT_KEYS = [
+    'sales-summary', 'sales-gross-profit', 'sales-ranking',
+    'sales-outstanding', 'purchase-summary', 'purchase-outstanding', 'inventory-movements',
+  ];
+  for (const key of ['sales-gross-profit', 'sales-ranking']) {
+    assert.match(decisionReports, new RegExp(`key:\\s*'${key}'`));
+  }
+  // Verify the REPORT_TABS export contains exactly the canonical keys.
   const tabsMatch = decisionReports.match(/export const REPORT_TABS\s*=\s*\[([\s\S]*?)\n\];/);
   assert.ok(tabsMatch, 'REPORT_TABS must be exported');
-  const tabCount = (tabsMatch[1].match(/key:\s*'/g) || []).length;
-  assert.equal(tabCount, 5, 'REPORT_TABS must contain exactly 5 entries');
+  const tabKeys = [...tabsMatch[1].matchAll(/key:\s*'([^']+)'/g)].map((match) => match[1]);
+  assert.deepEqual(tabKeys, CANONICAL_REPORT_KEYS, 'REPORT_TABS must contain exactly the canonical report keys');
 });
 
 test('P8 decision reports: report endpoints are registered server-side (V2 Wave 4A ownedRouteTable dispatch)', () => {

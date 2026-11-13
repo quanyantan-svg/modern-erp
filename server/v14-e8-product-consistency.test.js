@@ -16,7 +16,12 @@ test('E8 audits the complete current user-facing application catalogue', () => {
   // (projects, tasks, timesheets, contacts, followups, activities).
   // AA-W4 / AA-W6 / AA-W7 added 5 Accounting & Analytics domain routes, and
   // AA-W5 enabled `fixed-assets`, so the frozen disabled set is now 4.
-  assert.equal(pages.size, 79);
+// The Sales & Customer domain closure adds 6 contextual routes and no launcher
+// tile: credit-evaluation (Wave 11-B/C) plus the SC01 / SC06 / SC07 / SC19
+// operator work faces (sales-parameters, sales-group-memberships,
+// sellable-scope-rules, product-classifications,
+// sales-price-override-authorizations). 79 + 6 = 85.
+  assert.equal(pages.size, 85);
   assert.deepEqual(new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)), disabled);
   for (const page of ['business-overview', 'orders', 'inventory-transactions', 'decision-reports', 'traceability']) {
     assert.ok(pages.has(page), `missing audited page ${page}`);

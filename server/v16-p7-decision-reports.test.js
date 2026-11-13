@@ -110,7 +110,18 @@ test('P7 keeps all five decision CSV export endpoints', () => {
 // 11. The useReport hook still drives the canonical GET endpoints.
 test('P7 keeps useReport calling GET /api/reports/decision/{key}', () => {
   assert.match(page, /function useReport\(endpoint, appliedFilters\)/);
-  assert.match(page, /api\(endpoint/);
+  // The hook still issues exactly ONE request per effect and merges the
+  // applied filters into the endpoint's own query. The literal `api(endpoint`
+  // spelling was narrowed when the report-view selector (e.g.
+  // `?report=gross-profit`) had to be merged with the applied filters
+  // WITHOUT ever appending a duplicate key: the request contract, not the
+  // spelling of the argument, is what this assertion protects.
+  const hookStart = page.indexOf('function useReport');
+  const hookEnd = (page.slice(hookStart + 1).search(/\r?\nfunction /) + 1) + hookStart;
+  const hook = page.slice(hookStart, hookEnd > hookStart ? hookEnd : hookStart + 3000);
+  assert.equal(hook.split('api(').length - 1, 1, 'the hook must issue exactly one request');
+  assert.match(hook, /URLSearchParams/, 'the applied filters are merged into one query');
+  assert.match(hook, /params\.set\(key, value\)/, 'a repeated key is replaced, never appended');
   assert.match(page, /`\/api\/reports\/decision\/\$\{reportKey\}`/);
 });
 

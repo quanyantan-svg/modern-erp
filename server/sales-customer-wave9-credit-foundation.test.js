@@ -5,7 +5,7 @@ import { Worker } from 'node:worker_threads';
 import { test } from 'node:test';
 import { createDatabase } from './db.js';
 import { createTempDb } from './test-utils/temp-db.js';
-import { SALES_WAVE9_TABLES } from './migrations/sales-customer-wave9-credit-foundation.js';
+import { migrateSalesCustomerWave9CreditFoundation, SALES_WAVE9_TABLES } from './migrations/sales-customer-wave9-credit-foundation.js';
 import { createCreditParameter, createCreditRule, ensureCreditPolicySnapshot, listCreditParameters, listCreditRules, resolveCreditParameter, resolveCreditRule } from './modules/credit-policy.js';
 import { createCreditProfile, getCreditProfile, listCreditProfiles, resolveEffectiveCreditProfile } from './modules/credit-profile.js';
 import { listCreditAnchors, provisionCreditAnchor } from './modules/credit-anchor.js';
@@ -30,10 +30,17 @@ const NO_CREDIT = Object.freeze({ id: 'user-warehouse', roleCode: 'WAREHOUSE', p
 const UNMAPPED_SALES = Object.freeze({ id: 'user-warehouse', roleCode: 'WAREHOUSE', permissions: ['CREDIT_VIEW'] });
 const OTHER_SALES = Object.freeze({ id: 'user-other-sales', roleCode: 'SALES', permissions: ['CREDIT_VIEW'] });
 
-// The Wave 10 tables are no longer out of scope: they are created by the
-// Wave 10 migration, which the canonical registry now runs after Wave 9. The
-// Wave 11 tables remain out of scope for every wave up to and including 10.
+// The tables created by LATER waves. They are no longer "absent from the
+// current schema" — the canonical registry now runs the Wave 10 and Wave 11
+// entries after Wave 9, so a current bootstrap legitimately materialises
+// them.
+//
+// The assertion below therefore states its ACTUAL intent — the WAVE 9
+// MIGRATION must not create any of them — by running the Wave 9 migration on
+// its own against a database where they have been removed. Asserting against
+// the full bootstrap would only re-assert that later waves exist.
 const OUT_OF_SCOPE_TABLES = Object.freeze([
+  'credit_special_approval', 'credit_check_results',
   'credit_evaluation_indicator',
   'credit_evaluation_scheme', 'credit_evaluation_model', 'credit_evaluation_scoring_sheet',
   'credit_evaluation_result', 'credit_recalculation_history',
@@ -183,8 +190,16 @@ test('Wave 9 creates exactly the six approved tables and replays idempotently', 
   try {
     const present = handle.db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${SALES_WAVE9_TABLES.map(() => '?').join(',')}) ORDER BY name`).all(...SALES_WAVE9_TABLES);
     assert.deepEqual(present.map((row) => row.name), [...SALES_WAVE9_TABLES].sort());
-    const absent = handle.db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${OUT_OF_SCOPE_TABLES.map(() => '?').join(',')})`).all(...OUT_OF_SCOPE_TABLES);
-    assert.deepEqual(absent, []);
+    // The Wave 9 migration alone must not create any later-wave table. The
+    // later-wave tables are removed first so the assertion measures the Wave 9
+    // migration itself and not the current bootstrap.
+    const isolated = createTempDb({ label: 'sales-wave9-isolated' });
+    try {
+      for (const table of OUT_OF_SCOPE_TABLES) isolated.db.exec(`DROP TABLE IF EXISTS ${table}`);
+      migrateSalesCustomerWave9CreditFoundation(isolated.db);
+      const absent = isolated.db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${OUT_OF_SCOPE_TABLES.map(() => '?').join(',')})`).all(...OUT_OF_SCOPE_TABLES);
+      assert.deepEqual(absent, [], 'later-wave tables must not be created by the Wave 9 migration');
+    } finally { isolated.cleanup(); }
     assert.doesNotThrow(() => createDatabase(handle.dbPath).close());
     assert.equal(handle.db.prepare("SELECT COUNT(*) count FROM credit_lock_anchors WHERE anchor_key='POLICY_SCOPE|GLOBAL|GLOBAL'").get().count, 1);
   } finally { handle.cleanup(); }
@@ -685,8 +700,23 @@ test('SC89 initial state, status, rule linkage and immutable rating history', as
 
     const moduleSources = await Promise.all(['credit-profile.js', 'credit-anchor.js', 'credit-policy.js']
       .map((name) => readFile(new URL(`./modules/${name}`, import.meta.url), 'utf8')));
+    // §37.54.10.6 supersession — the protection is narrowed, not removed.
+    // The Wave 9 rule was "no module may rewrite applied rating history".
+    // W11-C introduces exactly one legitimate migration of that history: the
+    // `superseded_at` marker moves when an evaluation rating supersedes the
+    // previous one, and Design §37.54.10.6 states that `rating_grade` /
+    // `applied_at` / `applied_by` / `evaluation_result_id` are never
+    // rewritten. The assertion below therefore keeps the original protection
+    // and adds the new one: the only column any UPDATE may touch is
+    // `superseded_at`.
     for (const source of moduleSources) {
-      assert.doesNotMatch(source, /UPDATE\s+credit_profile_ratings/i, 'no module may rewrite applied rating history');
+      const updates = source.match(/UPDATE\s+credit_profile_ratings[\s\S]{0,400}?;/gi) || [];
+      for (const statement of updates) {
+        assert.doesNotMatch(statement, /rating_grade|applied_at|applied_by|evaluation_result_id/i,
+          'no module may rewrite applied rating history values');
+        assert.match(statement, /superseded_at/i,
+          'the only permitted change to applied rating history is the superseded_at migration');
+      }
     }
   } finally { handle.cleanup(); }
 });

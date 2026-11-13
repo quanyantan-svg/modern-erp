@@ -101,6 +101,31 @@ const FULL = [
   'server/db-transaction-start-safety.test.js',
   'server/sales-customer-wave7-functional.test.js',
   'server/sales-customer-wave7-acceptance.test.js',
+  // SC32 / SC68 — Reservation Intent reaction suite (document.md §34.3.5
+  // SC32 + §34.3.13 SC66..SC68, solution.md §29.17.2). Closes the two
+  // defects recorded by the Sales & Customer capability audit 2026-11-13:
+  // SC-DEF-02 (the order-side `sales_orders.reservation_intent_state` had no
+  // UPDATE anywhere) and SC-DEF-03 (the two react-to-event exports had zero
+  // callers). The suite drives the production writers and the real HTTP
+  // surface: an SO controlled change adjusts the reservation, an SO
+  // cancel / close releases the still-open reservation, an executed
+  // (delivered / consumed) obligation is never silently rewritten, and a
+  // failing order action rolls the reservation release back with it. It is
+  // deliberately NOT registered in FAST: every case owns one disposable temp
+  // SQLite and drives the real Sales / Planning / Inventory writers.
+  'server/sales-customer-reservation-reaction.test.js',
+  // CAP-1 / SC-DEF-01 — SC01 Sales Parameters control-switch enforcement
+  // (document.md §34.3.1, solution.md §29.4.5). The three switches that
+  // were persisted but had no production consumer now have one:
+  // `delivery_schedule_enabled` refuses the Delivery Notice path with
+  // SALES_DELIVERY_SCHEDULE_CONTROL_DISABLED, `delivery_quantity_control_enabled`
+  // gates the over-/under-delivery tolerance bound, and `reservation_behavior`
+  // refuses a reservation intent with SALES_RESERVATION_BEHAVIOR_DISABLED.
+  // The suite also pins the DEFAULT parameter state so the pre-existing
+  // behaviour stays unchanged. It is deliberately NOT registered in FAST:
+  // every case owns one disposable temp SQLite and drives the real HTTP
+  // surface.
+  'server/sales-customer-parameters-closure.test.js',
   'server/sales-customer-wave8-functional.test.js',
   'server/sales-customer-wave8-remediation.test.js',
   'server/sales-customer-wave8-mysql-metadata.test.js',
@@ -158,6 +183,27 @@ const FULL = [
   // five-category server filtering, pagination/scope and replay preservation.
   // It is not FAST because every case runs the production migration chain.
   'server/sales-customer-wave11-a-overdue-evidence.test.js',
+  // W11-D — SC99 Credit Reconciliation / SC100 Deterministic Recalculation.
+  // Disposable SQLite proof for the additive fact digest, the three-state
+  // replay semantics, the two-phase read/write transaction split, the
+  // fail-closed zero-side-effect paths, the ambiguous-attribution
+  // non-failure, the write-once property of `credit_recalculation_history`,
+  // the absence of any top-level amount column and the negative control for
+  // the unsafe-legacy-amount normalisation. It is not FAST because every case
+  // runs the production migration chain and a real SQLite database.
+  'server/sales-customer-wave11-d-reconciliation.test.js',
+  // W11-B / W11-C — SC103..SC107 Credit Evaluation foundation, bounded
+  // multi-scorer and rating application. Disposable SQLite proof for the
+  // effective-dated configuration contract (version exists, interval overlap,
+  // predecessor tightening, referenced-then-immutable, the one-way
+  // ACTIVE -> RETIRED transition), the integer milli-point scoring arithmetic
+  // asserted against a hand-computed expectation with no tolerance, the
+  // fail-closed input refusal with no clamping, the DRAFT -> SUBMITTED ->
+  // FINALIZED -> APPLIED sheet lifecycle, the bounded scorer set, the
+  // single-writer source contract and the write-class rating authority. It is
+  // not FAST because every case runs the production migration chain and a real
+  // SQLite database.
+  'server/sales-customer-wave11-b-evaluation.test.js',
   // Wave 10 Gate B OQC quality-policy fixture contract. Deterministic
   // single-connection regression over the real Delivery HTTP route: the
   // canonical control-point writer installs the fixture fact, the production
@@ -583,6 +629,10 @@ const FULL = [
 
   // ----- Sales / Purchase / Returns / Discounts -----
   'server/decision-reports.test.js',
+  // SC78 / SC80 / SC81 — Sales Reporting closure (Requirement §34.3.16,
+  // UAT-S-37 / UAT-S-38). Drives a real local HTTP server against a fresh
+  // SQLite database, so it belongs to FULL rather than FAST.
+  'server/sales-customer-reporting-closure.test.js',
   'server/m14-discounts.test.js',
   'server/m4-blocker-source-lookup-hotfix.test.js',
 

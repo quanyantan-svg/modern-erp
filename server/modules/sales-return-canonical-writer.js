@@ -14,6 +14,7 @@ import { assertFinancialPeriodsOpen, createSystemVoucher, reverseSystemVoucher, 
 import { applyCreditAdjustment, reverseCreditAdjustment, refreshOpenItem } from './settlement-core.js';
 import { applyInventoryMutation } from '../lib/inventory-mutation.js';
 import { postTrackedMovement, reverseTrackedSource } from './traceability-quality.js';
+import { reactReservationIntentToReturn } from './sales-reservation-intent.js';
 
 function safeInt(value) {
   if (!Number.isFinite(Number(value))) return 0;
@@ -372,11 +373,13 @@ export async function confirmOptionAReturn(db, req, res, actor, returnId) {
 
     const items = db.prepare(`SELECT * FROM return_order_items WHERE return_id=? ORDER BY id`).all(returnId);
     if (!items.length) throw new HttpError(409, '退货单无明细');
+    // The SO orders whose reservation projection this Return touches (SC68).
+    const soBackedOrderIds = new Set();
 
     if (marker === 'SO_BACKED') {
       for (const item of items) {
         if (!item.sales_order_item_id) throw new HttpError(409, 'SO_BACKED 必须提供 sales_order_item_id');
-        const soi = db.prepare(`SELECT soi.id, soi.product_id, soi.quantity, soi.unit_price_cents, so.customer_id, so.status FROM sales_order_items soi JOIN sales_orders so ON so.id=soi.order_id WHERE soi.id=?`).get(item.sales_order_item_id);
+        const soi = db.prepare(`SELECT soi.id, soi.product_id, soi.quantity, soi.unit_price_cents, soi.order_id, so.customer_id, so.status FROM sales_order_items soi JOIN sales_orders so ON so.id=soi.order_id WHERE soi.id=?`).get(item.sales_order_item_id);
         if (!soi) throw new HttpError(409, 'SO 行不存在');
         if (soi.product_id !== item.product_id) throw new HttpError(409, 'product 不匹配');
         if (soi.customer_id !== header.customer_id) throw new HttpError(409, 'customer 不匹配');
@@ -385,6 +388,7 @@ export async function confirmOptionAReturn(db, req, res, actor, returnId) {
         const confirmed = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) AS n FROM return_order_items WHERE sales_order_item_id=? AND return_id<>?`).get(item.sales_order_item_id, returnId).n);
         const available = Number(soi.quantity) - executed - confirmed;
         if (Number(item.quantity) > available + 1e-9) throw new HttpError(409, 'SO 行容量不足');
+        soBackedOrderIds.add(soi.order_id);
       }
     } else {
       for (const item of items) {
@@ -485,6 +489,15 @@ export async function confirmOptionAReturn(db, req, res, actor, returnId) {
     });
 
     db.prepare(`UPDATE return_orders SET status='CONFIRMED', confirmed_by=?, confirmed_at=? WHERE id=?`).run(actor.id, nowIso(), returnId);
+    // SC68 — a Return reacts to the reservation by NOT recreating it
+    // (solution.md §29.17.2 "Return → no automatic recreation"). What it does
+    // change is the order-side reservation projection (SC32): a Return may
+    // close the last open obligation of an SO line, and the order-side state
+    // must reflect the intents that actually exist. The reaction runs inside
+    // this same transaction, so a failure rolls the Return back with it.
+    for (const orderId of soBackedOrderIds) {
+      reactReservationIntentToReturn(db, actor, { salesOrderId: orderId, consumerEvent: 'RETURNED' });
+    }
     audit(db, actor.id, 'CONFIRM', 'SALES_RETURN', returnId, `确认销售退货 ${header.return_no} ${marker}`);
     saveIdempotency(db, 'SALES_RETURN_CONFIRM_OPTION_A', returnId, idempotencyKey, fingerprint, { id: returnId, status: 'CONFIRMED', voucherId, mode: marker });
   });
@@ -783,9 +796,29 @@ export async function createSalesOrderReplacement(db, req, res, actor) {
       );
     }
     audit(db, actor.id, 'CREATE', 'SALES_ORDER_REPLACEMENT', replacementId, `创建补货义务 ${replacementNo}`);
+    // SC68 — a Replacement opens a NEW source-linked obligation. It does NOT
+    // reopen the original intent silently, and Sales does NOT auto-create a
+    // reservation for it: the reservation mode / product / warehouse decision
+    // is an operator action, and inventing one here would create a Sales
+    // shadow balance without a canonical Planning / Inventory reservation
+    // behind it (Requirement S12 / §34.3.13). What the creation changes is the
+    // order-side projection (SC32), which is re-synced in the same transaction.
+    for (const orderId of replacementSourceOrderIds(db, sourceReturnId)) {
+      reactReservationIntentToReturn(db, actor, { salesOrderId: orderId, consumerEvent: 'REPLACEMENT' });
+    }
     saveIdempotency(db, 'SALES_ORDER_REPLACEMENT_CREATE', sourceReturnId, idempotencyKey, fingerprint, { id: replacementId, replacementNo, status: 'ACTIVE' });
   });
   return send(res, 201, { id: replacementId, replacementNo, status: 'ACTIVE' });
+}
+
+// The SO orders behind a source Return, through the Replacement → Return →
+// Return item → SO line chain. A NO_SOURCE Return has no SO order and
+// therefore contributes none.
+function replacementSourceOrderIds(db, sourceReturnId) {
+  const rows = db.prepare(`SELECT DISTINCT soi.order_id order_id
+    FROM return_order_items roi JOIN sales_order_items soi ON soi.id=roi.sales_order_item_id
+    WHERE roi.return_id=? AND roi.sales_order_item_id IS NOT NULL`).all(sourceReturnId);
+  return rows.map((row) => row.order_id).filter(Boolean);
 }
 
 export async function cancelSalesOrderReplacement(db, req, res, actor, replacementId) {
@@ -800,6 +833,16 @@ export async function cancelSalesOrderReplacement(db, req, res, actor, replaceme
     // The canonical Delivery reversal (future bounded work) may reduce fulfillment
     // separately; it does NOT modify this replacement header.
     db.prepare(`UPDATE sales_order_replacements SET cancellation_state='CANCELLED', closed_at=?, closed_by=? WHERE id=?`).run(nowIso(), actor.id, replacementId);
+    // SC68 — Replacement reacts to the reservation. Cancelling the replacement
+    // obligation closes its unfulfilled remainder, so the still-open
+    // reservation that covered the source SO line is released. The original
+    // intent is never silently reopened (solution.md §29.17.2 "Replacement →
+    // new source-linked intent; does not reopen original intent silently").
+    // The reaction runs inside this transaction, so a failure rolls the
+    // cancellation back together with the reservation release.
+    for (const orderId of replacementSourceOrderIds(db, header.source_return_id)) {
+      reactReservationIntentToReturn(db, actor, { salesOrderId: orderId, consumerEvent: 'REPLACEMENT' });
+    }
     audit(db, actor.id, 'CANCEL', 'SALES_ORDER_REPLACEMENT', replacementId, `取消补货义务（保留已履行历史）`);
   });
   return send(res, 200, { id: replacementId, status: 'CANCELLED' });

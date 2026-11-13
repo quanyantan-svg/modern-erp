@@ -8,8 +8,13 @@ import { ACTIVE_APPLICATION_ROUTES, DISABLED_APPLICATION_ROUTES } from '../src/n
 const read = (path) => readFileSync(resolve(path), 'utf8');
 
 test('D0 route presentation registry is complete and excludes aliases and disabled routes', () => {
-  assert.equal(ROUTE_PRESENTATIONS.length, 79);
-  assert.equal(new Set(ROUTE_PRESENTATIONS.map((item) => item.route)).size, 79);
+// The Sales & Customer domain closure adds 6 contextual routes and no launcher
+// tile: credit-evaluation (Wave 11-B/C) plus the SC01 / SC06 / SC07 / SC19
+// operator work faces (sales-parameters, sales-group-memberships,
+// sellable-scope-rules, product-classifications,
+// sales-price-override-authorizations). 79 + 6 = 85.
+  assert.equal(ROUTE_PRESENTATIONS.length, 85);
+  assert.equal(new Set(ROUTE_PRESENTATIONS.map((item) => item.route)).size, 85);
   assert.deepEqual(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route), ['cash-journals', 'bills', 'workflows', 'data-cleanup']);
   assert.equal(ROUTE_PRESENTATIONS.some((item) => item.route === 'mrp'), false);
   assert.equal(TECHNICAL_ROUTE_ALIASES.mrp, 'material-requirements-plan');
@@ -20,7 +25,7 @@ test('D0 route presentation registry is complete and excludes aliases and disabl
 
 test('D0 presentation projection reconciles exactly with canonical application registry', () => {
   const active = new Set(ACTIVE_APPLICATION_ROUTES.map((entry) => entry.key));
-  assert.equal(active.size, 79);
+  assert.equal(active.size, 85);
   assert.deepEqual(active, new Set(ROUTE_PRESENTATIONS.map((item) => item.route)));
   assert.deepEqual(new Set(DISABLED_APPLICATION_ROUTES.map((entry) => entry.key)), new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)));
 });

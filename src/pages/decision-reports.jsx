@@ -40,14 +40,34 @@ import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.js
 
 export const REPORT_TABS = [
   { key: 'sales-summary', label: '销售统计分析', usage: 'REPORT_SALES', domainPermissions: ['ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'ORDERS_APPROVE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
+  { key: 'sales-gross-profit', label: '销售毛利', usage: 'REPORT_SALES', domainPermissions: ['ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'ORDERS_APPROVE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
+  { key: 'sales-ranking', label: '销售排行', usage: 'REPORT_SALES', domainPermissions: ['ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'ORDERS_APPROVE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
   { key: 'sales-outstanding', label: '销售未出货', usage: 'REPORT_SALES', domainPermissions: ['ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'ORDERS_APPROVE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
   { key: 'purchase-summary', label: '采购统计分析', usage: 'REPORT_PURCHASE', domainPermissions: ['PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_SUBMIT', 'PURCHASE_ORDERS_APPROVE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE'] },
   { key: 'purchase-outstanding', label: '采购未交货', usage: 'REPORT_PURCHASE', domainPermissions: ['PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_SUBMIT', 'PURCHASE_ORDERS_APPROVE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE'] },
   { key: 'inventory-movements', label: '库存异动明细', usage: 'REPORT_INVENTORY', domainPermissions: ['INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'INVENTORY_TRANSFER_APPROVE', 'INVENTORY_TRANSFER_CONFIRM', 'INVENTORY_ADJUSTMENT_MANAGE', 'INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_MANAGE', 'RETURNS_MANAGE'] },
 ];
 
+// SC80 / SC81 share the sales decision-report transport. The report view
+// is selected by the `report` query parameter on the canonical sales
+// endpoint; the operator's filter state (dates / customer / dimension)
+// stays in the applied-filter contract exactly as for the other reports.
+//
+// The ranking view additionally REQUIRES a `dimension`: the backend refuses
+// a ranking without one (`UNSUPPORTED_RANKING_DIMENSION`). The dimension is
+// therefore part of the report identity, so the panel carries a default
+// dimension in its fixed query; the operator's own dimension selection (in
+// the filter sheet) still overrides it.
+export const SALES_REPORT_VIEW_ENDPOINTS = Object.freeze({
+  'sales-summary': { endpoint: '/api/reports/decision/sales-summary', fixedQuery: '' },
+  'sales-gross-profit': { endpoint: '/api/reports/decision/sales-summary', fixedQuery: 'report=gross-profit' },
+  'sales-ranking': { endpoint: '/api/reports/decision/sales-summary', fixedQuery: 'report=ranking&dimension=customer' },
+});
+
 export const REPORT_DATE_BASIS = {
   'sales-summary': '本报表按期间业务活动统计：订单按订单日期，出货按出货日期，退货按退货日期；缺权威业务日期的记录明确标注，不回退创建时间。',
+  'sales-gross-profit': '本报表按期间业务活动统计：出货按出货日期，服务履约按业务日期，退货按退货日期；毛利 = 收入 - 成本，成本来自 Inventory / Finance 已过账的权威估值事件。',
+  'sales-ranking': '本报表按期间业务活动统计：出货按出货日期，服务履约按业务日期，退货按退货日期；排行指标为毛利，复用与销售毛利相同的 canonical 事实。',
   'sales-outstanding': '本报表以要求交期作为日期筛选与到期口径；缺失要求交期的 legacy 订单明确标注，不回退订单日期。',
   'purchase-summary': '本报表按期间业务活动统计：订单按订单日期，入库按入库日期，退货按退货日期；缺权威业务日期的记录明确标注，不回退创建时间。',
   'purchase-outstanding': '本报表以预计到货日作为日期筛选与到期口径；缺失预计到货日的 legacy 订单明确标注，不回退订单日期。',
@@ -72,18 +92,27 @@ const FULFILLMENT_LABELS = {
 
 // ---- useReport: keeps the legacy JSON.stringify(appliedFilters) contract ----
 
+// The endpoint may already carry a report-view selector (e.g.
+// `?report=gross-profit`) that is part of the report identity rather than
+// of the operator's filter state. It is merged with the applied filters
+// into ONE query, so draft / applied filter semantics stay untouched and a
+// repeated key can never shadow the report identity.
 function useReport(endpoint, appliedFilters) {
   const [state, setState] = useState({ status: 'loading', data: null, error: null });
   const serialized = JSON.stringify(appliedFilters || {});
   useEffect(() => {
     let active = true;
     setState({ status: 'loading', data: null, error: null });
-    const params = new URLSearchParams();
+    // The fixed query is parsed first, so an applied filter with the same key
+    // REPLACES it instead of being appended as a second occurrence.
+    const params = new URLSearchParams(endpoint.includes('?') ? endpoint.slice(endpoint.indexOf('?') + 1) : '');
     Object.entries(appliedFilters || {}).forEach(([key, value]) => {
       if (value != null && value !== '') params.set(key, value);
+      else params.delete(key);
     });
+    const base = endpoint.includes('?') ? endpoint.slice(0, endpoint.indexOf('?')) : endpoint;
     const query = params.toString();
-    api(endpoint + (query ? '?' + query : ''))
+    api(base + (query ? `?${query}` : ''))
       .then((data) => { if (active) setState({ status: 'success', data, error: null }); })
       .catch((error) => { if (active) setState({ status: 'error', data: null, error }); });
     return () => { active = false; };
@@ -157,11 +186,11 @@ function DecisionReportSwitcher({ currentKey, visibleTabs, onChange }) {
 
 // ---- DecisionReportControls: filter trigger + CSV export ----
 
-function ExportButton({ endpoint, applied }) {
+function ExportButton({ endpoint, applied, fixedQuery }) {
   const [status, setStatus] = useState('idle');
   const [error, setError] = useState('');
   async function handle() {
-    const params = new URLSearchParams();
+    const params = new URLSearchParams(fixedQuery || '');
     Object.entries(applied || {}).forEach(([key, value]) => {
       if (value != null && value !== '') params.set(key, value);
     });
@@ -202,11 +231,11 @@ function ExportButton({ endpoint, applied }) {
   );
 }
 
-function DecisionReportControls({ activeCount, onOpenFilters, exportEndpoint, applied }) {
+function DecisionReportControls({ activeCount, onOpenFilters, exportEndpoint, exportFixedQuery, applied }) {
   return (
     <div className="v16-decision-reports__controls" data-testid="decision-report-controls">
       <FilterButton activeCount={activeCount} onClick={onOpenFilters}>筛选</FilterButton>
-      {exportEndpoint ? <ExportButton endpoint={exportEndpoint} applied={applied} /> : null}
+      {exportEndpoint ? <ExportButton endpoint={exportEndpoint} applied={applied} fixedQuery={exportFixedQuery} /> : null}
     </div>
   );
 }
@@ -521,6 +550,30 @@ const SALES_OUTSTANDING_FIELDS = [
   { name: 'includeFulfilled', kind: 'checkbox', label: '已履行行', checkboxLabel: '显示已履行' },
 ];
 
+// SC80 — Sales Gross Profit. The gross-profit report is period-activity
+// based, so it shares the summary report's date basis but carries no
+// order-status filter (status belongs to the order, not to the realised
+// revenue / cost).
+const SALES_GROSS_PROFIT_FIELDS = [
+  { name: 'dateFrom', type: 'date', label: '期间开始' },
+  { name: 'dateTo', type: 'date', label: '期间结束' },
+  { name: 'customerId', kind: 'entity', entityType: 'CUSTOMER', usage: 'REPORT_SALES', label: '客户', placeholder: '搜索客户编码或名称' },
+];
+
+// SC81 — Sales Ranking. The dimension selector is part of the report
+// identity and therefore part of the applied filter contract.
+const SALES_RANKING_FIELDS = [
+  { name: 'dateFrom', type: 'date', label: '期间开始' },
+  { name: 'dateTo', type: 'date', label: '期间结束' },
+  { name: 'customerId', kind: 'entity', entityType: 'CUSTOMER', usage: 'REPORT_SALES', label: '客户', placeholder: '搜索客户编码或名称' },
+  { name: 'dimension', label: '排行维度', options: [
+    { value: 'customer', label: '客户' },
+    { value: 'material', label: '物料' },
+    { value: 'salesperson', label: '销售员' },
+    { value: 'salesGroup', label: '销售组' },
+  ] },
+];
+
 const PURCHASE_SUMMARY_FIELDS = [
   { name: 'dateFrom', type: 'date', label: '期间开始' },
   { name: 'dateTo', type: 'date', label: '期间结束' },
@@ -568,6 +621,14 @@ function V16SalesSummaryPanel() {
   return <ReportPanel reportKey="sales-summary" fields={SALES_SUMMARY_FIELDS} renderBody={renderSalesSummaryBody} />;
 }
 
+function V16SalesGrossProfitPanel() {
+  return <ReportPanel reportKey="sales-gross-profit" fields={SALES_GROSS_PROFIT_FIELDS} renderBody={renderSalesGrossProfitBody} />;
+}
+
+function V16SalesRankingPanel() {
+  return <ReportPanel reportKey="sales-ranking" fields={SALES_RANKING_FIELDS} renderBody={renderSalesRankingBody} />;
+}
+
 function V16SalesOutstandingPanel() {
   return <ReportPanel reportKey="sales-outstanding" fields={SALES_OUTSTANDING_FIELDS} renderBody={renderSalesOutstandingBody} />;
 }
@@ -589,7 +650,10 @@ function ReportPanel({ reportKey, fields, renderBody }) {
   const [appliedFilters, setAppliedFilters] = useState({});
   const [filterOpen, setFilterOpen] = useState(false);
   const [contribution, setContribution] = useState({ open: false, reportKey: null, orderItemId: null, expectedCount: 0, orderLine: null });
-  const state = useReport(`/api/reports/decision/${reportKey}`, appliedFilters);
+  const defaultEndpoint = `/api/reports/decision/${reportKey}`;
+  const view = SALES_REPORT_VIEW_ENDPOINTS[reportKey] || { endpoint: defaultEndpoint, fixedQuery: '' };
+  const endpoint = view.fixedQuery ? `${view.endpoint}?${view.fixedQuery}` : view.endpoint;
+  const state = useReport(endpoint, appliedFilters);
 
   const panelId = useId();
   const headingId = `${panelId}-heading`;
@@ -629,7 +693,8 @@ function ReportPanel({ reportKey, fields, renderBody }) {
       <DecisionReportControls
         activeCount={activeFilterCount(appliedFilters)}
         onOpenFilters={() => setFilterOpen(true)}
-        exportEndpoint={`/api/reports/decision/${reportKey}`}
+        exportEndpoint={view.endpoint}
+        exportFixedQuery={view.fixedQuery}
         applied={appliedFilters}
       />
       <DecisionReportFilterSheet
@@ -722,6 +787,121 @@ function renderSalesSummaryBody(data) {
                 { label: '订单数', value: row.orderCount },
                 { label: '订单金额', value: money(row.orderCents) },
                 { label: '出货金额', value: money(row.deliveryCents) },
+              ]}
+            />
+          ))}
+        </ul>
+      )}
+      {renderSalesExecutionSection(data.execution)}
+      {data.notes ? <ReportAuditNotice kind="neutral" title="报表说明" message={data.notes} /> : null}
+    </>
+  );
+}
+
+// SC78 — Sales Execution Reports. Renders the six document families that
+// make up the sales execution evidence.
+function renderSalesExecutionSection(execution) {
+  if (!execution || !Array.isArray(execution.families)) return null;
+  return (
+    <>
+      <h4 className="v16-decision-reports__section-heading">执行证据（单据）</h4>
+      <ul className="v16-decision-reports__breakdown" data-testid="sales-summary-execution">
+        {execution.families.map((family) => (
+          <DecisionBreakdownRow
+            key={family.key}
+            testId={`sales-execution-${family.key}`}
+            title={family.label}
+            subtitle={family.amountBasis === 'NONE' ? '该单据不承载金额' : null}
+            facts={[
+              { label: '单据数', value: family.documentCount },
+              ...(family.lineCount === undefined ? [] : [{ label: '行数', value: family.lineCount }]),
+              { label: '金额', value: family.amountBasis === 'NONE' ? '不适用' : money(family.amountCents) },
+            ]}
+          />
+        ))}
+      </ul>
+    </>
+  );
+}
+
+// SC80 — Sales Gross Profit.
+function renderSalesGrossProfitBody(data) {
+  const summary = data.summary || {};
+  const components = data.components || {};
+  const rows = [
+    { label: '收入', value: money(summary.revenueCents) },
+    { label: '成本', value: money(summary.costCents) },
+    { label: '毛利', value: money(summary.grossProfitCents) },
+    { label: '统计行数', value: summary.lineCount ?? 0 },
+  ];
+  const componentRows = [
+    { label: '销售出库收入', value: money(components.deliveryRevenueCents) },
+    { label: '服务履约收入', value: money(components.serviceRevenueCents) },
+    { label: '销售退货冲减收入', value: money(components.returnRevenueCents) },
+    { label: '销售出库成本', value: money(components.deliveryCostCents) },
+    { label: '销售退货冲回成本', value: money(components.returnCostCents) },
+    { label: '服务履约成本', value: money(components.serviceCostCents) },
+  ];
+  return (
+    <>
+      <DecisionMetricGrid rows={rows} />
+      {data.giftBearingLineCount > 0 ? (
+        <ReportAuditNotice
+          title="赠品成本"
+          message={`共有 ${data.giftBearingLineCount} 条赠品出货行收入为 0 但仍承担成本，已计入毛利，因此毛利为负。`}
+        />
+      ) : null}
+      {data.zeroRevenueCostBearingLineCount > 0 ? (
+        <ReportAuditNotice
+          kind="neutral"
+          title="零收入承担成本"
+          message={`共有 ${data.zeroRevenueCostBearingLineCount} 条非赠品出货行收入为 0 但仍承担成本（例：权威 100% 折扣），已计入毛利。`}
+        />
+      ) : null}
+      {data.serviceLineCount > 0 ? (
+        <ReportAuditNotice
+          kind="neutral"
+          title="服务履约成本口径"
+          message={`共有 ${data.serviceLineCount} 条服务履约行不产生库存异动也不产生 COGS，其成本按 0 计入并显式标记为 NO_COGS_APPLICABLE。`}
+        />
+      ) : null}
+      {data.accuracyNotice ? <InlineAlert tone="warning">{data.accuracyNotice}</InlineAlert> : null}
+      <h4 className="v16-decision-reports__section-heading">收入与成本构成</h4>
+      <DecisionMetricGrid rows={componentRows} />
+      {data.notes ? <ReportAuditNotice kind="neutral" title="报表说明" message={data.notes} /> : null}
+    </>
+  );
+}
+
+// SC81 — Sales Ranking.
+function renderSalesRankingBody(data) {
+  const rows = data.rows || [];
+  return (
+    <>
+      <div className="v16-decision-reports__fulfillment-summary">
+        <span>排行维度</span>
+        <strong>{data.dimensionLabel}</strong>
+        <span>排行指标</span>
+        <strong>{data.metricLabel}</strong>
+        <span>条目</span>
+        <strong>{rows.length}</strong>
+      </div>
+      <h4 className="v16-decision-reports__section-heading">排行</h4>
+      {rows.length === 0 ? (
+        <BusinessState kind="NO_RESULTS" title="没有排行数据" description="请调整期间、客户或排行维度筛选条件。" />
+      ) : (
+        <ul className="v16-decision-reports__breakdown" data-testid="sales-ranking-rows">
+          {rows.map((row) => (
+            <DecisionBreakdownRow
+              key={`${row.dimension}-${row.key}`}
+              testId={`sales-ranking-${row.dimension}-${row.key}`}
+              title={`第 ${row.rank} 名 · ${row.code || '未归属'} ${row.name || ''}`}
+              subtitle={row.unassigned ? '该维度缺少归属，未静默丢弃' : null}
+              facts={[
+                { label: '收入', value: money(row.revenueCents) },
+                { label: '成本', value: money(row.costCents) },
+                { label: '毛利', value: money(row.grossProfitCents) },
+                { label: '行数', value: row.lineCount },
               ]}
             />
           ))}
@@ -927,6 +1107,8 @@ export default function DecisionReports({ user, notify }) {
       />
       <div className="v16-decision-reports__content">
         {safeKey === 'sales-summary' ? <V16SalesSummaryPanel /> : null}
+        {safeKey === 'sales-gross-profit' ? <V16SalesGrossProfitPanel /> : null}
+        {safeKey === 'sales-ranking' ? <V16SalesRankingPanel /> : null}
         {safeKey === 'sales-outstanding' ? <V16SalesOutstandingPanel /> : null}
         {safeKey === 'purchase-summary' ? <V16PurchaseSummaryPanel /> : null}
         {safeKey === 'purchase-outstanding' ? <V16PurchaseOutstandingPanel /> : null}

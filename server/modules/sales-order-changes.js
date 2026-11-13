@@ -11,6 +11,7 @@ import {
   PRICE_OVERRIDE_CONSUMPTION,
   validatePriceSnapshot,
 } from './sales-orders.js';
+import { adjustReservationIntentOnChange, executedQuantityForLine } from './sales-reservation-intent.js';
 
 const NOW = () => new Date().toISOString();
 const makeNo = () => `SOC-${Date.now()}-${String(Math.floor(Math.random() * 10000)).padStart(4, '0')}`;
@@ -451,6 +452,27 @@ export function applySalesOrderChange(db, changeId, expectedBaseVersion, key, ac
     db.prepare(`UPDATE sales_order_items SET quantity=?,amount_cents=?,document_quantity_num=?,planned_delivery_date=? WHERE id=?`)
       .run(Number(after.quantityMicros) / 1_000_000, Number(after.amountCents), Number(after.quantityMicros), after.plannedDeliveryDate, current.id);
     totalDelta += Number(after.amountCents) - Number(current.amount_cents);
+    // SC68 — SO Change reacts to the reservation. The line quantity is already
+    // persisted (it is the new commercial truth), so the reservation covering
+    // this line is now adjusted to that truth, in the same transaction as the
+    // line change. Any failure rolls both back together.
+    //
+    // The executed-history guard (Requirement SC40 / S05): the reservation is
+    // adjusted only for the still-open remainder. `executionFloorMicros` has
+    // already refused a quantity below the notified / delivered / service
+    // committed floor, and the executed quantity is passed explicitly so the
+    // reservation helper never touches an executed obligation. `mode` stays
+    // null so every reservation mode of the line reacts — one SO line may
+    // legitimately hold one intent per mode.
+    const executedQty = executedQuantityForLine(db, current.id);
+    adjustReservationIntentOnChange(db, actor, {
+      salesOrderId: order.id,
+      salesOrderItemId: current.id,
+      mode: null,
+      newQty: Number(after.quantityMicros) / 1_000_000,
+      consumerEvent: 'SO_CHANGED',
+      executedQty,
+    });
   }
   const changed = db.prepare('UPDATE sales_orders SET total_cents=total_cents+?,effective_version=effective_version+1,updated_at=? WHERE id=? AND effective_version=?')
     .run(totalDelta, NOW(), order.id, expectedBaseVersion);

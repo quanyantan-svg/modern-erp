@@ -229,7 +229,12 @@ describe('V1.6 P4 purchase receipt presentation contract', () => {
     //   - IQC still has parentRoute = purchase-receipts (contextual classification
     //     contract preserved)
     //   - the MobileShell header back handler chain still wires setHeaderBackAction
-    assert.equal(ROUTE_PRESENTATIONS.length, 79, 'canonical routes plus W11-A U3 and the AA domain closure must remain enabled');
+// The Sales & Customer domain closure adds 6 contextual routes and no launcher
+// tile: credit-evaluation (Wave 11-B/C) plus the SC01 / SC06 / SC07 / SC19
+// operator work faces (sales-parameters, sales-group-memberships,
+// sellable-scope-rules, product-classifications,
+// sales-price-override-authorizations). 79 + 6 = 85.
+    assert.equal(ROUTE_PRESENTATIONS.length, 85, 'canonical routes plus W11-A U3 and the AA domain closure must remain enabled');
     assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 4, 'frozen four disabled routes must remain disabled');
 
     const receiptRoute = enabledByRoute.get('purchase-receipts');

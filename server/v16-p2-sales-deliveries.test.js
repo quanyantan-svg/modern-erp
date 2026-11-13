@@ -227,13 +227,18 @@ describe('V1.6.2 Phase 1 sales-delivery presentation contract', () => {
     );
   });
 
-  test('34. canonical 79 enabled / 4 disabled routes remain and sales-deliveries parentRoute stays a primary', () => {
+// The Sales & Customer domain closure adds 6 contextual routes and no launcher
+// tile: credit-evaluation (Wave 11-B/C) plus the SC01 / SC06 / SC07 / SC19
+// operator work faces (sales-parameters, sales-group-memberships,
+// sellable-scope-rules, product-classifications,
+// sales-price-override-authorizations). 79 + 6 = 85.
+  test('34. canonical 85 enabled / 4 disabled routes remain and sales-deliveries parentRoute stays a primary', () => {
     // Finance Operations Domain Closure added finance-invoices + finance-treasury,
     // raising the canonical active count from 59 to 61. Wave 7 added
     // sales-prepayment-gates + sales-reservation-intents, raising it to 67.
     // The Accounting & Analytics Domain Closure (AA-W4 / AA-W6 / AA-W7) added
     // 5 more domain routes, and AA-W5 enabled fixed-assets, leaving 4 disabled.
-    assert.equal(ROUTE_PRESENTATIONS.length, 79, 'canonical routes plus W11-A U3 and the AA domain closure must remain enabled');
+    assert.equal(ROUTE_PRESENTATIONS.length, 85, 'canonical routes plus W11-A U3 and the AA domain closure must remain enabled');
     assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 4, 'frozen four disabled routes must remain disabled');
 
     const salesDeliveryRoute = enabledByRoute.get('sales-deliveries');

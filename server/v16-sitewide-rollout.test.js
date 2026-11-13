@@ -30,7 +30,7 @@ describe('V1.6 site-wide rollout source contract', () => {
     const rows = enabledMatrixRows();
     // The V1.6 matrix is frozen historical evidence. Sales Wave 2, Batch A
     // and Wave 7 own their acceptance evidence separately and must not rewrite it.
-    const laterSalesRoutes = ['sales-pricing', 'quotations', 'delivery-notices', 'sales-order-changes', 'sales-prepayment-gates', 'sales-reservation-intents', 'service-fulfillments', 'consignment-commercial', 'credit-foundation', 'credit-check', 'credit-query', 'credit-special-approvals'];
+    const laterSalesRoutes = ['sales-pricing', 'quotations', 'delivery-notices', 'sales-order-changes', 'sales-prepayment-gates', 'sales-reservation-intents', 'service-fulfillments', 'consignment-commercial', 'credit-foundation', 'credit-check', 'credit-query', 'credit-special-approvals', 'credit-evaluation', 'sales-parameters', 'sales-group-memberships', 'sellable-scope-rules', 'product-classifications', 'sales-price-override-authorizations'];
     // The Accounting & Analytics Domain Closure (AA-W4 / AA-W6 / AA-W7) added
     // 5 domain routes; they carry their own acceptance evidence and must not
     // rewrite the frozen V1.6 matrix either. AA-W5 also re-enabled
@@ -44,7 +44,12 @@ describe('V1.6 site-wide rollout source contract', () => {
 
   test('enabled route metadata remains unique', () => {
     const keys = ROUTE_PRESENTATIONS.map((route) => route.route);
-    assert.equal(keys.length, 79);
+// The Sales & Customer domain closure adds 6 contextual routes and no launcher
+// tile: credit-evaluation (Wave 11-B/C) plus the SC01 / SC06 / SC07 / SC19
+// operator work faces (sales-parameters, sales-group-memberships,
+// sellable-scope-rules, product-classifications,
+// sales-price-override-authorizations). 79 + 6 = 85.
+    assert.equal(keys.length, 85);
     assert.equal(new Set(keys).size, keys.length);
   });
 
@@ -75,7 +80,7 @@ describe('V1.6 site-wide rollout source contract', () => {
 
   test('contextual parent relationships all resolve to enabled routes', () => {
     const enabled = new Set(ROUTE_PRESENTATIONS.map((route) => route.route));
-    const matrixWhitelist = new Set(['sales-pricing', 'delivery-notices', 'sales-order-changes', 'sales-prepayment-gates', 'sales-reservation-intents', 'service-fulfillments', 'consignment-commercial', 'credit-foundation', 'credit-check', 'credit-query', 'credit-special-approvals']);
+    const matrixWhitelist = new Set(['sales-pricing', 'delivery-notices', 'sales-order-changes', 'sales-prepayment-gates', 'sales-reservation-intents', 'service-fulfillments', 'consignment-commercial', 'credit-foundation', 'credit-check', 'credit-query', 'credit-special-approvals', 'credit-evaluation', 'sales-parameters', 'sales-group-memberships', 'sellable-scope-rules', 'product-classifications', 'sales-price-override-authorizations']);
     for (const route of ROUTE_PRESENTATIONS.filter((item) => item.parentRoute)) {
       assert.ok(enabled.has(route.parentRoute), `${route.route} parent must remain enabled`);
       if (!matrixWhitelist.has(route.route)) assert.match(matrix, new RegExp(`\\| ${route.route} \\|[^\\n]+\\| ${route.parentRoute} \\|`));

@@ -29,6 +29,7 @@ import {
   resolveEligiblePrepaymentForSalesGate,
 } from './sales-prepayment-finance-adapter.js';
 import { assertFinancialPeriodsOpen } from './financial-inventory.js';
+import { assertReservationBehaviorEnabled, assertSalesOrderDeliveryScheduleEnabled } from './sales-parameters.js';
 import { isGateRetryAdmissionExpired, startGateRetryAdmission } from './sales-gate-retry-admission.js';
 
 function now() { return new Date().toISOString(); }
@@ -302,6 +303,35 @@ export function authorizeSalesPrepaymentGateWithPlan(db, plan, {
 } = {}) {
   if (!plan?.salesOrderId || !actorId || !mutationKey) throw new HttpError(400, '预付款门计划上下文不完整');
   if (!GATE_STAGES.includes(stage)) throw new HttpError(400, 'stage 无效');
+  // SC01 `reservation_behavior` — the RESERVATION stage is the only stage
+  // that starts a reservation, and it is entered ONLY by the Sales
+  // reservation intent writer (server/modules/sales-reservation-intent.js).
+  // The Sales parameter decides whether the reservation stage may run at
+  // all: `DISABLED` refuses the request with an explicit code; every other
+  // value in the RESERVATION_BEHAVIORS enum keeps today's behaviour.
+  //
+  // The guard runs BEFORE any Finance parent lock, Gate row or canonical
+  // Inventory lock / Planning reservation is acquired, so a refused
+  // reservation leaves zero side effect.
+  if (stage === 'RESERVATION') {
+    assertReservationBehaviorEnabled(db, 'SALES_ORDER', { salesOrderId: plan.salesOrderId });
+  }
+  // SC01 `delivery_schedule_enabled` — the PLANNING_RELEASE stage is entered
+  // ONLY by the sales order submit path (server/modules/sales-orders.js
+  // `submitSalesOrder`), so it is the single submit-time hook for the
+  // SALES_ORDER side of the delivery schedule control.
+  //
+  // The guard runs BEFORE any Finance parent lock, Gate row or canonical
+  // Planning / Inventory lock is acquired, so a refused submit leaves zero
+  // business side effect.
+  //
+  // Scope note: the mandatory header commitment date (`requested_delivery_date`,
+  // SC34) is NOT touched by this guard — only a line that carries its own
+  // delivery schedule is refused. See the SCOPE NOTE on
+  // `assertSalesOrderDeliveryScheduleEnabled` for the full reasoning.
+  if (stage === 'PLANNING_RELEASE') {
+    assertSalesOrderDeliveryScheduleEnabled(db, plan.salesOrderId);
+  }
   const currentOrder = loadOrder(db, plan.salesOrderId);
   const orderFingerprint = `${currentOrder.id}|${currentOrder.customer_id}|${currentOrder.status}|${currentOrder.total_cents}|${currentOrder.sales_group_id || ''}`;
   const currentRequirement = lookupRequirementForOrder(db, { salesOrderId: plan.salesOrderId, asOf: plan.businessDate });

@@ -1,4 +1,5 @@
 import { HttpError } from '../lib/http.js';
+import { resolveDeliveryQuantityControl } from './sales-parameters.js';
 import { lockSuffix } from './sales-scope.js';
 
 export function quantityToMicros(value, label = '数量') {
@@ -53,6 +54,11 @@ export function lockAndConsumeSalesDeliveryCapacity(db, deliveryId) {
   if (!delivery || !['DIRECT_ORDER','DELIVERY_NOTICE'].includes(delivery.source_mode)) throw new HttpError(409, '销售出库缺少合规来源模式');
   const order = db.prepare(`SELECT * FROM sales_orders WHERE id=?${lockSuffix(db)}`).get(delivery.sales_order_id);
   if (!order || order.status !== 'APPROVED' || order.commercial_close_state !== 'OPEN') throw new HttpError(409, '销售订单不是可交付的已审批开放版本');
+  // SC01 `delivery_quantity_control_enabled` — while the control is OFF the
+  // over-/under-delivery tolerance bound is NOT enforced on the delivery. The
+  // Delivery Notice remaining-capacity bound below is a DIFFERENT bound (the
+  // notice's own remaining capacity) and stays enforced in both modes.
+  const quantityControl = resolveDeliveryQuantityControl(db, 'SALES_ORDER');
   const items = db.prepare('SELECT * FROM sales_delivery_items WHERE delivery_id=? ORDER BY sales_order_item_id').all(deliveryId);
   for (const item of items) {
     const source = db.prepare(`SELECT * FROM sales_order_items WHERE id=? AND order_id=?${lockSuffix(db)}`).get(item.sales_order_item_id, order.id);
@@ -60,7 +66,7 @@ export function lockAndConsumeSalesDeliveryCapacity(db, deliveryId) {
     const { upper } = toleranceBoundsMicros(source.quantity, source.upper_delivery_tolerance_bps, source.lower_delivery_tolerance_bps);
     const confirmedMicros = quantityToMicros(confirmedOrderQuantity(db, source.id, deliveryId), '已确认出库数量');
     const itemMicros = quantityToMicros(item.quantity, '本次出库数量');
-    if (confirmedMicros + itemMicros > upper) throw new HttpError(409, '累计销售出库数量超过订单行容差上限', { code: 'SALES_DELIVERY_CAPACITY_EXCEEDED' });
+    if (quantityControl.enabled && confirmedMicros + itemMicros > upper) throw new HttpError(409, '累计销售出库数量超过订单行容差上限', { code: 'SALES_DELIVERY_CAPACITY_EXCEEDED' });
     if (delivery.source_mode === 'DELIVERY_NOTICE') {
       const notice = db.prepare(`SELECT * FROM delivery_notices WHERE id=?${lockSuffix(db)}`).get(delivery.delivery_notice_id);
       const line = db.prepare(`SELECT * FROM delivery_notice_lines WHERE id=? AND delivery_notice_id=?${lockSuffix(db)}`).get(item.delivery_notice_line_id, delivery.delivery_notice_id);

@@ -244,6 +244,37 @@ function matchesWave9ColumnIdentity(table, actual, base) {
   return same(suffix, CREDIT_PROFILE_APPROVED_ADDITIVE_SUFFIX.slice(0, suffix.length));
 }
 
+// W11-C APPROVED ADDITIVE FOREIGN KEY EXCEPTION.
+//
+// solution.md §37.54.10.8 / §37.54.12.3 adds exactly ONE named foreign key
+// to the frozen `credit_profile_ratings` table:
+//
+//   fk_credit_profile_ratings_evaluation_result
+//     FOREIGN KEY (evaluation_result_id) REFERENCES credit_evaluation_result(id)
+//
+// This is a COMPATIBILITY schema extension of a frozen table, not a
+// redefinition of it: the column set, both CHECK constraints, the unique
+// index and every existing row stay equivalent. The Wave 9 assertion below
+// therefore keeps requiring its own two foreign keys and tolerates ONLY this
+// exact additional constraint, mirroring the additive column-suffix exception
+// above. Any other foreign key still fails closed.
+const CREDIT_PROFILE_RATINGS_APPROVED_ADDITIVE_FK = Object.freeze({
+  table: 'credit_profile_ratings',
+  from: 'evaluation_result_id',
+  target: 'credit_evaluation_result',
+});
+
+function matchesWave9ForeignKeySet(table, fks, contract) {
+  if (table !== CREDIT_PROFILE_RATINGS_APPROVED_ADDITIVE_FK.table) return fks.length === contract.fks.length;
+  const base = fks.filter((row) => !(
+    row.from === CREDIT_PROFILE_RATINGS_APPROVED_ADDITIVE_FK.from
+    && row.table === CREDIT_PROFILE_RATINGS_APPROVED_ADDITIVE_FK.target
+  ));
+  const additive = fks.length - base.length;
+  if (additive > 1) return false;
+  return base.length === contract.fks.length;
+}
+
 function assertSqlite(db) {
   for (const [table, contract] of Object.entries(CONTRACTS)) {
     const columns = db.prepare(`PRAGMA table_info(${table})`).all();
@@ -253,7 +284,7 @@ function assertSqlite(db) {
     for (const [column, target] of contract.fks) {
       if (!fks.some((row) => row.from === column && row.table === target && row.to === 'id')) conflict(`${table}.${column} foreign key drifted`);
     }
-    if (fks.length !== contract.fks.length) conflict(`${table} foreign key set drifted`);
+    if (!matchesWave9ForeignKeySet(table, fks, contract)) conflict(`${table} foreign key set drifted`);
     const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(table)?.sql || '';
     if ((ddl.match(/\bCHECK\s*\(/gi) || []).length !== contract.checks) conflict(`${table} CHECK set drifted`);
   }
@@ -278,7 +309,7 @@ function assertMySql(db) {
     for (const [column, target] of contract.fks) {
       if (!fks.some((row) => row.name === column && row.target === target && row.target_column === 'id')) conflict(`${table}.${column} foreign key drifted`);
     }
-    if (fks.length !== contract.fks.length) conflict(`${table} foreign key set drifted`);
+    if (!matchesWave9ForeignKeySet(table, fks.map((row) => ({ from: row.name, table: row.target })), contract)) conflict(`${table} foreign key set drifted`);
     const checks = db.prepare(`SELECT COUNT(*) count FROM information_schema.TABLE_CONSTRAINTS
       WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND CONSTRAINT_TYPE='CHECK'`).get(table);
     if (Number(checks.count) !== contract.checks) conflict(`${table} CHECK set drifted`);

@@ -186,3 +186,104 @@ describe('UI source — file inventory sanity', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// CAP-1 / SC-DEF-08 — Sales & Customer operator work surfaces.
+//
+// The Sales & Customer capability audit (2026-11-13) recorded that
+// `/api/sales/parameters`, `/api/sales/memberships`,
+// `/api/sales/sellable-scope-rules` and `/api/sales/product-classifications`
+// had a backend but NO operator work surface, and that the SC19 price
+// override authorisation had no way to be obtained from the UI.
+//
+// The repo convention for "the screen exists and is wired" is a source
+// assertion plus a registry assertion. These cases cover both.
+// ---------------------------------------------------------------------------
+
+describe('UI source — Sales & Customer SC01/SC06/SC07/SC08/SC19 operator work surfaces', () => {
+  const page = readFile('pages/sales-parameters.jsx');
+  const batchA = readFile('pages/sales-batch-a.jsx');
+
+  test('the Sales operator work-surface module exists and exports every surface', () => {
+    for (const name of [
+      'SalesParameters',
+      'SalesGroupMemberships',
+      'SellableScopeRules',
+      'ProductClassifications',
+      'PriceOverrideAuthorizations',
+    ]) {
+      assert.match(
+        page,
+        new RegExp(`export\\s+function\\s+${name}\\b`),
+        `pages/sales-parameters.jsx must export ${name}`,
+      );
+    }
+  });
+
+  test('each operator surface reads and writes the existing backend API — no new endpoint', () => {
+    for (const endpoint of [
+      '/api/sales/parameters',
+      '/api/sales/memberships',
+      '/api/sales/sellable-scope-rules',
+      '/api/sales/product-classifications',
+      '/api/sales-price-overrides/authorize',
+    ]) {
+      assert.ok(
+        page.includes(endpoint),
+        `pages/sales-parameters.jsx must consume the existing endpoint ${endpoint}`,
+      );
+    }
+  });
+
+  test('the operator surfaces use the real empty-state and error-state primitives', () => {
+    // `.canonical-empty-state` / `.business-state` are the repo's real
+    // selectors; `.empty-state` does not exist.
+    assert.match(page, /BusinessState\s+kind="EMPTY"/, 'the surfaces must render a real BusinessState EMPTY state');
+    assert.match(page, /BusinessState\s+kind="LOADING"/, 'the surfaces must render a real BusinessState LOADING state');
+    assert.match(page, /<ErrorState\s+error=/, 'the surfaces must render a real error state');
+    assert.equal(page.includes('empty-state'), false, '`.empty-state` does not exist in this repo');
+  });
+
+  test('the operator surfaces gate every mutation on the backend permission', () => {
+    assert.match(page, /can\(user,\s*'SALES_PARAMETERS_MANAGE'\)/);
+    assert.match(page, /can\(user,\s*'SALES_FOUNDATION_MANAGE'\)/);
+    assert.match(page, /can\(user,\s*'SALES_COMMERCIAL_MANAGE'\)/);
+    assert.match(page, /can\(user,\s*'SALES_PRICING_OVERRIDE'\)/);
+  });
+
+  test('the surfaces follow the LIST → DETAIL → EDITOR house style of the Sales surfaces', () => {
+    assert.match(page, /BusinessPageShell/);
+    assert.match(page, /BusinessPageHeader/);
+    assert.match(page, /RecordList/);
+    assert.match(page, /RecordCard/);
+    assert.match(page, /DetailSection/);
+    assert.match(page, /<Sheet\s+title=/, 'the editor must use the canonical Sheet component');
+    assert.match(page, /BottomActionBar/);
+  });
+
+  // NOTE: the ROUTE BINDING assertions for the new Sales operator work
+  // surfaces live in server/sales-customer-parameters-closure.test.js (FULL,
+  // not FAST). `ui-source.test.js` is a FAST suite, and the registry file is
+  // under concurrent edit by another work package — a registry assertion here
+  // would make the daily FAST gate depend on an unapplied registry change.
+
+  test('the order change editor accepts a freshly obtained price override authorisation id', () => {
+    // SC19 — the operator must be able to enter a NEW authorisation id, not
+    // only forward the one already stored in the change snapshot.
+    assert.match(
+      batchA,
+      /priceOverrideAuthorizationId/,
+      'the change editor must carry a priceOverrideAuthorizationId field',
+    );
+    assert.match(
+      batchA,
+      /setAuthorizations/,
+      'the change draft editor must let the operator enter an authorisation id',
+    );
+    assert.match(
+      batchA,
+      /api\/sales-price-overrides\/authorize|价格覆盖授权/,
+      'the change editor must point the operator at the price override authorisation surface',
+    );
+  });
+});

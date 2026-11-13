@@ -71,6 +71,95 @@ function canonicalJson(value) {
   ));
 }
 
+// ---------------------------------------------------------------------------
+// §37.54.11.2 — the canonical fact digest.
+//
+// The digest is the SAME-IDENTITY marker of the fact set a derivation ran on.
+// `factDigest` equal => the fact sets are field-for-field equal => the derived
+// result is necessarily equal (R100-2). The converse does not hold: a digest
+// is irreversible, so it can never "explain where" two fact sets differ.
+//
+// CANONICALISATION RULES (fixed by the design):
+//   - every array is sorted by `id` ascending;
+//   - object field names are in a fixed order (the module's `canonicalJson`
+//     sorts object keys, so the field order requirement is satisfied by the
+//     single existing helper — there is exactly one canonicalisation);
+//   - only the fields that participate in the derivation are included; audit
+//     timestamps such as `created_at` are excluded, so the digest reacts to a
+//     business fact change and NOT to a re-stamped row;
+//   - numbers are normalised;
+//   - strings are kept verbatim (no trim, no case change).
+//
+// THE ONE DELIBERATE DEVIATION from "numbers are normalised": the AR fact
+// reader (`readOpenReceivables`) deliberately returns `amount_cents` and
+// `open_amount_cents` as TEXT so an out-of-safe-range legacy amount survives
+// to the evidence classifier instead of the engine throwing during the read.
+// A naive `Number(value)` would fold two DIFFERENT legacy amounts onto the
+// same number (e.g. '9007199254740993' and '9007199254740994' both become
+// 9007199254740992) and two distinct fact sets would then share one digest,
+// which would break the R100-2 same-digest => same-result guarantee. The
+// normalisation below therefore only rewrites a value to `String(Number(v))`
+// when that number IS a safe integer; otherwise the exact trimmed text is
+// kept, so distinct legacy texts stay distinct in the digest.
+function normalizeDigestNumber(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') return Number.isSafeInteger(value) ? value : String(value);
+  if (typeof value === 'bigint') return String(value);
+  const text = String(value).trim();
+  if (text === '') return '';
+  const numeric = Number(text);
+  if (Number.isSafeInteger(numeric)) return numeric;
+  // Not a safe integer: keep the exact text so distinct legacy amounts stay
+  // distinguishable in the digest.
+  return text;
+}
+
+function normalizeDigestString(value) {
+  if (value === null || value === undefined) return null;
+  return String(value);
+}
+
+function digestFactRow(row, fields, stringFields) {
+  const projected = {};
+  for (const name of fields) {
+    projected[name] = stringFields.has(name)
+      ? normalizeDigestString(row[name])
+      : normalizeDigestNumber(row[name]);
+  }
+  return projected;
+}
+
+// The three fact sets and exactly the fields that participate in the
+// derivation. The field list mirrors the readers above one-for-one.
+const DIGEST_ORDER_FIELDS = Object.freeze([
+  'id', 'total_cents', 'salesperson_id', 'commercial_close_state', 'reviewed_at',
+]);
+const DIGEST_ORDER_STRING_FIELDS = new Set(['salesperson_id', 'commercial_close_state', 'reviewed_at']);
+const DIGEST_DELIVERY_FIELDS = Object.freeze(['id', 'sales_order_id', 'total_cents']);
+const DIGEST_DELIVERY_STRING_FIELDS = new Set(['sales_order_id']);
+const DIGEST_RECEIVABLE_FIELDS = Object.freeze([
+  'id', 'source_type', 'source_id', 'amount_cents', 'open_amount_cents',
+  'recognition_mode', 'item_kind', 'item_class', 'due_date',
+]);
+const DIGEST_RECEIVABLE_STRING_FIELDS = new Set([
+  'source_type', 'source_id', 'recognition_mode', 'item_kind', 'item_class', 'due_date',
+]);
+
+function digestProjection(rows, fields, stringFields) {
+  return rows
+    .map((row) => digestFactRow(row, fields, stringFields))
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+}
+
+export function computeCreditFactDigest({ orders, deliveries, receivables }) {
+  const projected = {
+    orders: digestProjection(orders, DIGEST_ORDER_FIELDS, DIGEST_ORDER_STRING_FIELDS),
+    deliveries: digestProjection(deliveries, DIGEST_DELIVERY_FIELDS, DIGEST_DELIVERY_STRING_FIELDS),
+    receivables: digestProjection(receivables, DIGEST_RECEIVABLE_FIELDS, DIGEST_RECEIVABLE_STRING_FIELDS),
+  };
+  return sha256(canonicalJson(projected));
+}
+
 function toCents(value, label) {
   const amount = Number(value);
   if (!Number.isSafeInteger(amount)) throw new HttpError(400, `${label}必须为安全整数分`);
@@ -194,7 +283,7 @@ export function resolveCustomerCreditObject(db, { customerId, businessDate, cred
   return { creditObjectType: DEFAULT_CREDIT_OBJECT_TYPE, creditObjectId: String(customerId) };
 }
 
-function loadScopeProfiles(db, { customerId, salespersonId, creditObjectType, creditObjectId, businessDate }) {
+export function loadScopeProfiles(db, { customerId, salespersonId, creditObjectType, creditObjectId, businessDate }) {
   const aggregate = resolveEffectiveCreditProfile(db, {
     customerId, salespersonId: null, creditObjectType, creditObjectId, businessDate,
   });
@@ -577,6 +666,12 @@ export function computeCreditExposure(db, {
     orderCount: orders.length,
     deliveryCount: deliveries.length,
     receivableCount: receivables.length,
+    // §37.54.11.2 — the additive fact digest of the VERY SAME read snapshot
+    // that produced the components above. It is computed here, inside the same
+    // function that read the facts, so the digest and the derived exposure are
+    // provably same-source. The field is purely additive: no existing caller
+    // reads it and no existing behaviour changes.
+    factDigest: computeCreditFactDigest({ orders, deliveries, receivables }),
     ...(captureOverdueObservation ? {
       overdueObservation: {
         receivables: overdueReceivableObservations.sort((left, right) => left.openItemId.localeCompare(right.openItemId)),
