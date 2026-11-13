@@ -19,12 +19,12 @@
 // `credit_profile_ratings` are NOT created here; they belong to
 // `sales-customer-wave11-credit-evaluation-result-application.js`.
 //
-// PHYSICAL TYPE CONTRACT. The MySQL column types below are the ones the
-// generic MySQL snapshot bootstrap produces for these tables, so the
-// fresh-bootstrap path and this live migration path materialize the SAME
-// physical schema. `_json` payload columns become JSON; `*_id` columns and
-// `id` become VARCHAR(128); INTEGER score columns become BIGINT; every
-// other TEXT column becomes LONGTEXT.
+// PHYSICAL TYPE CONTRACT. The MySQL column types below are PINNED in
+// `server/database/mysql-schema.js`, so the fresh-bootstrap path (which
+// derives the type from the SQLite column) and this live migration path
+// materialize the SAME physical schema. `_json` payload columns become JSON;
+// `*_id` columns, `id` and indexed text columns become VARCHAR(128); INTEGER
+// score columns become BIGINT; every other TEXT column becomes LONGTEXT.
 
 export const SALES_WAVE11_EVALUATION_FOUNDATION_TABLES = Object.freeze([
   'credit_evaluation_indicator',
@@ -51,8 +51,9 @@ export const WAVE11_EVALUATION_FOUNDATION_UNIQUE_CONSTRAINTS = Object.freeze([
   { table: 'credit_evaluation_scoring_sheet', name: 'uq_credit_evaluation_scoring_sheet_no', columns: ['sheet_no'] },
 ]);
 
-// The approved physical type of every column of the four tables. It mirrors
-// what the generic snapshot bootstrap resolves, so both MySQL paths agree.
+// The approved physical type of every column of the four tables. It is
+// PINNED in the canonical resolver, so the snapshot path and the live
+// migration path cannot drift apart.
 export const WAVE11_EVALUATION_FOUNDATION_MYSQL_COLUMN_TYPES = Object.freeze({
   credit_evaluation_indicator: Object.freeze({
     id: 'VARCHAR(128)',
@@ -313,31 +314,18 @@ const NULLABILITY = Object.freeze([
 ]);
 
 // Indexed / constrained columns whose physical type must agree across engines.
-const PHYSICAL_TYPES = Object.freeze([
-  ['credit_evaluation_indicator', 'id', 'varchar', 128],
-  ['credit_evaluation_indicator', 'code', 'varchar', 128],
-  ['credit_evaluation_indicator', 'max_score_milli', 'bigint', null],
-  ['credit_evaluation_indicator', 'input_spec_json', 'json', null],
-  ['credit_evaluation_indicator', 'created_by', 'varchar', 128],
-  ['credit_evaluation_scheme', 'id', 'varchar', 128],
-  ['credit_evaluation_scheme', 'code', 'varchar', 128],
-  ['credit_evaluation_scheme', 'grade_boundaries_json', 'json', null],
-  ['credit_evaluation_scheme', 'created_by', 'varchar', 128],
-  ['credit_evaluation_model', 'id', 'varchar', 128],
-  ['credit_evaluation_model', 'code', 'varchar', 128],
-  ['credit_evaluation_model', 'scheme_id', 'varchar', 128],
-  ['credit_evaluation_model', 'indicator_weights_json', 'json', null],
-  ['credit_evaluation_model', 'created_by', 'varchar', 128],
-  ['credit_evaluation_scoring_sheet', 'id', 'varchar', 128],
-  ['credit_evaluation_scoring_sheet', 'sheet_no', 'varchar', 128],
-  ['credit_evaluation_scoring_sheet', 'model_id', 'varchar', 128],
-  ['credit_evaluation_scoring_sheet', 'customer_id', 'varchar', 128],
-  ['credit_evaluation_scoring_sheet', 'profile_scope_key', 'varchar', 128],
-  ['credit_evaluation_scoring_sheet', 'credit_profile_id', 'varchar', 128],
-  ['credit_evaluation_scoring_sheet', 'allowed_evaluator_ids_json', 'json', null],
-  ['credit_evaluation_scoring_sheet', 'sheet_data_json', 'json', null],
-  ['credit_evaluation_scoring_sheet', 'evaluator_count', 'bigint', null],
-]);
+// The physical type assertion is DERIVED from the pinned type map above, so
+// the map, the hand-written MySQL DDL and the assertion can never be three
+// different facts. A hand-maintained third copy of the same list is exactly
+// how the snapshot path and the live path drift apart.
+const PHYSICAL_TYPES = Object.freeze(
+  Object.entries(WAVE11_EVALUATION_FOUNDATION_MYSQL_COLUMN_TYPES).flatMap(([table, columns]) => Object.entries(columns).map(([column, type]) => {
+    const sized = /^VARCHAR\((\d+)\)$/i.exec(String(type));
+    return sized
+      ? [table, column, 'varchar', Number(sized[1])]
+      : [table, column, String(type).toLowerCase(), null];
+  })),
+);
 
 function same(actual, expected) { return JSON.stringify(actual) === JSON.stringify(expected); }
 function conflict(message) { throw new Error(`Wave 11-B evaluation foundation schema conflict: ${message}`); }

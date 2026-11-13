@@ -252,20 +252,18 @@ const NULLABILITY = Object.freeze([
   ['credit_evaluation_result', 'max_score_milli', 'NO'],
 ]);
 
-const PHYSICAL_TYPES = Object.freeze([
-  ['credit_evaluation_result', 'id', 'varchar', 128],
-  ['credit_evaluation_result', 'sheet_id', 'varchar', 128],
-  ['credit_evaluation_result', 'model_id', 'varchar', 128],
-  ['credit_evaluation_result', 'scheme_id', 'varchar', 128],
-  ['credit_evaluation_result', 'credit_profile_id', 'varchar', 128],
-  ['credit_evaluation_result', 'profile_effective_state_hash', 'varchar', 64],
-  ['credit_evaluation_result', 'policy_snapshot_fingerprint', 'varchar', 128],
-  ['credit_evaluation_result', 'total_score_milli', 'bigint', null],
-  ['credit_evaluation_result', 'max_score_milli', 'bigint', null],
-  ['credit_evaluation_result', 'rating_grade', 'varchar', 128],
-  ['credit_evaluation_result', 'evaluator_count', 'bigint', null],
-  ['credit_evaluation_result', 'applied_to_profile_id', 'varchar', 128],
-]);
+// The physical type assertion is DERIVED from the pinned type map above, so
+// the map, the hand-written MySQL DDL and the assertion can never be three
+// different facts. A hand-maintained third copy of the same list is exactly
+// how the snapshot path and the live path drift apart.
+const PHYSICAL_TYPES = Object.freeze(
+  Object.entries(WAVE11_EVALUATION_RESULT_MYSQL_COLUMN_TYPES).flatMap(([table, columns]) => Object.entries(columns).map(([column, type]) => {
+    const sized = /^VARCHAR\((\d+)\)$/i.exec(String(type));
+    return sized
+      ? [table, column, 'varchar', Number(sized[1])]
+      : [table, column, String(type).toLowerCase(), null];
+  })),
+);
 
 function same(actual, expected) { return JSON.stringify(actual) === JSON.stringify(expected); }
 function conflict(message) { throw new Error(`Wave 11-C evaluation result schema conflict: ${message}`); }

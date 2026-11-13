@@ -26,10 +26,10 @@
 // `credit_profile_ratings` (G-2), so it cannot be back-referenced as decision
 // evidence.
 //
-// PHYSICAL TYPE CONTRACT. The MySQL column types below are the ones the
-// generic MySQL snapshot bootstrap produces for this table, so the
-// fresh-bootstrap path and this live migration path materialize the SAME
-// physical schema without a per-table type map.
+// PHYSICAL TYPE CONTRACT. The MySQL column types below are PINNED in
+// `server/database/mysql-schema.js`, so the fresh-bootstrap path (which
+// derives the type from the SQLite column) and this live migration path
+// materialize the SAME physical schema.
 
 export const SALES_WAVE11_RECONCILIATION_TABLES = Object.freeze([
   'credit_recalculation_history',
@@ -41,8 +41,9 @@ const INDEXES = Object.freeze([
   { table: 'credit_recalculation_history', name: 'ix_credit_recalculation_history_kind', columns: ['kind', 'business_date'] },
 ]);
 
-// The approved physical type of every column of the ledger. It mirrors what
-// the generic snapshot bootstrap resolves, so both MySQL paths agree.
+// The approved physical type of every column of the ledger. It is PINNED in
+// the canonical resolver, so the snapshot path and the live migration path
+// cannot drift apart.
 export const WAVE11_RECONCILIATION_MYSQL_COLUMN_TYPES = Object.freeze({
   credit_recalculation_history: Object.freeze({
     id: 'VARCHAR(128)',
@@ -161,25 +162,18 @@ const NULLABILITY = Object.freeze([
 ]);
 
 // Indexed / constrained columns whose physical type must agree across engines.
-const PHYSICAL_TYPES = Object.freeze([
-  ['credit_recalculation_history', 'id', 'varchar', 128],
-  ['credit_recalculation_history', 'kind', 'varchar', 128],
-  ['credit_recalculation_history', 'credit_object_type', 'varchar', 128],
-  ['credit_recalculation_history', 'credit_object_id', 'varchar', 128],
-  ['credit_recalculation_history', 'customer_id', 'varchar', 128],
-  ['credit_recalculation_history', 'salesperson_scope_key', 'varchar', 128],
-  ['credit_recalculation_history', 'business_date', 'longtext', null],
-  ['credit_recalculation_history', 'fact_digest', 'varchar', 128],
-  ['credit_recalculation_history', 'policy_snapshot_fingerprint', 'varchar', 128],
-  ['credit_recalculation_history', 'profile_effective_state_hash', 'varchar', 64],
-  ['credit_recalculation_history', 'scope_filter_json', 'json', null],
-  ['credit_recalculation_history', 'result_snapshot_json', 'json', null],
-  ['credit_recalculation_history', 'discrepancy_count', 'bigint', null],
-  ['credit_recalculation_history', 'drift_detected', 'bigint', null],
-  ['credit_recalculation_history', 'duration_ms', 'bigint', null],
-  ['credit_recalculation_history', 'triggered_by', 'varchar', 128],
-  ['credit_recalculation_history', 'triggered_at', 'longtext', null],
-]);
+// The physical type assertion is DERIVED from the pinned type map above, so
+// the map, the hand-written MySQL DDL and the assertion can never be three
+// different facts. A hand-maintained third copy of the same list is exactly
+// how the snapshot path and the live path drift apart.
+const PHYSICAL_TYPES = Object.freeze(
+  Object.entries(WAVE11_RECONCILIATION_MYSQL_COLUMN_TYPES).flatMap(([table, columns]) => Object.entries(columns).map(([column, type]) => {
+    const sized = /^VARCHAR\((\d+)\)$/i.exec(String(type));
+    return sized
+      ? [table, column, 'varchar', Number(sized[1])]
+      : [table, column, String(type).toLowerCase(), null];
+  })),
+);
 
 function same(actual, expected) { return JSON.stringify(actual) === JSON.stringify(expected); }
 function conflict(message) { throw new Error(`Wave 11-D reconciliation schema conflict: ${message}`); }
