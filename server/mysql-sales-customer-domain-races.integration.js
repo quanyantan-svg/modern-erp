@@ -214,10 +214,14 @@ describe('Sales & Customer domain real MySQL concurrency invariants (7 races)', 
         right.run(commandFor('right')),
       ];
       if (inCampaign) {
-        // The contenders must be observably pending at the L0 boundary.
+        // The contenders must be observably BLOCKED at the same time.
         // Without this the race could degenerate into two sequential calls.
-        assert.equal(await waitAtTransactionGate(db, [registrations[0].connectionId, registrations[1].connectionId]), true,
-          `${label}: both contenders must be pending on the L0 coordination gate`);
+        const threadIds = [registrations[0].threadId, registrations[1].threadId];
+        assert.ok(threadIds.every((value) => Number.isInteger(Number(value))),
+          `${label}: every contender must report its performance_schema thread id`);
+        const observed = await waitForBothContendersBlocked(db, threadIds);
+        assert.equal(observed.observed, true,
+          `${label}: both contenders must be observably blocked against each other (attempts=${observed.attempts})`);
         await control.run({ action: 'release-gate' });
         held = false;
       }
@@ -256,6 +260,38 @@ describe('Sales & Customer domain real MySQL concurrency invariants (7 races)', 
       sleep(25);
     }
     return false;
+  }
+
+  /**
+   * Wait until BOTH contenders are simultaneously BLOCKED.
+   *
+   * The proof is the server-side lock-wait graph:
+   * `performance_schema.data_lock_waits` names the requesting and the
+   * blocking thread. Both contenders appearing as a REQUESTING_THREAD_ID is a
+   * real, server-side proof that they were in flight against each other.
+   *
+   * It deliberately does NOT require both to be waiting on the L0 gate. A
+   * contender that first blocks on a business row the other one already holds
+   * is blocked BY the other contender — a genuine contention, and a stronger
+   * one than a shared gate wait. Requiring both to sit on the same row would
+   * have rejected two real races (the controlled change apply and the order
+   * close), because those paths lock their business row during discovery,
+   * before the L0 gate.
+   */
+  async function waitForBothContendersBlocked(observer, threadIds) {
+    const ids = threadIds.map((value) => Number(value));
+    for (let attempt = 0; attempt < 400; attempt += 1) {
+      const rows = observer.prepare(`SELECT REQUESTING_THREAD_ID waiter, BLOCKING_THREAD_ID blocker
+        FROM performance_schema.data_lock_waits WHERE REQUESTING_THREAD_ID IN (?, ?)`).all(...ids);
+      const waiters = new Set(rows.map((row) => Number(row.waiter)));
+      if (ids.every((id) => waiters.has(id))) {
+        return { observed: true, attempts: attempt + 1, waiters: rows.map((row) => ({ waiter: Number(row.waiter), blocker: Number(row.blocker) })) };
+      }
+      // The wait must not block this process's event loop: the HTTP server
+      // that serves the suite's own fixture calls lives here.
+      await new Promise((done) => setTimeout(done, 25));
+    }
+    return { observed: false, attempts: 400, waiters: [] };
   }
 
   // -------------------------------------------------------------------------

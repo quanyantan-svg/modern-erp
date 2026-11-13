@@ -77,6 +77,23 @@ function connectionId() {
   return process.pid;
 }
 
+// The performance_schema THREAD_ID of this session. It is a DIFFERENT
+// identity from the connection id, and the lock-wait graph is keyed by it:
+// `performance_schema.data_lock_waits` reports REQUESTING_THREAD_ID and
+// BLOCKING_THREAD_ID, while `information_schema.PROCESSLIST` is keyed by the
+// connection id. The two must never be substituted for one another.
+//
+// The dedicated test account holds SELECT on `performance_schema.threads`, so
+// the mapping is readable. On SQLite there is no server-side session and no
+// thread id; the offline validation mode is explicitly not contention
+// evidence.
+function threadId() {
+  if (db.dialect !== 'mysql') return null;
+  const row = db.prepare(`SELECT THREAD_ID id FROM performance_schema.threads
+    WHERE PROCESSLIST_ID = CONNECTION_ID() LIMIT 1`).get();
+  return row ? Number(row.id) : null;
+}
+
 function request(body, key = null) {
   const bytes = Buffer.from(JSON.stringify(body || {}), 'utf8');
   return {
@@ -126,7 +143,7 @@ async function invoke(handler, command) {
 
 async function execute(command) {
   if (command.action === 'register') {
-    return { dialect: db.dialect, connectionId: connectionId(), processId: process.pid };
+    return { dialect: db.dialect, connectionId: connectionId(), threadId: threadId(), processId: process.pid };
   }
   if (command.action === 'hold-gate') {
     // The L0 coordination gate: the production transaction() helper acquires
