@@ -527,11 +527,29 @@ M&Q 域既有验收记录的当前有效性须在 Platform 域级 Acceptance 轮
 
 | 权限码 | 用途 |
 |---|---|
-| `ATTACHMENTS_VIEW` | 下载 / 列表 |
+| `ATTACHMENTS_VIEW` | **平台级**查看权：可查看任意归属对象的附件 |
 | `ATTACHMENTS_UPLOAD` | 上传 |
 | `ATTACHMENTS_DELETE` | 删除（软删：写 `deleted_at`） |
 
-错误码：`PLATFORM_ATTACHMENT_NOT_FOUND`(404) / `PLATFORM_ATTACHMENT_TYPE_REJECTED`(415) / `PLATFORM_ATTACHMENT_TOO_LARGE`(413) / `PLATFORM_ATTACHMENT_NAME_INVALID`(422) / `PLATFORM_ATTACHMENT_STORAGE_FAILED`(500) / `PLATFORM_ATTACHMENT_OWNER_FORBIDDEN`(403)。
+> **读取权限继承归属对象（2026-11-14 修正）**：下载与列举**不**单独要求 `ATTACHMENTS_VIEW` ——
+> 附件是业务对象的**子文档**：看不见单据就看不见它的附件。因此判定顺序是：
+> 持有 `ATTACHMENTS_VIEW` → 放行（平台级）；否则按 §32.6.3 的**归属对象既有查看权限**判定。
+> 上传与删除仍需 `ATTACHMENTS_UPLOAD` / `ATTACHMENTS_DELETE` 平台级权限，并额外要求对归属对象可读。
+> 若沿用"下载必须有 `ATTACHMENTS_VIEW`"的写法，新权限码只在 ADMIN 手上（其它角色不自动获得），
+> 附件能力对普通用户等于不可用 —— 这与 PL-DEC-04 暴露的是同一类问题。
+
+错误码：`PLATFORM_ATTACHMENT_NOT_FOUND`(404) / `PLATFORM_ATTACHMENT_TYPE_REJECTED`(415) / `PLATFORM_ATTACHMENT_TOO_LARGE`(413) / `PLATFORM_ATTACHMENT_NAME_INVALID`(422) / `PLATFORM_ATTACHMENT_STORAGE_FAILED`(500) / `PLATFORM_ATTACHMENT_OWNER_FORBIDDEN`(403) / `PLATFORM_ATTACHMENT_OWNER_UNSUPPORTED`(422) / `PLATFORM_ATTACHMENT_EMPTY`(400)。
+
+#### 32.6.5 实现期确定的三项事实
+
+1. **存储根目录**：`ERP_ATTACHMENT_DIR` 显式配置（多进程 / MySQL 部署**必须**设置）→ 数据库文件同目录的
+   `attachments/`（SQLite 单机默认，测试自动落在临时目录里）→ 仓库 `data/attachments`（兜底）。
+   库文件路径由 `createSqliteDatabase` 记录在 `db.__erpDatabaseFile` 上。
+2. **`Content-Disposition` 必须按 RFC 5987 编码**：HTTP 头只允许 latin1 —— 中文文件名直接写进
+   `filename="…"` 会让 Node 抛 `ERR_INVALID_CHAR`（表现为 500）。实现给出 ASCII 回退名 +
+   `filename*=UTF-8''` 百分号编码两种形式。
+3. **类型白名单只判定一次**：content type 与扩展名的**双重**校验由附件模块统一执行，
+   `readMultipart` 不重复判定 —— 否则拒绝码会来自两个地方、失去唯一性。
 
 ### 32.7 Notification 设计
 

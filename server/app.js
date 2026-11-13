@@ -7,6 +7,9 @@ import { listNotifications, markNotificationRead } from './modules/platform-noti
 import { createWorkflow, listWorkflows } from './modules/platform-workflows.js';
 import { assertApprovalSod } from './modules/platform-sod.js';
 import {
+  deleteAttachment, downloadAttachment, listAttachments, uploadAttachment,
+} from './modules/platform-attachments.js';
+import {
   bindOrganizationScope, createOrganization, createOrganizationScope, getOrganization,
   listOrganizationScopes, listOrganizations, setOrganizationStatus, unbindOrganizationScope,
   updateOrganization,
@@ -2858,6 +2861,35 @@ ownedRouteTable.register({
   path: /^\/api\/platform\/organization-scopes\/([^/]+)\/unbind$/,
   handler: ({ db, req, res, actor, params }) => unbindOrganizationScope(db, req, res, actor, params[0]),
   owner: 'server/modules/platform-organizations.js',
+});
+
+// Platform 平台层域 —— 附件（docs/design/platform.md §32.6）。
+// 下载必须走鉴权后的 API：附件目录不在静态服务范围内。
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/platform/attachments',
+  handler: ({ db, req, res, actor }) => uploadAttachment(db, req, res, actor),
+  owner: 'server/modules/platform-attachments.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/platform/attachments',
+  handler: ({ db, res, actor, url }) => listAttachments(
+    db, res, actor, url.searchParams.get('ownerType'), url.searchParams.get('ownerId'),
+  ),
+  owner: 'server/modules/platform-attachments.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/platform\/attachments\/([^/]+)\/content$/,
+  handler: ({ db, res, actor, params }) => downloadAttachment(db, res, actor, params[0]),
+  owner: 'server/modules/platform-attachments.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/platform\/attachments\/([^/]+)\/delete$/,
+  handler: ({ db, req, res, actor, params }) => deleteAttachment(db, req, res, actor, params[0]),
+  owner: 'server/modules/platform-attachments.js',
 });
 
 // V17 Master & Engineering Domain Closure — Wave B: BOM Governance.

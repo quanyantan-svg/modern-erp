@@ -377,6 +377,9 @@ function createSqliteDatabase(filename) {
   const db = new DatabaseSync(filename);
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec('PRAGMA journal_mode = WAL;');
+  // 记录库文件路径：附件子系统据此把附件目录放在库文件旁边（单机 SQLite 部署的默认）。
+  // 多进程 / MySQL 部署必须用 ERP_ATTACHMENT_DIR 显式指定共享目录。
+  db.__erpDatabaseFile = filename;
   migrate(db);
   migrateSettlementSchema(db);
   migrateExtendedSchema(db);

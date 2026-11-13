@@ -4836,3 +4836,28 @@ T40 台账不得豁免整体删除 → FAIL → T41 预授权不存在的提交 
 
 Attachment（PL-10）→ Notification 生产者（PL-11）→ Numbering 服务（PL-09）→ SOD 规则维护面 →
 7 个前端工作面 → 真实 MySQL campaign 与浏览器 UAT → Manual Closure / Release Readiness。
+
+### 61.12 Attachment 子系统（PL-10，Design §32.6）
+
+**授权来源**：业务所有者 2026-11-14 裁定「按序把四个子系统全部建完」。
+
+| 项 | 内容 |
+|---|---|
+| 模块 | `server/modules/platform-attachments.js`（附件能力的唯一 owner） |
+| 存储 | **内容不入库**：数据库只存元数据与内容寻址的存储键（`sha256[0:2]/sha256[2:4]/sha256`）；文件落附件目录。同一内容可挂多个单据而只存一份文件 |
+| 上传 | `multipart/form-data`（新增 `readMultipart`，独立上限默认 10 MB，`HTTP_ATTACHMENT_LIMIT_BYTES`）+ base64 JSON 两条路径；`readJson` 行为**一字未改** |
+| 下载 | 走鉴权后的 API（`/api/platform/attachments/:id/content`），附件目录**不在**静态服务范围内；固定 `Content-Disposition` 下载，不内联执行 |
+| 类型安全 | content type 白名单 + 扩展名白名单**双重**校验；文件名净化（路径分隔符与控制字符剥离）；落盘键由服务端按内容摘要生成，**绝不使用**客户端文件名 |
+| 权限 | `ATTACHMENTS_UPLOAD` / `ATTACHMENTS_DELETE` 为平台级；**读取权限继承归属对象**（`ATTACHMENTS_VIEW` 是平台级查看权） |
+| 挂载点 | 7 个：会计凭证 / 销售订单 / 采购订单 / 生产工单 / 生产检验 / 请购单 / 销售报价，按各自的**既有查看权限**判定 |
+| 派生计数 | `accounting_vouchers.attachment_count`（既有孤儿列）成为**派生值**，唯一写入口在附件模块 |
+| 测试 | `server/platform-attachments.test.js`（13 例，已登记 FAST/FULL） |
+
+**实现期确定的三项事实**（已写回 Design §32.6.5）：存储根目录的三级解析；
+`Content-Disposition` 必须按 RFC 5987 编码（HTTP 头只允许 latin1，中文文件名会抛
+`ERR_INVALID_CHAR` 表现为 500）；类型白名单只判定一次，拒绝码必须来自唯一判定点。
+
+**门禁**：`pnpm test:fast` **715/715 PASS**；`pnpm test`（FULL）**3968/3968 PASS**。
+
+**剩余**：Notification 生产者（PL-11）→ Numbering 服务（PL-09）→ SOD 规则维护面 →
+7 个前端工作面 → 真实 MySQL campaign 与浏览器 UAT → Manual Closure / Release Readiness。

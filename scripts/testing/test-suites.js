@@ -84,6 +84,8 @@ const FULL = [
   'server/platform-sod-wiring.test.js',
   // Platform 组织主数据与作用域登记合同（PL-03）。
   'server/platform-organizations.test.js',
+  // Platform 附件能力合同（PL-10）：内容寻址存储、双重类型白名单、下载鉴权、派生计数。
+  'server/platform-attachments.test.js',
   // ----- Sales & Customer Domain — Wave 0 migration infrastructure -----
   // Canonical zero-step registry, deterministic runner, fail-closed errors,
   // SQLite fresh/reopen wiring, and zero future Sales business schema.
@@ -900,6 +902,8 @@ const FAST = [
   'server/platform-sod-wiring.test.js',
   // Platform 组织主数据与作用域登记合同（PL-03）。
   'server/platform-organizations.test.js',
+  // Platform 附件能力合同（PL-10）：内容寻址存储、双重类型白名单、下载鉴权、派生计数。
+  'server/platform-attachments.test.js',
   // M1-Core WP-0 static infrastructure contract; no DB, MySQL or migration execution.
   'server/m1c-wp0-infrastructure.test.js',
   'server/m15-tracked-identity-key.test.js',

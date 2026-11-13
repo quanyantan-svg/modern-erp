@@ -122,6 +122,84 @@ export function assertAllowedFields(body, allowed) {
   if (unexpected.length) throw new HttpError(400, `请求包含不支持的字段: ${unexpected.join(', ')}`);
 }
 
+/**
+ * 读取 `multipart/form-data` 请求体。
+ *
+ * 附件子系统专用（Design §32.6.1）。与 `readJson` **完全分开**：
+ *   - 独立的大小上限（默认 10 MB，由 `HTTP_ATTACHMENT_LIMIT_BYTES` 控制），
+ *     不复用 JSON 的 1 MB 上限，也不改动 `readJson` 的任何行为；
+ *   - 只解析第一段带 filename 的部分作为文件，其余作为字段。
+ *
+ * 不引入任何第三方 multipart 依赖：边界解析必须自己负责，且必须在超限时**立即**停止读取。
+ *
+ * @param {import('node:http').IncomingMessage} req
+ * @param {{limitBytes?: number, allowedTypes?: string[]|null}} options
+ * @returns {Promise<{fields: Record<string,string>, file: {filename: string, contentType: string|null, body: Buffer}|null}>}
+ */
+export async function readMultipart(req, { limitBytes = 0, allowedTypes = null } = {}) {
+  const configured = Number(process.env.HTTP_ATTACHMENT_LIMIT_BYTES || 10 * 1024 * 1024);
+  const limit = Number.isSafeInteger(limitBytes) && limitBytes >= 1024
+    ? limitBytes
+    : (Number.isSafeInteger(configured) && configured >= 1024 && configured <= 50 * 1024 * 1024
+      ? configured : 10 * 1024 * 1024);
+  const contentType = String(req.headers['content-type'] || '');
+  if (!contentType.toLowerCase().startsWith('multipart/form-data')) {
+    throw new HttpError(415, '请求内容类型必须为 multipart/form-data');
+  }
+  const boundaryMatch = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType);
+  const boundary = boundaryMatch ? String(boundaryMatch[1] || boundaryMatch[2] || '').trim() : '';
+  if (!boundary) throw new HttpError(400, 'multipart 请求缺少 boundary');
+
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) throw new HttpError(413, '附件内容超过大小上限');
+    chunks.push(chunk);
+  }
+  const buffer = Buffer.concat(chunks);
+  if (!buffer.length) throw new HttpError(400, 'multipart 请求体为空');
+
+  const delimiter = Buffer.from(`--${boundary}`);
+  const fields = {};
+  let file = null;
+  let cursor = buffer.indexOf(delimiter);
+  while (cursor !== -1) {
+    const partStart = cursor + delimiter.length;
+    if (buffer.slice(partStart, partStart + 2).toString('latin1') === '--') break; // 结束分隔符
+    const next = buffer.indexOf(delimiter, partStart);
+    if (next === -1) break;
+    let part = buffer.slice(partStart, next);
+    if (part.slice(-2).toString('latin1') === '\r\n') part = part.slice(0, -2);
+    const headerEnd = part.indexOf('\r\n\r\n');
+    if (headerEnd !== -1) {
+      const headerText = part.slice(0, headerEnd).toString('utf8');
+      const body = part.slice(headerEnd + 4);
+      const nameMatch = /name="([^"]*)"/i.exec(headerText);
+      const filenameMatch = /filename="([^"]*)"/i.exec(headerText);
+      const typeMatch = /content-type:\s*([^\r\n]+)/i.exec(headerText);
+      const name = nameMatch ? nameMatch[1] : '';
+      if (filenameMatch) {
+        if (!file) {
+          file = {
+            filename: filenameMatch[1],
+            contentType: typeMatch ? typeMatch[1].trim() : null,
+            body,
+          };
+        }
+      } else {
+        fields[name] = body.toString('utf8');
+      }
+    }
+    cursor = next;
+  }
+  if (!file) throw new HttpError(400, 'multipart 请求缺少文件部分');
+  if (allowedTypes && !allowedTypes.includes(String(file.contentType || ''))) {
+    throw new HttpError(415, '附件类型不在允许清单内');
+  }
+  return { fields, file };
+}
+
 export function requiredText(value, label, maxLength) {
   const text = String(value ?? '').trim();
   if (!text) throw new HttpError(400, `${label}不能为空`);
