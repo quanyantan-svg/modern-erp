@@ -8,6 +8,9 @@ export const GOVERNED_FILES = Object.freeze([
   'solution.md',
   'docs/status/PROJECT_STATUS.md',
   'docs/decisions/OPEN-BUSINESS-DECISIONS.md',
+  // N7-LEDGER-01 的变更追溯台账自身也必须可追溯：
+  // 否则台账可以被无声地扩成「预授权未来提交」的后门。
+  'docs/acceptance/n7-traceability-ledger.md',
 ]);
 
 export const GOVERNED_DIRS = Object.freeze([

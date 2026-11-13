@@ -381,7 +381,7 @@ node scripts/docs/check-doc-consistency.mjs --mode current --target HEAD
 | N4 | Active 合同文件声明 状态 / Owner / 权威来源，状态为 `ACTIVE` |
 | N5 | 索引 README 登记本目录全部直属正文，且其链接可达 |
 | N6 | 历史行号 / 章节引用在当前结构中**仍可追溯**（结构化解析，不要求逐字不变） |
-| N7 | 已批准合同的后续修改可经「变更记录 + Git Diff」定位到提交；受治理路径取自 anchor..target **真实 Git 历史**，整文件删除与 Rename 一律 Fail Closed |
+| N7 | 已批准合同的后续修改可经「变更记录 + Git Diff」定位到提交；受治理路径取自 anchor..target **真实 Git 历史**，整文件删除与 Rename 一律 Fail Closed；「变更记录」有两个来源 —— **提交信息**（须含受治理文件完整路径，或全部被触达章节 id）与**变更追溯台账**（`docs/acceptance/n7-traceability-ledger.md`，见 [`docs/decisions/n7-traceability-ledger-policy-20261113.md`](./docs/decisions/n7-traceability-ledger-policy-20261113.md)），台账覆盖须 SHA + 文件 + 章节 id 集合**完全相等**且引用**已批准**的所有者决定 |
 | N8 | 待审候选声明 `PENDING` / `NOT_AUTHORIZED` / `NOT_ISSUED`，不得冒充已批准 |
 | N9 | 现场重跑 `migration` 模式的 C1–C6，证明 G0 历史迁移证明仍可独立复跑 |
 

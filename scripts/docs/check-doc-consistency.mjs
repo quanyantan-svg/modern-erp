@@ -57,9 +57,12 @@ import {
 } from './lib/migration-index.mjs';
 import {
   buildCurrentIndex, activeContractFiles, reviewFiles, bodyFingerprints, diffTraceableBodies,
-  resolveStructural, fileText, under, directChildren,
+  resolveStructural, fileText, under, directChildren, parseMetadata,
 } from './lib/current-index.mjs';
 import { GOVERNED_DIRS, GOVERNED_FILES } from './lib/governed-paths.mjs';
+import {
+  LEDGER_PATH, parseLedger, ledgerEntryFor, ledgerEntryKey,
+} from './lib/n7-traceability-ledger.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -523,6 +526,13 @@ function traceabilityProblems(anchor, target, cur) {
     return { problems, detail };
   }
 
+  /*
+   * N7-LEDGER-01：不合规提交先收集到这里，再统一套用变更追溯台账。
+   * 台账是「变更记录」的第二个来源 —— 覆盖条件见
+   * scripts/docs/lib/n7-traceability-ledger.mjs 的窄口径合同。
+   */
+  const failures = [];
+
   for (const commit of commits) {
     const parents = git(REPO_ROOT, ['show', '-s', '--format=%P', commit]).trim().split(/\s+/).filter(Boolean);
     if (!parents.length) {
@@ -545,8 +555,14 @@ function traceabilityProblems(anchor, target, cur) {
         continue;
       }
       if (before === null && after !== null) {
-        if (!message.includes(f)) problems.push(`  ${short} 新增受治理文件但提交信息缺少完整路径: ${f}`);
-        else detail.push(`  ${short} ${f}: 新增文件以完整路径追溯`);
+        if (!message.includes(f)) {
+          failures.push({
+            commit, short, file: f, sectionIds: [], unowned: true,
+            problem: `  ${short} 新增受治理文件但提交信息缺少完整路径: ${f}`,
+          });
+        } else {
+          detail.push(`  ${short} ${f}: 新增文件以完整路径追溯`);
+        }
         continue;
       }
 
@@ -558,14 +574,79 @@ function traceabilityProblems(anchor, target, cur) {
         return !token.test(message);
       });
       if (diff.unownedChanged || touched.length === 0) {
-        if (!hasFullPath) problems.push(`  ${short} 修改了元数据、文件头或无法可靠归属章节的内容，提交信息必须含完整路径: ${f}`);
+        if (!hasFullPath) {
+          failures.push({
+            commit, short, file: f, sectionIds: [], unowned: true,
+            problem: `  ${short} 修改了元数据、文件头或无法可靠归属章节的内容，提交信息必须含完整路径: ${f}`,
+          });
+        } else {
+          detail.push(`  ${short} ${f}: 完整路径追溯通过`);
+        }
       } else if (!hasFullPath && missingIds.length) {
-        problems.push(`  ${short} 未引用全部变更章节（缺少 ${missingIds.map(id => `§${id}`).join(', ')}）或完整路径: ${f}`);
-      }
-      if (!problems.some(p => p.includes(short) && p.includes(f))) {
+        failures.push({
+          commit, short, file: f, sectionIds: touched, unowned: false,
+          problem: `  ${short} 未引用全部变更章节（缺少 ${missingIds.map(id => `§${id}`).join(', ')}）或完整路径: ${f}`,
+        });
+      } else {
         detail.push(`  ${short} ${f}: ${hasFullPath ? '完整路径' : `${touched.length} 个章节 ID`}追溯通过`);
       }
     }
+  }
+
+  /*
+   * N7-LEDGER-01：套用变更追溯台账。
+   *
+   * 台账是「变更记录」的第二个来源。覆盖要求（scripts/docs/lib/n7-traceability-ledger.mjs）：
+   * 提交 SHA 精确相等、受治理文件精确相等、章节 id 集合与实际触达集合**完全相等**、
+   * 引用的所有者决定文件存在且状态为 APPROVED。
+   * 台账**不得**豁免「受治理文件整体删除或移动」，也不得豁免台账机制自身。
+   */
+  const ledger = parseLedger(fileText(REPO_ROOT, historyTarget, LEDGER_PATH));
+  for (const error of ledger.errors) problems.push(`  ${LEDGER_PATH} ${error}`);
+
+  const decisionState = new Map();
+  const isDecisionApproved = (decision) => {
+    if (decisionState.has(decision)) return decisionState.get(decision);
+    let approved = false;
+    if (/^docs\/decisions\/[A-Za-z0-9._-]+\.md$/.test(decision)) {
+      const text = fileText(REPO_ROOT, historyTarget, decision);
+      if (text) approved = /APPROVED/.test(parseMetadata(text)['状态'] || '');
+    }
+    decisionState.set(decision, approved);
+    return approved;
+  };
+
+  const usedEntryKeys = new Set();
+  const entryIssues = new Map();
+  for (const failure of failures) {
+    const cover = ledgerEntryFor(ledger, failure, isDecisionApproved);
+    if (cover) {
+      usedEntryKeys.add(ledgerEntryKey(cover.entry));
+      detail.push(`  ${failure.short} ${failure.file}: 台账追溯通过（${cover.entry.decision}）`);
+      continue;
+    }
+    problems.push(failure.problem);
+    // 台账有条目却没能覆盖时，报出条目自身的问题，而不是让失败静默通过。
+    for (const entry of ledger.entries.filter((item) => item.sha === failure.commit && item.file === failure.file)) {
+      const key = ledgerEntryKey(entry);
+      if (usedEntryKeys.has(key) || entryIssues.has(key)) continue;
+      const sectionsMatch = failure.unowned
+        ? entry.sectionIds.length === 0
+        : (entry.sectionIds.length === failure.sectionIds.length
+          && entry.sectionIds.every((id) => failure.sectionIds.includes(id)));
+      entryIssues.set(key, sectionsMatch
+        ? `  台账条目引用的所有者决定不存在或未批准: ${entry.sha.slice(0, 12)} ${entry.file} → ${entry.decision}`
+        : `  台账条目的章节 ID 集合与实际触达集合不一致（必须完全相等）: ${entry.sha.slice(0, 12)} ${entry.file}`);
+    }
+  }
+  for (const entry of ledger.entries) {
+    const key = ledgerEntryKey(entry);
+    if (usedEntryKeys.has(key)) continue;
+    if (entryIssues.has(key)) {
+      problems.push(entryIssues.get(key));
+      continue;
+    }
+    problems.push(`  台账条目不再对应任何不合规提交（可能已修复或提交已消失），必须删除: ${entry.sha.slice(0, 12)} ${entry.file}`);
   }
   return { problems, detail };
 }

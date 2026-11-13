@@ -10,6 +10,7 @@
 
 | 路径 | 内容 |
 |---|---|
+| [`n7-traceability-ledger.md`](./n7-traceability-ledger.md) | **N7 变更追溯台账**（`N7-LEDGER-01`，`APPROVED`）—— N7「变更记录 + Git Diff」可追溯性判定的第二个「变更记录」来源；登记提交信息不合规但变更本身可追溯的历史提交；覆盖须 SHA + 受治理文件 + 章节 id 集合**完全相等**且引用**已批准**的所有者决定；本台账**不是** Acceptance / Freeze 证据 |
 | [`g0-governance-acceptance-20261101.md`](./g0-governance-acceptance-20261101.md) | G0 开发治理重构的正式验收记录（`G0_ACCEPTANCE_PASS`，2026-11-01）—— 治理层验收，**不含**任何业务 Domain Acceptance |
 | [`m1-core-requirement-design-acceptance-20261102.md`](./m1-core-requirement-design-acceptance-20261102.md) | M1-Core Requirement / Design 正式验收（`M1_CORE_REQUIREMENT_ACCEPTANCE_PASS` / `M1_CORE_DESIGN_PASS`）；Implementation 未授权，非 Domain Acceptance |
 | [`m1-core-wp1-implementation-acceptance-20261102.md`](./m1-core-wp1-implementation-acceptance-20261102.md) | M1-Core WP1 Implementation 正式验收（`M1C_WP1_IMPLEMENTATION_PASS`）；不等于 `M1C-G01 PASS`，非 Capability Freeze / Domain Acceptance |
