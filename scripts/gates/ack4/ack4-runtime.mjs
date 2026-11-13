@@ -77,6 +77,17 @@ export const INVENTORY_WAREHOUSE_MYSQL_MANIFEST = Object.freeze([
   'RUN_INVENTORY_WAREHOUSE_RACES',
   'CLEANUP_SCHEMA_POST_RUN',
 ]);
+// Sales & Customer 域的 ACK-4 Manifest。本 Manifest 与 M1-Core G07、Accounting &
+// Analytics、Finance Operations、Master & Engineering、Manufacturing & Quality 与
+// Inventory & Warehouse 的 Manifest 互相独立：夹具操作名带 SALES_CUSTOMER 前缀，
+// 使运行期证据可以唯一地归属本域 campaign，不会与其他域 campaign 的证据混淆。
+export const SALES_CUSTOMER_MYSQL_MANIFEST_NAME = 'SALES_CUSTOMER_MYSQL_V1';
+export const SALES_CUSTOMER_MYSQL_MANIFEST = Object.freeze([
+  'RESET_SCHEMA_PRE_RUN',
+  'BOOTSTRAP_CURRENT_SCHEMA',
+  'RUN_SALES_CUSTOMER_RACES',
+  'CLEANUP_SCHEMA_POST_RUN',
+]);
 export const ACK4_RECOVERY_MANIFEST = Object.freeze([
   'INSPECT_QUARANTINE',
   'CLEANUP_SCHEMA_RECOVERY',

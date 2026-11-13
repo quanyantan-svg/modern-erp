@@ -36,6 +36,7 @@
     "test:mysql:master-engineering": "node scripts/gates/mysql-master-engineering-gate.mjs",
     "test:mysql:manufacturing-quality": "node scripts/gates/mysql-manufacturing-quality-gate.mjs",
     "test:mysql:inventory-warehouse": "node scripts/gates/mysql-inventory-warehouse-gate.mjs",
+    "test:mysql:sales-customer": "node scripts/gates/mysql-sales-customer-gate.mjs",
     "test:finance:responsive": "node scripts/acceptance/finance-operations-responsive-uat.mjs",
     "test:finance:uat": "node scripts/acceptance/finance-operations-final-uat.mjs",
     "test:sales:wave2-responsive": "node scripts/acceptance/sales-customer-wave2-responsive.mjs",
