@@ -4,7 +4,9 @@
 > Owner：Platform
 > 权威来源：**手册要求基线**是 [`document.md`](../../document.md) §22（2026-10-06 已批准基线）。
 > 本表只登记「当前 Coverage 应从哪里读」与「当前验收状态」，**不重新计数、不覆盖 §22 的手册要求基线**。
-> 逐 Capability 的后验收覆盖统计本次**未逐条核验**，因此保持 `UNVERIFIED`。
+> **（2026-11-13 刷新）**：21 本手册已完成逐 Capability 复核并签发域级 Acceptance 与 Capability Freeze，
+> 状态列据实记为 `FROZEN`；仅 B3122（Platform）尚未开工，记 `NOT_STARTED`。
+> 逐 Capability 的证据台账在 [`docs/audits/`](../audits/)，域级验收与冻结证据在 [`docs/acceptance/`](../acceptance/)。
 > Domain 级进度见 [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) §35.3。
 
 ## 状态词表
@@ -12,6 +14,7 @@
 | 状态 | 含义 |
 |---|---|
 | `VERIFIED` | 有当前代码 + 逐项证据 + 验收记录支撑 |
+| `FROZEN` | 所属域的 **Domain-Level Acceptance 与 Capability Freeze 均已签发**，能力范围已冻结；**不**表示 Manual Capability Closure 或 Release Readiness 已签发 |
 | `HISTORICAL_EVIDENCE` | 有历史验收证据，但未在当前 HEAD 上重新验证 |
 | `UNVERIFIED` | 缺少逐 Capability 证据，**不得**据此宣称覆盖 |
 | `BLOCKED` | 已知阻塞项未解 |
@@ -126,13 +129,19 @@
    [审计台账 §7](../audits/accounting-analytics-capability-audit-20261110.md)。
 2. **Platform（B3122）** 同理，只有手册基线，`NOT_STARTED`。
 3. **Inventory & Warehouse / Manufacturing & Quality / Finance Operations / Master & Engineering**
-   实现完成但缺**独立 Domain-Level Acceptance token**，故记 `HISTORICAL_EVIDENCE` 而非 `VERIFIED`。
-4. **B3101 / B3121** 的 `BLOCKED` 来自 [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) §35.8 的 G-1..G-5
-   与 §31.11 的 `NOT READY`，不是覆盖率本身为零。2026-11-07 登记的静态代码审计基线
-   （见上节）**不改变**该状态，只补充 Issue 级台账。
-5. **B3101 / B3121** 已于 2026-11-07 建立**静态代码审计基线**（17 个 Issue），但该基线
-   **不产生** Capability Verified、Formal Acceptance、Capability Freeze 或 Domain Acceptance；
-   逐 Capability 的运行时结论仍需后续轮次审计补齐（台账 §8）。
+   已分别签发**独立 Domain-Level Acceptance 与 Capability Freeze**
+   （`INVENTORY_WAREHOUSE_*` 2026-11-13、`MANUFACTURING_QUALITY_*` 2026-11-12、
+   `FINANCE_OPERATIONS_*` 2026-11-12、`MASTER_ENGINEERING_*` 2026-11-12），
+   四域对应手册行已由 `HISTORICAL_EVIDENCE` 改为 `FROZEN`。
+   （2026-10-31 基线快照记为「缺独立 token」——该陈述在其自身日期为真，现由各域签发日作 dated supersession。）
+4. **B3101 / B3121** 的历史 `BLOCKED`（来自 [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) §35.8 的 G-1..G-5
+   与 §31.11 的 `NOT READY`）已随 2026-11-11 的
+   `PROCUREMENT_OUTSOURCING_DOMAIN_ACCEPTANCE_PASS` / `PROCUREMENT_OUTSOURCING_CAPABILITY_FREEZE`
+   解除（§35.8 的 G-1..G-5 已由 §47.4 逐项闭合），行状态改为 `FROZEN`。
+5. **B3101 / B3121** 的 2026-11-07 **静态代码审计基线**（17 个 Issue）仍只是 Issue 级台账，
+   本身**不产生** Capability Verified、Formal Acceptance、Capability Freeze 或 Domain Acceptance；
+   其当前 Coverage 依据已由 2026-11-10 的**域级逐项复核**（54 项：50 `COVERED` / 0 `PARTIAL` /
+   0 `MISSING` / 3 项已批准延期或移出范围）取代，历史事实保留不改写。
 
 ## 追溯规则
 

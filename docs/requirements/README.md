@@ -11,14 +11,14 @@
 |---|---|---|---|
 | [`core-scope-cleanup.md`](./core-scope-cleanup.md) | Core Scope Cleanup | `document.md` §26 | Requirement 完成；Domain Closure 已实施（无独立 Domain Acceptance token） |
 | [`domain-alignment.md`](./domain-alignment.md) | Domain Alignment | `document.md` §27 | Requirement 完成 |
-| [`master-engineering.md`](./master-engineering.md) | Master & Engineering | `document.md` §28 | Requirement 完成；实现完成；**未见独立 Domain-Level Acceptance** |
-| [`manufacturing-quality.md`](./manufacturing-quality.md) | Manufacturing & Quality | `document.md` §29 | Requirement 完成；实现完成；**未见独立 Domain-Level Acceptance** |
-| [`planning.md`](./planning.md) | Planning | `document.md` §30 | Requirement 完成；**有明确用户 Freeze** |
-| [`procurement-outsourcing.md`](./procurement-outsourcing.md) | Procurement & Outsourcing | `document.md` §31 | Requirement 完成；Domain Acceptance 仍 `NOT READY`；§31.12 M1 全范围历史 Requirement 已验收（`M1_REQUIREMENT_ACCEPTANCE_PASS`）；§31.13 M1-Core 首期 Requirement 已批准（`M1_CORE_REQUIREMENT_ACCEPTANCE_PASS`，2026-11-02），首期 Implementation 已实施并取得包级 Acceptance（`M1_CORE_ACCEPTANCE_PASS`，2026-11-07）—— **Domain Acceptance、Capability Freeze 仍未签发，不得据此认为整个 Procurement & Outsourcing Domain 已完成** |
-| [`inventory-warehouse.md`](./inventory-warehouse.md) | Inventory & Warehouse | `document.md` §32 | Requirement 完成；实现 Partial；**未见独立 Domain-Level Acceptance** |
-| [`finance-operations.md`](./finance-operations.md) | Finance Operations | `document.md` §33 | Requirement 完成；实现完成；**未见独立 Domain-Level Acceptance** |
-| [`sales-customer/`](./sales-customer/) | Sales & Customer | `document.md` §34 + Wave 8/9/10/11 修订 | Requirement 完成；部分能力冻结；整域**明确未冻结** |
-| [`accounting-analytics.md`](./accounting-analytics.md) | Accounting & Analytics | `document.md` §35 | Requirement 完成并获批准（`APPROVED`，2026-11-10）；AA-W1..AA-W7 全部纳入 Domain Closure，AA-31 多币种 `OUT_OF_SCOPE`；**Design 实施与域级 Acceptance 均未开始** |
+| [`master-engineering.md`](./master-engineering.md) | Master & Engineering | `document.md` §28 | Requirement 完成；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12，`MASTER_ENGINEERING_DOMAIN_ACCEPTANCE_PASS`） |
+| [`manufacturing-quality.md`](./manufacturing-quality.md) | Manufacturing & Quality | `document.md` §29 | Requirement 完成；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12，`MANUFACTURING_QUALITY_DOMAIN_ACCEPTANCE_PASS`） |
+| [`planning.md`](./planning.md) | Planning | `document.md` §30 | Requirement 完成；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12，`PLANNING_DOMAIN_ACCEPTANCE_PASS`） |
+| [`procurement-outsourcing.md`](./procurement-outsourcing.md) | Procurement & Outsourcing | `document.md` §31 | Requirement 完成；域级 Acceptance 与 Capability Freeze 已签发（2026-11-11，`PROCUREMENT_OUTSOURCING_DOMAIN_ACCEPTANCE_PASS`，50 项 `COVERED`）；§31.12 M1 全范围历史 Requirement 已验收（`M1_REQUIREMENT_ACCEPTANCE_PASS`）；§31.13 M1-Core 首期 Requirement 已批准（`M1_CORE_REQUIREMENT_ACCEPTANCE_PASS`，2026-11-02），首期 Implementation 已实施并取得包级 Acceptance（`M1_CORE_ACCEPTANCE_PASS`，2026-11-07）—— **Manual Capability Closure 与 Release Readiness 仍未签发** |
+| [`inventory-warehouse.md`](./inventory-warehouse.md) | Inventory & Warehouse | `document.md` §32 | Requirement 完成；域级 Acceptance 与 Capability Freeze 已签发（2026-11-13，`INVENTORY_WAREHOUSE_DOMAIN_ACCEPTANCE_PASS`，44 项 `COVERED`） |
+| [`finance-operations.md`](./finance-operations.md) | Finance Operations | `document.md` §33 | Requirement 完成；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12，`FINANCE_OPERATIONS_DOMAIN_ACCEPTANCE_PASS`，58 项 `COVERED`） |
+| [`sales-customer/`](./sales-customer/) | Sales & Customer | `document.md` §34 + Wave 8/9/10/11 修订 | Requirement 完成；整域已冻结（2026-11-13，`SALES_CUSTOMER_DOMAIN_ACCEPTANCE_PASS`，CAP-1..36 全部 `COVERED`） |
+| [`accounting-analytics.md`](./accounting-analytics.md) | Accounting & Analytics | `document.md` §35 | Requirement 完成并获批准（`APPROVED`，2026-11-10）；AA-W1..AA-W7 全部纳入 Domain Closure，AA-31 多币种 `OUT_OF_SCOPE`；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12，`ACCOUNTING_ANALYTICS_DOMAIN_ACCEPTANCE_PASS`，43 项 `COVERED`） |
 | — | Platform | — | **尚无 Domain Closure Requirement** |
 
 > 状态列的完整依据见 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §35.3；

@@ -11,15 +11,15 @@
 |---|---|---|---|
 | [`core-scope-cleanup.md`](./core-scope-cleanup.md) | Core Scope Cleanup | `solution.md` §21 | 已实施 |
 | [`domain-alignment.md`](./domain-alignment.md) | Domain Alignment | `solution.md` §22 | 已实施 |
-| [`master-engineering.md`](./master-engineering.md) | Master & Engineering | `solution.md` §23 | 已实施 |
-| [`manufacturing-quality.md`](./manufacturing-quality.md) | Manufacturing & Quality | `solution.md` §24 | 已实施 |
-| [`planning.md`](./planning.md) | Planning | `solution.md` §25 | 已实施并冻结 |
-| [`procurement-outsourcing.md`](./procurement-outsourcing.md) | Procurement & Outsourcing | `solution.md` §26 | 原 Domain Design 基线，继续 Active |
-| [`procurement-outsourcing-m1-core.md`](./procurement-outsourcing-m1-core.md) | Procurement & Outsourcing（M1-Core 首期） | §31.13 对应有界后继设计 | `ACTIVE` / `M1_CORE_DESIGN_PASS`；首期 Implementation 已实施，七 Gate 7/7 `PASS` 且包级 Acceptance 已签发（`M1_CORE_ACCEPTANCE_PASS`，2026-11-07）—— **Capability Freeze、Domain Acceptance 仍未签发** |
-| [`inventory-warehouse.md`](./inventory-warehouse.md) | Inventory & Warehouse | `solution.md` §27 | 已实施 |
-| [`finance-operations.md`](./finance-operations.md) | Finance Operations | `solution.md` §28.0–§28.29 | 已实施 |
-| [`sales-customer/`](./sales-customer/) | Sales & Customer | `solution.md` §29 / §30 / Wave 8/9/11 基线 | 已实施；分波次冻结基线 |
-| [`accounting-analytics.md`](./accounting-analytics.md) | Accounting & Analytics | `solution.md` §31 | Design 已完成（2026-11-10），覆盖 AA-W1..AA-W7 七个实施包；**Implementation 仍 `NOT_AUTHORIZED`**，需业务所有者批准后方可开工 |
+| [`master-engineering.md`](./master-engineering.md) | Master & Engineering | `solution.md` §23 | 已实施；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12） |
+| [`manufacturing-quality.md`](./manufacturing-quality.md) | Manufacturing & Quality | `solution.md` §24 | 已实施；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12） |
+| [`planning.md`](./planning.md) | Planning | `solution.md` §25 | 已实施并冻结（域级 Acceptance 2026-11-12） |
+| [`procurement-outsourcing.md`](./procurement-outsourcing.md) | Procurement & Outsourcing | `solution.md` §26 | 原 Domain Design 基线，继续 Active；域级 Acceptance 与 Capability Freeze 已签发（2026-11-11） |
+| [`procurement-outsourcing-m1-core.md`](./procurement-outsourcing-m1-core.md) | Procurement & Outsourcing（M1-Core 首期） | §31.13 对应有界后继设计 | `ACTIVE` / `M1_CORE_DESIGN_PASS`；首期 Implementation 已实施，七 Gate 7/7 `PASS` 且包级 Acceptance 已签发（`M1_CORE_ACCEPTANCE_PASS`，2026-11-07）—— **域级 Capability Freeze 与 Domain Acceptance 已于 2026-11-11 签发** |
+| [`inventory-warehouse.md`](./inventory-warehouse.md) | Inventory & Warehouse | `solution.md` §27 | 已实施；域级 Acceptance 与 Capability Freeze 已签发（2026-11-13） |
+| [`finance-operations.md`](./finance-operations.md) | Finance Operations | `solution.md` §28.0–§28.29 | 已实施；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12） |
+| [`sales-customer/`](./sales-customer/) | Sales & Customer | `solution.md` §29 / §30 / Wave 8/9/11 基线 | 已实施；整域已冻结（2026-11-13） |
+| [`accounting-analytics.md`](./accounting-analytics.md) | Accounting & Analytics | `solution.md` §31 | Design 已完成（2026-11-10），覆盖 AA-W1..AA-W7 七个实施包；Implementation 已完成；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12） |
 | — | Platform | — | **尚无 Domain Technical Design** |
 
 > 状态列依据见 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §35.3；

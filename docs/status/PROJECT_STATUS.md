@@ -43,37 +43,45 @@
 
 | Domain | Requirement | Implementation | Stage Acceptance | Capability Freeze | Domain-Level Acceptance | Manual Capability Closure | Release Readiness |
 |---|---|---|---|---|---|---|---|
-| Master & Engineering | §28 Complete | Complete | — | — | 未见独立 token（下游日志记 `V17 §28` FROZEN） | 未见 | 未就绪 |
-| Manufacturing & Quality | §29 Complete | Complete | — | — | 未见独立 token（下游日志记 `V18 §29` FROZEN） | 未见 | 未就绪 |
-| Planning | §30 Complete | Complete | `Final Acceptance: PASS` | `Freeze: YES` | **有明确用户 Freeze** | §30 覆盖范围内 | 未就绪（整体） |
-| Procurement & Outsourcing | §31 Complete | Complete | 28/28 browser + 11/11 MySQL race | 未冻结 | **§31.11 `NOT READY`，不得 Freeze** | 未见 | 未就绪 |
-| Inventory & Warehouse | §32 Complete | Partial Complete | — | — | 未见独立 token | 未见 | 未就绪 |
-| Finance Operations | §33 Complete | Complete | — | — | 未见独立 token | 未见 | 未就绪 |
-| Sales & Customer | §34 FROZEN | Complete（Wave 0–10 + W11） | Wave 6/7/9 + Gate A PASS | Wave 6/7/9 + Gate A + Wave 10 | 部分：Wave 8 待提交、Waves 1–2 无验收记录、整域明确未冻结 | CAP-1..36 部分 | 未就绪 |
-| Accounting & Analytics | **无 Domain Closure Requirement** | Partial | — | — | 未见 | **未闭合**（B3114–B3117） | 未就绪 |
+| Master & Engineering | §28 Complete | Complete | — | 已冻结 | `MASTER_ENGINEERING_DOMAIN_ACCEPTANCE_PASS`（2026-11-12） | 未见 | 未就绪 |
+| Manufacturing & Quality | §29 Complete | Complete | — | 已冻结 | `MANUFACTURING_QUALITY_DOMAIN_ACCEPTANCE_PASS`（2026-11-12） | 未见 | 未就绪 |
+| Planning | §30 Complete | Complete | `Final Acceptance: PASS` | `Freeze: YES` | `PLANNING_DOMAIN_ACCEPTANCE_PASS`（2026-11-12） | §30 覆盖范围内 | 未就绪（整体） |
+| Procurement & Outsourcing | §31 Complete | Complete | 28/28 browser + 11/11 MySQL race | 已冻结 | `PROCUREMENT_OUTSOURCING_DOMAIN_ACCEPTANCE_PASS`（2026-11-11） | 未见 | 未就绪 |
+| Inventory & Warehouse | §32 Complete | Partial Complete | — | 已冻结 | `INVENTORY_WAREHOUSE_DOMAIN_ACCEPTANCE_PASS`（2026-11-13） | 未见 | 未就绪 |
+| Finance Operations | §33 Complete | Complete | — | 已冻结 | `FINANCE_OPERATIONS_DOMAIN_ACCEPTANCE_PASS`（2026-11-12） | 未见 | 未就绪 |
+| Sales & Customer | §34 FROZEN | Complete（Wave 0–10 + W11） | Wave 6/7/9 + Gate A PASS | 整域已冻结 | `SALES_CUSTOMER_DOMAIN_ACCEPTANCE_PASS`（2026-11-13） | 未见 | 未就绪 |
+| Accounting & Analytics | §35 Complete | Complete | — | 已冻结 | `ACCOUNTING_ANALYTICS_DOMAIN_ACCEPTANCE_PASS`（2026-11-12） | 未见 | 未就绪 |
 | Platform | **无 Domain Closure Requirement** | Partial | — | — | 未见 | **未闭合**（B3122） | 未就绪 |
+
+> **（2026-11-13 刷新）** 本表原为 2026-10-31 基线快照。此后 §51–§60 已陆续签发八个业务域的
+> Domain-Level Acceptance 与 Capability Freeze，上表各列据此更新。
+> **Manual Capability Closure 与 Release Readiness 两层对所有域、所有手册均未签发** ——
+> 它们是业务所有者的独立决定，不由域级 Acceptance 自动跟随。
+> **Platform（B3122）仍未开工**：无 Domain Closure Requirement、无 Domain Closure Design，
+> 逐 Capability 审计台账见 [`docs/audits/`](../audits/)。
 
 **没有任何 Domain 达到 Release Readiness。** 生产发布仍未获授权（`document.md:11187`）。
 
 ### 35.4 B3101–B3122 最新 Coverage 来源
 
 §22 仍是**已批准的手册能力基线**；本节只指定"当前 Coverage 应从哪里读"，**不重新计数、不覆盖 §22**。
-逐 Capability 的后验收覆盖统计本次**未逐条核验**，因此保持 `UNVERIFIED`。
+逐 Capability 的后验收覆盖统计已于 2026-11-10～2026-11-13 逐手册补齐并留存台账；
+**B3122 仍无逐 Capability 覆盖证据**，保持 `UNVERIFIED`。
 
 | 手册 | 当前 Coverage 权威来源 | Capability 规模 | 状态 |
 |---|---|---|---|
-| B3101 采购 | §31.3.1 | PRC-01..26 | Requirement 完成；Acceptance `NOT READY` |
-| B3102 销售 | §34.8 | CAP-1..27 | 已实现并部分冻结 |
-| B3103 信用 | §34.8 + Stage B SC82–SC107 | CAP-28..36 | 已实现并冻结 |
-| B3104 库存 / B3105 条码 | §32.3 | INV-01..44（Barcode = INV-39..44） | Requirement 完成；Domain Acceptance 未见 |
-| B3106 存货核算 / B3107 固资 | §33.1.3 仅确认归属 | **无能力矩阵** | Coverage `UNVERIFIED` |
-| B3108–B3113 | §33.5 + §33.2 三种识别模型 | FO01..FO58 | Requirement 完成；Domain Acceptance 未见 |
-| B3114 智能会计 / B3115 总账 / B3116 报表 / B3117 经营会计 | **无能力矩阵** | — | Coverage `UNVERIFIED` |
-| B3118 工程数据 | §28.3 | ME-01..31 | 已实现；Domain Acceptance 未见 |
-| B3119 生产管理 | §29.3 | MQ-01..43 | 已实现；Domain Acceptance 未见 |
-| B3120 计划 | §30.2 | PL-01..45 | 已实现并冻结 |
-| B3121 委外 | §31.3.3 + VMI-01..05 | OUT-01..23 | Requirement 完成；Acceptance `NOT READY` |
-| B3122 工作流 | §22.22 | — | 仍然开放（正确） |
+| B3101 采购 | §31.3.1 | PRC-01..26 | Requirement 完成；域级 Acceptance 与 Capability Freeze 已签发（2026-11-11） |
+| B3102 销售 | §34.8 | CAP-1..27 | 已实现；整域已冻结（2026-11-13） |
+| B3103 信用 | §34.8 + Stage B SC82–SC107 | CAP-28..36 | 已实现并冻结（2026-11-13） |
+| B3104 库存 / B3105 条码 | §32.3 | INV-01..44（Barcode = INV-39..44） | Requirement 完成；域级 Acceptance 与 Capability Freeze 已签发（2026-11-13） |
+| B3106 存货核算 / B3107 固资 | AA 域 §35.4（归属见 `document.md §33.1.3`） | AA-01..17 | 能力矩阵已建立；已冻结（2026-11-12） |
+| B3108–B3113 | §33.5 + §33.2 三种识别模型 | FO01..FO58 | Requirement 完成；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12） |
+| B3114 智能会计 / B3115 总账 / B3116 报表 / B3117 经营会计 | AA 域 §35.4 | AA-18..44 | 能力矩阵已建立；已冻结（2026-11-12） |
+| B3118 工程数据 | §28.3 | ME-01..31 | 已实现；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12） |
+| B3119 生产管理 | §29.3 | MQ-01..43 | 已实现；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12） |
+| B3120 计划 | §30.2 | PL-01..45 | 已实现并冻结（2026-11-12） |
+| B3121 委外 | §31.3.3 + VMI-01..05 | OUT-01..23 | Requirement 完成；域级 Acceptance 与 Capability Freeze 已签发（2026-11-11） |
+| B3122 工作流 | §22.22 | — | **仍然开放（正确）**：Platform 无 Domain Closure Requirement / Design，尚未开工 |
 
 ### 35.5 已验收、待验收与未实施
 
@@ -81,19 +89,30 @@
 Planning；Sales Wave 6 / 7 / 9、Gate A、Wave 10（**能力冻结，发布仍阻塞**）；Package B 测试隔离；
 W11-SEC-01；W11-A U1、U2、OVERDUE Foundation、U3。
 
+**已签发域级 Acceptance 与 Capability Freeze 的业务域（2026-11-11～2026-11-13）**：
+Procurement & Outsourcing、Accounting & Analytics、Planning、Finance Operations、
+Master & Engineering、Manufacturing & Quality、Inventory & Warehouse、Sales & Customer ——
+共 **8 个业务域**；Platform 为第 9 个域，尚未开工。
+各域的 Acceptance 标识、冻结能力数与证据锚点见
+[`docs/status/CAPABILITY_MATRIX.md`](./CAPABILITY_MATRIX.md) 对应行与
+[`docs/acceptance/`](../acceptance/)。
+**Manual Capability Closure 与 Release Readiness 两层对全部 8 域均未签发。**
+
 **已验收但不属于业务能力冻结**（文档层基线验收，详见 §35.11）：
 M0 Project Baseline Reconciliation & Audit Errata（`M0_BASELINE_ACCEPTANCE_PASS`）。
 它是**文档与基线层面的验收**，**不是**任何 Domain 的 Domain-Level Acceptance，
 **不关闭**任何 G-1…G-5、D-2…D-5、历史库存完整性或 Release Blocker。
 
-**实现完成但缺 Domain-Level Acceptance**：Master & Engineering、Manufacturing & Quality、
-Inventory & Warehouse、Finance Operations。
+**已验收但缺 Domain-Level Acceptance**：无（2026-11-13 刷新；四个域已于 2026-11-12 / 11-13 补齐）。
 
-**待验收**：Procurement & Outsourcing（`NOT READY`）。
+**待验收**：无域级待验收项（Procurement & Outsourcing 已于 2026-11-11 签发）。
 
-**未实施**：W11-B Credit Evaluation Foundation、W11-C Multi-Scorer / Rating Application、
-W11-D Reconciliation / Recalculation；Accounting & Analytics 的 Smart Accounting 规则平台、
-Cash Flow、Report Designer、Management Accounting；Platform Generic Workflow 执行引擎。
+**未实施（2026-11-13 刷新）**：**Platform Generic Workflow 执行引擎**（B3122 驱动）——
+Platform 无 Domain Closure Requirement / Design，尚未开工。
+本节此前登记的其余七项（W11-B / W11-C / W11-D；Accounting & Analytics 的 Smart Accounting 规则平台、
+Cash Flow、Report Designer、Management Accounting）已分别由
+Sales & Customer 域 §60 整改轮（CAP-34 / CAP-36）与 Accounting & Analytics 域 §53
+（AA-W1..AA-W7 全包实施，43 项 `COVERED` / 1 项 `OUT_OF_SCOPE` = AA-31 多币种）闭合。
 
 ### 35.6 W11 依赖 DAG 与 W11-A 包级 Acceptance 就绪度
 
