@@ -8,6 +8,7 @@
 // 证据链不依赖任何其它 campaign 的 worker 行为，夹具动作名也带 SALES_CUSTOMER
 // 前缀。
 
+import { existsSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
@@ -142,7 +143,25 @@ async function invoke(handler, command) {
   }
 }
 
+// A FILE gate releases the contender. Both contenders wait for the same file
+// and are released by the same write, so they enter the contested code at the
+// same instant.
+//
+// The L0 coordination gate is deliberately NOT used to force the contention:
+// the production transaction() helper takes that gate FIRST, so holding it
+// would queue the two contenders BEHIND THE CONTROL instead of letting them
+// contend with each other — and the loser would then sit on a lock until the
+// server's lock-wait timeout, which is a test artifact, not a race outcome.
+async function waitForGateFile(gatePath, timeoutMs = 60_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!existsSync(gatePath)) {
+    if (Date.now() >= deadline) throw new Error('SALES_CUSTOMER_RACE_GATE_TIMEOUT');
+    await new Promise((done) => setTimeout(done, 5));
+  }
+}
+
 async function execute(command) {
+  if (command.gatePath) await waitForGateFile(String(command.gatePath));
   if (command.action === 'register') {
     return { dialect: db.dialect, connectionId: connectionId(), threadId: threadId(), processId: process.pid };
   }

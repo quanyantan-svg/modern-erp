@@ -27,6 +27,8 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { dirname, join, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
@@ -198,31 +200,34 @@ describe('Sales & Customer domain real MySQL concurrency invariants (7 races)', 
     const left = new RaceWorker(`${label}-left`);
     const right = new RaceWorker(`${label}-right`);
     const control = new RaceWorker(`${label}-control`);
-    let held = false;
     try {
       const registrations = await Promise.all([
         left.run({ action: 'register' }), right.run({ action: 'register' }), control.run({ action: 'register' }),
       ]);
       assert.equal(new Set(registrations.map((row) => row.connectionId)).size, 3,
         `${label}: three independent sessions are required`);
+      // The FILE gate releases both contenders at the same instant. Holding
+      // the production L0 coordination gate instead would queue them behind
+      // the control rather than against each other, and the loser would then
+      // sit on a lock until the server's lock-wait timeout — a test artifact,
+      // not a race outcome.
+      let gatePath = null;
       if (inCampaign) {
-        await control.run({ action: 'hold-gate' });
-        held = true;
+        gatePath = join(mkdtempSync(join(tmpdir(), 'sales-customer-race-gate-')), 'gate');
       }
       const pending = [
-        left.run(commandFor('left')),
-        right.run(commandFor('right')),
+        left.run({ ...commandFor('left'), gatePath }),
+        right.run({ ...commandFor('right'), gatePath }),
       ];
       let contention = null;
       if (inCampaign) {
-        // The contenders must be observably BLOCKED at the same time.
+        // The contenders must be observably BLOCKED against each other.
         // Without this the race could degenerate into two sequential calls.
         const threadIds = [registrations[0].threadId, registrations[1].threadId];
         assert.ok(threadIds.every((value) => Number.isInteger(Number(value))),
           `${label}: every contender must report its performance_schema thread id`);
+        writeFileSync(gatePath, 'go\n');
         contention = await waitForBothContendersBlocked(db, threadIds);
-        await control.run({ action: 'release-gate' });
-        held = false;
       }
       const outcomes = await Promise.all(pending);
       // The contention verdict is asserted AFTER the outcomes are known, so a
@@ -245,7 +250,6 @@ describe('Sales & Customer domain real MySQL concurrency invariants (7 races)', 
       }
       return { outcomes, negativeOutcome, stderr: `${left.stderr}|${right.stderr}` };
     } finally {
-      if (held) { try { await control.run({ action: 'release-gate' }); } catch { /* already released */ } }
       await Promise.all([left.close(), right.close(), control.close()]);
     }
   }
@@ -288,7 +292,7 @@ describe('Sales & Customer domain real MySQL concurrency invariants (7 races)', 
    */
   async function waitForBothContendersBlocked(observer, threadIds) {
     const ids = threadIds.map((value) => Number(value));
-    for (let attempt = 0; attempt < 400; attempt += 1) {
+    for (let attempt = 0; attempt < 2000; attempt += 1) {
       const rows = observer.prepare(`SELECT REQUESTING_THREAD_ID waiter, BLOCKING_THREAD_ID blocker
         FROM performance_schema.data_lock_waits
         WHERE REQUESTING_THREAD_ID IN (?, ?) OR BLOCKING_THREAD_ID IN (?, ?)`).all(...ids, ...ids);
@@ -308,7 +312,7 @@ describe('Sales & Customer domain real MySQL concurrency invariants (7 races)', 
       }
       // The wait must not block this process's event loop: the HTTP server
       // that serves the suite's own fixture calls lives here.
-      await new Promise((done) => setTimeout(done, 25));
+      await new Promise((done) => setTimeout(done, 5));
     }
     return { observed: false, attempts: 400, waiters: [] };
   }
