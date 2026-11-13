@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { createDatabase } from './db.js';
+import { grantProductionApproverToWarehouse } from './test-utils/platform-sod-fixture.js';
 
 let baseUrl;
 let database;
@@ -333,6 +334,7 @@ test('扩展业务模块在全新数据库中完成迁移并可查询', async ()
 
 describe('Production Orders', () => {
   let adminToken;
+  let approverToken;
   let productId;
   let componentProductId;
   let bomId;
@@ -341,6 +343,10 @@ describe('Production Orders', () => {
   before(async () => {
     const loginResult = await login('admin', 'admin123');
     adminToken = loginResult.data.token;
+    // 生产工单的建单人与审批人必须不同（平台 SOD，PL-DEF-01）：准备第二位审批人。
+    grantProductionApproverToWarehouse(database);
+    const approverLogin = await login('warehouse', 'warehouse123');
+    approverToken = approverLogin.data.token;
     // Get a product for testing
     const productsRes = await fetch(`${baseUrl}/api/products`, {
       headers: { 'Authorization': `Bearer ${adminToken}` },
@@ -420,7 +426,7 @@ describe('Production Orders', () => {
       const transitionRes = await fetch(`${baseUrl}/api/production-orders/${orderId}/state`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${adminToken}`,
+          'Authorization': `Bearer ${target === 'APPROVED' ? approverToken : adminToken}`,
           'content-type': 'application/json',
         },
         body: JSON.stringify({ target }),

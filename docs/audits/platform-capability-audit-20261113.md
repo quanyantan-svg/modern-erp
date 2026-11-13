@@ -391,7 +391,7 @@
 
 | ID | 缺陷 | 位置 | 严重度 |
 |---|---|---|---|
-| `PL-DEF-01` | 生产订单审批**无自审批防护**（6 族中唯一缺口） | `server/modules/manufacturing-orders.js:164-169` | 高 |
+| `PL-DEF-01` | 生产订单审批**无自审批防护**（6 族中唯一缺口） | `server/modules/manufacturing-orders.js:164-169` | 高 | — **2026-11-14 已闭合**：平台 SOD 层接入生产工单族，种子规则 `SAME_PERSON_FORBIDDEN`；发起人自审批被拒（409 `PLATFORM_SOD_RULE_VIOLATION`）。连带：M&Q 域 7 个测试文件的证据更新（生产工单审批须由非创建者执行），以及新增待裁定项 `PL-DEC-04`（种子角色模型里 `PRODUCTION_ORDERS_APPROVE` 只授予 ADMIN） |
 | `PL-DEF-02` | 信用域从销售域导入 `actorHas`，形成跨域原语耦合 | `server/modules/credit-scope.js:2` | 中 |
 | `PL-DEF-03` | `/api/approvals/…` 下禁止任何变更方法（测试锁定），通用引擎须换前缀 | `server/mobile-approval-center.test.js:166` | 约束（须遵守） |
 | `PL-DEF-04` | 生命周期 / 归档借用管理员权限 `USERS_MANAGE` | `server/modules/lifecycle-engine.js:520`、`:535`、`:559`、`:609`、`:664`、`:930` | 中 |

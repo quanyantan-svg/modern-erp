@@ -5,6 +5,7 @@ import { audit } from './lib/audit.js';
 import { adjustInventory, adjustInventoryAtPosition, resolveCanonicalPosition, setInventoryQuantity } from './lib/stock.js';
 import { listNotifications, markNotificationRead } from './modules/platform-notifications.js';
 import { createWorkflow, listWorkflows } from './modules/platform-workflows.js';
+import { assertApprovalSod } from './modules/platform-sod.js';
 import {
   getWorkflowInstance, getWorkflowTemplate, handleActivateWorkflowBinding, handleCompleteWorkflowTask,
   handleCreateWorkflowTemplate, handleCreateWorkflowVersion, handlePublishWorkflowVersion,
@@ -5357,6 +5358,8 @@ async function changePurchaseOrderState(db, req, res, actor, orderId, action) {
   } else if (action === 'approve') {
     if (order.status !== 'SUBMITTED') throw new HttpError(409, '只有待审核订单可以处理');
     if (order.creator_id === actor.id) throw new HttpError(409, '创建人不能审核自己的订单');
+    // Platform SOD —— 接在既有自审批防护之后（Design §32.4.3），既有族行为逐字不变。
+    assertApprovalSod(db, { businessType: 'PURCHASE_ORDER', businessId: orderId, actorId: actor.id });
     db.prepare("UPDATE purchase_orders SET status='APPROVED',reviewer_id=?,reviewed_at=?,updated_at=? WHERE id=?").run(actor.id, now, now, orderId);
     audit(db, actor.id, 'APPROVE', 'PURCHASE_ORDER', orderId, `审核通过采购订单 ${order.order_no}`);
   } else {
@@ -6095,6 +6098,8 @@ async function approveAccountingVoucher(db, req, res, actor, voucherId) {
   if (voucher.creator_id === actor.id) {
     throw new HttpError(403, '不能审核自己录入的凭证');
   }
+  // Platform SOD —— 接在既有自审批防护之后（Design §32.4.3），既有族行为逐字不变。
+  assertApprovalSod(db, { businessType: 'ACCOUNTING_VOUCHER', businessId: voucherId, actorId: actor.id });
 
   const now = new Date().toISOString();
 

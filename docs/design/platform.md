@@ -336,7 +336,7 @@ RUNNING ──────────────► COMPLETED          │
 | 2 | **审批节点解析不到参与人时失败即拒绝**（409 `PLATFORM_WORKFLOW_PARTICIPANT_UNRESOLVED`）。静默跳过审批是正确性事故；知会节点（`NOTIFY` / `CC`）无参与人时跳过节点，不阻塞流程 | Requirement §36.3.1「参与人解析规则必须物化」；AGENTS.md §6 fail closed |
 | 3 | **只有被指派的参与人可以处理任务**（403 `PLATFORM_WORKFLOW_TASK_NOT_ASSIGNED`）。权限码只说明「可以做这类事」，不代表可以做**别人**的事 | §32.3.6 的权限语义 |
 | 4 | **`row_version` 乐观锁是纵深防御**：写事务被闸门串行化（SQLite `BEGIN IMMEDIATE`；MySQL 全局闸门行），因此并发方的**真实可达**结果是「任务已被处理」（409 `PLATFORM_WORKFLOW_TASK_ALREADY_COMPLETED`）；`PLATFORM_WORKFLOW_TASK_CONFLICT` 是绕过闸门的写者才会触发的分支 | §32.3.3；`server/db.js:2453` 的 `transaction()` |
-| 5 | **SOD 判定原语与引擎同批落地**：`server/modules/platform-sod.js` 提供 `evaluateSodCompliance` / `assertSodCompliance` 与 initiator resolver 注册表。§32.3.1 第③步要求引擎调用它，而 AGENTS.md §6 禁止同一原语出现第二份实现 → 判定原语必须先于引擎存在。**规则的维护面（CRUD）与既有 6 族的接线不在本单元**。引擎**不得引用**该模块的错误码：它调用判定原语、读取**结构化判定结果**，并以自己的对外码 `PLATFORM_WORKFLOW_SOD_REJECTED` 表达拒绝 | §32.3.1 第③步；AGENTS.md §6；`docs/decisions/cross-domain-error-code-policy-20261112.md` |
+| 5 | **SOD 判定原语与引擎同批落地**：`server/modules/platform-sod.js` 提供 `evaluateSodCompliance` / `assertApprovalSod` 与 initiator resolver 注册表。§32.3.1 第③步要求引擎调用它，而 AGENTS.md §6 禁止同一原语出现第二份实现 → 判定原语必须先于引擎存在。**规则的维护面（CRUD）仍不在本单元**；**既有 6 族的接线已在本单元落地**（§32.4.6）。引擎**不得引用**该模块的错误码：它调用判定原语、读取**结构化判定结果**，并以自己的对外码 `PLATFORM_WORKFLOW_SOD_REJECTED` 表达拒绝 | §32.3.1 第③步；AGENTS.md §6；`docs/decisions/cross-domain-error-code-policy-20261112.md` |
 | 6 | **SOD 规则一旦产生过判定记录即不可删除**：`sod_evaluations.rule_id` 的外键为 NO ACTION，判定记录是历史证据 → 规则只能**停用**（`status='INACTIVE'`），不能物理删除。规则的维护面必须只暴露停用，不暴露删除 | `server/migrations/platform-domain-schema.js` 的 `sod_evaluations` 定义 |
 
 **API 路径前缀**：`/api/platform/workflow-templates` / `-versions` / `-bindings` / `-instances` / `-tasks` / `-test-runs`。
@@ -428,6 +428,45 @@ SOD 求值必须在**审批决策点**被调用。既有 6 族的决策点分布
 | `SOD_RULES_MANAGE` | 写规则、启用 / 停用 |
 
 规则变更写 `audit_logs`（`action` ∈ `SOD_RULE_CREATE` / `SOD_RULE_UPDATE` / `SOD_RULE_DISABLE`，`entity_type='SOD_RULE'`）。每次求值写 `sod_evaluations`（含 PASS 与违规）。
+
+#### 32.4.6 SOD 接线实施结果（2026-11-14）
+
+既有 6 族 + 信用特批共 **7 个审批决策点**已接入 SOD 判定原语。接线位置严格遵循 §32.4.3：**既有自审批防护之后**接入，
+既有族的状态码与文案**逐字不变**；生产工单族没有既有防护，由平台层唯一把关。
+
+| # | 族 | 决策点 | 既有防护 | 接入后 |
+|---|---|---|---|---|
+| 1 | `SALES_ORDER` | `server/modules/sales-orders.js:838`（事务内） | 409 创建人不能审批自己的订单 | 既有防护先抛错；SOD 为第二层 |
+| 2 | `PURCHASE_ORDER` | `server/app.js:5359` | 409 创建人不能审核自己的订单 | 同上 |
+| 3 | `PURCHASE_REQUISITION` | `server/modules/planning-documents.js` 事务内 | 409 创建人不能审核自己的请购单 | 同上 |
+| 4 | `INVENTORY_CHECK` | `server/modules/inventory-stocktake.js:301`（事务内） | 409 盘点单创建人不能审批自己的单据 | 同上 |
+| 5 | `ACCOUNTING_VOUCHER` | `server/app.js:6096` | **403** 不能审核自己录入的凭证 | 同上 |
+| 6 | `PRODUCTION_ORDER` | `server/modules/manufacturing-orders.js` 的 `APPROVED` 分支（事务内） | **无** | **平台层是唯一闸门（PL-DEF-01 闭合）** |
+| 7 | `CREDIT_SPECIAL_APPROVAL` | `server/modules/credit-special-approval.js` 事务内 | 409 申请人与审批人必须分离 | 同上 |
+
+**发起人解析**（§32.4.1 的映射表）：6 族统一为 `<表>.creator_id`；信用特批的请求人存于 `audit_logs`
+（`action='REQUEST'`），由该族自己写入。
+
+**种子规则只有一条**：生产工单族 `SAME_PERSON_FORBIDDEN` / `REJECT`。
+其余 6 族**不设规则** —— 它们各自已有自审批防护，平台层不重复设规则，
+因此既有族的**行为与数据量都不变**（不会为每次审批多写一行判定记录）。
+其余族若将来需要 `SAME_ROLE` / `MIN_APPROVERS` 约束，由规则的维护面创建（§32.4.4，本单元之外）。
+
+**`SAME_PERSON_FORBIDDEN` 在发起人解析不出来时失败即拒绝** —— 静默放行等于没有职责分离。
+
+**跨域影响（必须登记，AGENTS.md §4.6）**：闭合 `PL-DEF-01` 改变了 **Manufacturing & Quality** 域的
+生产工单审批行为 —— 该族此前允许创建者审批自己提交的工单。既有 M&Q 证据中有 **7 个测试文件**
+（`app.test.js`、`manufacturing-quality-domain.test.js`、`manufacturing-stabilization.test.js`、
+`phase-d-hfix.test.js`、`v13-phase4-production-integrity.test.js`、`v13-phase6c-manufacturing-execution.test.js`、
+`v23-manufacturing-quality-closure.test.js`）依赖了这个漏洞。它们已改为**由非创建者审批**
+（测试库内为 WAREHOUSE 角色追加 `PRODUCTION_ORDERS_APPROVE`，**不改动产品的种子角色模型**）。
+M&Q 域既有验收记录的当前有效性须在 Platform 域级 Acceptance 轮按 §4.6 复核登记。
+
+**待业务所有者裁定（`PL-DEC-04`）**：种子角色模型里 `PRODUCTION_ORDERS_APPROVE` **只授予 ADMIN**。
+关闭自审批缺口后，**建单人与审批人必须不同** —— 于是默认部署下"管理员建的工单无人可批"。
+候选处置：① 授予 `role-warehouse`（它已持有 `PRODUCTION_ORDERS_VIEW` 与全部生产物料执行权限）；
+② 授予 `role-reviewer`；③ 新增第 8 个系统角色「生产主管」；④ 维持种子角色不变，由部署方经角色管理授予
+（测试走的就是这条路径）。本单元**不擅自改动种子角色模型**。
 
 ### 32.5 Organization Scope 设计
 

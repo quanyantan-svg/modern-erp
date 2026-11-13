@@ -33,8 +33,9 @@ export const SOD_RESOLUTIONS = Object.freeze(['REJECT', 'ESCALATE']);
 /**
  * 发起人解析注册表：business_type → (db, businessId) => userId | null。
  *
- * 6 个既有审批族的发起人列统一为 `creator_id`；信用特批的请求人存于 audit_logs，
- * 由接线方各自注册解析器。
+ * 6 个既有审批族的发起人列统一为 `creator_id`；信用特批的请求人存于 audit_logs。
+ * 这张映射表是 **Platform 域的合同**（Design §32.4.1 逐行列明），因此集中登记在
+ * Platform 自己的模块里 —— 业务域只提供文档 id，不参与"谁是发起人"的判定。
  */
 const initiatorResolvers = new Map();
 
@@ -46,6 +47,32 @@ export function registerSodInitiatorResolver(businessType, resolver) {
 export function listSodInitiatorResolverTypes() {
   return [...initiatorResolvers.keys()].sort();
 }
+
+/** 以文档表的 creator_id 作为发起人（既有 6 个审批族的统一形态）。 */
+function creatorIdResolver(table) {
+  return (db, documentId) => {
+    const row = db.prepare(`SELECT creator_id FROM ${table} WHERE id=?`).get(String(documentId));
+    return row ? row.creator_id : null;
+  };
+}
+
+/*
+ * Design §32.4.1 的发起人映射表。信用特批的表中**没有请求人列** ——
+ * 请求人只存在于 audit_logs（action='REQUEST'），由该模块自己写入。
+ */
+registerSodInitiatorResolver('SALES_ORDER', creatorIdResolver('sales_orders'));
+registerSodInitiatorResolver('PURCHASE_ORDER', creatorIdResolver('purchase_orders'));
+registerSodInitiatorResolver('PURCHASE_REQUISITION', creatorIdResolver('purchase_requisitions'));
+registerSodInitiatorResolver('INVENTORY_CHECK', creatorIdResolver('inventory_checks'));
+registerSodInitiatorResolver('ACCOUNTING_VOUCHER', creatorIdResolver('accounting_vouchers'));
+registerSodInitiatorResolver('PRODUCTION_ORDER', creatorIdResolver('production_orders'));
+registerSodInitiatorResolver('CREDIT_SPECIAL_APPROVAL', (db, approvalId) => {
+  const row = db.prepare(
+    "SELECT user_id FROM audit_logs WHERE entity_type='CREDIT_SPECIAL_APPROVAL' AND action='REQUEST'"
+    + ' AND id=(SELECT audit_id FROM credit_special_approval WHERE id=?)',
+  ).get(String(approvalId));
+  return row ? row.user_id : null;
+});
 
 function resolveInitiator(db, businessType, businessId) {
   const resolver = initiatorResolvers.get(String(businessType));
@@ -71,7 +98,8 @@ export function evaluateSodRule(rule, context) {
   const { initiatorId, actorId, actorRole, approvedCount } = context;
   switch (rule.constraint_type) {
     case 'SAME_PERSON_FORBIDDEN': {
-      if (!initiatorId) return { violated: false, evaluable: false, reason: '无法解析发起人' };
+      // 发起人解析不出来时**失败即拒绝**：静默放行等于没有职责分离。
+      if (!initiatorId) return { violated: true, evaluable: false, reason: '无法解析发起人' };
       return { violated: initiatorId === String(actorId), evaluable: true };
     }
     case 'SAME_ROLE_FORBIDDEN': {
@@ -154,6 +182,34 @@ export function assertSodCompliance(db, context) {
     error.sodOutcome = outcome;
     throw error;
   }
+  return outcome;
+}
+
+/**
+ * 审批决策点的职责分离断言（既有 7 个族的接线入口）。
+ *
+ * 调用位置约定（Design §32.4.3）：
+ *   - **既有自审批防护之后**接入 → 既有防护先抛错并返回，既有族的状态码与文案逐字不变；
+ *   - 没有既有防护的族（当前只有 PRODUCTION_ORDER）→ 本函数是唯一闸门。
+ *
+ * 判定必须在**事务内**进行：权威发起人在事务内从数据库重读，不使用请求方传入的标识。
+ * 被拒绝时事务回滚，判定记录随之消失 —— 这与既有 5 族自审批拒绝**不留审计行**的现状一致；
+ * 若要为 SOD 拒绝补事务外审计，须按 `auditBusinessRejection` 的模式另行实现。
+ *
+ * @param {object} db
+ * @param {{businessType: string, businessId: string, actorId: string, action?: string, approvedCount?: number}} context
+ */
+export function assertApprovalSod(db, { businessType, businessId, actorId, action = 'APPROVE', approvedCount = undefined }) {
+  const outcome = evaluateSodCompliance(db, { businessType, businessId, action, actorId, approvedCount });
+  if (outcome.decision === 'REJECT') {
+    const error = new HttpError(409, '职责分离规则不允许本次操作', {
+      code: 'PLATFORM_SOD_RULE_VIOLATION',
+      ruleCode: outcome.rule?.code ?? null,
+    });
+    error.sodOutcome = outcome;
+    throw error;
+  }
+  writeSodEvaluations(db, outcome.evaluations);
   return outcome;
 }
 

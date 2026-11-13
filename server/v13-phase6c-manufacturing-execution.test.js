@@ -7,6 +7,7 @@ import { id } from './db.js';
 import { createTempDb } from './test-utils/temp-db.js';
 import { APPROVAL_DOCUMENT_TYPES } from './modules/approvals.js';
 import { deriveProductionCost } from './modules/manufacturing-execution.js';
+import { grantProductionApproverToWarehouse } from './test-utils/platform-sod-fixture.js';
 
 let handle; let db; let server; let baseUrl; let admin; let warehouse; let sales; let accounting;
 async function request(path, { token = admin, method = 'GET', body, headers = {} } = {}) {
@@ -18,6 +19,8 @@ async function login(username, password) { const result = await request('/api/au
 before(async () => {
   handle = createTempDb({ label: 'v13-p6c' }); db = handle.db;
   server = createServer(createApp(db, { distDir: resolve('dist') })); await new Promise((done) => server.listen(0, '127.0.0.1', done)); baseUrl = `http://127.0.0.1:${server.address().port}`;
+  // 生产工单的建单人与审批人必须不同（平台 SOD，PL-DEF-01）：准备第二位审批人。
+  grantProductionApproverToWarehouse(db);
   admin = await login('admin', 'admin123'); warehouse = await login('warehouse', 'warehouse123'); sales = await login('sales', 'sales123'); accounting = await login('accounting', 'accounting123');
   const now = new Date().toISOString();
   for (const [pid, code, cost] of [['p6c-fg','X100-FG',0],['p6c-pcb','X100-PCB',20000],['p6c-case','X100-CASE',8000],['p6c-psu','X100-PSU',12000]]) db.prepare("INSERT INTO products(id,code,name,category,unit,price_cents,stock_quantity,active,created_at,updated_at,standard_manufacturing_cost_cents) VALUES(?,?,?,'测试','件',0,0,1,?,?,?)").run(pid, code, code, now, now, cost);
@@ -41,7 +44,7 @@ describe('V1.3 Phase 6C manufacturing execution, yield, capacity and analytical 
 
   test('routing and work-center rates snapshot at start; baseline is integer cents and immutable', async () => {
     const created = await request('/api/production-orders', { method: 'POST', body: { productId: 'p6c-fg', bomId: 'p6c-bom', routingId: 'p6c-route', quantity: 100, plannedStart: '2026-09-24' } }); assert.equal(created.status, 200, created.data.error); orderId = created.data.id;
-    for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED']) { const transition = await request(`/api/production-orders/${orderId}/state`, { method: 'POST', body: { target } }); assert.equal(transition.status, 200, transition.data.error); }
+    for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED']) { const transition = await request(`/api/production-orders/${orderId}/state`, { method: 'POST', body: { target }, token: target === 'APPROVED' ? warehouse : undefined }); assert.equal(transition.status, 200, transition.data.error); }
     assert.equal((await request(`/api/production-orders/${orderId}`, { method: 'POST', body: { action: 'start' } })).status, 200);
     operations = db.prepare('SELECT * FROM production_order_operations WHERE production_order_id=? ORDER BY sequence_no').all(orderId); assert.equal(operations.length, 3); assert.equal(operations[0].labor_rate_cents_per_hour, 6000); assert.deepEqual(operations.map((x) => x.planned_date), ['2026-09-24','2026-09-25','2026-09-26']);
     const baseline = db.prepare('SELECT * FROM production_cost_baselines WHERE production_order_id=?').get(orderId); assert.equal(baseline.standard_material_cents, 4000000); assert.ok(Number.isInteger(baseline.standard_total_cents));

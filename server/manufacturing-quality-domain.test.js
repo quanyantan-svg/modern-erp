@@ -24,21 +24,26 @@ import { join, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { createDatabase } from './db.js';
+import { grantProductionApproverToWarehouse } from './test-utils/platform-sod-fixture.js';
 
 let baseUrl;
 let database;
 let server;
 let tempDir;
 let adminAuth;
+let approverAuth;
 let productCounter = 0;
 
 before(async () => {
   tempDir = mkdtempSync(join(tmpdir(), 'modern-erp-mq-test-'));
   database = createDatabase(join(tempDir, 'erp.db'));
+  // 生产工单的建单人与审批人必须不同（平台 SOD，PL-DEF-01）：准备第二位审批人。
+  grantProductionApproverToWarehouse(database);
   server = createServer(createApp(database, { distDir: resolve('dist') }));
   await new Promise((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
   adminAuth = (await login('admin', 'admin123')).data.token;
+  approverAuth = (await login('warehouse', 'warehouse123')).data.token;
 });
 
 after(async () => {
@@ -115,7 +120,8 @@ describe('V18 Production Order state machine', () => {
     assert.equal(create.status, 200, JSON.stringify(create.data));
     const orderId = create.data.id;
     for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED']) {
-      const r = await api('POST', `/api/production-orders/${orderId}/state`, adminAuth, { target });
+      // 审批由非创建者执行（平台 SOD：创建者不得审批自己提交的生产工单）。
+      const r = await api('POST', `/api/production-orders/${orderId}/state`, target === 'APPROVED' ? approverAuth : adminAuth, { target });
       assert.equal(r.status, 200, `transition ${target}: ${JSON.stringify(r.data)}`);
     }
     const start = await api('POST', `/api/production-orders/${orderId}/state`, adminAuth, { target: 'IN_PROGRESS' });
@@ -157,7 +163,7 @@ describe('V18 Material Supplement', () => {
     const create = await api('POST', '/api/production-orders', adminAuth, { productId: setup.productId, quantity: 5 });
     const orderId = create.data.id;
     for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED', 'IN_PROGRESS']) {
-      await api('POST', `/api/production-orders/${orderId}/state`, adminAuth, { target });
+      await api('POST', `/api/production-orders/${orderId}/state`, target === 'APPROVED' ? approverAuth : adminAuth, { target });
     }
     // Top up stock so supplement can be confirmed
     await api('POST', '/api/inventory-adjustments', adminAuth, {
@@ -176,7 +182,7 @@ describe('V18 Material Supplement', () => {
     const create = await api('POST', '/api/production-orders', adminAuth, { productId: setup.productId, quantity: 1 });
     const orderId = create.data.id;
     for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED', 'IN_PROGRESS']) {
-      await api('POST', `/api/production-orders/${orderId}/state`, adminAuth, { target });
+      await api('POST', `/api/production-orders/${orderId}/state`, target === 'APPROVED' ? approverAuth : adminAuth, { target });
     }
     const supplement = await api('POST', '/api/production-material-supplements', adminAuth, {
       productionOrderId: orderId, warehouseId: setup.warehouseId, reasonCode: 'INVALID', items: [{ productId: setup.componentId, quantity: 1 }],
@@ -192,7 +198,7 @@ describe('V18 Material Return Reason', () => {
     const create = await api('POST', '/api/production-orders', adminAuth, { productId: setup.productId, quantity: 1 });
     const orderId = create.data.id;
     for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED', 'IN_PROGRESS']) {
-      await api('POST', `/api/production-orders/${orderId}/state`, adminAuth, { target });
+      await api('POST', `/api/production-orders/${orderId}/state`, target === 'APPROVED' ? approverAuth : adminAuth, { target });
     }
     // Top up + issue
     await api('POST', '/api/inventory-adjustments', adminAuth, {
@@ -220,7 +226,7 @@ describe('V18 Batch Picking', () => {
       const id = c.data.id;
       ids.push(id);
       for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED', 'IN_PROGRESS']) {
-        await api('POST', `/api/production-orders/${id}/state`, adminAuth, { target });
+        await api('POST', `/api/production-orders/${id}/state`, target === 'APPROVED' ? approverAuth : adminAuth, { target });
       }
     }
     await api('POST', '/api/inventory-adjustments', adminAuth, {
@@ -251,7 +257,7 @@ describe('V18 Operation Plan + Scheduling', () => {
     const create = await api('POST', '/api/production-orders', adminAuth, { productId: setup.productId, quantity: 4 });
     const orderId = create.data.id;
     for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED', 'IN_PROGRESS']) {
-      await api('POST', `/api/production-orders/${orderId}/state`, adminAuth, { target });
+      await api('POST', `/api/production-orders/${orderId}/state`, target === 'APPROVED' ? approverAuth : adminAuth, { target });
     }
     const detail = await api('GET', `/api/production-orders/${orderId}`, adminAuth);
     assert.equal(detail.status, 200);
@@ -273,7 +279,7 @@ describe('V18 Operation Plan + Scheduling', () => {
     const create = await api('POST', '/api/production-orders', adminAuth, { productId: setup.productId, quantity: 2 });
     const orderId = create.data.id;
     for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED', 'IN_PROGRESS']) {
-      await api('POST', `/api/production-orders/${orderId}/state`, adminAuth, { target });
+      await api('POST', `/api/production-orders/${orderId}/state`, target === 'APPROVED' ? approverAuth : adminAuth, { target });
     }
     const schedule = await api('POST', `/api/production-orders/${orderId}/schedule`, adminAuth, { mode: 'FORWARD' });
     assert.equal(schedule.status, 200, JSON.stringify(schedule.data));
@@ -288,7 +294,7 @@ describe('V18 Operation Plan + Scheduling', () => {
     const create = await api('POST', '/api/production-orders', adminAuth, { productId: setup.productId, quantity: 2 });
     const orderId = create.data.id;
     for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED', 'IN_PROGRESS']) {
-      await api('POST', `/api/production-orders/${orderId}/state`, adminAuth, { target });
+      await api('POST', `/api/production-orders/${orderId}/state`, target === 'APPROVED' ? approverAuth : adminAuth, { target });
     }
     const schedule = await api('POST', `/api/production-orders/${orderId}/schedule`, adminAuth, { mode: 'BACKWARD' });
     assert.equal(schedule.status, 200, JSON.stringify(schedule.data));
@@ -327,7 +333,7 @@ describe('V18 Production Inspection execution', () => {
     const orderCreate = await api('POST', '/api/production-orders', adminAuth, { productId: setup.productId, quantity: 1 });
     const orderId = orderCreate.data.id;
     for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED']) {
-      await api('POST', `/api/production-orders/${orderId}/state`, adminAuth, { target });
+      await api('POST', `/api/production-orders/${orderId}/state`, target === 'APPROVED' ? approverAuth : adminAuth, { target });
     }
     for (const action of ['submit', 'approve', 'release']) assert.equal((await api('POST', `/api/production-orders/${orderId}/plan/${action}`, adminAuth)).status, 200);
     assert.equal((await api('POST', `/api/production-orders/${orderId}/state`, adminAuth, { target: 'IN_PROGRESS' })).status, 200);
@@ -368,7 +374,7 @@ describe('V18 Production Scan', () => {
     const create = await api('POST', '/api/production-orders', adminAuth, { productId: setup.productId, quantity: 1 });
     const orderId = create.data.id;
     for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED', 'IN_PROGRESS']) {
-      await api('POST', `/api/production-orders/${orderId}/state`, adminAuth, { target });
+      await api('POST', `/api/production-orders/${orderId}/state`, target === 'APPROVED' ? approverAuth : adminAuth, { target });
     }
     const detail = await api('GET', `/api/production-orders/${orderId}`, adminAuth);
     const rejected = await api('POST', '/api/production-scan/issue', adminAuth, {

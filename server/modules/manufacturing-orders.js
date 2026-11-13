@@ -17,6 +17,7 @@ import { resolveEffectiveBomForCaller } from './engineering-bom.js';
 import { snapshotManufacturingExecution, assertRoutedCompletion, deriveProductionCost } from './manufacturing-execution.js';
 import { assertFinancialPeriodsOpen, createSystemVoucher, postWipMovement } from './financial-inventory.js';
 import { productionNetReceived, productionRequirementSummary } from './production-workflow.js';
+import { assertApprovalSod } from './platform-sod.js';
 
 const EPS = 1e-9;
 const PO_STATUS = Object.freeze({
@@ -163,6 +164,9 @@ function transitionOrder(db, actor, order, target, body) {
   }
   if (target === 'APPROVED') {
     allow(actor, 'PRODUCTION_ORDERS_APPROVE');
+    // Platform SOD —— 生产工单族**没有**既有自审批防护（PL-DEF-01），
+    // 本层是该族唯一的职责分离闸门：发起人不得审批自己提交的生产工单。
+    assertApprovalSod(db, { businessType: 'PRODUCTION_ORDER', businessId: order.id, actorId: actor.id });
     db.prepare("UPDATE production_orders SET status='APPROVED',approved_by=?,approved_at=?,updated_at=?,rejection_reason='' WHERE id=?")
       .run(actor.id, now, now, order.id);
     audit(db, actor.id, 'APPROVE', 'PRODUCTION_ORDER', order.id, `审核生产工单 ${order.order_no}`);

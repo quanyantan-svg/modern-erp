@@ -9,6 +9,7 @@ import { assertGroupScope, currentCommercialExtension, lockSuffix, requireSalesP
 import { lifecycleArchiveFilter } from './lifecycle-engine.js';
 import { quantityToMicros, toleranceBoundsMicros } from './sales-delivery-source.js';
 import { authorizeSalesPrepaymentGateWithPlan, discoverSalesPrepaymentGatePlan } from './sales-prepayment-gate.js';
+import { assertApprovalSod } from './platform-sod.js';
 import { assertCreditAllowsBusinessAction, lockCreditPrepaymentParents } from './credit-check.js';
 import { resolveRecognitionPolicy } from './finance-recognition-policy.js';
 import { isGateRetryAdmissionExpired, startGateRetryAdmission } from './sales-gate-retry-admission.js';
@@ -836,6 +837,9 @@ function approveSalesOrder(db, res, actor, orderId, body, key, operation, finger
         if (!order) throw new HttpError(404, '销售订单不存在');
         if (order.status !== 'SUBMITTED') throw new HttpError(409, '只有待审批订单可以处理');
         if (order.creator_id === actor.id) throw new HttpError(409, '创建人不能审批自己的订单');
+        // Platform SOD —— 接在**既有自审批防护之后**（Design §32.4.3）：
+        // 既有族的状态码与文案逐字不变；本层为 SAME_ROLE / MIN_APPROVERS 等其它约束留出接缝。
+        assertApprovalSod(db, { businessType: 'SALES_ORDER', businessId: orderId, actorId: actor.id });
         if (order.sales_group_id) {
           assertGroupScope(db, actor, {
             salesGroupId: order.sales_group_id,

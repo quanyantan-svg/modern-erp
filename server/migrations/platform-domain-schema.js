@@ -231,8 +231,9 @@ export function migratePlatformDomainSchema(db) {
       constraint_type TEXT NOT NULL CHECK(constraint_type IN ('SAME_PERSON_FORBIDDEN','SAME_ROLE_FORBIDDEN','SAME_DEPARTMENT_FORBIDDEN','MIN_APPROVERS')),
       resolution TEXT NOT NULL CHECK(resolution IN ('REJECT','ESCALATE')),
       escalate_to_role TEXT,
+      min_approved_count INTEGER,
       status TEXT NOT NULL CHECK(status IN ('ACTIVE','INACTIVE')),
-      created_by TEXT NOT NULL REFERENCES users(id),
+      created_by TEXT REFERENCES users(id),
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -362,6 +363,58 @@ export function migratePlatformDomainSchema(db) {
   addColumn(db, 'ALTER TABLE audit_logs ADD COLUMN request_id TEXT');
   addColumn(db, 'ALTER TABLE audit_logs ADD COLUMN before_json TEXT');
   addColumn(db, 'ALTER TABLE audit_logs ADD COLUMN after_json TEXT');
+
+  // 既有库补齐 sod_rules 的 MIN_APPROVERS 阈值列（新建库已含该列，重复添加会被忽略）。
+  addColumn(db, 'ALTER TABLE sod_rules ADD COLUMN min_approved_count INTEGER');
+
+  /*
+   * sod_rules.created_by 允许为空：规则可以是**系统种子**的（没有人工创建者）。
+   * 迁移时点 users 表还没有播种（用户的种子在演示数据阶段），因此系统种子规则不能
+   * 引用一个尚不存在的用户。早期版本该列为 NOT NULL，需要重建该表。
+   */
+  const sodRuleCreator = db.prepare('PRAGMA table_info(sod_rules)').all()
+    .find((column) => column.name === 'created_by');
+  if (sodRuleCreator && sodRuleCreator.notnull === 1) {
+    db.exec(`
+      CREATE TABLE sod_rules_rebuilt (
+        id TEXT PRIMARY KEY NOT NULL,
+        code TEXT NOT NULL UNIQUE,
+        business_type TEXT NOT NULL,
+        action TEXT NOT NULL,
+        constraint_type TEXT NOT NULL CHECK(constraint_type IN ('SAME_PERSON_FORBIDDEN','SAME_ROLE_FORBIDDEN','SAME_DEPARTMENT_FORBIDDEN','MIN_APPROVERS')),
+        resolution TEXT NOT NULL CHECK(resolution IN ('REJECT','ESCALATE')),
+        escalate_to_role TEXT,
+        min_approved_count INTEGER,
+        status TEXT NOT NULL CHECK(status IN ('ACTIVE','INACTIVE')),
+        created_by TEXT REFERENCES users(id),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO sod_rules_rebuilt(id, code, business_type, action, constraint_type, resolution,
+        escalate_to_role, min_approved_count, status, created_by, created_at, updated_at)
+        SELECT id, code, business_type, action, constraint_type, resolution,
+          escalate_to_role, min_approved_count, status, created_by, created_at, updated_at FROM sod_rules;
+      DROP TABLE sod_rules;
+      ALTER TABLE sod_rules_rebuilt RENAME TO sod_rules;
+    `);
+  }
+
+  /*
+   * 种子规则：**只有生产工单族**。
+   *
+   * 其余 6 个族各自已有自审批防护（销售订单 / 采购订单 / 请购单 / 库存盘点 / 会计凭证 /
+   * 信用特批），平台层不再重复设规则 —— 这样既不改变既有族的任何行为，也不为每次审批
+   * 产生判定记录行。生产工单族此前**没有**自审批防护（PL-DEF-01），由平台层补齐。
+   */
+  db.prepare(
+    "INSERT OR IGNORE INTO sod_rules(id, code, business_type, action, constraint_type, resolution,"
+    + ' escalate_to_role, min_approved_count, status, created_by, created_at, updated_at)'
+    + ' VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+  ).run(
+    'sod-production-order-same-person', 'SOD-PRODUCTION-ORDER-SAME-PERSON', 'PRODUCTION_ORDER', 'APPROVE',
+    'SAME_PERSON_FORBIDDEN', 'REJECT', null, null, 'ACTIVE', null,
+    new Date().toISOString(), new Date().toISOString(),
+  );
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS ix_notifications_user ON notifications(user_id);

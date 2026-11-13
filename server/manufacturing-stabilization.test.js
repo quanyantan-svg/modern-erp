@@ -6,12 +6,14 @@ import { join, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { createDatabase, PERMISSIONS, id } from './db.js';
+import { grantProductionApproverToWarehouse } from './test-utils/platform-sod-fixture.js';
 
 let baseUrl;
 let database;
 let server;
 let tempDir;
 let adminToken;
+let approverToken;
 let salesToken;
 
 async function request(path, { token = adminToken, method = 'GET', body } = {}) {
@@ -44,7 +46,9 @@ before(async () => {
   server = createServer(createApp(database, { distDir: resolve('dist') }));
   await new Promise((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
+  grantProductionApproverToWarehouse(database);
   adminToken = await login('admin', 'admin123');
+  approverToken = await login('warehouse', 'warehouse123');
   salesToken = await login('sales', 'sales123');
 });
 
@@ -151,7 +155,7 @@ describe('Production order core hardening', () => {
     const response = await request('/api/production-orders', { method: 'POST', body: { productId: 'product-001', bomId: bom.data.id, quantity: 5, plannedStart: '2026-09-02' } });
     assert.equal(response.status, 200, response.data.error);
     for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED']) {
-      const transition = await request(`/api/production-orders/${response.data.id}/state`, { method: 'POST', body: { target } });
+      const transition = await request(`/api/production-orders/${response.data.id}/state`, { method: 'POST', body: { target }, token: target === 'APPROVED' ? approverToken : undefined });
       assert.equal(transition.status, 200, transition.data.error);
     }
     return response.data.id;

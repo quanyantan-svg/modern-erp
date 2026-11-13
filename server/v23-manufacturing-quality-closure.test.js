@@ -22,12 +22,14 @@ import { join, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { createDatabase } from './db.js';
+import { grantProductionApproverToWarehouse } from './test-utils/platform-sod-fixture.js';
 
 let baseUrl;
 let database;
 let server;
 let tempDir;
 let adminAuth;
+let approverAuth;
 let counter = 0;
 
 before(async () => {
@@ -42,6 +44,10 @@ before(async () => {
     body: JSON.stringify({ username: 'admin', password: 'admin123' }),
   });
   adminAuth = (await response.json()).token;
+  // 生产工单的建单人与审批人必须不同（平台 SOD，PL-DEF-01）：准备第二位审批人。
+  grantProductionApproverToWarehouse(database);
+  const approverResponse = await fetch(`${baseUrl}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'warehouse', password: 'warehouse123' }) });
+  approverAuth = (await approverResponse.json()).token;
 });
 
 after(async () => {
@@ -103,7 +109,7 @@ async function createReleasedOrder(setup, quantity = 10) {
   assert.equal(created.status, 200, JSON.stringify(created.data));
   const orderId = created.data.id;
   for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED', 'IN_PROGRESS']) {
-    const transition = await api('POST', `/api/production-orders/${orderId}/state`, adminAuth, { target });
+    const transition = await api('POST', `/api/production-orders/${orderId}/state`, target === 'APPROVED' ? approverAuth : adminAuth, { target });
     assert.equal(transition.status, 200, `${target}: ${JSON.stringify(transition.data)}`);
   }
   const detail = await api('GET', `/api/production-orders/${orderId}`, adminAuth);
@@ -126,7 +132,7 @@ describe('V23 Material List lifecycle', () => {
     const draft = await api('POST', '/api/production-orders', adminAuth, { productId: setup.productId, quantity: 4 });
     const draftId = draft.data.id;
     await api('POST', `/api/production-orders/${draftId}/state`, adminAuth, { target: 'SUBMITTED' });
-    await api('POST', `/api/production-orders/${draftId}/state`, adminAuth, { target: 'APPROVED' });
+    await api('POST', `/api/production-orders/${draftId}/state`, approverAuth, { target: 'APPROVED' });
     const detail = await api('GET', `/api/production-orders/${draftId}`, adminAuth);
     const draftLineId = detail.data.order.items[0].id;
 

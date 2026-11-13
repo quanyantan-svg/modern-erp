@@ -32,6 +32,7 @@ import {
   requireCreditSpecialApprovalRequestAuthority, resolveCreditReadMode,
 } from './credit-scope.js';
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
+import { assertApprovalSod } from './platform-sod.js';
 
 export const CREDIT_SPECIAL_APPROVAL_SCOPE_MODES = Object.freeze(['ONE_TIME', 'TIME_BOUNDED', 'OBJECT_BOUNDED']);
 export const CREDIT_SPECIAL_APPROVAL_DECISIONS = Object.freeze(['PENDING', 'APPROVED', 'REJECTED']);
@@ -259,6 +260,8 @@ export async function decideCreditSpecialApproval(db, req, res, actor, approvalI
     if (requestAudit && requestAudit.user_id === actor.id) {
       throw new HttpError(409, '申请人与审批人必须分离', { code: 'CREDIT_SPECIAL_APPROVAL_SOD' });
     }
+    // Platform SOD —— 接在既有 SOD 防护之后（Design §32.4.3），既有行为逐字不变。
+    assertApprovalSod(db, { businessType: 'CREDIT_SPECIAL_APPROVAL', businessId: approvalId, actorId: actor.id });
     if (decision === 'REJECTED') {
       db.prepare(`UPDATE credit_special_approval SET decision='REJECTED', approver_id=?, decided_at=?,
         approved_override_cents=NULL, approved_ceiling_cents=NULL, approved_expiry_business_date=NULL

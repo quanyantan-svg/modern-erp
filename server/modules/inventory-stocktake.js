@@ -19,6 +19,7 @@ import {
   createSystemVoucher, inventoryAccountRole, issueSourceValue, receivePositiveSourceValue,
 } from './financial-inventory.js';
 import { postTrackedMovement, saveTrackedAllocations } from './traceability-quality.js';
+import { assertApprovalSod } from './platform-sod.js';
 
 function nowIso() { return new Date().toISOString(); }
 
@@ -299,6 +300,8 @@ export function approveStocktake(db, res, actor, checkId) {
     if (!check) throw new HttpError(404, '盘点单不存在');
     if (check.status !== 'SUBMITTED') throw new HttpError(409, `状态 ${check.status} 不可审批`);
     if (check.creator_id === actor.id) throw new HttpError(409, '盘点单创建人不能审批自己的单据');
+    // Platform SOD —— 接在既有自审批防护之后（Design §32.4.3），既有族行为逐字不变。
+    assertApprovalSod(db, { businessType: 'INVENTORY_CHECK', businessId: checkId, actorId: actor.id });
     const businessDate = check.business_date;
     if (!businessDate || !/^\d{4}-\d{2}-\d{2}$/.test(businessDate)) {
       throw new HttpError(409, '盘点单缺少权威业务日期，无法审批', { code: 'SOURCE_LINEAGE_MISSING' });

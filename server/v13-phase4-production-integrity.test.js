@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { createApp } from './app.js';
 import { id } from './db.js';
 import { createTempDb } from './test-utils/temp-db.js';
+import { grantProductionApproverToWarehouse } from './test-utils/platform-sod-fixture.js';
 import { upsertCanonicalInventory } from './test-support/inventory-canonical-fixture.js';
 
 let handle; let db; let server; let baseUrl; let admin; let warehouse; let sales; let accounting;
@@ -18,6 +19,8 @@ async function login(username, password) { const result = await request('/api/au
 before(async () => {
   handle = createTempDb({ label: 'v13-p4' }); db = handle.db;
   server = createServer(createApp(db, { distDir: resolve('dist') })); await new Promise((done) => server.listen(0, '127.0.0.1', done)); baseUrl = `http://127.0.0.1:${server.address().port}`;
+  // 生产工单的建单人与审批人必须不同（平台 SOD，PL-DEF-01）：准备第二位审批人。
+  grantProductionApproverToWarehouse(db);
   admin = await login('admin', 'admin123'); warehouse = await login('warehouse', 'warehouse123'); sales = await login('sales', 'sales123'); accounting = await login('accounting', 'accounting123');
 });
 after(async () => { await new Promise((done) => server.close(done)); handle.cleanup(); });
@@ -63,7 +66,7 @@ describe('V1.3 Phase 4 X100 execution, correction, completion and zero-side-effe
   test('J-BR full authoritative flow', async () => {
     seedX100();
     const created = await request('/api/production-orders', { method: 'POST', body: { productId: 'fg-x100', bomId: 'bom-x100', quantity: 100, plannedStart: '2026-09-23' } }); assert.equal(created.status, 200, created.data.error); const orderId = created.data.id;
-    for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED']) { const transition = await request(`/api/production-orders/${orderId}/state`, { method: 'POST', body: { target } }); assert.equal(transition.status, 200, transition.data.error); }
+    for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED']) { const transition = await request(`/api/production-orders/${orderId}/state`, { method: 'POST', body: { target }, token: target === 'APPROVED' ? warehouse : undefined }); assert.equal(transition.status, 200, transition.data.error); }
     const txBeforeStart = db.prepare('SELECT COUNT(*) n FROM inventory_transactions').get().n; const started = await request(`/api/production-orders/${orderId}`, { method: 'POST', body: { action: 'start' } }); assert.equal(started.status, 200); assert.equal(db.prepare('SELECT COUNT(*) n FROM inventory_transactions').get().n, txBeforeStart);
     const reqs = db.prepare('SELECT * FROM production_order_items WHERE order_id=? ORDER BY line_no').all(orderId); assert.equal(reqs.length, 3); assert.ok(reqs.every((r) => Number(r.quantity) === 100));
 

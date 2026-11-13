@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { after, before, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { createDatabase, PERMISSIONS } from './db.js';
+import { grantProductionApproverToWarehouse } from './test-utils/platform-sod-fixture.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const srcDir = resolve(here, '..', 'src');
@@ -40,6 +41,7 @@ let server;
 let baseUrl;
 let salesToken;
 let adminToken;
+let approverToken;
 
 before(async () => {
   tempDir = mkdtempSync(join(tmpdir(), 'modern-erp-phase-d-hfix-'));
@@ -53,6 +55,13 @@ before(async () => {
   });
   const loginBody = await loginRes.json();
   adminToken = loginBody.token;
+  // 生产工单的建单人与审批人必须不同（平台 SOD，PL-DEF-01）：准备第二位审批人。
+  grantProductionApproverToWarehouse(database);
+  const approverLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'warehouse', password: 'warehouse123' }),
+  });
+  approverToken = (await approverLogin.json()).token;
   const salesLogin = await fetch(`${baseUrl}/api/auth/login`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ username: 'sales', password: 'sales123' }),
@@ -202,7 +211,7 @@ describe('Production order — permission and state-machine regression', () => {
     for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED']) {
       const transition = await api(`/api/production-orders/${orderId}/state`, {
         method: 'POST', body: { target },
-      });
+      }, target === 'APPROVED' ? approverToken : adminToken);
       assert.equal(transition.status, 200, `transition ${target}`);
     }
     const res = await api(`/api/production-orders/${orderId}`, {

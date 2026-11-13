@@ -4730,3 +4730,62 @@ T40 台账不得豁免整体删除 → FAIL → T41 预授权不存在的提交 
 **未发生**：未改写任何已发布历史；四个历史提交的提交信息保持原样；未修改 `server/`、`src/` 任何业务代码；
 未执行真实环境 migration、业务数据库写入、真实 MySQL Gate、push / merge / tag / 发布 / 部署；
 未签发任何 Acceptance 或 Freeze 标识。
+
+### 61.10 SOD 接线与 PL-DEF-01 闭合（2026-11-14）
+
+**授权来源**：业务所有者 2026-11-13 裁定「按建议：SOD 接线（7 个决策点 + 生产订单自审批缺口 PL-DEF-01）」。
+
+#### 61.10.1 落地内容
+
+- `server/modules/platform-sod.js`：新增 `assertApprovalSod`（审批决策点入口）、7 个 initiator 解析器
+  （6 族统一 `creator_id`；信用特批从 `audit_logs` 的 `action='REQUEST'` 行取），
+  `SAME_PERSON_FORBIDDEN` 在发起人解析不出时**失败即拒绝**。
+- 既有 6 族 + 信用特批共 **7 个审批决策点**接入，位置一律在**既有自审批防护之后**
+  → 既有族的状态码与文案**逐字不变**（Design §32.4.6 有逐点对照表）。
+- **生产工单族**此前没有任何自审批防护，由平台层唯一把关 → **`PL-DEF-01` 闭合**：
+  发起人审批自己提交的生产工单被拒（409 `PLATFORM_SOD_RULE_VIOLATION`），工单状态不变。
+- 种子规则**只有一条**（生产工单族 `SAME_PERSON_FORBIDDEN` / `REJECT`）；其余 6 族不设规则，
+  因此既有族的**行为与数据量都不变**。
+- `server/migrations/platform-domain-schema.js`：`sod_rules` 增加 `min_approved_count` 列，
+  `created_by` 放宽为可空（系统种子规则没有人工创建者），并对早期版本做一次表重建。
+- `server/platform-sod-wiring.test.js`（17 个用例，已登记 FAST/FULL）：
+  既有 6 族自审批的**状态码与文案逐字比对**、生产工单族自审批被拒、他人审批照常成功、
+  7 个接线点的源码级断言。
+- `server/test-utils/platform-sod-fixture.js`：测试用的"第二位生产工单审批人"夹具
+  （**只在测试自己的库内**给 WAREHOUSE 角色追加 `PRODUCTION_ORDERS_APPROVE`，不改产品种子角色）。
+
+#### 61.10.2 跨域影响与证据更新（AGENTS.md §4.6 登记项）
+
+闭合 `PL-DEF-01` 改变了 **Manufacturing & Quality** 域的生产工单审批行为。既有 M&Q 证据中
+**7 个测试文件**依赖了旧漏洞，已改为由非创建者审批：
+`app.test.js`、`manufacturing-quality-domain.test.js`、`manufacturing-stabilization.test.js`、
+`phase-d-hfix.test.js`、`v13-phase4-production-integrity.test.js`、
+`v13-phase6c-manufacturing-execution.test.js`、`v23-manufacturing-quality-closure.test.js`。
+
+> **待 Platform 域级 Acceptance 轮复核登记**：M&Q 域既有验收记录
+> （`MANUFACTURING_QUALITY_DOMAIN_ACCEPTANCE_PASS` / `MANUFACTURING_QUALITY_CAPABILITY_FREEZE`）
+> 所依据的证据文件已更新，其结论的**当前有效性**须按 AGENTS.md §4.6 逐项复核；
+> 受影响的是生产工单审批能力的行为描述（更严格），不是能力覆盖结论。
+
+#### 61.10.3 待业务所有者裁定
+
+**`PL-DEC-04` —— 生产工单的审批身份**。种子角色模型里 `PRODUCTION_ORDERS_APPROVE` 只授予 `ADMIN`。
+关闭自审批缺口后，建单人与审批人必须不同 —— 默认部署下"管理员建的工单无人可批"。
+候选：① 授予 `role-warehouse`；② 授予 `role-reviewer`；③ 新增第 8 个系统角色「生产主管」；
+④ 维持种子角色不变，由部署方经角色管理授予（测试走的就是这条路径）。
+**本单元未擅自改动种子角色模型。**
+
+#### 61.10.4 门禁
+
+| 门禁 | 结果 |
+|---|---|
+| `pnpm test:fast` | **690/690 PASS**（基线 673 + 17） |
+| `pnpm test`（FULL） | **3943/3943 PASS**（基线 3926 + 17；M&Q 证据更新后无回归） |
+| `node --test server/platform-sod-wiring.test.js` | **17/17 PASS** |
+| `scripts/qa/verify-error-code-coupling.mjs` | **PASS**（引擎不再引用 SOD 模块的错误码） |
+
+#### 61.10.5 未发生事项
+
+- 未改动**产品的种子角色模型**；未改动任何业务域的状态机、状态词表与错误码。
+- 未执行真实环境 migration、业务数据库写入、真实 MySQL Gate、push / merge / tag / 发布 / 部署。
+- 未签发任何 Acceptance / Freeze 标识。

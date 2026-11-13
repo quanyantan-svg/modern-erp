@@ -36,6 +36,7 @@ import { createProductionOrderCommand } from './manufacturing-orders.js';
 import { createPurchaseOrderDraftCanonical } from './procurement-orders.js';
 import { assertPurchaseQuotaControl, assertPurchaseSourceControl, assertRequisitionSourcePolicy } from './procurement-policy.js';
 import { rationalAdd, rationalCmp } from './procurement-sourcing.js';
+import { assertApprovalSod } from './platform-sod.js';
 
 const PI_STATUS = { DRAFT: '草稿', RELEASED: '已下达', CANCELLED: '已取消' };
 const PUI_STATUS = { DRAFT: '草稿', RELEASED: '已下达', CANCELLED: '已取消' };
@@ -831,6 +832,8 @@ export async function approvePurchaseRequisition(db, res, actor, id) {
   }
   const now = nowIso();
   transaction(db, () => {
+    // Platform SOD —— 接在既有自审批防护之后（Design §32.4.3），既有族行为逐字不变。
+    assertApprovalSod(db, { businessType: 'PURCHASE_REQUISITION', businessId: id, actorId: actor.id });
     db.prepare("UPDATE purchase_requisitions SET status='APPROVED', reviewer_id=?, reviewed_at=?, rejection_reason='', updated_at=? WHERE id=?").run(actor.id, now, now, id);
     audit(db, actor.id, 'APPROVE', 'PURCHASE_REQUISITION', id, `审批通过请购单 ${header.requisition_no}`);
   });
