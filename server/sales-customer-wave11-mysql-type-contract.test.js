@@ -161,3 +161,33 @@ test('Wave 11 MySQL type contract: the pinned tables are registered in the canon
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('Wave 11 deferred foreign key: credit_profile_ratings carries EXACTLY ONE deferred foreign key', () => {
+  // The SQLite snapshot's MySQL DDL carries every foreign key WITHOUT its
+  // constraint name, so MySQL auto-names it. A migration that looks the
+  // deferred key up by name alone therefore misses it on a
+  // snapshot-bootstrapped database and adds a SECOND foreign key on the same
+  // column — which the frozen Wave 9 foreign-key-set assertion then refuses.
+  // This guard pins the invariant that makes the fix observable offline:
+  // exactly ONE foreign key leaves `evaluation_result_id`.
+  const dir = mkdtempSync(join(tmpdir(), 'modern-erp-w11-deferred-fk-'));
+  let db;
+  try {
+    db = createDatabase(join(dir, 'deferred.db'));
+    const fks = db.prepare('PRAGMA foreign_key_list(credit_profile_ratings)').all();
+    const deferred = fks.filter((row) => row.from === 'evaluation_result_id');
+    assert.equal(deferred.length, 1, 'exactly one foreign key may leave evaluation_result_id');
+    assert.equal(deferred[0].table, 'credit_evaluation_result');
+    assert.equal(deferred[0].to, 'id');
+    assert.equal(fks.length, 3, 'credit_profile_ratings carries its two base foreign keys plus the deferred one');
+    const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='credit_profile_ratings'").get().sql;
+    assert.match(
+      ddl,
+      /CONSTRAINT\s+fk_credit_profile_ratings_evaluation_result/,
+      'the deferred foreign key must carry its canonical constraint name',
+    );
+  } finally {
+    try { db?.close(); } catch { /* the fixture may already be closed */ }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

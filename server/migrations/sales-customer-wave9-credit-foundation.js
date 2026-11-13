@@ -264,15 +264,35 @@ const CREDIT_PROFILE_RATINGS_APPROVED_ADDITIVE_FK = Object.freeze({
   target: 'credit_evaluation_result',
 });
 
+// The foreign key set is compared as a SET of `column->referenced table`
+// pairs, not as a COUNT. A count cannot tell "the right number of the wrong
+// foreign keys" from "the right foreign keys", and this table's contract is
+// about WHICH foreign keys exist.
+//
+// The one sanctioned additive foreign key is tolerated by identity, and only
+// when it appears exactly once. Any other addition, any duplication and any
+// removal still fails closed.
+function wave9ForeignKeyKeys(fks) {
+  return new Set(fks.map((row) => `${row.from}->${row.table}`));
+}
+
 function matchesWave9ForeignKeySet(table, fks, contract) {
-  if (table !== CREDIT_PROFILE_RATINGS_APPROVED_ADDITIVE_FK.table) return fks.length === contract.fks.length;
-  const base = fks.filter((row) => !(
-    row.from === CREDIT_PROFILE_RATINGS_APPROVED_ADDITIVE_FK.from
-    && row.table === CREDIT_PROFILE_RATINGS_APPROVED_ADDITIVE_FK.target
-  ));
-  const additive = fks.length - base.length;
-  if (additive > 1) return false;
-  return base.length === contract.fks.length;
+  const expected = wave9ForeignKeyKeys(contract.fks.map(([from, target]) => ({ from, table: target })));
+  const actual = wave9ForeignKeyKeys(fks);
+  if (table !== CREDIT_PROFILE_RATINGS_APPROVED_ADDITIVE_FK.table) {
+    return actual.size === expected.size && [...expected].every((key) => actual.has(key));
+  }
+  const additiveKey = `${CREDIT_PROFILE_RATINGS_APPROVED_ADDITIVE_FK.from}->${CREDIT_PROFILE_RATINGS_APPROVED_ADDITIVE_FK.target}`;
+  const additive = [...actual].filter((key) => key === additiveKey);
+  if (additive.length > 1) return false;
+  actual.delete(additiveKey);
+  return actual.size === expected.size && [...expected].every((key) => actual.has(key));
+}
+
+function wave9ForeignKeySetDetail(fks, contract) {
+  const expected = wave9ForeignKeyKeys(contract.fks.map(([from, target]) => ({ from, table: target })));
+  const actual = wave9ForeignKeyKeys(fks);
+  return `expected=[${[...expected].sort().join(', ')}] actual=[${[...actual].sort().join(', ')}]`;
 }
 
 function assertSqlite(db) {
@@ -284,7 +304,7 @@ function assertSqlite(db) {
     for (const [column, target] of contract.fks) {
       if (!fks.some((row) => row.from === column && row.table === target && row.to === 'id')) conflict(`${table}.${column} foreign key drifted`);
     }
-    if (!matchesWave9ForeignKeySet(table, fks, contract)) conflict(`${table} foreign key set drifted`);
+    if (!matchesWave9ForeignKeySet(table, fks, contract)) conflict(`${table} foreign key set drifted: ${wave9ForeignKeySetDetail(fks, contract)}`);
     const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(table)?.sql || '';
     if ((ddl.match(/\bCHECK\s*\(/gi) || []).length !== contract.checks) conflict(`${table} CHECK set drifted`);
   }
@@ -309,7 +329,9 @@ function assertMySql(db) {
     for (const [column, target] of contract.fks) {
       if (!fks.some((row) => row.name === column && row.target === target && row.target_column === 'id')) conflict(`${table}.${column} foreign key drifted`);
     }
-    if (!matchesWave9ForeignKeySet(table, fks.map((row) => ({ from: row.name, table: row.target })), contract)) conflict(`${table} foreign key set drifted`);
+    if (!matchesWave9ForeignKeySet(table, fks.map((row) => ({ from: row.name, table: row.target })), contract)) {
+      conflict(`${table} foreign key set drifted: ${wave9ForeignKeySetDetail(fks.map((row) => ({ from: row.name, table: row.target })), contract)}`);
+    }
     const checks = db.prepare(`SELECT COUNT(*) count FROM information_schema.TABLE_CONSTRAINTS
       WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND CONSTRAINT_TYPE='CHECK'`).get(table);
     if (Number(checks.count) !== contract.checks) conflict(`${table} CHECK set drifted`);

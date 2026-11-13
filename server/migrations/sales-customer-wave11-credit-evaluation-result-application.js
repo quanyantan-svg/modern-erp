@@ -219,11 +219,32 @@ function sqliteAddDeferredForeignKey(db) {
   return true;
 }
 
+// The deferred foreign key, located by WHAT IT REFERENCES rather than by its
+// name.
+//
+// The SQLite snapshot's MySQL DDL carries every foreign key WITHOUT its
+// constraint name, so MySQL auto-names it (`credit_profile_ratings_ibfk_N`).
+// Looking the constraint up by name alone therefore misses it on a
+// snapshot-bootstrapped database, and adding the named constraint on top would
+// leave the table with TWO foreign keys on the same column — which the frozen
+// Wave 9 foreign-key-set assertion then (correctly) refuses.
+//
+// The named constraint is the one the contract asserts, so an existing
+// unnamed equivalent is dropped and re-added under the canonical name. The
+// table therefore ends with exactly ONE deferred foreign key, always named.
+function mysqlDeferredForeignKeyRow(db) {
+  return db.prepare(`SELECT CONSTRAINT_NAME constraint_name FROM information_schema.KEY_COLUMN_USAGE
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='credit_profile_ratings'
+      AND COLUMN_NAME='evaluation_result_id' AND REFERENCED_TABLE_NAME='credit_evaluation_result'
+      AND REFERENCED_COLUMN_NAME='id' LIMIT 1`).get();
+}
+
 function mysqlAddDeferredForeignKey(db) {
-  const found = db.prepare(`SELECT 1 present FROM information_schema.TABLE_CONSTRAINTS
-    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='credit_profile_ratings' AND CONSTRAINT_NAME=? LIMIT 1`)
-    .get(DEFERRED_EVALUATION_RESULT_FK);
-  if (found) return false;
+  const existing = mysqlDeferredForeignKeyRow(db);
+  if (existing && existing.constraint_name === DEFERRED_EVALUATION_RESULT_FK) return false;
+  if (existing) {
+    db.exec(`ALTER TABLE credit_profile_ratings DROP FOREIGN KEY ${existing.constraint_name}`);
+  }
   assertNoOrphanEvaluationRatings(db);
   db.exec(`ALTER TABLE credit_profile_ratings ADD CONSTRAINT ${DEFERRED_EVALUATION_RESULT_FK}
     FOREIGN KEY (evaluation_result_id) REFERENCES credit_evaluation_result(id)`);
