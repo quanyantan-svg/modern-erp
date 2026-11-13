@@ -4,7 +4,7 @@
 >
 > **Owner**：Sales & Customer Domain Owner（Acceptance 与 Freeze 的唯一签字人）；Platform / QA（证据维护）。
 >
-> **状态**：`IMPLEMENTED` —— 逐项复核与整改轮均已完成（整改后 36 项全部 `COVERED`）；**域级 Acceptance 与 Capability Freeze 尚未签发**，等待业务所有者裁定。
+> **状态**：`FROZEN` —— 逐项复核与整改轮均已完成（整改后 36 项全部 `COVERED`），**域级 Acceptance 与 Capability Freeze 已于 2026-11-13 签发**（`SALES_CUSTOMER_DOMAIN_ACCEPTANCE_PASS` / `SALES_CUSTOMER_CAPABILITY_FREEZE`）。
 >
 > **权威来源**：Requirement [`docs/requirements/sales-customer/01-domain-closure.md`](../requirements/sales-customer/01-domain-closure.md) §34.2～§34.14；Wave 修订 [`docs/requirements/sales-customer/02-wave-8-amendments.md`](../requirements/sales-customer/02-wave-8-amendments.md) / [`03-wave-9-amendments.md`](../requirements/sales-customer/03-wave-9-amendments.md) / [`04-wave-10-amendments.md`](../requirements/sales-customer/04-wave-10-amendments.md) / [`05-wave-11-amendments.md`](../requirements/sales-customer/05-wave-11-amendments.md)；Design [`docs/design/sales-customer/`](../design/sales-customer/)；唯一项目状态登记表 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md)。
 >
@@ -103,8 +103,18 @@
 | `SC-DEF-10` | 销售域**无专属真实 MySQL ACK-4 campaign** | `scripts/gates/ack4/ack4-runtime.mjs` 注册的 manifest 中无 `SALES_*`；`blockUnmigratedAck4Entry` 阻断全部销售 MySQL 入口 | 本域无法产出真实 MySQL 域级验收证据（`MYSQL-EV-01` 口径要求逐段写明覆盖 / 不覆盖） |
 | `SC-DEF-11`（整改轮新发现） | `grantReservationIntent` / `consumeReservationIntent` / `releaseReservationIntent` 在**事务外**读 `intent_state`，UPDATE **不带状态 CAS** —— 两个并发授权都会观察到 `REQUESTED` 并都提交 `GRANTED`，状态机不是承重件 | `server/modules/sales-reservation-intent.js` 三条路径 | 三条路径改为：事务内 `FOR UPDATE` 复读 + UPDATE 携带期望状态（consume 另携带期望已消费数量）作 compare-and-set；锁序统一为「意图行 → canonical 对象」，与批量释放路径一致 |
 | `SC-DEF-12`（整改轮新发现） | 整改初稿把订单行的**文档单位**数量与预留意图的**基本单位**数量直接比较 | 预留意图数量进入 canonical 库存锁与 Planning 预留，恒为基本单位；订单行数量为文档单位 | 统一经订单行的 `base_quantity_num / base_quantity_den` 基本单位快照换算；已执行量同样按基本单位累计 |
+| `SC-DEF-13`（campaign 暴露） | 三个 Wave 11 迁移把「MySQL 物理类型」这一件事维护了**三份手抄副本**：类型映射、手写 MySQL DDL、断言列表。SQLite 快照引导这条权威路径从 SQLite 列重新推导类型，三份副本因此漂移，且漂移**只在真实 MySQL 上可见** | 三个 Wave 11 表加入 `server/database/mysql-schema.js` 已有的「手写 DDL 表」钉住机制（与 Wave 10 同一机制）；三份副本收敛为**一份**，断言列表由它推导；并加装**离线守卫** `server/sales-customer-wave11-mysql-type-contract.test.js`，同类漂移此后在 SQLite 上即可捕获 |
+| `SC-DEF-14`（campaign 暴露） | SQLite 快照生成的 MySQL DDL **不携带外键约束名**，MySQL 因此自动命名；Wave 11-C 迁移按约束名查找该延迟外键，查不到就再 ADD 一条，同一列上出现**两条外键** | 延迟外键改为按「引用了什么」定位；已存在但命名不符时先删除再以规范名重建，保证该列上恰好一条外键且始终具名。离线守卫同时断言「离开 `evaluation_result_id` 的外键恰好一条」 |
+| `SC-DEF-15`（campaign 暴露） | campaign 的 BOOTSTRAP 步骤用默认环境调用 `createDatabase`，**demo seed 开启**，目标库里留下 `user-admin`，与竞态套件自己的管理员身份冲突（`ER_DUP_ENTRY`） | campaign 引导显式关闭 demo seed，目标库只承载 schema 与 canonical 角色/权限；竞态套件安装管理员身份改为幂等（已存在则更新凭据） |
+| `SC-DEF-16`（campaign 暴露） | 竞态套件的两个竞争者**共用同一个幂等键**，第二个直接重放第一个的结果并返回 200，根本没有进入被争用的代码路径 | 每个竞争者各持一个幂等键；争用证据同时要求「确实被阻塞」与「另一方也在其中」 |
 
-### 4.1 浏览器证据的去空洞过程
+### 4.1 真实 MySQL 取证（campaign 结果）
+
+- **通过运行**：run `c738ecc6-6193-40d3-9517-29211a4b6099`、commit `aa075921839de4ce1b5aa0a1ca4d3b24800333c2`；`RESULT = PASS`、`ACK-4 STATE = FINISHED`；独立只读复核 `tables=0 views=0 triggers=0 routines=0 events=0`。
+- **竞态套件 7/7 PASS**（SC-RACE-01..07），每项配一个未争用负对照；争用证据取自 `performance_schema.data_lock_waits` 的真实等待图与服务器上报的会话状态。
+- **campaign 共运行 9 次，前 8 次失败**，逐条根因登记于验收记录 §2.2；其中 `SC-DEF-13`～`SC-DEF-16` 是本轮真实暴露的缺陷。
+
+### 4.2 浏览器证据的去空洞过程
 
 域级浏览器门禁 `scripts/acceptance/sales-customer-domain-responsive-uat.mjs`（22 个界面 × 4 档宽度 = 88 项）在建立过程中暴露并修复了三类门禁自身缺陷；**生产代码零改动**：
 
@@ -118,7 +128,7 @@
 ① 移除 `src/pages/sales-parameters.jsx` 的 `data-testid` → 门禁在该界面 4/4 失败并报「规范 data-testid 未绘制」，而行数检查本身仍会通过 —— 证明真正承重的是**界面确实渲染**这一条；
 ② 把 `.mobile-header__back` 缩到 30px → 旧写法下门禁保持绿色，新写法下 88/88 失败并报「1 个已绘制可点目标低于 44px」。
 
-### 4.1 开放设计决策（D-2～D-5）与编号矛盾
+### 4.3 开放设计决策（D-2～D-5）与编号矛盾
 
 `docs/design/sales-customer/05-wave-11-stage-c.md` §37.54.17 记录 5 项 Design 决策，D-1 已闭合（CORRECTION-2 → `result_snapshot_json`）。D-2～D-5 原为 `PENDING` 且标注「请用户确认」；**业务所有者已于 2026-11-13 裁定全部按 Design 推荐值实施**（见 §6.1）：
 
@@ -138,10 +148,10 @@ D-7（评分人 ≠ 应用人的**人员级**分离）是**未决业务决策**�
 | 事项 | 状态 | 来源 |
 |---|---|---|
 | `W11_A_ACCEPTANCE_PASS`（W11-A 整包 Acceptance） | **未签发** —— 单元级冻结（W11-SEC-01 / U1 / U2 / OVERDUE / U3）已各自签发，整包签发是业务所有者的**独立**决定，不是单元冻结的自动汇总 | `docs/decisions/OPEN-BUSINESS-DECISIONS.md` §3；`PROJECT_STATUS.md` §35.6 / §35.11.4 |
-| Waves 1–2 无独立验收记录 | **历史事实** —— 实施记录见 `docs/acceptance/sales-customer/wave-0-2-implementation-records.md`；按 AGENTS.md §4.6 引用规则，该目录整体为 `PENDING_DOMAIN_AUDIT`，本轮逐项复核后可逐份重判 | `docs/acceptance/acceptance-record-revalidation-20261112.md` |
+| Waves 1–2 无独立验收记录 | **历史事实** —— 实施记录见 `docs/acceptance/sales-customer/wave-0-2-implementation-records.md`；本轮域级复核已完成，这些域内记录随域级 Acceptance 转入 `SUPERSEDED_BY_DOMAIN_ACCEPTENCE` 类别，改引域级记录 | `docs/acceptance/acceptance-record-revalidation-20261112.md` §3.4 |
 | Wave 8「待提交」 | **历史事实已消解** —— `docs/acceptance/sales-customer/wave-8-final-acceptance-and-freeze.md` 已存在并含 `WAVE8_FINAL_ACCEPTANCE_PASS`；`PROJECT_STATUS.md` §35 表格中的「Wave 8 待提交」是**状态表未更新**，非事实缺口 | `PROJECT_STATUS.md` §35 快照表 |
-| 真实 MySQL 证据 | 本域**无专属 campaign**；按 `MYSQL-EV-01` 统一口径（`docs/decisions/mysql-evidence-policy-20261112.md`），schema 对等可由 `test:mysql:accounting-analytics` 的全量 bootstrap 覆盖，但**行为等价在真实 MySQL 上未被单独取证**，必须作为显式残余登记，或按所有者「逐域新建专属 campaign」的裁定新建 | `docs/decisions/mysql-evidence-policy-20261112.md`；`docs/acceptance/inventory-warehouse-domain-acceptance-20261113.md` §2.1 |
-| `AGENTS.md` §4.6 引用规则 | 本台账引用的域内历史记录整体处于 `PENDING_DOMAIN_AUDIT` 类别；本轮复核后须在 `docs/acceptance/acceptance-record-revalidation-20261112.md` 中重判 | `AGENTS.md` §4.6 |
+| 真实 MySQL 证据 | **已取证** —— 本域专属 campaign `SALES_CUSTOMER_MYSQL_V1` 在真实 MySQL 8.0.37 上 **PASS**：run `c738ecc6-6193-40d3-9517-29211a4b6099`、commit `aa075921839de4ce1b5aa0a1ca4d3b24800333c2`，`RESULT = PASS`、`ACK-4 STATE = FINISHED`、清理独立 post-flight 证明，竞态套件 7/7 PASS | `docs/decisions/mysql-evidence-policy-20261112.md`；`docs/acceptance/sales-customer-domain-acceptance-20261113.md` §2.1 |
+| `AGENTS.md` §4.6 引用规则 | 本台账引用的域内历史记录已在 `docs/acceptance/acceptance-record-revalidation-20261112.md` §3.4 完成重判 | `AGENTS.md` §4.6 |
 
 ## 6. 整改轮（2026-11-13）—— 所有者裁定与实施结果
 
@@ -207,5 +217,5 @@ D-7（评分人 ≠ 应用人的**人员级**分离）是**未决业务决策**�
 
 - 未签发任何 Acceptance / Freeze token；未签发 Manual Closure（B3102 / B3103）、Release Readiness、发布或部署。
 - 未执行真实环境 migration、业务数据库写入、真实 MySQL 运行、push / merge / tag / 发布 / 部署。
-- 真实 MySQL campaign 的**运行**尚未执行 —— ACK-4 capability 只能由所有者用受保护 launcher 一次性签发，本轮只完成 campaign 基础设施与其离线夹具校验。
+- 真实 MySQL campaign 的**运行**已完成并通过（见 §4.1）；除此之外，本轮未执行任何其他真实环境 migration 或业务数据库写入。
 

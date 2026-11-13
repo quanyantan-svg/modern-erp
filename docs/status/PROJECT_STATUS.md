@@ -4564,14 +4564,23 @@ Requirement §33.39 的 **15 个 Finance race**（RACE-01..15）实现齐备（`
 
 `pnpm test:fast` **638/638**、`pnpm test`（FULL）**3881/3881**、`pnpm test:heavy` **67/67**、`pnpm build` PASS、`git diff --check` PASS；域级合同套件 **13/13**、域能力套件 **32/32 + 20/20**、信用评估 **14/14**、信用对账 **26/26**；既有 Wave 7 / 8 / 9 / 10 与 W11-A 套件全绿且既有断言未修改；浏览器域级门禁 **88/88**（22 界面 × 4 档宽度，两次变异实验证明非空洞）；文档一致性 `current` N1、N3～N6、N8、N9 PASS、N2 `RETIRED`、**N7 FAIL**（既有历史提交的追溯债务，与本域无关），`migration` C1～C6 全 PASS。
 
-### 60.5 真实 MySQL 证据边界
+### 60.5 真实 MySQL 8.0.37 证据（本域专属 campaign）
 
-- 本域专属 campaign `SALES_CUSTOMER_MYSQL_V1` 的基础设施已建成（manifest + root/child/gate 三件套 + worker + 竞态套件 + launcher 条目 + `test:mysql:sales-customer`）：**7 项竞态用例**（SC-RACE-01..07），每项配一个**未争用负对照**；离线校验 **7/7 PASS**，连续三次稳定；campaign 模式在 SQLite 上**显式拒绝**，不产出非 MySQL 证据。
-- **真实 MySQL 运行尚未执行** —— ACK-4 capability 只能由业务所有者用受保护 launcher 一次性签发；每次失败运行都会消耗 capability，重试需要新的 RunId 与新的 15 分钟窗口。
-- 按 `MYSQL-EV-01` 统一口径：schema / migration 对等由 `test:mysql:accounting-analytics` 的全量 bootstrap 覆盖（Sales 域的表也在其中）；**行为等价在真实 MySQL 上未单独取证**，在 campaign 实际运行前作为显式残余登记。
+- **通过运行**：run `c738ecc6-6193-40d3-9517-29211a4b6099`、commit `aa075921839de4ce1b5aa0a1ca4d3b24800333c2`；`RESULT = PASS`、`ACK-4 STATE = FINISHED`（清理由 Root 的 `CLEANUP_SCHEMA_POST_RUN` 子进程独立 post-flight 证明）。
+- **独立只读复核**：目标 `modern_erp_domain_test@127.0.0.1:3306/modern_erp_domain_test` → `tables=0 views=0 triggers=0 routines=0 events=0`；serverUuid `256c7a4e-d275-11f1-885b-b025aa71d167`、grants sha256 `bef61617…807e`、MySQL 8.0.37。
+- **竞态套件 7/7 PASS**：SC-RACE-01 受控订单变更 CAS 只赢一次；SC-RACE-02 报价转单不超容量；SC-RACE-03 出货确认只产生一次库存移动与 COGS 凭证；SC-RACE-04 信用检查每检查组一次决策；SC-RACE-05 评分表终评每表一条聚合结果；SC-RACE-06 预留授权只授权一次（实测 GRANT 审计 1 条）；SC-RACE-07 订单终态只释放一次预留。每项配一个**未争用负对照**。
+- **争用证据**：`performance_schema.data_lock_waits` 的真实等待图 + 服务器上报的会话状态；**文件闸门 + L0 协调闸门**双重屏障保证两个竞争者同时进入被争用代码路径。
+- **campaign 共运行 9 次，前 8 次均失败并如实登记**（见验收记录 §2.2）：第 1～3 次暴露**真实产品缺陷**（Wave 11 迁移的 MySQL 物理类型事实存在三份手抄副本而漂移；快照生成的 MySQL DDL 不带外键约束名导致延迟外键被重复创建），第 4～8 次暴露**夹具与证据缺陷**（demo seed 与夹具身份冲突、争用证据口径过窄、两个竞争者共用幂等键）。前 3 项已加装**离线守卫** `server/sales-customer-wave11-mysql-type-contract.test.js`，使同类漂移此后在 SQLite 上即可捕获，不必再消耗 capability。
 
-### 60.6 未解决事项与暂停点
+### 60.6 域级 Acceptance 与 Capability Freeze 签发
 
-- **尚未签发**任何域级 Acceptance / Capability Freeze token；**不签发** Manual Closure（B3102 销售管理 / B3103 信用管理）、Release Readiness、发布、部署。
-- 待业务所有者决定的两件事：① 是否签发 ACK-4 capability 以运行本域专属 campaign；② 是否在「行为等价未单独取证」这一显式残余下签发域级 Acceptance 与 Capability Freeze。
+- **授权来源**：业务所有者 2026-11-13 裁定「批准签发并运行 campaign」与「签发」。
+- **决定**：**域级 Acceptance 通过**（`SALES_CUSTOMER_DOMAIN_ACCEPTANCE_PASS`）与 **Capability Freeze 签发**（`SALES_CUSTOMER_CAPABILITY_FREEZE`，冻结 36 项 `COVERED` 能力）。
+- **签发记录**：[`docs/acceptance/sales-customer-domain-acceptance-20261113.md`](../acceptance/sales-customer-domain-acceptance-20261113.md)。同日的候签材料标记为 `SUPERSEDED`，保留为决定过程的证据。
+- **随冻结接受的残余**：`SC-RES-01`～`SC-RES-09`（出库/退货未收敛到 `server/modules/`、逐列 schema parity 未取证、SC01 交货计划开关的执行面取行级、SO 变更预留反应取释放、`factDigest` 超范围金额保留原文、W11-A 整包未签发、N7 文档追溯债务、OQC/财务确认属 INTEGRATION_BACKED、争用证据采样本质上是概率性的）。
+- **不签发**：Manual Closure（B3102 销售管理 / B3103 信用管理）、Release Readiness、发布、部署。
+
+### 60.7 未解决事项与暂停点
+
 - 本轮**未**执行真实环境 migration、业务数据库写入、push / merge / tag / 发布 / 部署。
+- 下一个可推进项：剩余的 Manual Closure 与 Release Readiness 仍需业务所有者单独决定；本域不阻塞其余域的收尾。

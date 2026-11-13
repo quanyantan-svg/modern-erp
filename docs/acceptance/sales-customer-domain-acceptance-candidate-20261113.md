@@ -4,7 +4,7 @@
 >
 > **Owner**：Sales & Customer Domain Owner（Acceptance 与 Freeze 的唯一签字人）；Platform / QA（证据维护）。
 >
-> **状态**：`PENDING_APPROVAL` —— 候签材料已产出，等待业务所有者裁定与真实 MySQL 取证。
+> **状态**：`SUPERSEDED` —— 业务所有者已于 2026-11-13 裁定「批准签发并运行 campaign」与「签发」。本候签材料所列的待裁定项全部落定，正式签发记录见 [`sales-customer-domain-acceptance-20261113.md`](./sales-customer-domain-acceptance-20261113.md)。本文件保留为决定过程的证据。
 >
 > **权威来源**：Requirement [`docs/requirements/sales-customer/01-domain-closure.md`](../requirements/sales-customer/01-domain-closure.md) §34.2～§34.14 与 [`05-wave-11-amendments.md`](../requirements/sales-customer/05-wave-11-amendments.md)；Design [`docs/design/sales-customer/`](../design/sales-customer/) §29 / §36 / §37.54；逐项判定 [`docs/audits/sales-customer-capability-audit-20261113.md`](../audits/sales-customer-capability-audit-20261113.md)；唯一项目状态登记表 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md)。
 >
@@ -14,11 +14,11 @@
 
 | 项 | 候签建议 |
 |---|---|
-| 域级 Acceptance | 建议**通过**（`SALES_CUSTOMER_DOMAIN_ACCEPTANCE_PASS`） |
-| Capability Freeze | 建议**冻结 36 项 `COVERED` 能力**（`SALES_CUSTOMER_CAPABILITY_FREEZE`，CAP-1～CAP-36） |
+| 域级 Acceptance | 建议**通过**（`SALES_CUSTOMER_DOMAIN_ACCEPTANCE_PASS`）—— **已签发**，见 [`sales-customer-domain-acceptance-20261113.md`](./sales-customer-domain-acceptance-20261113.md) |
+| Capability Freeze | 建议**冻结 36 项 `COVERED` 能力**（`SALES_CUSTOMER_CAPABILITY_FREEZE`，CAP-1～CAP-36）—— **已签发** |
 | 能力判定 | CAP-1～CAP-36 共 **36 项**：`COVERED` **36**、`PARTIAL` **0**、`MISSING` **0**、`OUT_OF_SCOPE` **0**（整改前为 31 / 3 / 2） |
 | D-2～D-5 开放设计决策 | **已裁定**：全部按 Design §37.54.17 推荐值实施（2026-11-13 所有者裁定，见 [`docs/decisions/OPEN-BUSINESS-DECISIONS.md`](../decisions/OPEN-BUSINESS-DECISIONS.md) §2） |
-| 真实 MySQL 证据 | **待取证**：本域专属 campaign `SALES_CUSTOMER_MYSQL_V1` 的基础设施已建成并离线校验通过，但**尚未在真实 MySQL 上运行** —— ACK-4 capability 只能由业务所有者用受保护 launcher 一次性签发。详见 §2.3 |
+| 真实 MySQL 证据 | **已取证**：本域专属 campaign `SALES_CUSTOMER_MYSQL_V1` 在真实 MySQL 8.0.37 上 **PASS**，`ACK-4 STATE = FINISHED`，清理由 root 的独立 post-flight 证明；run `c738ecc6-6193-40d3-9517-29211a4b6099`、commit `aa075921839de4ce1b5aa0a1ca4d3b24800333c2`。详见 §2.3 |
 | 冻结不包含 | Manual Closure（B3102 销售管理 / B3103 信用管理）、Release Readiness、发布、部署、真实环境 migration、业务数据库写入、远端 Git 操作，以及其他 Domain 的 Acceptance |
 
 ## 2. 验收证据

@@ -75,8 +75,12 @@ N7 的成因与当前状态已登记在 [`docs/status/PROJECT_STATUS.md`](../sta
 | `package-b-final-acceptance.md` | 本地测试后端隔离结论在当前 HEAD 仍成立（隔离由 `scripts/testing/test-env.js` 在 runner 内自建） |
 | `w11-sec-01-acceptance-and-freeze.md`、`w11-a-u1-acceptance-and-freeze.md`、`w11-a-u2-acceptance-and-freeze.md`、`w11-a-overdue-acceptance-and-freeze.md`、`w11-a-u3-*.md` | W11-SEC-01 与 W11-A U1/U2/U3 的单元级冻结在域级复核中判为仍成立（对应套件绿色）；**W11-A 整包（`W11_A_ACCEPTANCE_PASS`）仍未签发**，为业务所有者的独立决定 |
 
-**当前分类不变**：这 13 份在域级 Acceptance **正式签发**前仍属 `PENDING_DOMAIN_AUDIT`，
-按 §4.2 的引用规则**不得**作为当前证据单独引用；域级能力结论一律改引域级 Acceptance 记录。
+**当前分类（2026-11-13 更新）**：Sales & Customer 域级 Acceptance 已签发
+（[`sales-customer-domain-acceptance-20261113.md`](./sales-customer-domain-acceptance-20261113.md)，
+`SALES_CUSTOMER_DOMAIN_ACCEPTANCE_PASS` / `SALES_CUSTOMER_CAPABILITY_FREEZE`，36 项 `COVERED`）。
+这 13 份域内记录因此由 `PENDING_DOMAIN_AUDIT` 转入 **`SUPERSEDED_BY_DOMAIN_ACCEPTANCE`**：
+它们的能力结论已被更晚的域级 Acceptance 在当前 HEAD 上重新逐项取证，域级能力结论一律改引
+域级 Acceptance 记录。**这些记录本身仍保留原样**（不撤销、不改写任何已签发结论）。
 
 ## 4. 复核的可重跑性
 
