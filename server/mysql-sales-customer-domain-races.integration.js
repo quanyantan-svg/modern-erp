@@ -213,19 +213,27 @@ describe('Sales & Customer domain real MySQL concurrency invariants (7 races)', 
         left.run(commandFor('left')),
         right.run(commandFor('right')),
       ];
+      let contention = null;
       if (inCampaign) {
         // The contenders must be observably BLOCKED at the same time.
         // Without this the race could degenerate into two sequential calls.
         const threadIds = [registrations[0].threadId, registrations[1].threadId];
         assert.ok(threadIds.every((value) => Number.isInteger(Number(value))),
           `${label}: every contender must report its performance_schema thread id`);
-        const observed = await waitForBothContendersBlocked(db, threadIds);
-        assert.equal(observed.observed, true,
-          `${label}: both contenders must be observably blocked against each other (attempts=${observed.attempts})`);
+        contention = await waitForBothContendersBlocked(db, threadIds);
         await control.run({ action: 'release-gate' });
         held = false;
       }
       const outcomes = await Promise.all(pending);
+      // The contention verdict is asserted AFTER the outcomes are known, so a
+      // failure reports what the contenders actually did instead of only
+      // reporting that no contention was observed. A race whose contenders
+      // both refused before reaching a lock is a SETUP defect, and the
+      // outcome shape says so.
+      if (inCampaign && contention && !contention.observed) {
+        assert.fail(`${label}: both contenders must be observably blocked against each other `
+          + `(attempts=${contention.attempts}); outcomes=${JSON.stringify(outcomes.map((row) => ({ status: row.status, code: row.code, message: row.message })))}`);
+      }
       let negativeOutcome = null;
       if (negative) {
         const negativeWorker = new RaceWorker(`${label}-negative`);
