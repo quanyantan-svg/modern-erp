@@ -4891,3 +4891,33 @@ Attachment（PL-10）→ Notification 生产者（PL-11）→ Numbering 服务�
 
 **剩余**：Numbering 服务（PL-09）→ SOD 规则维护面 → 7 个前端工作面（含 messages tab 徽标）→
 真实 MySQL campaign 与浏览器 UAT → Manual Closure / Release Readiness。
+
+### 61.14 Numbering 子系统（PL-09，Design §32.8）与四个子系统的完成状态
+
+**授权来源**：业务所有者 2026-11-14 裁定「按序把四个子系统全部建完」。
+
+| 项 | 内容 |
+|---|---|
+| 模块 | `server/modules/platform-numbering.js`（编号发放的唯一 canonical 实现） |
+| 采纳 | 既有 `document_sequences` / `document_number_allocations` **结构不变**；新增规则表 `document_number_series` 把前缀 / 期间模式 / 补零长度 / 组织维度从"调用点字面量"变为可维护配置 |
+| 路由 | 3 条：`/api/platform/number-series`（GET/POST）、`/api/platform/number-series/:id`（PATCH） |
+| 权限 | `NUMBERING_VIEW` / `NUMBERING_MANAGE` |
+| 单号不变 | 既有 6 种单据（SI / PB / SCN / PCN / OB / PO）逐字符不变，`period_key` 仍是 `YYYYMM` → 号段不断 |
+| `PL-DEF-11` 闭合 | 编号分配**移入单据事务**（通用采购订单接口）；事务内调用时内联执行，不另开事务 → 不再产生孤儿号 |
+| `PL-DEF-12` 闭合 | 幂等先查后写同一事务；插入冲突时重读返回**同一单号**，不再是 409 |
+| `PL-DEF-13` 闭合 | 请购单号由服务发放（`PRQ-YYYYMM-00001`），删除后不再撞号；已核实无生产代码解析该格式 |
+| 待迁移清单 | 12 种单据仍各自造号（销售订单 / 生产工单 / 报价 / 凭证 / 库存调整·调拨·报废 / 组装 / 生产检验 / 预测 / MRP / WIP 转移）—— **清单必须可见**，避免"以为已统一编号"的误判 |
+| 测试 | `server/platform-numbering.test.js`（12 例，已登记 FAST/FULL） |
+
+**实现期确定的六项事实**（已写回 Design §32.8.1）：渲染形态必须逐字符复现（含期间段与补零段
+之间的短横线）；`period_key` 无组织维度时仍是 `YYYYMM`；分配在调用方事务内内联执行；
+幂等冲突时重读返回同一单号；请购单号格式变更已核实无解析方；`PI` / `PUI` 仍用 `COUNT(*)+1`
+（同类缺陷，不在本单元范围，登记为待迁移项）。
+
+**四个子系统的完成状态**：Organization Scope（PL-03，§61.11）、Attachment（PL-10，§61.12）、
+Notification（PL-11，§61.13）、Numbering（PL-09，§61.14）—— **全部建成并有合同测试**。
+
+**门禁**：`pnpm test:fast` **738/738 PASS**；`pnpm test`（FULL）**3991/3991 PASS**。
+
+**剩余**：SOD 规则维护面 → 7 个前端工作面（含 messages tab 徽标）→ 真实 MySQL campaign 与浏览器
+UAT → Manual Closure / Release Readiness。

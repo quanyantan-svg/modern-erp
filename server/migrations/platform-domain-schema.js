@@ -370,6 +370,24 @@ export function migratePlatformDomainSchema(db) {
   addColumn(db, 'ALTER TABLE sod_rules ADD COLUMN min_approved_count INTEGER');
 
   /*
+   * 编号规则种子：既有 6 种单据 + 请购单。
+   *
+   * 前缀 = 单据类型、期间模式 = 按月、补零 5 位 —— 逐字符复现既有形态
+   * `${TYPE}-${YYYYMM}-${00000}`，因此**既有单号不变**（号段也不断）。
+   * PRQ 是**新增**的请购单规则：原先的 `PREQ-${YYYYMMDD}-${COUNT(*)+1}` 删除单据后必然撞号
+   * （PL-DEF-13），改为服务发放。
+   */
+  for (const documentType of ['SI', 'PB', 'SCN', 'PCN', 'OB', 'PO', 'PRQ']) {
+    db.prepare(
+      "INSERT OR IGNORE INTO document_number_series(id, document_type, org_id, prefix, suffix, period_mode,"
+      + ' pad_length, reset_rule, active, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,1,?,?)',
+    ).run(
+      `number-series-${documentType.toLowerCase()}`, documentType, '', documentType, '', 'MONTH', 5, null,
+      new Date().toISOString(), new Date().toISOString(),
+    );
+  }
+
+  /*
    * sod_rules.created_by 允许为空：规则可以是**系统种子**的（没有人工创建者）。
    * 迁移时点 users 表还没有播种（用户的种子在演示数据阶段），因此系统种子规则不能
    * 引用一个尚不存在的用户。早期版本该列为 NOT NULL，需要重建该表。

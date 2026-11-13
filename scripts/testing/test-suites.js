@@ -88,6 +88,8 @@ const FULL = [
   'server/platform-attachments.test.js',
   // Platform 通知中心合同（PL-11）：生产者写入、去重、读取一致性、权限与接线。
   'server/platform-notifications.test.js',
+  // Platform 编号服务合同（PL-09）：既有单号逐字符不变、幂等原子性、规则表。
+  'server/platform-numbering.test.js',
   // ----- Sales & Customer Domain — Wave 0 migration infrastructure -----
   // Canonical zero-step registry, deterministic runner, fail-closed errors,
   // SQLite fresh/reopen wiring, and zero future Sales business schema.
@@ -908,6 +910,8 @@ const FAST = [
   'server/platform-attachments.test.js',
   // Platform 通知中心合同（PL-11）：生产者写入、去重、读取一致性、权限与接线。
   'server/platform-notifications.test.js',
+  // Platform 编号服务合同（PL-09）：既有单号逐字符不变、幂等原子性、规则表。
+  'server/platform-numbering.test.js',
   // M1-Core WP-0 static infrastructure contract; no DB, MySQL or migration execution.
   'server/m1c-wp0-infrastructure.test.js',
   'server/m15-tracked-identity-key.test.js',

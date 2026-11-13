@@ -7,6 +7,9 @@ import {
   listNotificationOverview, listNotifications, listNotificationSubscriptions, manageNotificationSubscription,
   markNotificationRead,
 } from './modules/platform-notifications.js';
+import {
+  createNumberSeries, listNumberSeries, updateNumberSeries,
+} from './modules/platform-numbering.js';
 import { createWorkflow, listWorkflows } from './modules/platform-workflows.js';
 import { assertApprovalSod } from './modules/platform-sod.js';
 import {
@@ -2707,6 +2710,26 @@ ownedRouteTable.register({
   handler: ({ db, res, actor }) => listNotificationOverview(db, res, actor),
   owner: 'server/modules/platform-notifications.js',
 });
+
+// Platform 平台层域 —— 编号服务（docs/design/platform.md §32.8）。
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/platform/number-series',
+  handler: ({ db, res, actor }) => listNumberSeries(db, res, actor),
+  owner: 'server/modules/platform-numbering.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/platform/number-series',
+  handler: ({ db, req, res, actor }) => createNumberSeries(db, req, res, actor),
+  owner: 'server/modules/platform-numbering.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/platform\/number-series\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateNumberSeries(db, req, res, actor, params[0]),
+  owner: 'server/modules/platform-numbering.js',
+});
 ownedRouteTable.register({
   method: 'GET',
   path: '/api/workflows',
@@ -5356,14 +5379,17 @@ async function createPurchaseOrder(db, req, res, actor) {
     throw new HttpError(400, '通用采购订单接口不得指定业务类型或委外来源', { code: 'PURCHASE_ORDER_BUSINESS_TYPE_NOT_CLIENT_SETTABLE' });
   }
   const input = purchaseOrderInput(db, body);
-  const orderId = id(); const now = new Date().toISOString(); const orderNo = makePurchaseOrderNo(db, input.orderDate || now.slice(0, 10));
+  const orderId = id(); const now = new Date().toISOString();
   // Wave A procurement: supplier snapshot for commercial identity;
   // Wave C procurement-orders: business_type defaults to STANDARD_PURCHASE.
   const supplier = db.prepare('SELECT contact,phone,address,default_payment_terms_days FROM suppliers WHERE id=?').get(input.supplierId);
   const supplierContactSnapshot = supplier ? `${supplier.contact || ''}|${supplier.phone || ''}` : '';
   const supplierAddressSnapshot = supplier?.address || '';
   const paymentTermsSnapshot = input.paymentTerms || '';
+  let orderNo = null;
   transaction(db, () => {
+    // 编号必须在**单据事务内**分配 —— 否则事务回滚会留下孤儿号（PL-DEF-11）。
+    orderNo = makePurchaseOrderNo(db, input.orderDate || now.slice(0, 10));
     createPurchaseOrderDraftCanonical(db, actor, {
       ...input, id: orderId, orderNo, now, businessType: 'STANDARD_PURCHASE',
       supplierContactSnapshot, supplierAddressSnapshot, paymentTermsSnapshot,

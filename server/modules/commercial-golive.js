@@ -11,6 +11,7 @@ import { discoverInvoiceSourcePlan, lockInvoiceSourcePlan, recognizeFinanceExpos
 import { RECOGNITION_MODES } from './finance-recognition-policy.js';
 import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 import { assertSupplierBillGlPostable } from './outsourcing-gl-policy.js';
+import { allocateDocumentNumber as allocatePlatformNumber } from './platform-numbering.js';
 
 const stamp = () => new Date().toISOString();
 const int = (value, label, { min = 0 } = {}) => {
@@ -39,14 +40,7 @@ export function calculateLineTax({ amountCents, mode = 'NO_TAX', rateNumerator =
 }
 
 export function allocateDocumentNumber(db, documentType, businessDate, idempotencyKey) {
-  const existing = db.prepare('SELECT document_no FROM document_number_allocations WHERE idempotency_key=?').get(idempotencyKey);
-  if (existing) return existing.document_no;
-  const period = String(businessDate).slice(0, 7).replace('-', '');
-  const row = db.prepare(`INSERT INTO document_sequences(document_type,period_key,next_value) VALUES(?,?,2)
-    ON CONFLICT(document_type,period_key) DO UPDATE SET next_value=next_value+1 RETURNING next_value-1 allocated`).get(documentType, period);
-  const number = `${documentType}-${period}-${String(row.allocated).padStart(5, '0')}`;
-  db.prepare('INSERT INTO document_number_allocations(idempotency_key,document_type,document_no,created_at) VALUES(?,?,?,?)').run(idempotencyKey, documentType, number, stamp());
-  return number;
+  return allocatePlatformNumber(db, documentType, businessDate, idempotencyKey).documentNo;
 }
 
 function atomic(db, work) { return db.isTransaction ? work() : transaction(db, work); }

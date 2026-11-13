@@ -401,9 +401,9 @@
 | `PL-DEF-08` | 三个期间闸门并存且语义不一致 | `server/modules/financial-inventory.js:24-46`；`server/lib/inventory-mutation.js:271-286`；`server/app.js:5778-5783` | 高 |
 | `PL-DEF-09` | `operating_period_closures` / `finance_business_closures` 对所有 canonical 闸门不可见 | `server/modules/financial-inventory.js:24-46`；`server/modules/finance-business-close.js:54` | 高 |
 | `PL-DEF-10` | 合同称"五审批族"，代码为 6 族 + 1 信用特批 | `document.md:158`、`:573`；`solution.md:1238`；`server/modules/approvals.js:5-137` | 低（表述漂移） |
-| `PL-DEF-11` | 编号分配在采购订单路径中发生在单据事务之外 → 孤儿号且不回滚 | `server/app.js:5127`（分配）vs `:5134`（事务开启） | 中 |
-| `PL-DEF-12` | 编号分配器幂等 SELECT→INSERT 非原子，并发同键返回 409 而非重放 | `server/modules/commercial-golive.js:42`、`:48`；`server/app.js:3908-3910` | 中 |
-| `PL-DEF-13` | 采购申请号 `PREQ-${YYYYMMDD}-${COUNT(*)+1}` 删除后必冲突 | `server/modules/planning-documents.js:85-92` | 中 |
+| `PL-DEF-11` | 编号分配在采购订单路径中发生在单据事务之外 → 孤儿号且不回滚 | `server/app.js:5127`（分配）vs `:5134`（事务开启） | 中 | — **2026-11-14 已闭合**：编号分配移入单据事务；事务内调用时内联执行，不再产生孤儿号 |
+| `PL-DEF-12` | 编号分配器幂等 SELECT→INSERT 非原子，并发同键返回 409 而非重放 | `server/modules/commercial-golive.js:42`、`:48`；`server/app.js:3908-3910` | 中 | — **2026-11-14 已闭合**：编号服务先查后写同一事务，插入冲突时重读返回同一单号而非 409 |
+| `PL-DEF-13` | 采购申请号 `PREQ-${YYYYMMDD}-${COUNT(*)+1}` 删除后必冲突 | `server/modules/planning-documents.js:85-92` | 中 | — **2026-11-14 已闭合**：请购单号改由编号服务发放（PRQ-YYYYMM-00001），删除后不再撞号 |
 | `PL-DEF-14` | `voucher_sequences` / `voucher_words` 为死表 | `server/migrations/extended-schema.js:22-26`、`:44-48`；`server/modules/accounting-config.js:38` | 低 |
 | `PL-DEF-15` | 通知中心前端永久空态；messages tab 无徽标 | `src/pages/platform-notifications.jsx:49`；`src/App.jsx:186` | 中 |
 | `PL-DEF-16` | 工作流前端读取不存在的 `item.active` 列；`entity_type` 选项与族键不匹配；编辑永远 INSERT | `src/pages/platform-workflows.jsx:21`、`:51`、`:56` | 中 |

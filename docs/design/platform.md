@@ -679,6 +679,23 @@ transaction(db):
 
 `NUMBERING_VIEW` / `NUMBERING_MANAGE`（新增）。规则变更写 `audit_logs`（`NUMBERING_RULE_CREATE` / `NUMBERING_RULE_UPDATE` / `NUMBERING_RULE_DISABLE`）。取号本身**不写** `audit_logs`（高频路径，避免审计表膨胀），但**分配失败**（409）走 `auditBusinessRejection`。
 
+#### 32.8.1 实现期确定的六项事实（2026-11-14）
+
+1. **渲染形态必须逐字符复现既有实现**：既有形态是 `${TYPE}-${YYYYMM}-${00000}` ——
+   期间段与补零段**之间有短横线**。第一版漏了它，产出了 `SI-20990100001`。
+2. **`period_key` 在无组织维度时必须仍是 `YYYYMM`**（否则号段会断在旧数据上）；
+   有组织维度时为 `ORG-9:YYYYMM`。组织维度**不编进单号文本**。
+3. **分配在调用方事务内内联执行**（`db.isTransaction`），不另开事务 ——
+   否则分配与单据写入不同生共死，单据事务回滚会留下孤儿号（`PL-DEF-11`）。
+   通用采购订单接口的编号分配已移入其单据事务。
+4. **幂等必须原子**（`PL-DEF-12`）：先查后写在同一事务内；插入冲突时**重读返回同一单号**，
+   而不是 409。同号段由 `document_number_allocations` 的 UNIQUE 约束兜底。
+5. **请购单号格式变更**：`PREQ-${YYYYMMDD}-${COUNT(*)+1}` → `PRQ-${YYYYMM}-${00001}`（`PL-DEF-13`）。
+   已核实**无任何生产代码解析该格式**（其余命中均为字面量夹具），格式变更安全。
+6. **同类缺陷的残余**：生产指令 `PI` 与采购指令 `PUI` 仍用 `makeCode` 的 `COUNT(*)+1`
+   —— 与 `PL-DEF-13` 同缺陷类，但**不在本单元批准范围**（它们属 Planning 域的其它单据族），
+   登记为待迁移清单项。
+
 ### 32.9 Audit schema 升级设计
 
 - `server/lib/audit.js` 的 `audit()` 增加第 7 个**可选**参数 `extra`（§32.2.7）。既有调用点**一行不改**。

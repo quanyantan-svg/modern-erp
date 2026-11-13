@@ -712,7 +712,7 @@ export async function createPurchaseRequisition(db, req, res, actor) {
 
   const now = nowIso();
   const newIdValue = genId();
-  const newNo = makeCode(db, 'purchase_requisitions', 'PREQ');
+  const newNo = allocateDocumentNumber(db, 'PRQ', new Date().toISOString().slice(0, 10), `PRQ-${genId()}`);
 
   transaction(db, () => {
     db.prepare(`
