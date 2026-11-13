@@ -590,10 +590,21 @@ describe('Sales & Customer domain real MySQL concurrency invariants (7 races)', 
     // Three actors, because the production separation-of-duties rules require
     // them: the creator may not approve the order, and the requester of a
     // change may not approve that change.
+    //
+    // The admin actor is installed idempotently: the offline SQLite mode runs
+    // against a demo-seeded database (the row already exists) while the
+    // campaign mode runs against a schema-only target (it does not). Either
+    // way the suite owns the credentials it logs in with.
     const adminHash = hashPassword('admin123');
-    db.prepare(`INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at)
-      VALUES('user-admin','admin','系统管理员',?,?,'role-admin',1,?)`)
-      .run(adminHash.hash, adminHash.salt, now());
+    const adminRow = db.prepare('SELECT id FROM users WHERE id=?').get('user-admin');
+    if (adminRow) {
+      db.prepare(`UPDATE users SET username=?,display_name=?,password_hash=?,password_salt=?,role_id='role-admin',active=1
+        WHERE id=?`).run('admin', '系统管理员', adminHash.hash, adminHash.salt, 'user-admin');
+    } else {
+      db.prepare(`INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at)
+        VALUES('user-admin','admin','系统管理员',?,?,'role-admin',1,?)`)
+        .run(adminHash.hash, adminHash.salt, now());
+    }
     for (const [actorId, username, password] of [
       [ACTOR_ID, 'sc-race-actor', 'sc-race-actor-pw'],
       [APPROVER_ID, 'sc-race-approver', 'sc-race-approver-pw'],

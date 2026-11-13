@@ -71,7 +71,24 @@ async function databaseOperation(operation) {
     // createDatabase(config) runs the full current migration set against the
     // disposable MySQL target. This is the step that proves the Sales & Customer
     // domain's schema is accepted by a real MySQL 8 server.
-    const db = dbModule.createDatabase(config);
+    //
+    // The demo seed is switched OFF for the bootstrap. The campaign target
+    // therefore holds the SCHEMA and the canonical roles / permissions, and
+    // nothing else: the race suite installs its own fixture identities and
+    // must be able to install them on a target that the bootstrap already
+    // created. A seeded demo `user-admin` would collide with the suite's own
+    // admin actor.
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousSeed = process.env.ERP_SEED_DEMO;
+    process.env.NODE_ENV = 'production';
+    process.env.ERP_SEED_DEMO = 'false';
+    let db;
+    try {
+      db = dbModule.createDatabase(config);
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = previousNodeEnv;
+      if (previousSeed === undefined) delete process.env.ERP_SEED_DEMO; else process.env.ERP_SEED_DEMO = previousSeed;
+    }
     try { process.stdout.write(`${JSON.stringify({ operation, bootstrapped: true })}\n`); }
     finally { db.close(); }
     return;
