@@ -4531,3 +4531,47 @@ Requirement §33.39 的 **15 个 Finance race**（RACE-01..15）实现齐备（`
 - **不签发**：Manual Closure（B3104 库存管理 / B3105 条码管理）、Release Readiness、发布、部署。
 - 本轮**未**执行真实环境 migration、业务数据库写入、push / merge / tag / 发布 / 部署。
 - **下一域**：按就绪度顺序继续域 6 —— **Sales & Customer**（CAP-1..36，以及本轮未实现的 W11-B / W11-C / W11-D）。
+
+## 60. Sales & Customer 销售与客户域：域级审计、整改轮与验收候签（2026-11-13）
+
+### 60.1 授权与范围
+
+- **授权来源**：业务所有者 2026-11-12「现在我们要进行整个项目最后的收尾，请对八个业务域进行验收」；本轮追加指示「现在做 Sales & Customer 业务域 补齐剩余缺口 进行最后验收 最终目标是域级 acceptacne 和能力 freezen」。
+- **本轮范围**：域 6 —— Sales & Customer（B3102 销售管理 / B3103 信用管理，CAP-1..CAP-36）的域级逐项能力审计、整改轮实施、专属真实 MySQL campaign 基础设施与域级验收**候签材料**。
+- **状态**：`PENDING_APPROVAL` —— 候签材料已产出，**尚未签发**任何域级 Acceptance / Capability Freeze。
+
+### 60.2 所有者裁定
+
+| 事项 | 裁定 |
+|---|---|
+| D-2～D-5 四项开放设计决策 | **全部按 Design §37.54.17 已写明的推荐值实施**；四项均为 Requirement 允许范围内的 Design 决策，不改动 Requirement |
+| 真实 MySQL 证据口径 | **新建 Sales 专属 campaign**（沿用库存域裁定「逐域新建专属 campaign」） |
+| 整改范围 | **全量补齐**：信用三包（W11-B / W11-C / W11-D）+ 3 项 `PARTIAL` + SC80 / SC81 报表 + SC01 / SC06 / SC07 / SC19 的 operator 前端工作面 |
+
+### 60.3 审计结论与整改结果
+
+- 台账：[`docs/audits/sales-customer-capability-audit-20261113.md`](../audits/sales-customer-capability-audit-20261113.md)；候签：[`docs/acceptance/sales-customer-domain-acceptance-candidate-20261113.md`](../acceptance/sales-customer-domain-acceptance-candidate-20261113.md)。
+- 整改前：CAP-1..CAP-36 共 36 项 = `COVERED` **31** / `PARTIAL` **3**（CAP-1、24、27）/ `MISSING` **2**（CAP-34、36）。
+- 整改后：36 项**全部 `COVERED`**。
+- 登记 **12 项真实缺陷**（`SC-DEF-01`..`SC-DEF-12`），其中最关键的四项：
+  - `SC-DEF-03` SC68 的五个反应路径从未接线，且 `consumeReservationIntent` **无生产调用方** —— 出货从不消费预留；
+  - `SC-DEF-11`（整改轮新发现）`grant` / `consume` / `release` 三条路径在事务外读状态、UPDATE 不带 CAS —— 并发双授权都会提交 `GRANTED`，状态机不是承重件；
+  - `SC-DEF-12`（整改轮新发现）订单行的**文档单位**数量与预留意图的**基本单位**数量被直接比较；
+  - `SC-DEF-04` / `SC-DEF-05` SC80 销售毛利与 SC81 销售排行**零实现**。
+- **显式 Supersession 十二处**（无一处断言被删除）：Wave 9 / Wave 10 的「Wave 11 表不存在」断言收窄为隔离迁移证明；Wave 9 的评级历史不可改写断言收窄为「仅允许 `superseded_at` 迁移」；Wave 9 迁移的外键集合断言容忍**恰好一条**具名新增外键；T5 的冻结指纹按 Design §37.54.11.2 的预告重新钉住（八个历史链接不变）；P8 的 `REPORT_TABS` 计数改为精确集合相等；11 处路由计数契约随新增 6 条 contextual route 更新；P7 的 `useReport` 字面断言收窄为请求合同语义。
+
+### 60.4 门禁
+
+`pnpm test:fast` **638/638**、`pnpm test`（FULL）**3881/3881**、`pnpm test:heavy` **67/67**、`pnpm build` PASS、`git diff --check` PASS；域级合同套件 **13/13**、域能力套件 **32/32 + 20/20**、信用评估 **14/14**、信用对账 **26/26**；既有 Wave 7 / 8 / 9 / 10 与 W11-A 套件全绿且既有断言未修改；浏览器域级门禁 **88/88**（22 界面 × 4 档宽度，两次变异实验证明非空洞）；文档一致性 `current` N1、N3～N6、N8、N9 PASS、N2 `RETIRED`、**N7 FAIL**（既有历史提交的追溯债务，与本域无关），`migration` C1～C6 全 PASS。
+
+### 60.5 真实 MySQL 证据边界
+
+- 本域专属 campaign `SALES_CUSTOMER_MYSQL_V1` 的基础设施已建成（manifest + root/child/gate 三件套 + worker + 竞态套件 + launcher 条目 + `test:mysql:sales-customer`）：**7 项竞态用例**（SC-RACE-01..07），每项配一个**未争用负对照**；离线校验 **7/7 PASS**，连续三次稳定；campaign 模式在 SQLite 上**显式拒绝**，不产出非 MySQL 证据。
+- **真实 MySQL 运行尚未执行** —— ACK-4 capability 只能由业务所有者用受保护 launcher 一次性签发；每次失败运行都会消耗 capability，重试需要新的 RunId 与新的 15 分钟窗口。
+- 按 `MYSQL-EV-01` 统一口径：schema / migration 对等由 `test:mysql:accounting-analytics` 的全量 bootstrap 覆盖（Sales 域的表也在其中）；**行为等价在真实 MySQL 上未单独取证**，在 campaign 实际运行前作为显式残余登记。
+
+### 60.6 未解决事项与暂停点
+
+- **尚未签发**任何域级 Acceptance / Capability Freeze token；**不签发** Manual Closure（B3102 销售管理 / B3103 信用管理）、Release Readiness、发布、部署。
+- 待业务所有者决定的两件事：① 是否签发 ACK-4 capability 以运行本域专属 campaign；② 是否在「行为等价未单独取证」这一显式残余下签发域级 Acceptance 与 Capability Freeze。
+- 本轮**未**执行真实环境 migration、业务数据库写入、push / merge / tag / 发布 / 部署。

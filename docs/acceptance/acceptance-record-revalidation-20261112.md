@@ -62,6 +62,22 @@
 
 N7 的成因与当前状态已登记在 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §53.3 与 §54；该 FAIL 与任何 Domain 验收无关，**不得**被记为某个域的缺陷。
 
+### 3.4 `PENDING_DOMAIN_AUDIT`（13 份）的域级复核结果（2026-11-13 更新）
+
+域 6 —— Sales & Customer 的域级逐项审计与整改轮已完成（[`sales-customer-capability-audit-20261113.md`](../audits/sales-customer-capability-audit-20261113.md)），
+候签材料见 [`sales-customer-domain-acceptance-candidate-20261113.md`](./sales-customer-domain-acceptance-candidate-20261113.md)（`PENDING_APPROVAL`）。
+
+| 记录 | 域级复核结论 |
+|---|---|
+| `wave-8-stage-d-implementation-evidence.md`、`wave-8-stage-d-verification-and-p1-remediation.md`、`wave-8-user-decision-approval.md`、`wave-8-stage-d-coverage-record.md`、`wave-8-final-acceptance-and-freeze.md` | Wave 8 能力（CAP-25 寄售 / CAP-26 服务物料）在域级逐项复核中判为 `COVERED`，对应套件在当前 HEAD 保持绿色 |
+| `wave-9-final-acceptance-and-freeze.md`、`wave-10-capability-freeze.md`、`wave-10-implementation-records.md` | Wave 9 / Wave 10 信用能力（CAP-28..CAP-33）在域级逐项复核中判为 `COVERED`；**Wave 9 的两处冻结断言已按 `SC-SUP-01` / `SC-SUP-02` / `SC-SUP-03` 显式收窄**（原意保留） |
+| `wave-0-2-implementation-records.md`、`batch-a-implementation-mapping.md`、`f2-implementation-status-clarification.md` | Waves 1–2 / Batch A 的实施事实在域级逐项复核中已由当前工作树重新取证；对应能力判为 `COVERED` |
+| `package-b-final-acceptance.md` | 本地测试后端隔离结论在当前 HEAD 仍成立（隔离由 `scripts/testing/test-env.js` 在 runner 内自建） |
+| `w11-sec-01-acceptance-and-freeze.md`、`w11-a-u1-acceptance-and-freeze.md`、`w11-a-u2-acceptance-and-freeze.md`、`w11-a-overdue-acceptance-and-freeze.md`、`w11-a-u3-*.md` | W11-SEC-01 与 W11-A U1/U2/U3 的单元级冻结在域级复核中判为仍成立（对应套件绿色）；**W11-A 整包（`W11_A_ACCEPTANCE_PASS`）仍未签发**，为业务所有者的独立决定 |
+
+**当前分类不变**：这 13 份在域级 Acceptance **正式签发**前仍属 `PENDING_DOMAIN_AUDIT`，
+按 §4.2 的引用规则**不得**作为当前证据单独引用；域级能力结论一律改引域级 Acceptance 记录。
+
 ## 4. 复核的可重跑性
 
 | 检查 | 命令 | 当前结果 |

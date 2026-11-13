@@ -193,16 +193,25 @@ Freeze、Domain Closure 或 Release Readiness。
 
 
 
-## 2. Sales & Customer —— 开放设计决策
+## 2. Sales & Customer —— 设计决策
 
-规范来源：[`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §35.9（Release Blockers 表）。
+规范来源：[`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §35.9（Release Blockers 表）；
+决策正文：[`docs/design/sales-customer/05-wave-11-stage-c.md`](../design/sales-customer/05-wave-11-stage-c.md) §37.54.17。
+
+**2026-11-13 业务所有者裁定**：D-2～D-5 **全部按 Design §37.54.17 已写明的推荐值实施**。
+四项均为 Requirement 允许范围内的 Design 决策，**不改动 Requirement，不重开 Requirement**。
 
 | ID | 待定内容 | 阻塞范围 | 状态 |
 |---|---|---|---|
-| D-2 | 信用评估基础（W11-B）的设计决策 | W11-B | `PENDING` |
-| D-3 | 多评分 / 评级应用（W11-C）的设计决策 | W11-C | `PENDING` |
-| D-4 | 信用对账与重算（W11-D）的设计决策 | W11-D | `PENDING` |
-| D-5 | 信用对账与重算（W11-D）的设计决策 | W11-D | `PENDING` |
+| D-2 | 评分数值一律整数 milli-point、权重整数 milli-weight，**禁止插值与浮点** | W11-B | `APPROVED`（2026-11-13 所有者裁定；按 Design 推荐值实施） |
+| D-3 | 模型 / 方案 / 指标**不设独立版本表**，采用生效日期版本化（沿用 Wave 9 形态） | W11-B | `APPROVED`（2026-11-13 所有者裁定；按 Design 推荐值实施） |
+| D-4 | 评分表创建时**固定** profile 版本；apply 时版本变化则 fail closed（409 `CREDIT_RATING_TARGET_PROFILE_CHANGED`） | W11-C | `APPROVED`（2026-11-13 所有者裁定；按 Design 推荐值实施） |
+| D-5 | `credit_evaluation_result` 对 sheet 唯一；重新评价必须新建评分表 | W11-C | `APPROVED`（2026-11-13 所有者裁定；按 Design 推荐值实施） |
+
+> **本表原有编号失真已更正**：此前 D-4 / D-5 被登记为「信用对账与重算（W11-D）」的设计决策，
+> 与 Design §37.54.17 及 `PROJECT_STATUS.md` §35.9（阻塞范围为 W11-B、W11-C）不一致。
+> **W11-D 从未被 D-2～D-5 阻塞**，其唯一硬依赖 W11-SEC-01 已于 2026-10-28 验收冻结。
+> 本次更正的是**状态索引的归属行**，不改写任何已签发记录。
 
 ## 3. 待业务所有者追认 / 待独立决定
 
