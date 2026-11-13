@@ -319,7 +319,7 @@ describe('Permissions — canonical registry count', () => {
     // remain. 2026-11-13: the Platform domain closure adds five generic
     // workflow engine codes (WORKFLOW_TASK_VIEW / WORKFLOW_TASK_ACT /
     // WORKFLOW_INSTANCE_VIEW / WORKFLOW_CONTROL / WORKFLOW_REDEPLOY) → 252.
-    assert.equal(perms.length, 252, `PERMISSIONS array must include the approved Wave 10 family, M1-Core M-17, the Accounting & Analytics AA-W1 family and the Platform workflow engine family (got ${perms.length})`);
+    assert.equal(perms.length, 264, `PERMISSIONS array must include the approved Wave 10 family, M1-Core M-17, the Accounting & Analytics AA-W1 family and the Platform workflow engine family (got ${perms.length})`);
     assert.equal(perms.filter(([code]) => code === 'CREDIT_VIEW').length, 1);
     assert.equal(perms.filter(([code]) => code === 'CREDIT_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'CREDIT_EVALUATE').length, 1);

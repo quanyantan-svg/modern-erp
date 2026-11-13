@@ -7,6 +7,11 @@ import { listNotifications, markNotificationRead } from './modules/platform-noti
 import { createWorkflow, listWorkflows } from './modules/platform-workflows.js';
 import { assertApprovalSod } from './modules/platform-sod.js';
 import {
+  bindOrganizationScope, createOrganization, createOrganizationScope, getOrganization,
+  listOrganizationScopes, listOrganizations, setOrganizationStatus, unbindOrganizationScope,
+  updateOrganization,
+} from './modules/platform-organizations.js';
+import {
   getWorkflowInstance, getWorkflowTemplate, handleActivateWorkflowBinding, handleCompleteWorkflowTask,
   handleCreateWorkflowTemplate, handleCreateWorkflowVersion, handlePublishWorkflowVersion,
   handleRedeployWorkflowInstances, handleResumeWorkflowInstance, handleRetireWorkflowVersion,
@@ -2796,6 +2801,63 @@ ownedRouteTable.register({
   path: '/api/platform/workflow-test-runs',
   handler: ({ db, req, res, actor }) => testWorkflowRun(db, req, res, actor),
   owner: 'server/modules/platform-workflow-engine.js',
+});
+
+// Platform 平台层域 —— 组织主数据与作用域登记（docs/design/platform.md §32.5）。
+// PL-DEC-02：Organization 主数据所有权归 Platform；本模块是它的唯一 owner。
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/platform/organizations',
+  handler: ({ db, res, actor, url }) => listOrganizations(db, res, actor, url),
+  owner: 'server/modules/platform-organizations.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/platform/organizations',
+  handler: ({ db, req, res, actor }) => createOrganization(db, req, res, actor),
+  owner: 'server/modules/platform-organizations.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/platform\/organizations\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getOrganization(db, res, actor, params[0]),
+  owner: 'server/modules/platform-organizations.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/platform\/organizations\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateOrganization(db, req, res, actor, params[0]),
+  owner: 'server/modules/platform-organizations.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/platform\/organizations\/([^/]+)\/status$/,
+  handler: ({ db, req, res, actor, params }) => setOrganizationStatus(db, req, res, actor, params[0]),
+  owner: 'server/modules/platform-organizations.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/platform/organization-scopes',
+  handler: ({ db, res, actor }) => listOrganizationScopes(db, res, actor),
+  owner: 'server/modules/platform-organizations.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/platform/organization-scopes',
+  handler: ({ db, req, res, actor }) => createOrganizationScope(db, req, res, actor),
+  owner: 'server/modules/platform-organizations.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/platform\/organization-scopes\/([^/]+)\/bind$/,
+  handler: ({ db, req, res, actor, params }) => bindOrganizationScope(db, req, res, actor, params[0]),
+  owner: 'server/modules/platform-organizations.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/platform\/organization-scopes\/([^/]+)\/unbind$/,
+  handler: ({ db, req, res, actor, params }) => unbindOrganizationScope(db, req, res, actor, params[0]),
+  owner: 'server/modules/platform-organizations.js',
 });
 
 // V17 Master & Engineering Domain Closure — Wave B: BOM Governance.

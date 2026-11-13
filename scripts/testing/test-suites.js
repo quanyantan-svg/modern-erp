@@ -82,6 +82,8 @@ const FULL = [
   'server/platform-workflow-engine.test.js',
   // SOD 接线合同（FAST 已含，此处随 FULL 一并登记）。
   'server/platform-sod-wiring.test.js',
+  // Platform 组织主数据与作用域登记合同（PL-03）。
+  'server/platform-organizations.test.js',
   // ----- Sales & Customer Domain — Wave 0 migration infrastructure -----
   // Canonical zero-step registry, deterministic runner, fail-closed errors,
   // SQLite fresh/reopen wiring, and zero future Sales business schema.
@@ -896,6 +898,8 @@ const FAST = [
   'server/platform-workflow-engine.test.js',
   // Platform SOD 接线：既有 6 族的行为逐字不变 + 生产工单族自审批缺口闭合（PL-DEF-01）。
   'server/platform-sod-wiring.test.js',
+  // Platform 组织主数据与作用域登记合同（PL-03）。
+  'server/platform-organizations.test.js',
   // M1-Core WP-0 static infrastructure contract; no DB, MySQL or migration execution.
   'server/m1c-wp0-infrastructure.test.js',
   'server/m15-tracked-identity-key.test.js',

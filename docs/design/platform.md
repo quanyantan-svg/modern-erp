@@ -462,11 +462,14 @@ SOD 求值必须在**审批决策点**被调用。既有 6 族的决策点分布
 （测试库内为 WAREHOUSE 角色追加 `PRODUCTION_ORDERS_APPROVE`，**不改动产品的种子角色模型**）。
 M&Q 域既有验收记录的当前有效性须在 Platform 域级 Acceptance 轮按 §4.6 复核登记。
 
-**待业务所有者裁定（`PL-DEC-04`）**：种子角色模型里 `PRODUCTION_ORDERS_APPROVE` **只授予 ADMIN**。
-关闭自审批缺口后，**建单人与审批人必须不同** —— 于是默认部署下"管理员建的工单无人可批"。
-候选处置：① 授予 `role-warehouse`（它已持有 `PRODUCTION_ORDERS_VIEW` 与全部生产物料执行权限）；
-② 授予 `role-reviewer`；③ 新增第 8 个系统角色「生产主管」；④ 维持种子角色不变，由部署方经角色管理授予
-（测试走的就是这条路径）。本单元**不擅自改动种子角色模型**。
+**待业务所有者裁定（`PL-DEC-04`）** → **已裁定（2026-11-14）：授予 `role-warehouse`**。
+种子角色模型里 `PRODUCTION_ORDERS_APPROVE` 原先只授予 `ADMIN`；关闭自审批缺口后
+**建单人与审批人必须不同**，否则默认部署下"管理员建的工单无人可批"。
+仓库管理员本就持有 `PRODUCTION_ORDERS_VIEW` 与全部生产物料执行权限
+（领料 / 退料 / 完工入库、`INVENTORY_TRANSFER_APPROVE`、`INVENTORY_CHECK_APPROVE`），
+是最贴近的第二审批身份。`role-warehouse` 因此新增 `PRODUCTION_ORDERS_APPROVE`。
+**这改变了 M&Q 域的角色合同** —— 其既有验收记录所依据的证据（`server/manufacturing-stabilization.test.js`
+的"只有管理员拿到生产控制项"断言）须在 Platform 域级 Acceptance 轮按 §4.6 复核登记。
 
 ### 32.5 Organization Scope 设计
 
