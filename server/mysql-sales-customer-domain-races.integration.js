@@ -210,14 +210,23 @@ describe('Sales & Customer domain real MySQL concurrency invariants (7 races)', 
       ]);
       assert.equal(new Set(registrations.map((row) => row.connectionId)).size, 3,
         `${label}: three independent sessions are required`);
-      // The FILE gate releases both contenders at the same instant. Holding
-      // the production L0 coordination gate instead would queue them behind
-      // the control rather than against each other, and the loser would then
-      // sit on a lock until the server's lock-wait timeout — a test artifact,
-      // not a race outcome.
+      // Two barriers, both needed:
+      //
+      //   * the FILE gate releases both contenders at the same instant, so
+      //     neither can finish before the other has even started;
+      //   * the L0 coordination gate, held by the control, keeps BOTH of them
+      //     blocked at the production transaction boundary until the
+      //     contention has been OBSERVED. Without it the two contenders could
+      //     serialize on their own and the race would degenerate into two
+      //     sequential calls.
+      //
+      // The control releases the gate as soon as the contention is observed,
+      // so the hold is short and no contender ever reaches the server's
+      // lock-wait timeout.
       let gatePath = null;
       if (inCampaign) {
         gatePath = join(mkdtempSync(join(tmpdir(), 'sales-customer-race-gate-')), 'gate');
+        await control.run({ action: 'hold-gate' });
       }
       const pending = [
         left.run({ ...commandFor('left'), gatePath }),
@@ -228,10 +237,16 @@ describe('Sales & Customer domain real MySQL concurrency invariants (7 races)', 
         // The contenders must be observably BLOCKED against each other.
         // Without this the race could degenerate into two sequential calls.
         const threadIds = [registrations[0].threadId, registrations[1].threadId];
+        const connectionIds = [registrations[0].connectionId, registrations[1].connectionId];
         assert.ok(threadIds.every((value) => Number.isInteger(Number(value))),
           `${label}: every contender must report its performance_schema thread id`);
         writeFileSync(gatePath, 'go\n');
-        contention = await waitForBothContendersBlocked(db, threadIds);
+        contention = await waitForBothContendersBlocked(db, {
+          threadIds,
+          connectionIds,
+          controlThreadId: registrations[2].threadId,
+        });
+        await control.run({ action: 'release-gate' });
       }
       const outcomes = await Promise.all(pending);
       // The contention verdict is asserted AFTER the outcomes are known, so a
@@ -294,31 +309,48 @@ describe('Sales & Customer domain real MySQL concurrency invariants (7 races)', 
    * close), because those paths lock their business row during discovery,
    * before the L0 gate.
    */
-  async function waitForBothContendersBlocked(observer, threadIds) {
+  async function waitForBothContendersBlocked(observer, { threadIds, connectionIds, controlThreadId }) {
     const ids = threadIds.map((value) => Number(value));
-    for (let attempt = 0; attempt < 2000; attempt += 1) {
+    const controlId = controlThreadId == null ? null : Number(controlThreadId);
+    for (let attempt = 0; attempt < 400; attempt += 1) {
+      // Tier 1 — the lock-wait graph.
       const rows = observer.prepare(`SELECT REQUESTING_THREAD_ID waiter, BLOCKING_THREAD_ID blocker
         FROM performance_schema.data_lock_waits
         WHERE REQUESTING_THREAD_ID IN (?, ?) OR BLOCKING_THREAD_ID IN (?, ?)`).all(...ids, ...ids);
       const waiters = new Set(rows.map((row) => Number(row.waiter)));
+      const blockers = new Set(rows.map((row) => Number(row.blocker)));
+      // Tier 2 — the server-reported session state of the contenders.
+      const procRows = observer.prepare(`SELECT ID AS ID, COMMAND AS COMMAND, STATE AS STATE
+        FROM information_schema.PROCESSLIST WHERE ID IN (?, ?)`).all(...connectionIds);
+      const blockedSessions = new Set(procRows
+        .filter((row) => /waiting for .*lock/i.test(String(row.STATE || '')))
+        .map((row) => Number(row.ID)));
+      const blockedIds = new Set([...waiters].filter((id) => ids.includes(id)));
       // Contention means: at least one contender is genuinely BLOCKED, and the
-      // other one is either blocked as well or is the blocker. Both shapes are
-      // a real race — the second contender is held by the first one's
-      // in-flight transaction. A contender that is neither waiting nor
-      // blocking has already finished, and the race degenerated into two
-      // sequential calls, which is exactly what must be rejected.
-      const blocked = ids.filter((id) => waiters.has(id));
-      const blocking = new Set(rows.map((row) => Number(row.blocker)));
-      const contended = blocked.length > 0
-        && ids.every((id) => waiters.has(id) || blocking.has(id));
-      if (contended) {
-        return { observed: true, attempts: attempt + 1, waiters: rows.map((row) => ({ waiter: Number(row.waiter), blocker: Number(row.blocker) })) };
+      // other one is either blocked as well, or is the blocker, or is the
+      // control both of them are queued behind. A contender that is neither
+      // waiting nor blocking has already finished, and the race degenerated
+      // into two sequential calls — which is exactly what must be rejected.
+      const someoneBlocked = blockedIds.size > 0 || blockedSessions.size > 0;
+      const otherIsAlsoInvolved = ids.every((id, index) => (
+        blockedSessions.has(Number(connectionIds[index]))
+        || waiters.has(id)
+        || blockers.has(id)
+        || (controlId != null && id === controlId)
+      ));
+      if (someoneBlocked && otherIsAlsoInvolved) {
+        return {
+          observed: true,
+          attempts: attempt + 1,
+          waiters: rows.map((row) => ({ waiter: Number(row.waiter), blocker: Number(row.blocker) })),
+          blockedSessions: [...blockedSessions],
+        };
       }
       // The wait must not block this process's event loop: the HTTP server
       // that serves the suite's own fixture calls lives here.
-      await new Promise((done) => setTimeout(done, 5));
+      await new Promise((done) => setTimeout(done, 25));
     }
-    return { observed: false, attempts: 400, waiters: [] };
+    return { observed: false, attempts: 400, waiters: [], blockedSessions: [] };
   }
 
   // -------------------------------------------------------------------------
@@ -1193,7 +1225,11 @@ describe('Sales & Customer domain real MySQL concurrency invariants (7 races)', 
       action: 'order-action', orderAction: 'close', orderId,
       key, body: { reason: '竞态关闭' },
     });
-    const closeRace = await raceTwo(() => closeCommand(closeOrder.orderId, `sc-race-07-close-${suffix}`), {
+    // Each contender gets its OWN idempotency key. A shared key would make the
+    // second contender a REPLAY of the first one's result — it would return
+    // 200 without ever entering the contested code, and the race would prove
+    // nothing.
+    const closeRace = await raceTwo((side) => closeCommand(closeOrder.orderId, `sc-race-07-close-${side}-${suffix}`), {
       label: 'SC-RACE-07-close',
       negative: () => closeCommand(closeControlOrder.orderId, 'sc-race-07-close-control-close'),
     });
@@ -1235,7 +1271,7 @@ describe('Sales & Customer domain real MySQL concurrency invariants (7 races)', 
       action: 'order-action', orderAction: 'cancel', orderId,
       key, body: { reason: '竞态取消' },
     });
-    const cancelRace = await raceTwo(() => cancelCommand(cancelOrder.orderId, `sc-race-07-cancel-${suffix}`), {
+    const cancelRace = await raceTwo((side) => cancelCommand(cancelOrder.orderId, `sc-race-07-cancel-${side}-${suffix}`), {
       label: 'SC-RACE-07-cancel',
       negative: () => cancelCommand(cancelControlOrder.orderId, 'sc-race-07-cancel-control-cancel'),
     });
