@@ -21,11 +21,30 @@
 4. **审计在 handler**：`audit(db, userId, action, entityType, entityId, detail)`（`server/lib/audit.js:4-6`）**同事务**写入；业务拒绝审计 `auditBusinessRejection(db, actor, context, error, {onlyCodes})`（`server/lib/audit.js:19-32`）**必须在事务外**调用，仅对 HttpError 409 触发。
 5. **DDL 不进事务**：MySQL DDL 隐式提交。所有建表 / 改表 / 建索引必须在 `transaction()` 之外执行。
 6. **双 DDL 同批**：每个新表必须同时提供 SQLite 与 MySQL DDL；MySQL 物理类型经 `resolveMySqlColumnType`（`server/database/mysql-schema.js:183`）解析，与快照路径共用同一来源（`:168-181`）。MySQL 建表 / 改表经 `mysql-worker.js` 的 `'exec'` action（`:219` → `runExec :153`）。
-7. **MySQL 建表现有库**：新增表只写进 SQLite schema 时，MySQL 全新库经 `bootstrapMySql`（`server/database/mysql-schema.js:459`）的快照派生自动获得；**既有库**必须走 `planMySqlAdditiveReconciliation`（`:374`）与 `planMySqlIndexReconciliation`（`:389`）的显式分支，因此迁移文件必须**同时**给出 MySQL 分支。
+7. **MySQL 方言由 SQLite 快照派生，不手写第二份 DDL**（2026-11-13 修正）：
+   - 全新 MySQL 库经 `bootstrapMySql`（`server/database/mysql-schema.js:459`）从 SQLite 快照派生；
+   - **既有** MySQL 库经 `planMySqlAdditiveReconciliation`（`:374`）补齐缺失的**表与列**、
+     `planMySqlIndexReconciliation`（`:389`）补齐缺失的**普通列索引** —— **两者都是快照驱动**，
+     因此迁移文件**只需写 SQLite DDL**，MySQL 侧自动同批落地；
+   - `tableDefinition`（`:247-269`）负责携带 PK（**含复合主键** —— SQLite `PRAGMA table_info` 对复合主键
+     返回 `pk=1,2,…` 序位，`:253` 按序位排序后正确生成 `PRIMARY KEY (a, b)`）、
+     行内 UNIQUE（≤4 列）、外键与 **CHECK 约束**（`:268`）；列物理类型由 `resolveMySqlColumnType`（`:183`）
+     从 SQLite 类型派生，**不得手写第二份类型表**（第二份正是两条路径漂移的来源）；
+   - **必须由迁移显式处理的三种例外**：① 表达式索引（`planMySqlIndexReconciliation` 明确拒绝）；
+     ② 行内 UNIQUE 超过 4 列（快照派生会抛错）；③ 需要 MySQL 专有类型或命名约束的表。
+   - **本域 17 张新表全部避开上述三种例外** → 一律只写 SQLite DDL。
 8. **测试必须登记**：测试发现根只有 `server` 与 `src/lib`（`scripts/testing/test-suites.js:965-981`）；`validate()`（`:1001`）对任何未分类的 `server/*.test.js` 直接失败。新增测试文件必须登记进 FAST / FULL / HEAVY。
 9. **金额用安全整数分**（AGENTS.md §6）。
-10. **平台能力不得成为第二写入口**：通用工作流的"下推"动作必须调用目标域的 canonical 创建入口；跨域调用必须走被调域的 canonical API。
-11. **平台错误码自成命名空间**（`PLATFORM_*`），不得被业务域用作业务判断依据（AGENTS.md §6；`docs/decisions/cross-domain-error-code-policy-20261112.md`）。
+10. **既有表新增唯一索引不会被增量对账补齐**：`planMySqlIndexReconciliation`（`:389-405`）**跳过**
+    `origin === 'u'` 的索引 → 对**已存在的**表（如 `notifications`）新增 UNIQUE 索引，在既有 MySQL 库上不会被创建，
+    与 SQLite 快照产生 parity 差异。故：**既有表一律只加普通列与普通索引**；
+    唯一性由**应用层在事务内**保证 —— 本仓库的写事务被序列化（SQLite `BEGIN IMMEDIATE`，
+    MySQL 全局闸门行 `mysql_transaction_gates`），故事务内的「先查后写」是原子的。
+11. **JSON 载荷列用 `TEXT`**（仓库既有约定：`server/migrations/fixed-assets-schema.js:85` 的
+    `before_json TEXT NOT NULL`、`server/migrations/accounting-period-end-schema.js:51` 的
+    `difference_json TEXT`），**不在** SQLite 侧声明 `JSON` 类型。
+12. **平台能力不得成为第二写入口**：通用工作流的"下推"动作必须调用目标域的 canonical 创建入口；跨域调用必须走被调域的 canonical API。
+13. **平台错误码自成命名空间**（`PLATFORM_*`），不得被业务域用作业务判断依据（AGENTS.md §6；`docs/decisions/cross-domain-error-code-policy-20261112.md`）。
 
 ### 32.1 模块与文件清单
 
@@ -89,7 +108,7 @@
 | `workflow_template_versions` | `id` PK、`template_id` FK、`version` INTEGER、`status` CHECK(DRAFT/PUBLISHED/RETIRED)、`definition_json`、`change_note`、`published_by` FK users、`published_at`、`created_at` | UNIQUE(`template_id`,`version`)；`ix_workflow_template_versions_template` |
 | `workflow_bindings` | `id` PK、`document_type`、`org_id` NOT NULL DEFAULT `''`（`''` = 全局组织）、`condition_json`、`template_id` FK、`version_id` FK、`priority`、`status` CHECK(ACTIVE/INACTIVE)、`created_by`、`created_at`、`updated_at` | UNIQUE(`document_type`,`org_id`)；`ix_workflow_bindings_status` |
 | `workflow_binding_history` | `id` PK、`binding_id` FK、`version_id` FK、`condition_json`、`activated_by` FK users、`activated_at`、`retired_at` | `ix_workflow_binding_history_binding` |
-| `workflow_instances` | `id` PK、`template_id` FK、`version_id` FK、`document_type`、`document_id`、`org_id` NOT NULL DEFAULT `''`、`status` CHECK(RUNNING/SUSPENDED/COMPLETED/TERMINATED/CANCELLED)、`definition_snapshot_json`、`variables_json`、`started_by` FK users、`started_at`、`completed_at`、`suspended_at`、`terminated_at`、`cancel_reason` | UNIQUE(`idempotency_key`)；`ix_workflow_instances_document`(`document_type`,`document_id`)；`ix_workflow_instances_status` |
+| `workflow_instances` | `id` PK、`template_id` FK、`version_id` FK、`document_type`、`document_id`、`org_id` NOT NULL DEFAULT `''`、`status` CHECK(RUNNING/SUSPENDED/COMPLETED/TERMINATED/CANCELLED)、`definition_snapshot_json`、`variables_json`、`idempotency_key`、`started_by` FK users、`started_at`、`completed_at`、`suspended_at`、`terminated_at`、`cancel_reason` | UNIQUE(`idempotency_key`)；`ix_workflow_instances_document`(`document_type`,`document_id`)；`ix_workflow_instances_status` |
 | `workflow_node_instances` | `id` PK、`instance_id` FK、`node_key`、`node_type`、`sequence_no`、`status` CHECK(PENDING/ACTIVE/COMPLETED/SKIPPED/CANCELLED)、`assignee_id` FK users NULL、`assignee_role` NULL、`entered_at`、`completed_at`、`branch_taken` | UNIQUE(`instance_id`,`node_key`)；`ix_workflow_node_instances_instance` |
 | `workflow_tasks` | `id` PK、`instance_id` FK、`node_instance_id` FK、`assignee_id` FK users、`status` CHECK(PENDING/COMPLETED/CANCELLED/TRANSFERRED)、`action` NULL CHECK(APPROVE/REJECT/RETURN/TRANSFER/ADD_SIGN/SKIP)、`comment`、`created_at`、`completed_at`、`completed_by` FK users NULL、`row_version` INTEGER NOT NULL DEFAULT 0 | `ix_workflow_tasks_assignee_status`(`assignee_id`,`status`)；`ix_workflow_tasks_instance` |
 | `workflow_action_logs` | `id` PK、`instance_id` FK、`node_instance_id` FK、`action_type` CHECK(FORM_WRITE/NOTIFY/PUSH/CALLBACK)、`target`、`payload_json`、`status` CHECK(SUCCESS/FAILED)、`error`、`executed_at` | `ix_workflow_action_logs_instance` |
@@ -156,8 +175,8 @@
 | 变更 | 内容 |
 |---|---|
 | ADD COLUMN | `priority` TEXT NOT NULL DEFAULT 'NORMAL'、`category` TEXT、`action_url` TEXT、`expires_at` TEXT、`dedupe_key` TEXT |
-| 索引 | `ix_notifications_user`(`user_id`)、`ix_notifications_user_unread`(`user_id`,`is_read`)、`ix_notifications_created_at`(`created_at`) |
-| 唯一 | `CREATE UNIQUE INDEX ux_notifications_dedupe ON notifications(user_id, dedupe_key)` —— 既有行 `dedupe_key` 为 NULL，SQLite 与 MySQL 的 UNIQUE 索引均允许多个 NULL，向后兼容 |
+| 索引 | `ix_notifications_user`(`user_id`)、`ix_notifications_user_unread`(`user_id`,`is_read`)、`ix_notifications_created_at`(`created_at`)、`ix_notifications_dedupe`(`user_id`,`dedupe_key`) —— **全部为普通索引**（既有表不得新增唯一索引，见 §32.0 第 10 条） |
+| 唯一 | **不建唯一索引**（2026-11-13 修正）：`planMySqlIndexReconciliation`（`server/database/mysql-schema.js:389-405`）跳过 `origin === 'u'` 的索引 → 对**已存在的** `notifications` 表新增 UNIQUE 索引，在既有 MySQL 库上不会被创建，与 SQLite 快照产生 parity 差异。去重由**应用层在通知自己的事务内**保证（写事务被序列化 —— SQLite `BEGIN IMMEDIATE`、MySQL 全局闸门行 → 事务内「先查后写」原子）。既有行 `dedupe_key` 为 NULL，不影响读取 |
 | `type` 收敛 | 由自由文本收敛为受约束枚举。**不**加 CHECK 约束（既有表 ALTER 加 CHECK 在 SQLite 需重建表，会触碰既有行）—— 改为**服务端校验 + 新增 `category` 承载扩展语义**，`type` 只接受 `INFO` / `WARNING` / `SUCCESS` / `ERROR` 四个值，非法值在写入前被拒绝 |
 
 新增表 `notification_subscriptions`：

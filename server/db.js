@@ -54,6 +54,7 @@ import { migrateManagementAccountingSchema } from './migrations/management-accou
 import { migrateInventoryPositionSchema } from './migrations/inventory-position-schema.js';
 import { migrateSalesCustomerDomain } from './migrations/sales-customer-domain.js';
 import { migrateW11ASelectorSearchKey } from './migrations/sales-customer-wave11-a-selector-search-key.js';
+import { migratePlatformDomainSchema } from './migrations/platform-domain-schema.js';
 import { foldSearchText } from './lib/search-fold.js';
 import { computePositionKey } from './lib/inventory-position.js';
 
@@ -605,6 +606,10 @@ function createSqliteDatabase(filename) {
   // customer and the Credit Profile tables exist, so the columns can be added
   // and the stored rows can be backfilled.
   migrateW11ASelectorSearchKey(db);
+  // Platform 平台层域 Domain Closure —— 17 张新表 + notifications / audit_logs 的
+  // 加列扩展（docs/design/platform.md §32.2）。它必须排在基础 schema 之后，
+  // 这样外键指向的 users(id) 已经存在；MySQL 侧由 SQLite 快照派生自动同批落地。
+  migratePlatformDomainSchema(db);
   // W11-A U3 — the demo seed runs after the additive search key migration, so
   // the demo customers write their derived search keys in the insert itself
   // and a repeated initialization never breaks an existing customer.

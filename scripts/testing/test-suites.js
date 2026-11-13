@@ -74,6 +74,10 @@ const HEAVY = [
 // KEEP / MERGE / DELETE / HEAVY classification for every file in this
 // manifest is recorded in docs/operations/testing.md §3.
 const FULL = [
+  // ----- Platform 平台层域 Domain Closure -----
+  // 17 张新表的 SQLite 形状、迁移幂等性，以及 MySQL 侧由 SQLite 快照派生的
+  // CREATE TABLE / ADD COLUMN 语句（离线，不需要 MySQL）。
+  'server/platform-domain-schema.test.js',
   // ----- Sales & Customer Domain — Wave 0 migration infrastructure -----
   // Canonical zero-step registry, deterministic runner, fail-closed errors,
   // SQLite fresh/reopen wiring, and zero future Sales business schema.
