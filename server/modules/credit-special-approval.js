@@ -33,6 +33,7 @@ import {
 } from './credit-scope.js';
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 import { assertApprovalSod } from './platform-sod.js';
+import { expandApproverRecipients, notifyEvent } from './platform-notifications.js';
 
 export const CREDIT_SPECIAL_APPROVAL_SCOPE_MODES = Object.freeze(['ONE_TIME', 'TIME_BOUNDED', 'OBJECT_BOUNDED']);
 export const CREDIT_SPECIAL_APPROVAL_DECISIONS = Object.freeze(['PENDING', 'APPROVED', 'REJECTED']);
@@ -225,6 +226,20 @@ export async function requestCreditSpecialApproval(db, req, res, actor) {
     response = { approval: present(readApproval(db, approvalId)) };
     saveIdempotency(db, REQUEST_OPERATION, sourceCreditCheckResultId, key, fingerprint, response);
   });
+  // 通知是副作用：在事务提交之后产生，失败不影响申请结果。
+  // 事务回调里的 approvalId 出了作用域 —— 用事务外的 response 取。
+  const requestedApprovalId = response.approval?.id || null;
+  notifyEvent(db, {
+    eventType: 'APPROVAL_PENDING',
+    category: 'APPROVAL_CREDIT_SPECIAL_APPROVAL',
+    recipients: expandApproverRecipients(db, ['CREDIT_SPECIAL_APPROVE']).map((value) => ({ type: 'USER', value })),
+    title: '有一项信用特别审批待处理',
+    content: `信用特别审批 ${requestedApprovalId} 待裁定`,
+    type: 'INFO',
+    sourceType: 'CREDIT_SPECIAL_APPROVAL',
+    sourceId: requestedApprovalId,
+    dedupeKey: `CREDIT_SPECIAL_APPROVAL:${requestedApprovalId}:PENDING`,
+  });
   return send(res, 201, response);
 }
 
@@ -317,6 +332,25 @@ export async function decideCreditSpecialApproval(db, req, res, actor, approvalI
     response = { approval: present(readApproval(db, approvalId)) };
     saveIdempotency(db, DECIDE_OPERATION, approvalId, key, fingerprint, response);
   });
+  // 通知申请人：请求人只存在于审计行里（该表没有请求人列）。
+  // 事务回调里的 row 出了作用域 —— 在事务外重新读一次。
+  const decidedApproval = readApproval(db, approvalId);
+  const requestAudit = db.prepare(
+    "SELECT user_id FROM audit_logs WHERE id=? AND entity_type='CREDIT_SPECIAL_APPROVAL' AND action='REQUEST'",
+  ).get(decidedApproval?.audit_id);
+  if (requestAudit?.user_id) {
+    notifyEvent(db, {
+      eventType: 'APPROVAL_HANDLED',
+      category: 'APPROVAL_CREDIT_SPECIAL_APPROVAL',
+      recipients: [{ type: 'USER', value: requestAudit.user_id }],
+      title: `信用特别审批已${decision === 'APPROVED' ? '通过' : '驳回'}`,
+      content: `信用特别审批 ${approvalId} 已${decision === 'APPROVED' ? '通过' : '驳回'}`,
+      type: decision === 'APPROVED' ? 'SUCCESS' : 'WARNING',
+      sourceType: 'CREDIT_SPECIAL_APPROVAL',
+      sourceId: approvalId,
+      dedupeKey: `CREDIT_SPECIAL_APPROVAL:${approvalId}:${decision}`,
+    });
+  }
   return send(res, 200, response);
 }
 

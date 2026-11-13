@@ -18,6 +18,7 @@ import { snapshotManufacturingExecution, assertRoutedCompletion, deriveProductio
 import { assertFinancialPeriodsOpen, createSystemVoucher, postWipMovement } from './financial-inventory.js';
 import { productionNetReceived, productionRequirementSummary } from './production-workflow.js';
 import { assertApprovalSod } from './platform-sod.js';
+import { notifyApprovalHandled, notifyApprovalPending } from './platform-notifications.js';
 
 const EPS = 1e-9;
 const PO_STATUS = Object.freeze({
@@ -282,6 +283,23 @@ export function changeProductionOrderStateByBody(db, body, res, actor, poId, opt
     }
     return transitionOrder(db, actor, order, target, body);
   });
+  // 通知是副作用：在事务提交之后产生。
+  const notified = db.prepare('SELECT * FROM production_orders WHERE id=?').get(poId);
+  if (notified) {
+    if (target === 'SUBMITTED') {
+      notifyApprovalPending(db, {
+        family: 'PRODUCTION_ORDER', documentType: 'PRODUCTION_ORDER',
+        documentId: poId, documentNo: notified.order_no,
+        title: `生产工单 ${notified.order_no} 待审批`,
+      });
+    } else if (target === 'APPROVED') {
+      notifyApprovalHandled(db, {
+        family: 'PRODUCTION_ORDER', documentType: 'PRODUCTION_ORDER',
+        documentId: poId, documentNo: notified.order_no,
+        initiatorId: notified.creator_id || null, outcome: 'APPROVED',
+      });
+    }
+  }
   return send(res, 200, { ok: true, ...result });
 }
 

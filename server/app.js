@@ -3,7 +3,10 @@ import { id, transaction, verifyPassword } from './db.js';
 import { randomUUID } from 'node:crypto';
 import { audit } from './lib/audit.js';
 import { adjustInventory, adjustInventoryAtPosition, resolveCanonicalPosition, setInventoryQuantity } from './lib/stock.js';
-import { listNotifications, markNotificationRead } from './modules/platform-notifications.js';
+import {
+  listNotificationOverview, listNotifications, listNotificationSubscriptions, manageNotificationSubscription,
+  markNotificationRead,
+} from './modules/platform-notifications.js';
 import { createWorkflow, listWorkflows } from './modules/platform-workflows.js';
 import { assertApprovalSod } from './modules/platform-sod.js';
 import {
@@ -585,6 +588,7 @@ import {
   generateBarcode, listGeneratedBarcodes, renderBarcodeLabel,
 } from './modules/inventory-barcode-generation.js';
 import { productionScanLookup, productionScanIssue, productionScanReport, productionScanTransfer } from './modules/manufacturing-scan.js';
+import { notifyApprovalHandled, notifyApprovalPending } from './modules/platform-notifications.js';
 
 // V2 owned-route registrations — Waves 3A–3F / 4A–4C
 //
@@ -2676,13 +2680,31 @@ ownedRouteTable.register({
 ownedRouteTable.register({
   method: 'GET',
   path: '/api/notifications',
-  handler: ({ db, res, actor }) => listNotifications(db, res, actor),
+  handler: ({ db, res, actor, url }) => listNotifications(db, res, actor, url),
   owner: 'server/modules/platform-notifications.js',
 });
 ownedRouteTable.register({
   method: 'POST',
   path: '/api/notifications/read',
   handler: ({ db, req, res, actor }) => markNotificationRead(db, req, res, actor),
+  owner: 'server/modules/platform-notifications.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/platform/notification-subscriptions',
+  handler: ({ db, res, actor }) => listNotificationSubscriptions(db, res, actor),
+  owner: 'server/modules/platform-notifications.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/platform/notification-subscriptions',
+  handler: ({ db, req, res, actor }) => manageNotificationSubscription(db, req, res, actor),
+  owner: 'server/modules/platform-notifications.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/platform/notification-overview',
+  handler: ({ db, res, actor }) => listNotificationOverview(db, res, actor),
   owner: 'server/modules/platform-notifications.js',
 });
 ownedRouteTable.register({
@@ -5449,6 +5471,11 @@ async function changePurchaseOrderState(db, req, res, actor, orderId, action) {
     }
     db.prepare("UPDATE purchase_orders SET status='SUBMITTED',submitted_at=?,rejection_reason='',updated_at=? WHERE id=?").run(now, now, orderId);
     audit(db, actor.id, 'SUBMIT', 'PURCHASE_ORDER', orderId, `提交采购订单 ${order.order_no}`);
+    notifyApprovalPending(db, {
+      family: 'PURCHASE_ORDER', documentType: 'PURCHASE_ORDER',
+      documentId: orderId, documentNo: order.order_no,
+      title: `采购订单 ${order.order_no} 待审批`,
+    });
   } else if (action === 'approve') {
     if (order.status !== 'SUBMITTED') throw new HttpError(409, '只有待审核订单可以处理');
     if (order.creator_id === actor.id) throw new HttpError(409, '创建人不能审核自己的订单');
@@ -5456,6 +5483,11 @@ async function changePurchaseOrderState(db, req, res, actor, orderId, action) {
     assertApprovalSod(db, { businessType: 'PURCHASE_ORDER', businessId: orderId, actorId: actor.id });
     db.prepare("UPDATE purchase_orders SET status='APPROVED',reviewer_id=?,reviewed_at=?,updated_at=? WHERE id=?").run(actor.id, now, now, orderId);
     audit(db, actor.id, 'APPROVE', 'PURCHASE_ORDER', orderId, `审核通过采购订单 ${order.order_no}`);
+    notifyApprovalHandled(db, {
+      family: 'PURCHASE_ORDER', documentType: 'PURCHASE_ORDER',
+      documentId: orderId, documentNo: order.order_no,
+      initiatorId: order.creator_id || null, outcome: 'APPROVED',
+    });
   } else {
     if (order.status !== 'SUBMITTED') throw new HttpError(409, '只有待审核订单可以处理');
     if (order.creator_id === actor.id) throw new HttpError(409, '创建人不能审核自己的订单');
@@ -6166,6 +6198,12 @@ async function submitAccountingVoucher(db, req, res, actor, voucherId) {
 
   audit(db, actor.id, 'SUBMIT', 'ACCOUNTING_VOUCHER', voucherId, '提交凭证 ' + voucher.voucher_no);
 
+  notifyApprovalPending(db, {
+    family: 'ACCOUNTING_VOUCHER', documentType: 'ACCOUNTING_VOUCHER',
+    documentId: voucherId, documentNo: voucher.voucher_no,
+    title: `凭证 ${voucher.voucher_no} 待审批`,
+  });
+
   return send(res, 200, { success: true });
 }
 
@@ -6201,6 +6239,12 @@ async function approveAccountingVoucher(db, req, res, actor, voucherId) {
     .run('POSTED', actor.id, now, now, voucherId);
 
   audit(db, actor.id, 'APPROVE', 'ACCOUNTING_VOUCHER', voucherId, '审核通过凭证 ' + voucher.voucher_no);
+
+  notifyApprovalHandled(db, {
+    family: 'ACCOUNTING_VOUCHER', documentType: 'ACCOUNTING_VOUCHER',
+    documentId: voucherId, documentNo: voucher.voucher_no,
+    initiatorId: voucher.creator_id, outcome: 'APPROVED',
+  });
 
   return send(res, 200, { success: true });
 }

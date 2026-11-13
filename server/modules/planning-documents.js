@@ -37,6 +37,7 @@ import { createPurchaseOrderDraftCanonical } from './procurement-orders.js';
 import { assertPurchaseQuotaControl, assertPurchaseSourceControl, assertRequisitionSourcePolicy } from './procurement-policy.js';
 import { rationalAdd, rationalCmp } from './procurement-sourcing.js';
 import { assertApprovalSod } from './platform-sod.js';
+import { notifyApprovalHandled, notifyApprovalPending } from './platform-notifications.js';
 
 const PI_STATUS = { DRAFT: '草稿', RELEASED: '已下达', CANCELLED: '已取消' };
 const PUI_STATUS = { DRAFT: '草稿', RELEASED: '已下达', CANCELLED: '已取消' };
@@ -818,6 +819,11 @@ export async function submitPurchaseRequisition(db, res, actor, id) {
     db.prepare("UPDATE purchase_requisitions SET status='SUBMITTED', rejection_reason='', submitted_at=?, reviewed_at=NULL, reviewer_id=NULL, updated_at=? WHERE id=?").run(now, now, id);
     audit(db, actor.id, 'SUBMIT', 'PURCHASE_REQUISITION', id, `提交请购单 ${header.requisition_no}`);
   });
+  notifyApprovalPending(db, {
+    family: 'PURCHASE_REQUISITION', documentType: 'PURCHASE_REQUISITION',
+    documentId: id, documentNo: header.requisition_no,
+    title: `请购单 ${header.requisition_no} 待审批`,
+  });
   return send(res, 200, { ok: true, status: 'SUBMITTED' });
 }
 
@@ -836,6 +842,11 @@ export async function approvePurchaseRequisition(db, res, actor, id) {
     assertApprovalSod(db, { businessType: 'PURCHASE_REQUISITION', businessId: id, actorId: actor.id });
     db.prepare("UPDATE purchase_requisitions SET status='APPROVED', reviewer_id=?, reviewed_at=?, rejection_reason='', updated_at=? WHERE id=?").run(actor.id, now, now, id);
     audit(db, actor.id, 'APPROVE', 'PURCHASE_REQUISITION', id, `审批通过请购单 ${header.requisition_no}`);
+  });
+  notifyApprovalHandled(db, {
+    family: 'PURCHASE_REQUISITION', documentType: 'PURCHASE_REQUISITION',
+    documentId: id, documentNo: header.requisition_no,
+    initiatorId: header.creator_id, outcome: 'APPROVED',
   });
   return send(res, 200, { ok: true, status: 'APPROVED' });
 }

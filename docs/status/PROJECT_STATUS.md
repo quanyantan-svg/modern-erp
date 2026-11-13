@@ -4861,3 +4861,33 @@ Attachment（PL-10）→ Notification 生产者（PL-11）→ Numbering 服务�
 
 **剩余**：Notification 生产者（PL-11）→ Numbering 服务（PL-09）→ SOD 规则维护面 →
 7 个前端工作面 → 真实 MySQL campaign 与浏览器 UAT → Manual Closure / Release Readiness。
+
+### 61.13 Notification 子系统（PL-11，Design §32.7）
+
+**授权来源**：业务所有者 2026-11-14 裁定「按序把四个子系统全部建完」。
+
+| 项 | 内容 |
+|---|---|
+| 模块 | `server/modules/platform-notifications.js`（通知中心的唯一 owner） |
+| 此前状态 | `notifications` 表存在、读接口存在、前端页面存在，但**全仓库没有任何一处写入** —— 表运行时永远为空、`unreadCount` 恒为 0，通知中心是永远显示"暂无通知"的空壳 |
+| 现在 | 生产者真实写入：通用工作流引擎 3 类（任务生成 / 任务完成·驳回·退回 / 实例终止·恢复）、既有 6 审批族的待办与结果、信用特批待决与裁定、库存月结阻塞项 —— **六类生产者全部接线** |
+| 路由 | 5 条：`/api/notifications`（分页）、`/api/notifications/read`、`/api/platform/notification-subscriptions`（GET/POST）、`/api/platform/notification-overview` |
+| 接收人 | `USER` / `ROLE` / `SUBSCRIBERS`（按 category + event_type 订阅）；审批族的待办接收人由**持有该族审批权限**的启用用户推导（审批中心同样是按状态聚合、按权限过滤可见性） |
+| 去重 | `user_id` + `dedupe_key`（含 eventType）；同一业务事件对同一接收人只产生一条 |
+| 读取一致性 | 列表与未读计数**同源同条件**；列表走分页，计数是同一条件下的全量未读数。此前列表 `LIMIT 50` 而计数取全表，二者可以互相矛盾 —— 已修正 |
+| 权限 | 读接口改用 `NOTIFICATION_VIEW`（**不再**用 `DASHBOARD_VIEW`）；订阅维护用 `NOTIFICATION_MANAGE` |
+| 徽标 | 前端路由登记表同步改为 `NOTIFICATION_VIEW`（否则"页面可见但接口 403"）；移动端 messages tab 徽标待前端工作面单元 |
+| 测试 | `server/platform-notifications.test.js`（11 例，已登记 FAST/FULL） |
+
+**实现期确定的四项事实**（已写回 Design §32.7.5）：`notifications` 增 `event_type` 列；
+通知写入**自提交不包事务**（否则会在业务事务后多开一次 BEGIN，击穿销售域按 BEGIN 次数断言的
+提交重试契约）；通知必须在业务事务**之后**产生且需**重新读取**事务内局部变量；
+读接口权限从 `DASHBOARD_VIEW` 改为 `NOTIFICATION_VIEW`。
+
+**跨域影响登记**：本单元在 6 个业务域的 12 个提交 / 审批点接入通知 —— 均为**事务提交之后**的
+副作用写入，不改变任何域的状态机、状态词表与错误码；既有域的测试证据已随 FULL 回归确认无回归。
+
+**门禁**：`pnpm test:fast` **726/726 PASS**；`pnpm test`（FULL）**3979/3979 PASS**。
+
+**剩余**：Numbering 服务（PL-09）→ SOD 规则维护面 → 7 个前端工作面（含 messages tab 徽标）→
+真实 MySQL campaign 与浏览器 UAT → Manual Closure / Release Readiness。

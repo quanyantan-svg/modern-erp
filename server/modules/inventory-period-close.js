@@ -2,6 +2,7 @@ import { id, transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, optionalText, readJson, send } from '../lib/http.js';
 import { systemHealth } from './financial-inventory.js';
+import { expandApproverRecipients, notifyEvent } from './platform-notifications.js';
 
 const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -404,7 +405,23 @@ export function getInventoryPeriodStatus(db, res, actor) {
 export async function checkInventoryPeriodClose(db, req, res, actor) {
   allowAny(actor, ['INVENTORY_PERIOD_CLOSE_VIEW', 'INVENTORY_PERIOD_CLOSE_MANAGE']);
   const body = await readJson(req);
-  return send(res, 200, { precheck: runInventoryCloseChecks(db, String(body.period || ''), actor) });
+  const precheck = runInventoryCloseChecks(db, String(body.period || ''), actor);
+  // 通知是副作用：月结阻塞项必须让相关角色知道，但不得影响预检结果。
+  const blocking = (precheck?.checks || []).filter((check) => check.severity === 'BLOCKING' && check.status === 'FAIL');
+  if (blocking.length) {
+    notifyEvent(db, {
+      eventType: 'INVENTORY_PERIOD_CLOSE_BLOCKED',
+      category: 'INVENTORY_PERIOD_CLOSE',
+      recipients: expandApproverRecipients(db, ['INVENTORY_PERIOD_CLOSE_VIEW']).map((value) => ({ type: 'USER', value })),
+      title: `库存期间 ${String(body.period || '')} 结账存在阻塞项`,
+      content: blocking.map((check) => check.title || check.code).join('；'),
+      type: 'WARNING',
+      sourceType: 'INVENTORY_PERIOD_CLOSE',
+      sourceId: String(body.period || ''),
+      dedupeKey: `INVENTORY_PERIOD_CLOSE:${String(body.period || '')}:${blocking.map((check) => check.code).join(',')}`,
+    });
+  }
+  return send(res, 200, { precheck });
 }
 
 export async function closeInventoryPeriod(db, req, res, actor) {

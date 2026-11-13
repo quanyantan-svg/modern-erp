@@ -26,6 +26,7 @@ import {
 import {
   evaluateSodCompliance, registerSodInitiatorResolver, writeSodEvaluations,
 } from './platform-sod.js';
+import { notifyEvent } from './platform-notifications.js';
 
 const TEMPLATE_STATUS = ['DRAFT', 'PUBLISHED', 'RETIRED'];
 const VERSION_STATUS = ['DRAFT', 'PUBLISHED', 'RETIRED'];
@@ -455,9 +456,9 @@ export function startWorkflowInstance(db, options) {
     idempotencyKey, actor, requestId = null, businessDate = null,
   } = options;
   const key = idempotencyKey || `${documentType}:${documentId}:${versionId}`;
-  return transaction(db, () => {
+  const started = transaction(db, () => {
     const existing = db.prepare('SELECT * FROM workflow_instances WHERE idempotency_key=?').get(key);
-    if (existing) return { instance: existing, replayed: true };
+    if (existing) return { instance: existing, replayed: true, taskIds: [] };
 
     // 权威状态重读：版本必须存在且已发布。
     const version = db.prepare('SELECT * FROM workflow_template_versions WHERE id=?').get(versionId);
@@ -492,8 +493,19 @@ export function startWorkflowInstance(db, options) {
     return {
       instance: db.prepare('SELECT * FROM workflow_instances WHERE id=?').get(instanceId),
       replayed: false,
+      taskIds: db.prepare(
+        "SELECT id FROM workflow_tasks WHERE instance_id=? AND status='PENDING'",
+      ).all(instanceId).map((row) => row.id),
     };
   });
+  // 通知是副作用：在事务**提交之后**产生，失败不影响流程结果。
+  if (!started.replayed && started.taskIds.length) {
+    const tasks = started.taskIds.map((taskId) => (
+      db.prepare('SELECT * FROM workflow_tasks WHERE id=?').get(taskId)
+    ));
+    notifyWorkflowTaskPending(db, started.instance, tasks, { requestId });
+  }
+  return { instance: started.instance, replayed: started.replayed };
 }
 
 /**
@@ -556,9 +568,16 @@ function nextNodeKey(node, action, definition) {
 export function completeWorkflowTask(db, options) {
   const { taskId, actor, action, comment, payload = null, requestId = null, businessDate = null } = options;
   try {
-    return transaction(db, () => completeWorkflowTaskInTransaction(db, {
+    const result = transaction(db, () => completeWorkflowTaskInTransaction(db, {
       taskId, actor, action, comment, payload, requestId, businessDate,
     }));
+    // 通知是副作用：在事务**提交之后**产生，失败不影响审批结果。
+    const instance = db.prepare('SELECT * FROM workflow_instances WHERE id=?')
+      .get(db.prepare('SELECT instance_id FROM workflow_tasks WHERE id=?').get(taskId)?.instance_id || '');
+    if (instance && !result.escalated && !result.transferred && !result.addedSign) {
+      notifyWorkflowTaskHandled(db, instance, action, { requestId });
+    }
+    return result;
   } catch (error) {
     // 事务已回滚：拒绝证据必须在事务之外补写，否则会随回滚消失。
     recordTaskFailureEvidence(db, error, { taskId, actor, action, requestId });
@@ -739,6 +758,75 @@ function recordTaskFailureEvidence(db, error, { taskId, actor, action, requestId
   }
 }
 
+/*
+ * ---------------------------------------------------------------------------
+ * 通知生产者（Design §32.7 六类生产者之 1～3）
+ * ---------------------------------------------------------------------------
+ * 通知是**副作用**：一律在业务事务**提交之后**产生，失败不得影响流程结果。
+ */
+
+/** 任务生成 → 通知任务参与人。 */
+function notifyWorkflowTaskPending(db, instance, tasks, { requestId = null } = {}) {
+  const recipients = tasks
+    .map((task) => task.assignee_id)
+    .filter((assigneeId) => assigneeId && assigneeId !== instance.started_by)
+    .map((value) => ({ type: 'USER', value }));
+  if (!recipients.length) return { created: 0, skipped: 0 };
+  return notifyEvent(db, {
+    eventType: 'WORKFLOW_TASK_PENDING',
+    category: 'WORKFLOW',
+    recipients,
+    title: '有一项流程任务待你处理',
+    content: `${instance.document_type} ${instance.document_id} 有一项待办`,
+    type: 'INFO',
+    sourceType: 'WORKFLOW_INSTANCE',
+    sourceId: instance.id,
+    dedupeKey: `${instance.id}:${tasks.map((task) => task.id).join(',')}:PENDING`,
+    requestId,
+  });
+}
+
+/** 任务完成 / 驳回 / 退回 → 通知流程发起人。 */
+function notifyWorkflowTaskHandled(db, instance, action, { requestId = null } = {}) {
+  if (!instance.started_by) return { created: 0, skipped: 0 };
+  const label = action === 'REJECT' ? '已驳回' : action === 'RETURN' ? '已退回' : '已通过';
+  return notifyEvent(db, {
+    eventType: 'WORKFLOW_TASK_HANDLED',
+    category: 'WORKFLOW',
+    recipients: [{ type: 'USER', value: instance.started_by }],
+    title: `流程任务${label}`,
+    content: `${instance.document_type} ${instance.document_id} 的流程任务${label}`,
+    type: action === 'APPROVE' ? 'SUCCESS' : 'WARNING',
+    sourceType: 'WORKFLOW_INSTANCE',
+    sourceId: instance.id,
+    dedupeKey: `${instance.id}:${action}:HANDLED`,
+    requestId,
+  });
+}
+
+/** 实例终止 / 恢复 → 通知发起人与参与人。 */
+function notifyWorkflowInstanceState(db, instance, eventType, title, { requestId = null } = {}) {
+  const participants = db.prepare(
+    "SELECT DISTINCT assignee_id FROM workflow_tasks WHERE instance_id=? AND assignee_id IS NOT NULL",
+  ).all(instance.id).map((row) => row.assignee_id);
+  const recipients = [...new Set([instance.started_by, ...participants])]
+    .filter(Boolean)
+    .map((value) => ({ type: 'USER', value }));
+  if (!recipients.length) return { created: 0, skipped: 0 };
+  return notifyEvent(db, {
+    eventType,
+    category: 'WORKFLOW',
+    recipients,
+    title,
+    content: `${instance.document_type} ${instance.document_id}：${title}`,
+    type: eventType === 'WORKFLOW_INSTANCE_TERMINATED' ? 'WARNING' : 'INFO',
+    sourceType: 'WORKFLOW_INSTANCE',
+    sourceId: instance.id,
+    dedupeKey: `${instance.id}:${eventType}`,
+    requestId,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // 实例控制
 // ---------------------------------------------------------------------------
@@ -775,6 +863,8 @@ export function resumeWorkflowInstance(db, { instanceId, actor, requestId = null
     audit(db, actor.id, 'WORKFLOW_INSTANCE_RESUME', 'WORKFLOW_INSTANCE', instance.id, '恢复流程实例', { requestId });
     return db.prepare('SELECT * FROM workflow_instances WHERE id=?').get(instance.id);
   });
+  notifyWorkflowInstanceState(db, instance, 'WORKFLOW_INSTANCE_RESUMED', '流程实例已恢复', { requestId });
+  return db.prepare('SELECT * FROM workflow_instances WHERE id=?').get(instance.id);
 }
 
 /** 终止实例：未完成任务置 CANCELLED，**不产生任何业务副作用**。 */
@@ -797,6 +887,8 @@ export function terminateWorkflowInstance(db, { instanceId, reason, actor, reque
       `终止流程实例${reason ? `：${reason}` : ''}`, { requestId });
     return db.prepare('SELECT * FROM workflow_instances WHERE id=?').get(instance.id);
   });
+  notifyWorkflowInstanceState(db, instance, 'WORKFLOW_INSTANCE_TERMINATED', '流程实例已终止', { requestId });
+  return db.prepare('SELECT * FROM workflow_instances WHERE id=?').get(instance.id);
 }
 
 /**

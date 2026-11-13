@@ -358,6 +358,8 @@ export function migratePlatformDomainSchema(db) {
   addColumn(db, 'ALTER TABLE notifications ADD COLUMN action_url TEXT');
   addColumn(db, 'ALTER TABLE notifications ADD COLUMN expires_at TEXT');
   addColumn(db, 'ALTER TABLE notifications ADD COLUMN dedupe_key TEXT');
+  // 事件类型：消费侧必须能区分「待办 / 结果 / 阻塞 / 知会」，不能靠解析标题。
+  addColumn(db, 'ALTER TABLE notifications ADD COLUMN event_type TEXT');
 
   addColumn(db, 'ALTER TABLE audit_logs ADD COLUMN business_date TEXT');
   addColumn(db, 'ALTER TABLE audit_logs ADD COLUMN request_id TEXT');

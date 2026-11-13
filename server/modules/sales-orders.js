@@ -14,6 +14,7 @@ import { assertCreditAllowsBusinessAction, lockCreditPrepaymentParents } from '.
 import { resolveRecognitionPolicy } from './finance-recognition-policy.js';
 import { isGateRetryAdmissionExpired, startGateRetryAdmission } from './sales-gate-retry-admission.js';
 import { releaseReservationIntentsForOrder } from './sales-reservation-intent.js';
+import { notifyApprovalHandled, notifyApprovalPending } from './platform-notifications.js';
 
 const DAY = () => new Date().toISOString().slice(0, 10);
 const NOW = () => new Date().toISOString();
@@ -747,6 +748,12 @@ function submitSalesOrder(db, res, actor, orderId, body, key, operation, fingerp
         if (key) saveIdempotency(db, operation, orderId, key, fingerprint, result);
         audit(db, actor.id, 'SUBMIT', 'SALES_ORDER', orderId, String(body.reason || ''));
       });
+      const submittedOrder = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(orderId);
+      notifyApprovalPending(db, {
+        family: 'SALES_ORDER', documentType: 'SALES_ORDER',
+        documentId: orderId, documentNo: submittedOrder?.order_no || orderId,
+        title: `销售订单 ${submittedOrder?.order_no || orderId} 待审批`,
+      });
       return send(res, 200, result);
     } catch (error) {
       if (!isSalesOrderSubmitRediscoveryEligible(error)) throw error;
@@ -860,6 +867,12 @@ function approveSalesOrder(db, res, actor, orderId, body, key, operation, finger
         result = { ok: true, id: orderId, action: 'approve' };
         if (key) saveIdempotency(db, operation, orderId, key, fingerprint, result);
         audit(db, actor.id, 'APPROVE', 'SALES_ORDER', orderId, String(body.reason || ''));
+      });
+      const approvedOrder = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(orderId);
+      notifyApprovalHandled(db, {
+        family: 'SALES_ORDER', documentType: 'SALES_ORDER',
+        documentId: orderId, documentNo: approvedOrder?.order_no || orderId,
+        initiatorId: approvedOrder?.creator_id || null, outcome: 'APPROVED',
       });
       return send(res, 200, result);
     } catch (error) {

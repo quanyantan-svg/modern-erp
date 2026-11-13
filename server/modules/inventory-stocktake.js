@@ -20,6 +20,7 @@ import {
 } from './financial-inventory.js';
 import { postTrackedMovement, saveTrackedAllocations } from './traceability-quality.js';
 import { assertApprovalSod } from './platform-sod.js';
+import { notifyApprovalHandled, notifyApprovalPending } from './platform-notifications.js';
 
 function nowIso() { return new Date().toISOString(); }
 
@@ -254,6 +255,12 @@ export function submitStocktake(db, res, actor, checkId) {
     if (updated.changes !== 1) throw new HttpError(409, '盘点单状态已变化，请刷新后重试');
     audit(db, actor.id, 'SUBMIT', 'INVENTORY_CHECK', checkId, `提交盘点单 ${check.check_no} 待审核`);
   });
+  const submitted = readCheck(db, checkId);
+  notifyApprovalPending(db, {
+    family: 'INVENTORY_CHECK', documentType: 'INVENTORY_CHECK',
+    documentId: checkId, documentNo: submitted?.check_no || checkId,
+    title: `盘点单 ${submitted?.check_no || checkId} 待审批`,
+  });
   return send(res, 200, { ok: true, status: 'SUBMITTED' });
 }
 
@@ -419,6 +426,13 @@ export function approveStocktake(db, res, actor, checkId) {
       .run(actor.id, now, checkId);
     if (updated.changes !== 1) throw new HttpError(409, '盘点单状态已变化，请刷新后重试');
     audit(db, actor.id, 'APPROVE', 'INVENTORY_CHECK', checkId, `审核盘点单 ${check.check_no}，差异经规范库存异动生效`);
+  });
+  // 事务内重读 —— 事务回调里的 check 出了作用域，必须在事务外重新取。
+  const approvedCheck = readCheck(db, checkId);
+  notifyApprovalHandled(db, {
+    family: 'INVENTORY_CHECK', documentType: 'INVENTORY_CHECK',
+    documentId: checkId, documentNo: approvedCheck?.check_no || checkId,
+    initiatorId: approvedCheck?.creator_id || null, outcome: 'APPROVED',
   });
   return send(res, 200, { ok: true, status: 'APPROVED' });
 }

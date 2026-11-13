@@ -96,7 +96,7 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('iqc','IQC 来料检验','manufacturing-quality','FLOW_INTERNAL_STEP','WORKFLOW','contextual','制造与质量','iqc',{any:['IQC_VIEW','IQC_MANAGE']},{parentRoute:'purchase-receipts'}),
   route('oqc','OQC 出货检验','manufacturing-quality','FLOW_INTERNAL_STEP','WORKFLOW','contextual','制造与质量','oqc',{any:['OQC_VIEW','OQC_MANAGE']},{parentRoute:'sales-deliveries'}),
   route('quality-control-points','质量规则','manufacturing-quality','ADVANCED_CONFIGURATION','CONFIG','contextual','制造与质量','iqc',{any:['USERS_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
-  route('notifications','通知中心','platform','SYSTEM_SUPPORT','LIST','contextual','系统设置','notifications',{any:['DASHBOARD_VIEW']},{desktopExposure:'global',mobileExposure:'messages-tab'}),
+  route('notifications','通知中心','platform','SYSTEM_SUPPORT','LIST','contextual','系统设置','notifications',{any:['NOTIFICATION_VIEW']},{desktopExposure:'global',mobileExposure:'messages-tab'}),
   route('users','用户与权限','platform','SYSTEM_SUPPORT','CONFIG','contextual','系统设置','users',{any:['USERS_MANAGE','ROLES_MANAGE']},{desktopExposure:'system-settings',mobileExposure:'system-settings'}),
 ]);
 
