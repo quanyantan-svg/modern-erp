@@ -29,7 +29,9 @@
 //   accounting voucher for a scrap confirm.
 
 import { id as genId, transaction } from '../db.js';
-import { adjustInventory } from '../lib/stock.js';
+import { resolveCanonicalPosition } from '../lib/stock.js';
+import { applyInventoryMutation } from '../lib/inventory-mutation.js';
+import { computePositionKey } from '../lib/inventory-position.js';
 import { audit } from '../lib/audit.js';
 import {
   HttpError, allow, allowAny, readJson, requiredText, optionalText, send,
@@ -212,6 +214,24 @@ export async function updateInventoryScrap(db, req, res, actor, scrapId) {
   return send(res, 200, { ok: true });
 }
 
+// INV-21 — the canonical position of a scrap line. A bin-enabled warehouse
+// or a LOT / SERIAL tracked product cannot be expressed by the
+// warehouse+product pair and is refused.
+function scrapPosition(db, warehouseId, productId) {
+  const { positionKey } = resolveCanonicalPosition(db, warehouseId, productId);
+  return {
+    productId,
+    warehouseId,
+    binId: null,
+    ownerType: 'ENTERPRISE',
+    ownerId: null,
+    stockStatus: 'AVAILABLE',
+    lotId: null,
+    serialId: null,
+    positionKey,
+  };
+}
+
 export function confirmInventoryScrap(db, res, actor, scrapId) {
   allow(actor, 'INVENTORY_SCRAP_MANAGE');
   const now = nowIso();
@@ -222,27 +242,31 @@ export function confirmInventoryScrap(db, res, actor, scrapId) {
     assertFinancialPeriodsOpen(db,header.scrap_date);
     const items = db.prepare('SELECT * FROM inventory_scrap_items WHERE scrap_id=? ORDER BY line_no, id').all(scrapId);
     if (!items.length) throw new HttpError(409, '报废单没有明细，无法确认');
-    // Pre-validate stock for every item; abort all on any shortage.
-    for (const item of items) {
-      const inv = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?')
-        .get(item.warehouse_id, item.product_id);
-      const current = inv ? Number(inv.quantity) : 0;
-      if (!Number.isFinite(current) || current < Number(item.quantity)) {
-        throw new HttpError(409, `库存不足：仓库 ${item.warehouse_id} 货品 ${item.product_id} 当前 ${current}，需报废 ${item.quantity}`);
-      }
-    }
-    // Mutate canonical inventory and ledger in a single transaction.
+    // INV-07: the scrap writes the canonical position identity and goes
+    // through the canonical mutation contract. The negative-stock policy, the
+    // inventory lock and the period gates apply to it as well.
     const voucherEntries=[];
     for (const item of items) {
+      const position = scrapPosition(db, item.warehouse_id, item.product_id);
       postTrackedMovement(db, { sourceType: 'INVENTORY_SCRAP', sourceId: scrapId, sourceItemId: item.id, productId: item.product_id, warehouseId: item.warehouse_id, quantity: item.quantity, direction: 'OUT', businessDate: header.scrap_date });
-      const balance = adjustInventory(db, item.warehouse_id, item.product_id, -Number(item.quantity), now);
-      const transactionId=genId(); db.prepare(`
-        INSERT INTO inventory_transactions
-          (id, warehouse_id, product_id, quantity_change, direction, balance_after,
-           source_type, source_id, source_no, remark, creator_id, created_at,business_date)
-        VALUES(?,?,?,?, 'OUT', ?, 'INVENTORY_SCRAP', ?, ?, ?, ?, ?,?)
-      `).run(transactionId, item.warehouse_id, item.product_id, Number(item.quantity), balance,
-             header.id, header.scrap_no, header.reason || '库存报废', actor.id, now,header.scrap_date);
+      const mutation = applyInventoryMutation({
+        db, actor,
+        sourceType: 'INVENTORY_SCRAP',
+        sourceId: scrapId,
+        sourceItemId: item.id,
+        sourceNo: header.scrap_no,
+        businessDate: header.scrap_date,
+        movementKind: 'OUT',
+        quantity: Number(item.quantity),
+        fromPosition: position,
+        idempotencyKey: `INVENTORY_SCRAP:${item.id}`,
+        remark: header.reason || '库存报废',
+        // The caller owns the strict valuation step below, in the same
+        // transaction.
+        valuationMode: 'EXTERNAL',
+      });
+      const balance = Number(mutation?.balanceAfterFrom || 0);
+      const transactionId=mutation?.movements?.[0]?.transactionId || null;
       const amount=issueSourceValue(db,{businessDate:header.scrap_date,productId:item.product_id,warehouseId:item.warehouse_id,quantity:Number(item.quantity),movementType:'INVENTORY_SCRAP',sourceType:'INVENTORY_SCRAP',sourceId:scrapId,sourceItemId:item.id,inventoryTransactionId:transactionId}).reduce((s,x)=>s-x.valueDeltaCents,0);
       voucherEntries.push({role:'INVENTORY_SCRAP_EXPENSE',direction:'DEBIT',amountCents:amount},{role:inventoryAccountRole(db,item.product_id),direction:'CREDIT',amountCents:amount});
     }

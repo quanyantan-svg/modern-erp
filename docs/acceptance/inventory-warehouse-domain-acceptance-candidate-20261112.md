@@ -4,7 +4,7 @@
 >
 > **Owner**：Inventory & Warehouse Domain Owner（Acceptance 与 Freeze 的唯一签字人）；Platform / QA（证据维护）。
 >
-> **状态**：`PENDING_APPROVAL` —— 整改轮与取证已完成，**域级 Acceptance 与 Capability Freeze 尚未签发**，等待业务所有者裁定。
+> **状态**：`SUPERSEDED` —— 整改轮与取证完成后，业务所有者于 2026-11-13 指示「解决未解决矛盾 然后签发域级 acceptance」。本候签材料所列的两个待裁定项（`INV-DEC-01` / `INV-DEC-02`）已在收尾轮解决，正式签发记录见 [`inventory-warehouse-domain-acceptance-20261113.md`](./inventory-warehouse-domain-acceptance-20261113.md)。本文件保留为决定过程的证据。
 >
 > **权威来源**：Requirement [`docs/requirements/inventory-warehouse.md`](../requirements/inventory-warehouse.md) §32.1～§32.10；Design [`docs/design/inventory-warehouse.md`](../design/inventory-warehouse.md) §27.52 / §27.54；逐项判定 [`docs/audits/inventory-warehouse-capability-audit-20261112.md`](../audits/inventory-warehouse-capability-audit-20261112.md)；唯一项目状态登记表 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md)。
 >

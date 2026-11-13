@@ -26,12 +26,15 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 
 import { createDatabase } from './db.js';
+import { changeInventoryAdjustmentState, createInventoryAdjustment } from './app.js';
 import {
   createStocktake, submitStocktake, approveStocktake, scanStocktake, listStocktakes,
 } from './modules/inventory-stocktake.js';
 import {
   createInventoryTransfer, confirmInventoryTransferCommand, cancelInventoryTransfer,
 } from './modules/inventory-transfer.js';
+import { createInventoryLock } from './modules/inventory-lock.js';
+import { createInventoryScrap, confirmInventoryScrap } from './modules/inventory-extensions.js';
 import { applyInventoryMutation } from './lib/inventory-mutation.js';
 import { computePositionKey } from './lib/inventory-position.js';
 import { readFileSync } from 'node:fs';
@@ -43,6 +46,8 @@ const ACTOR = {
   permissions: [
     'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_CHECK_APPROVE',
     'INVENTORY_TRANSFER_CREATE', 'INVENTORY_TRANSFER_CONFIRM', 'INVENTORY_TRANSFER_APPROVE',
+    'INVENTORY_LOCK_VIEW', 'INVENTORY_LOCK_MANAGE',
+    'INVENTORY_ADJUSTMENT_MANAGE', 'INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE',
   ],
 };
 const APPROVER = { ...ACTOR, id: 'u-approver' };
@@ -91,6 +96,9 @@ describe('Inventory & Warehouse closure — single write entry and canonical mut
       VALUES('p-1','P1','货品一','FG','PCS',1000,0,1,'NONE',?,?)`).run(now, now);
     db.prepare(`INSERT OR IGNORE INTO products(id,code,name,category,unit,price_cents,stock_quantity,active,tracking_policy,created_at,updated_at)
       VALUES('p-2','P2','货品二','FG','PCS',1000,0,1,'NONE',?,?)`).run(now, now);
+    // A standard cost lets the valuation post a real integer-cent amount, so
+    // the adjustment gain/loss also writes its system voucher.
+    db.prepare('UPDATE products SET standard_manufacturing_cost_cents=100000 WHERE id IN (?,?)').run('p-1', 'p-2');
     // The source position holds 100; the receiving warehouse starts empty.
     db.prepare(`INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at,position_key,bin_id,owner_type,owner_id,stock_status,lot_id,serial_id,active)
       VALUES('inv-1','wh-1','p-1',100,?,?,NULL,'ENTERPRISE',NULL,'AVAILABLE',NULL,NULL,1)`)
@@ -274,6 +282,77 @@ describe('Inventory & Warehouse closure — single write entry and canonical mut
     assert.equal(onHand('p-1', 'wh-1'), beforeSource);
     assert.equal(onHand('p-1', 'wh-2'), beforeTarget);
     assert.equal(db.prepare('SELECT status FROM inventory_transfers WHERE id=?').get(created.body.id).status, 'DRAFT');
+  });
+
+  // ------------------------------------------------------------------- INV-21
+  test('INV-21 adjustment confirmation writes the canonical position through the canonical mutation', async () => {
+    const created = makeRes();
+    await createInventoryAdjustment(db, makeReq({
+      warehouseId: 'wh-1', reason: 'closure gain', adjustmentDate: TODAY,
+      items: [{ productId: 'p-1', quantityDelta: 5 }],
+    }), created, ACTOR);
+    assert.equal(created.statusCode, 201);
+    const adjustmentId = created.body.id;
+    const before = onHand('p-1', 'wh-1');
+    const confirmed = makeRes();
+    changeInventoryAdjustmentState(db, confirmed, ACTOR, adjustmentId, 'confirm');
+    assert.equal(onHand('p-1', 'wh-1'), before + 5, 'the canonical balance carries the adjustment');
+    const mutation = db.prepare("SELECT * FROM inventory_mutation_log WHERE source_type='INVENTORY_ADJUSTMENT' AND source_id=?")
+      .get(adjustmentId);
+    assert.ok(mutation, 'the adjustment is recorded in the canonical mutation log');
+    assert.equal(mutation.movement_kind, 'ADJUSTMENT');
+    const movement = db.prepare("SELECT * FROM inventory_transactions WHERE source_type='INVENTORY_ADJUSTMENT' AND source_id=?")
+      .get(adjustmentId);
+    assert.ok(movement, 'the adjustment writes the canonical inventory movement');
+    assert.equal(movement.direction, 'IN');
+    assert.equal(Number(movement.quantity_change), 5);
+    const valuation = db.prepare("SELECT * FROM inventory_valuation_movements WHERE source_type='INVENTORY_ADJUSTMENT' AND source_id=?")
+      .all(adjustmentId);
+    assert.ok(valuation.length > 0, 'the adjustment still writes its valuation movement');
+    const voucher = db.prepare("SELECT * FROM accounting_vouchers WHERE source_type='INVENTORY_ADJUSTMENT' AND source_id=?")
+      .get(adjustmentId);
+    assert.ok(voucher, 'the adjustment still writes its system voucher');
+  });
+
+  test('INV-21 adjustment confirmation cannot consume locked stock', async () => {
+    const lock = makeRes();
+    await createInventoryLock(db, makeReq({
+      productId: 'p-2', warehouseId: 'wh-1', quantity: 5, reason: 'closure lock',
+    }), lock, ACTOR);
+    assert.equal(lock.statusCode, 201);
+    const created = makeRes();
+    await createInventoryAdjustment(db, makeReq({
+      warehouseId: 'wh-1', reason: 'closure locked loss', adjustmentDate: TODAY,
+      items: [{ productId: 'p-2', quantityDelta: -1 }],
+    }), created, ACTOR);
+    const before = onHand('p-2', 'wh-1');
+    assert.throws(
+      () => changeInventoryAdjustmentState(db, makeRes(), ACTOR, created.body.id, 'confirm'),
+      /库存不足/,
+      'the canonical mutation refuses to consume locked stock',
+    );
+    assert.equal(onHand('p-2', 'wh-1'), before, 'the refused adjustment changed nothing');
+    assert.equal(db.prepare('SELECT status FROM inventory_adjustments WHERE id=?').get(created.body.id).status, 'DRAFT');
+  });
+
+  test('INV-21 scrap confirmation writes the canonical position through the canonical mutation', async () => {
+    const created = makeRes();
+    await createInventoryScrap(db, makeReq({
+      scrapDate: TODAY, reason: 'closure scrap',
+      items: [{ warehouseId: 'wh-1', productId: 'p-1', quantity: 3 }],
+    }), created, ACTOR);
+    assert.equal(created.statusCode, 201);
+    const before = onHand('p-1', 'wh-1');
+    const confirmed = makeRes();
+    confirmInventoryScrap(db, confirmed, ACTOR, created.body.id);
+    assert.equal(onHand('p-1', 'wh-1'), before - 3, 'the canonical balance carries the scrap');
+    const mutation = db.prepare("SELECT * FROM inventory_mutation_log WHERE source_type='INVENTORY_SCRAP' AND source_id=?")
+      .get(created.body.id);
+    assert.ok(mutation, 'the scrap is recorded in the canonical mutation log');
+    const movement = db.prepare("SELECT * FROM inventory_transactions WHERE source_type='INVENTORY_SCRAP' AND source_id=?")
+      .get(created.body.id);
+    assert.ok(movement, 'the scrap writes the canonical inventory movement');
+    assert.equal(movement.direction, 'OUT');
   });
 
   // ------------------------------------------------- single write entry (source)

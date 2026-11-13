@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { id, transaction, verifyPassword } from './db.js';
 import { randomUUID } from 'node:crypto';
 import { audit } from './lib/audit.js';
-import { adjustInventory, adjustInventoryAtPosition, setInventoryQuantity } from './lib/stock.js';
+import { adjustInventory, adjustInventoryAtPosition, resolveCanonicalPosition, setInventoryQuantity } from './lib/stock.js';
 import { listNotifications, markNotificationRead } from './modules/platform-notifications.js';
 import { createWorkflow, listWorkflows } from './modules/platform-workflows.js';
 import {
@@ -144,6 +144,7 @@ import {
   inventoryAlerts, inventoryPositionsList,
 } from './lib/inventory-reports.js';
 import { applyInventoryMutation } from './lib/inventory-mutation.js';
+import { computePositionKey } from './lib/inventory-position.js';
 import {
   checkInventoryPeriodClose, closeInventoryPeriod, getInventoryPeriodClosure,
   getInventoryPeriodStatus, listInventoryPeriodClosures, reopenInventoryPeriod,
@@ -5412,6 +5413,26 @@ function getReorderList(db, res, actor) {
 // /api/mrp/bom-explode POST 已 410 Gone；旧的独立 BOM 查找 / 递归展开 / 损耗计算 / 库存净需求已停用。
 // Canonical 路径：Engineering Resolver (`resolveEffectiveBomForCaller`) 与 Planning read models (`/api/planning/reports/*`).
 
+// INV-21 — the canonical position of an inventory adjustment / scrap line.
+// The document carries a warehouse and a product, so the line is written at
+// the default canonical position. A bin-enabled warehouse or a LOT / SERIAL
+// tracked product cannot be expressed by that pair and is refused here,
+// exactly like the legacy tuple write did.
+function canonicalAdjustmentPosition(db, warehouseId, productId) {
+  const { positionKey } = resolveCanonicalPosition(db, warehouseId, productId);
+  return {
+    productId,
+    warehouseId,
+    binId: null,
+    ownerType: 'ENTERPRISE',
+    ownerId: null,
+    stockStatus: 'AVAILABLE',
+    lotId: null,
+    serialId: null,
+    positionKey,
+  };
+}
+
 // ============ Inventory Checks ============
 
 
@@ -5476,7 +5497,7 @@ function getInventoryAdjustment(db, res, actor, adjustmentId) {
   return send(res, 200, { inventoryAdjustment: adjustment });
 }
 
-async function createInventoryAdjustment(db, req, res, actor) {
+export async function createInventoryAdjustment(db, req, res, actor) {
   allow(actor, 'INVENTORY_ADJUSTMENT_MANAGE');
   const body = await readJson(req); requireActiveReference(db, 'warehouses', body.warehouseId, '仓库');
   const reason = requiredText(body.reason, '调整原因', 200); const items = normalizeAdjustmentItems(db, body.items);
@@ -5504,7 +5525,7 @@ async function updateInventoryAdjustment(db, req, res, actor, adjustmentId) {
   return send(res, 200, { ok: true });
 }
 
-function changeInventoryAdjustmentState(db, res, actor, adjustmentId, action) {
+export function changeInventoryAdjustmentState(db, res, actor, adjustmentId, action) {
   allow(actor, 'INVENTORY_ADJUSTMENT_MANAGE');
   const adjustment = db.prepare('SELECT * FROM inventory_adjustments WHERE id=?').get(adjustmentId);
   if (!adjustment) throw new HttpError(404, '库存调整单不存在');
@@ -5516,14 +5537,31 @@ function changeInventoryAdjustmentState(db, res, actor, adjustmentId, action) {
     assertFinancialPeriodsOpen(db,locked.adjustment_date);
     const items = db.prepare('SELECT * FROM inventory_adjustment_items WHERE adjustment_id=? ORDER BY line_no').all(adjustmentId); const voucherEntries=[];
     for (const item of items) {
-      const before = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(locked.warehouse_id, item.product_id)?.quantity || 0;
-      const after = before + item.quantity_delta;
-      if (!Number.isFinite(after) || after < 0) throw new HttpError(409, '调整后库存不能为负数');
+      // INV-07: the adjustment writes the canonical position identity and goes
+      // through the canonical mutation contract, so the negative-stock policy,
+      // the inventory lock and the period gates apply to it as well.
+      const position = canonicalAdjustmentPosition(db, locked.warehouse_id, item.product_id);
+      const before = Number(db.prepare('SELECT quantity FROM inventory WHERE position_key=? AND active=1').get(computePositionKey(position))?.quantity || 0);
       postTrackedMovement(db, { sourceType: 'INVENTORY_ADJUSTMENT', sourceId: adjustmentId, sourceItemId: item.id, productId: item.product_id, warehouseId: locked.warehouse_id, quantity: Math.abs(item.quantity_delta), direction: item.quantity_delta > 0 ? 'IN' : 'OUT', businessDate: locked.adjustment_date });
-      const balance = adjustInventory(db, locked.warehouse_id, item.product_id, item.quantity_delta, now);
-      db.prepare('UPDATE inventory_adjustment_items SET before_quantity=?,after_quantity=? WHERE id=?').run(before, balance, item.id);
-      const transactionId=id(); db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date)
-        VALUES(?,?,?,?,?,?,'INVENTORY_ADJUSTMENT',?,?,?,?,?,?)`).run(transactionId, locked.warehouse_id, item.product_id, Math.abs(item.quantity_delta), item.quantity_delta > 0 ? 'IN' : 'OUT', balance, adjustmentId, locked.adjustment_no, locked.reason, actor.id, now,locked.adjustment_date);
+      const mutation = applyInventoryMutation({
+        db, actor,
+        sourceType: 'INVENTORY_ADJUSTMENT',
+        sourceId: adjustmentId,
+        sourceItemId: item.id,
+        sourceNo: locked.adjustment_no,
+        businessDate: locked.adjustment_date,
+        movementKind: 'ADJUSTMENT',
+        quantity: Math.abs(item.quantity_delta),
+        ...(item.quantity_delta > 0 ? { toPosition: position } : { fromPosition: position }),
+        idempotencyKey: `INVENTORY_ADJUSTMENT:${item.id}`,
+        remark: locked.reason || '库存调整',
+        // The caller owns the strict valuation step below, in the same
+        // transaction.
+        valuationMode: 'EXTERNAL',
+      });
+      const balance = item.quantity_delta > 0 ? mutation.balanceAfterTo : mutation.balanceAfterFrom;
+      db.prepare('UPDATE inventory_adjustment_items SET before_quantity=?,after_quantity=? WHERE id=?').run(before, Number(balance || 0), item.id);
+      const transactionId=mutation?.movements?.[0]?.transactionId || null;
       const movements=item.quantity_delta>0?receivePositiveSourceValue(db,{businessDate:locked.adjustment_date,productId:item.product_id,warehouseId:locked.warehouse_id,quantity:Number(item.quantity_delta),movementType:'INVENTORY_ADJUSTMENT_GAIN',sourceType:'INVENTORY_ADJUSTMENT',sourceId:adjustmentId,sourceItemId:item.id,inventoryTransactionId:transactionId}):issueSourceValue(db,{businessDate:locked.adjustment_date,productId:item.product_id,warehouseId:locked.warehouse_id,quantity:-Number(item.quantity_delta),movementType:'INVENTORY_ADJUSTMENT_LOSS',sourceType:'INVENTORY_ADJUSTMENT',sourceId:adjustmentId,sourceItemId:item.id,inventoryTransactionId:transactionId});
       const amount=movements.reduce((s,x)=>s+Math.abs(x.valueDeltaCents),0); const invRole=inventoryAccountRole(db,item.product_id); if(item.quantity_delta>0){voucherEntries.push({role:invRole,direction:'DEBIT',amountCents:amount},{role:'INVENTORY_GAIN_LOSS',direction:'CREDIT',amountCents:amount});}else{voucherEntries.push({role:'INVENTORY_GAIN_LOSS',direction:'DEBIT',amountCents:amount},{role:invRole,direction:'CREDIT',amountCents:amount});}
     }

@@ -32,7 +32,11 @@ const DEFAULT_POSITION = Object.freeze({
   serialId: null,
 });
 
-function resolveCanonicalPosition(db, warehouseId, productId) {
+// The canonical position of a (warehouse, product) pair. It refuses a
+// bin-enabled warehouse and a LOT / SERIAL tracked product: those positions
+// cannot be expressed by the pair alone and must be addressed by the explicit
+// position of applyInventoryMutation.
+export function resolveCanonicalPosition(db, warehouseId, productId) {
   const wh = db.prepare('SELECT id, bin_enabled FROM warehouses WHERE id=? AND active=1').get(warehouseId);
   if (!wh) throw new HttpError(400, `仓库 ${warehouseId} 不存在或已停用`);
   const prod = db.prepare('SELECT id, tracking_policy, active FROM products WHERE id=?').get(productId);

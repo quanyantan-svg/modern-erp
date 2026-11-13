@@ -800,9 +800,20 @@ function assertVoucherSafety(db, graph) {
 
 function applyInventoryCleanup(db, groups, actorId) {
   const remove = db.prepare('DELETE FROM inventory_transactions WHERE id=?');
+  // The canonical mutation log references the movement transactions. The
+  // cleanup removes the movements of an authorized document purge, so the
+  // referring log rows go with them — otherwise the foreign key would refuse
+  // the purge.
+  const removeMutationLog = db.prepare('DELETE FROM inventory_mutation_log WHERE out_inventory_transaction_id=? OR in_inventory_transaction_id=?');
+  // The tracked identity movements reference the movement transactions as well.
+  const removeTracked = db.prepare('DELETE FROM tracked_inventory_movements WHERE transaction_id=?');
   const updateBalance = db.prepare('UPDATE inventory_transactions SET balance_after=? WHERE id=?');
   for (const group of groups) {
-    for (const transactionId of group.transactionIds) remove.run(transactionId);
+    for (const transactionId of group.transactionIds) {
+      removeMutationLog.run(transactionId, transactionId);
+      removeTracked.run(transactionId);
+      remove.run(transactionId);
+    }
     // V21 — write at the canonical default position so the multidimensional
     // identity is preserved. The legacy UPDATE against (warehouse_id,
     // product_id) could touch the wrong row once a second position (e.g. lot)

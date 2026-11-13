@@ -192,7 +192,7 @@ after(async () => {
 async function rawJson(res) { return res.json(); }
 
 function resetFinancialInventoryFixture(db) {
-  db.exec('DELETE FROM inventory_valuation_movements; DELETE FROM inventory_valuation_balances; DELETE FROM inventory_transactions; DELETE FROM inventory;');
+  db.exec('DELETE FROM inventory_valuation_movements; DELETE FROM inventory_valuation_balances; DELETE FROM inventory_mutation_log; DELETE FROM tracked_inventory_movements; DELETE FROM tracked_source_allocations; DELETE FROM tracked_inventory_movements; DELETE FROM tracked_source_allocations; DELETE FROM inventory_transactions; DELETE FROM inventory;');
 }
 
 function seedClosedInventoryPeriod(db, period) {

@@ -1927,7 +1927,7 @@ Integration-Backed = 4
 | INV-22 | `traceability-quality.js` EXTEND | `inventory_lots / inventory_lot_balances` | focused + UAT-09 |
 | INV-23 | `traceability-quality.js` EXTEND | `inventory_lots.expiry_date / manufacture_date` | focused + UAT-11 |
 | INV-24 | `traceability-quality.js` EXTEND | `inventory_serials` | focused + UAT-10 |
-| INV-25 | `inventory-parameters.js` + product additive | `inventory.aux_*` (optional) | focused |
+| INV-25 | `inventory-parameters.js` + product additive | canonical 位置维度（bin / owner / stock_status / lot / serial）；不另建 `aux_*` 列族 | focused |
 | INV-26 | `inventory-abc-classifications.js` | `inventory_abc_classifications` NEW | focused + UAT-16 |
 | INV-27 | `inventory-reports.js` | reads canonical | focused + UAT-26 |
 | INV-28 | `inventory-lock.js` | `inventory_locks` NEW | focused + UAT-07 |
@@ -1955,6 +1955,7 @@ Integration-Backed = 4
 ```
 
 > **2026-11-12 修订（域级 Acceptance 整改轮）**：上表的 owner 列按实现事实更正。`warehouse-master.js`、`inventory-stock-status-mutation.js`、`inventory-adjustment-scrap.js` 三个模块**从未存在**；INV-02 的实际 owner 是 `warehouses.js`，INV-19 与 INV-21 分别是 `server/app.js` 的 inline handler。INV-15 的 owner `inventory-transfer.js` 与 INV-29～31 的 owner `inventory-stocktake.js` 已在本轮成为**唯一**写入口（legacy 的 tuple 写入口退役），INV-39 增加条码生成与标签渲染模块 `inventory-barcode-generation.js`。本修订只更正 owner 映射，不改变任何能力语义。
+> **2026-11-13 修订（域级 Acceptance 收尾轮）**：INV-25 的辅助属性由 canonical 位置维度承载（仓位 / 所有权 / 库存状态 / 批号 / 序列号），上表原写的 `inventory.aux_*`（optional）列族**作为实现载体退役**——Requirement §32.3 对该能力的表述（「库存身份允许使用必要的辅助属性」「Inventory owns these attributes as physical-stock dimensions」）已由这些维度满足，另建列族既无实现也无使用方。本修订只更正实现载体，不改变该能力本身。
 
 ### 27.53 Rollback Strategy
 

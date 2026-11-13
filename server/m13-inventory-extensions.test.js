@@ -290,7 +290,7 @@ describe('M13 — Inventory Month-End', () => {
   });
 
   test('9. forward chronological order: close 2026-07 after 2026-06 succeeds; close 2026-05 rejected', async () => {
-    database.exec("UPDATE inventory_scraps SET status='CANCELLED' WHERE status='DRAFT'; DELETE FROM inventory_valuation_movements; DELETE FROM inventory_valuation_balances; DELETE FROM inventory_transactions; DELETE FROM inventory; DELETE FROM inventory_period_snapshots; DELETE FROM inventory_period_closures;");
+    database.exec("UPDATE inventory_scraps SET status='CANCELLED' WHERE status='DRAFT'; DELETE FROM inventory_valuation_movements; DELETE FROM inventory_valuation_balances; DELETE FROM inventory_mutation_log; DELETE FROM tracked_inventory_movements; DELETE FROM tracked_source_allocations; DELETE FROM tracked_inventory_movements; DELETE FROM tracked_source_allocations; DELETE FROM inventory_transactions; DELETE FROM inventory; DELETE FROM inventory_period_snapshots; DELETE FROM inventory_period_closures;");
     const close06 = await request('/api/inventory-period-closures', { token: adminToken, method: 'POST', body: { period: '2026-06' } });
     assert.equal(close06.status, 200, JSON.stringify(close06.data));
     const close07 = await request('/api/inventory-period-closures', { token: adminToken, method: 'POST', body: { period: '2026-07' } });
@@ -345,7 +345,7 @@ describe('M13 — Inventory Month-End', () => {
     const list = (await request('/api/inventory-period-closures', { token: adminToken })).data.inventoryPeriodClosures;
     const closure07 = list.find((row) => row.period_key === '2026-07');
     const beforeSnapshots = database.prepare('SELECT COUNT(*) n FROM inventory_period_snapshots WHERE closure_id=?').get(closure07.id).n;
-    database.exec('DELETE FROM inventory_valuation_movements; DELETE FROM inventory_valuation_balances; DELETE FROM inventory_transactions; DELETE FROM inventory;');
+    database.exec('DELETE FROM inventory_valuation_movements; DELETE FROM inventory_valuation_balances; DELETE FROM inventory_mutation_log; DELETE FROM tracked_inventory_movements; DELETE FROM tracked_source_allocations; DELETE FROM tracked_inventory_movements; DELETE FROM tracked_source_allocations; DELETE FROM inventory_transactions; DELETE FROM inventory;');
     const reclose = await request('/api/inventory-period-closures', { token: adminToken, method: 'POST', body: { period: '2026-07' } });
     assert.equal(reclose.status, 200, JSON.stringify(reclose.data));
     const detail = (await request(`/api/inventory-period-closures/${closure07.id}`, { token: adminToken })).data.inventoryPeriodClosure;

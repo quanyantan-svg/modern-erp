@@ -78,7 +78,7 @@ beforeEach(() => {
   // clean inventory ledger.
   db.exec(`DELETE FROM inventory_valuation_movements;
     DELETE FROM inventory_valuation_balances;
-    DELETE FROM inventory_transactions;
+    DELETE FROM tracked_inventory_movements; DELETE FROM tracked_source_allocations; DELETE FROM inventory_transactions;
     DELETE FROM inventory;`);
   db.prepare("INSERT OR IGNORE INTO accounting_subjects(id,code,name,type,direction,active) VALUES('w3-rev','6999','测试收入','REVENUE','CREDIT',1),('w3-exp','6998','测试费用','EXPENSE','DEBIT',1)").run();
   db.exec("UPDATE accounting_subjects SET active=1");

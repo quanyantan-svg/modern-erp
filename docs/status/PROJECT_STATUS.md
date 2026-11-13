@@ -4481,17 +4481,19 @@ Requirement §33.39 的 **15 个 Finance race**（RACE-01..15）实现齐备（`
 
 - **授权来源**：业务所有者 2026-11-12「现在完成剩下几个业务域的收尾工作」「最终目标是该 mobile erp 系统各业务域的 acceptance 完成整个项目验收」，并就真实 MySQL 证据口径裁定「逐域新建专属 campaign」；2026-11-13 追加裁定「收敛到 canonical 模块 + 单一 canonical 工作面」。
 - **本轮范围**：域 5 —— Inventory & Warehouse（§32.3 共 44 项能力 INV-01～INV-44）的写入口收敛、缺失 operator 工作面补齐、浏览器证据去空洞、专属 campaign 取证与域级验收**候签材料**。
-- **状态**：**域级 Acceptance 与 Capability Freeze 尚未签发**（候选建议见 [`docs/acceptance/inventory-warehouse-domain-acceptance-candidate-20261112.md`](../acceptance/inventory-warehouse-domain-acceptance-candidate-20261112.md)）。
+- **状态**：**域级 Acceptance 与 Capability Freeze 已签发**（`INVENTORY_WAREHOUSE_DOMAIN_ACCEPTANCE_PASS` / `INVENTORY_WAREHOUSE_CAPABILITY_FREEZE`，44 项 `COVERED`）——签发记录 [`docs/acceptance/inventory-warehouse-domain-acceptance-20261113.md`](../acceptance/inventory-warehouse-domain-acceptance-20261113.md)；同日候签材料标记为 `SUPERSEDED`。
 
 ### 59.2 审计结论
 
 - 台账：[`docs/audits/inventory-warehouse-capability-audit-20261112.md`](../audits/inventory-warehouse-capability-audit-20261112.md) —— 44 项逐项判定；整改后 = **42 `COVERED` / 2 `PARTIAL` / 0 `OUT_OF_SCOPE` / 0 `MISSING`**（整改前 29 / 15）。
-- 登记 **21 项真实缺陷**（`INV-DEF-01..21`），其中最关键的五项：
+- **能力判定**：INV-01～INV-44 共 44 项：整改与收尾轮后 = **44 `COVERED` / 0 `PARTIAL` / 0 `OUT_OF_SCOPE` / 0 `MISSING`**（整改前 29 / 15）。
+- 登记 **23 项真实缺陷**（`INV-DEF-01..23`），其中最关键的六项：
   - `INV-DEF-01` canonical 盘点模块调用 `transaction` 却从未 import —— 路由一调即 `ReferenceError`；
   - `INV-DEF-02` 调拨在同一张 `inventory_transfers` 表上并存两个写入口，且一个丢失进侧估值承接；
   - `INV-DEF-03` legacy 盘点写入口按 warehouse+product tuple 写入，不经 canonical 位置身份与 `applyInventoryMutation`；
   - `INV-DEF-17` 即时库存查询路由每次调用 500（过滤函数收到 `url` 而非 `url.searchParams`）；
-  - `INV-DEF-19` 锁库的防超锁检查在事务外读已锁量，可并发超锁。
+  - `INV-DEF-19` 锁库的防超锁检查在事务外读已锁量，可并发超锁；
+  - `INV-DEF-23` canonical 变更合同写的 mutation log 与 tracked movement 引用交易行，生命周期归档清理路径因此被外键阻断。
 
 ### 59.3 写入口收敛与前端工作面
 
@@ -4513,7 +4515,19 @@ Requirement §33.39 的 **15 个 Finance race**（RACE-01..15）实现齐备（`
 
 `pnpm test:fast` 632/632、`pnpm test` 3766/3766、`pnpm test:heavy` 67/67、`pnpm build` PASS、`git diff --check` PASS；功能 UAT 28/28；浏览器 108/108；文档一致性 `current` N1、N3～N6、N8、N9 PASS、N2 `RETIRED`、**N7 FAIL**（既有历史提交的追溯债务，与本域无关），`migration` C1～C6 全 PASS。
 
-### 59.7 未解决事项与暂停点
+### 59.7 收尾轮：两个未决矛盾的解决与域级签发
 
-- **待业务所有者裁定**：域级 Acceptance 与 Capability Freeze 的签发；`INV-DEC-01`（INV-21 的确认路径未进入 canonical 变更合同）与 `INV-DEC-02`（INV-25 可选辅助属性）建议作为显式残余随冻结接受。
+业务所有者 2026-11-13 指示「解决未解决矛盾 然后签发域级 acceptance」，据此：
+
+| 矛盾 | 解决方式 |
+|---|---|
+| `INV-DEC-01`（INV-21 的确认路径未进入 canonical 变更合同） | **已解决**：库存调整（`INVENTORY_ADJUSTMENT`）与库存报废（`INVENTORY_SCRAP`）的确认路径改写 canonical 位置身份并经 `applyInventoryMutation` 生效，负库存策略、库存锁定、期间闸门与 `inventory_mutation_log` 同时适用；估值流水与系统凭证语义不变。域级合同用例新增三条（调整生效且留痕、调整不得消耗被锁库存、报废生效且留痕）。代价是 `inventory_mutation_log` 与 `tracked_inventory_movements` 开始引用交易行，生命周期归档清理路径因此被外键阻断 —— 一并修复（`INV-DEF-23`） |
+| `INV-DEC-02`（INV-25 的可选辅助属性） | **已解决（契约对齐）**：库存辅助属性由 canonical 身份维度承载，Requirement §32.3 对该能力的表述已满足；Design §27.52 的 `inventory.aux_*`（optional）列族作为实现载体退役并在设计表中更正 |
+
+**签发**：`INVENTORY_WAREHOUSE_DOMAIN_ACCEPTANCE_PASS` + `INVENTORY_WAREHOUSE_CAPABILITY_FREEZE`（44 项 `COVERED`）。签发记录 [`docs/acceptance/inventory-warehouse-domain-acceptance-20261113.md`](../acceptance/inventory-warehouse-domain-acceptance-20261113.md)；同日候签材料标记 `SUPERSEDED`。随冻结接受的残余：`INV-RES-04` 逐列 schema parity 未取证、`INV-RES-05` 既有库存行的位置键回填、`INV-RES-06` N7 文档追溯债务、`INV-RES-07` 全站级导航预留口径、**`INV-RES-08` 库存冲销路径按元组重建补偿异动仍未进入 canonical 变更合同**（不在 INV-07 的枚举内，且未产生第二套物理账）。
+
+### 59.8 未解决事项与暂停点
+
+- **不签发**：Manual Closure（B3104 库存管理 / B3105 条码管理）、Release Readiness、发布、部署。
 - 本轮**未**执行真实环境 migration、业务数据库写入、push / merge / tag / 发布 / 部署。
+- **下一域**：按就绪度顺序继续域 6 —— **Sales & Customer**（CAP-1..36，以及本轮未实现的 W11-B / W11-C / W11-D）。

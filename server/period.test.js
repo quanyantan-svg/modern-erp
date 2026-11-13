@@ -19,7 +19,7 @@ let approverToken;
 before(async () => {
   tempDir = mkdtempSync(join(tmpdir(), 'modern-erp-period-test-'));
   database = createDatabase(join(tempDir, 'erp.db'));
-  database.exec("DELETE FROM inventory_valuation_movements; DELETE FROM inventory_valuation_balances; DELETE FROM inventory_transactions; DELETE FROM inventory; INSERT OR IGNORE INTO accounting_subjects(id,code,name,type,direction,active) VALUES('period-test-debit','6998','期间测试借方','EXPENSE','DEBIT',1),('period-test-credit','6999','期间测试贷方','REVENUE','CREDIT',1);");
+  database.exec("DELETE FROM inventory_valuation_movements; DELETE FROM inventory_valuation_balances; DELETE FROM inventory_mutation_log; DELETE FROM tracked_inventory_movements; DELETE FROM tracked_source_allocations; DELETE FROM tracked_inventory_movements; DELETE FROM tracked_source_allocations; DELETE FROM inventory_transactions; DELETE FROM inventory; INSERT OR IGNORE INTO accounting_subjects(id,code,name,type,direction,active) VALUES('period-test-debit','6998','期间测试借方','EXPENSE','DEBIT',1),('period-test-credit','6999','期间测试贷方','REVENUE','CREDIT',1);");
   server = createServer(createApp(database, { distDir: resolve('dist') }));
   await new Promise((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
   baseUrl = `http://127.0.0.1:${server.address().port}`;

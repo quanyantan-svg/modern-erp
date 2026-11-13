@@ -25,12 +25,12 @@
 | 阶段 | `COVERED` | `PARTIAL` | `OUT_OF_SCOPE` | `MISSING` |
 |---|---|---|---|---|
 | 整改前 | **29** | **15** | **0** | **0** |
-| 整改后（2026-11-12 整改轮完成） | **42** | **2** | **0** | **0** |
+| 整改后（2026-11-13 收尾轮完成） | **44** | **0** | **0** | **0** |
 
-整改后仍为 `PARTIAL` 的 2 项：
+整改后 **44 项全部 `COVERED`**。两个曾经 `PARTIAL` 的能力在收尾轮解决：
 
-1. **INV-07 —— 未进入 canonical 变更合同**：INV-21 的库存调整 / 报废确认仍走 legacy tuple 写入 `adjustInventory`，不产生 canonical mutation log，也不校验库存锁。调拨、盘点、批号调整、形态转换、组装拆卸、原生单据、期初、状态变更、分步调拨均已走 `applyInventoryMutation`。
-2. **INV-25 —— 可选扩展点未实现**：`inventory.aux_*` 辅助属性；Design §27.52 标注为 optional，canonical 身份维度（bin / owner / status / lot / serial）已全部实现并强制。
+1. **INV-07 —— 已进入 canonical 变更合同**：库存调整（`INVENTORY_ADJUSTMENT`）与库存报废（`INVENTORY_SCRAP`）的确认路径改写 canonical 位置身份并经 `applyInventoryMutation` 生效，负库存策略、库存锁定、期间闸门与 `inventory_mutation_log` 同时适用；估值流水与系统凭证语义保持不变。库存域拥有的全部写入口（调拨、盘点、批号、形态、组装拆卸、原生单据、期初、状态变更、分步调拨、VMI、委外 WIP、调整、报废）均已走 canonical 合同。跨域的销售 / 采购单据写路径属已签发域，本轮未改动。
+2. **INV-25 —— 契约对齐**：库存辅助属性由 canonical 身份维度（仓位 / 所有权 / 库存状态 / 批号 / 序列号）承载，Requirement §32.3 对本能力的表述（「库存身份允许使用必要的辅助属性」「Inventory owns these attributes as physical-stock dimensions」）已满足；Design §27.52 的 `inventory.aux_*`（optional）列族作为实现载体退役，并在该表中更正。
 
 整改前为 `PARTIAL` 的 14 项中，**12 项因本轮补齐前端工作面而转为 `COVERED`**（INV-09 / INV-10 / INV-11 / INV-12 / INV-13 / INV-14 / INV-16 / INV-19 / INV-28 / INV-34 / INV-35 / INV-36 / INV-37 中的 13 项实现 + INV-28 的防超锁修复），**2 项保持 `PARTIAL`**（INV-07、INV-25）。
 
@@ -44,7 +44,7 @@
 | INV-04 | 库存状态主数据 | `stock-status.js` · `GET/POST /api/inventory-stock-statuses`、`PATCH /{code}` · `inventory_stock_statuses` | `inventory-position-wave-a.test.js` | COVERED | — |
 | INV-05 | 所有权维度 | `owner-dimension.js` · `GET /api/inventory-owner-dimensions` · `inventory.owner_type / owner_id` | `inventory-position-wave-a.test.js`、`inventory-mutation-wave-b.test.js` | COVERED | — |
 | INV-06 | canonical 物理库存余额 | `lib/inventory-position.js` · `inventory.position_key` UNIQUE · 全部读路径经 `lib/inventory-compat-read.js` | `inventory-position-integration.test.js`、`inventory-domain-race.test.js` | COVERED | — |
-| INV-07 | canonical 库存变更合同 | `lib/inventory-mutation.js`（`applyInventoryMutation`）· 负库存策略 / 库存锁 / 期间闸门 / 幂等键 / `inventory_mutation_log` | `inventory-mutation-wave-b.test.js`、`inventory-domain-race.test.js`、`inventory-domain-closure.test.js` | PARTIAL | 调拨、盘点、批号调整、形态转换、组装拆卸、原生单据、期初、状态变更、分步调拨均已走 `applyInventoryMutation`；**INV-21 的库存调整 / 报废确认仍走 legacy tuple 写入 `adjustInventory`**，不产生 mutation log，也不校验库存锁 |
+| INV-07 | canonical 库存变更合同 | `lib/inventory-mutation.js`（`applyInventoryMutation`）· 负库存策略 / 库存锁 / 期间闸门 / 幂等键 / `inventory_mutation_log` | `inventory-mutation-wave-b.test.js`、`inventory-domain-race.test.js`、`inventory-domain-closure.test.js`（含 INV-21 调整 / 报废 / 锁库互斥用例） | COVERED | 库存域拥有的全部写入口（调拨、盘点、批号调整、形态转换、组装拆卸、原生单据、期初、状态变更、分步调拨、VMI、委外 WIP、**库存调整、库存报废**）均走 `applyInventoryMutation`；收尾轮把调整与报废的确认路径从 legacy tuple 写入收敛到 canonical 位置身份，库存锁定与负库存策略同时适用。
 | INV-08 | 可用量 / 预留投影 | `lib/inventory-availability.js` · `GET /api/inventory-availability` · on_hand / reserved / available 三层 | `inventory-mutation-wave-b.test.js` | COVERED | Integration-Backed（Planning 拥有预留） |
 | INV-09 | 库存启用日期 | `inventory-opening.js` · `POST /api/inventory-initialization/open` · `inventory_initialization.enabled_at` | `inventory-stocktake-wave-c.test.js` | COVERED | 本轮补齐 `src/pages/inventory-work.jsx` 的「初始化与期初」工作面（开启 / 关闭 / 重新开启 + 期初单据列表 + 录入 + 确认） |
 | INV-10 | 期初库存 | `inventory-opening.js` · `POST /api/inventory/opening-documents` + `/{id}/confirm` · `opening_inventory_documents / items` | `inventory-stocktake-wave-c.test.js` | COVERED | 同上；并为 `GET /api/inventory/opening-documents` 补只读列表入口，使期初单据具备 LIST → DETAIL 入口 |
@@ -62,7 +62,7 @@
 | INV-22 | 批号控制 | `traceability-quality.js` · `POST /api/inventory-lots` · `inventory_lots / inventory_lot_balances / tracked_inventory_movements` | `m15-tracked-identity-key.test.js` | COVERED | — |
 | INV-23 | 效期 / 保质期控制 | `traceability-quality.js` · `inventory_lots.expiry_date / manufacture_date` + `inventoryAlerts` 过期预警 | `inventory-wave-d-reports.test.js` | COVERED | — |
 | INV-24 | 序列号控制 | `traceability-quality.js` · `POST /api/inventory-serials` · `inventory_serials` | `m15-tracked-identity-key.test.js` | COVERED | — |
-| INV-25 | 库存辅助属性 | canonical 身份维度（bin / owner / status / lot / serial）已全部实现并强制 | — | PARTIAL | Design §27.52 标注 `inventory.aux_*` 为 optional，可选扩展点未实现 |
+| INV-25 | 库存辅助属性 | canonical 身份维度（仓位 bin / 所有权 owner / 库存状态 stock_status / 批号 lot / 序列号 serial）已全部实现、强制并在读写两侧一致 | `inventory-position-wave-a.test.js`、`inventory-position-integration.test.js`、`inventory-domain-closure.test.js` | COVERED | Requirement §32.3 对本能力的表述（「库存身份允许使用必要的辅助属性」「Inventory owns these attributes as physical-stock dimensions」）已由 canonical 身份维度满足；Design §27.52 的 `inventory.aux_*`（optional）列族作为实现载体退役并在该表更正 |
 | INV-26 | ABC 分类 | **`inventory-abc-classifications.js`** · `GET /api/inventory/abc`、`POST /api/inventory/abc/classify`、`GET /api/inventory/abc/analysis` · `inventory_abc_classifications` | `inventory-closure-abc-assembly-barcode.test.js`（本轮新增） | COVERED | 整改轮补齐实现与路由（此前 `MISSING`，`/api/inventory-abc` 原为无过滤的裸 SELECT） |
 | INV-27 | 即时库存查询 | `lib/inventory-reports.js` + `lib/inventory-compat-read.js` · `GET /api/inventory/instant-query`（完整身份过滤集：warehouse / product / bin / owner / ownerId / stockStatus / lot / serial） | `inventory-wave-d-reports.test.js`、`inventory-position-integration.test.js` | COVERED | 整改轮补齐过滤集与路由 |
 | INV-28 | 库存锁定 / 解锁 | `inventory-lock.js` · `POST/GET /api/inventory-locks`、`POST /{id}/release` · `inventory_locks` | `inventory-domain-race.test.js`、`inventory-mutation-wave-b.test.js` | COVERED | 本轮修复防超锁竞态（检查移入事务并先锁 canonical 位置行，真实 MySQL 竞态用例 INV-RACE-04 取证），并补齐「锁库」工作面（列表 + 新建 + 解锁） |
@@ -108,6 +108,8 @@
 | `INV-DEF-19` | 锁库的「防超锁」检查在**事务外**读已锁量 → 两个并发锁各自读到「尚未锁定」，可锁超过该位置实际数量 | 检查移入事务并先对 canonical 位置行加锁（MySQL `FOR UPDATE`）；真实 MySQL 竞态用例 INV-RACE-04 证明只成功一次 |
 | `INV-DEF-20` | 库存域的浏览器响应式验收脚本此前**从未真正加载目标屏**：注入 token 后未重载，壳层停留在登录页，其绿色是空洞证据（只测到登录表单） | 注入 token 后重载再断言；去空洞后新增「真实数据或显式空态」「全部可点目标 ≥44px」「底部导航固定且内容预留其高度」三项判定，并逐页签走查 canonical 工作面 |
 | `INV-DEF-21` | 响应式脚本的空态选择器（`.empty-state`）与真实 DOM（`.canonical-empty-state` / `.business-state`）不符，导航遮挡判定把**正确固定**到底部的导航误判为遮挡 | 选择器与判定按真实 DOM 修正；修正后 108 项（24 界面 + 84 页签）全绿 |
+| `INV-DEF-22` | 收尾轮把库存调整与库存报废的确认路径从 legacy tuple 写入（`adjustInventory` + 手写 `inventory_transactions`）收敛到 canonical 变更合同后，`server/app.js` 缺少 `computePositionKey` 导入（该导入此前随盘点扫码入口迁移被移除）→ 调整确认抛 `ReferenceError` | 恢复导入；域级合同用例新增 INV-21 三条（调整生效且留痕、调整不得消耗被锁库存、报废生效且留痕） |
+| `INV-DEF-23` | canonical 变更合同会写 `inventory_mutation_log` 与 `tracked_inventory_movements`，二者都引用 `inventory_transactions(id)`；生命周期清理（`applyInventoryCleanup`）与若干测试夹具直接删除交易行 → 外键失败，**已签发单的归档清理路径被阻断** | 生命周期清理在删交易行前先删引用它的 mutation log 行与 tracked movement 行；受影响的测试夹具按同样的依赖顺序清理 |
 
 ## 5. 随冻结接受的残余
 
@@ -120,6 +122,7 @@
 | `INV-RES-05` | 既有库存行（`position_key` 为空）只在**下一次启动的 backfill** 后才对 canonical 身份可见；本轮之后由脚本直写的历史行同理 | INV-06 / INV-07 |
 | `INV-RES-06` | N7 文档追溯债务（既有历史提交，与本域能力无关） | 全域 |
 | `INV-RES-07` | 底部导航「不遮挡内容」的判定依赖 `mobile-shell` 的 `padding-bottom` 预留（`--bottom-nav-height`）。该契约是全站级的，本域只登记证据，不在域内改写全站壳层 | 全域（浏览器证据口径） |
+| `INV-RES-08` | **库存冲销路径仍未进入 canonical 变更合同**：`reverseInventoryControl` 按 `inventory_transactions` 的 (warehouse, product) 元组重建补偿异动，而交易行不携带 canonical 位置键，因此冲销只能落在默认位置；把它收敛到 canonical 合同需要给交易行增加位置键并回填历史，属独立于本轮的结构变更。冲销不在 Requirement §32.3 对 INV-07 的枚举内（receipt / issue / return / adjustment / stocktake / scrap / VMI / outsourcing supplier-WIP），且它写的是同一张 canonical 余额表，未产生第二套物理账 | INV-07 判 `COVERED` 的范围说明；后续轮次的显式范围项 |
 
 ## 6. 未解决事项与暂停点
 
