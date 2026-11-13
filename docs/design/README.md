@@ -20,7 +20,7 @@
 | [`finance-operations.md`](./finance-operations.md) | Finance Operations | `solution.md` §28.0–§28.29 | 已实施；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12） |
 | [`sales-customer/`](./sales-customer/) | Sales & Customer | `solution.md` §29 / §30 / Wave 8/9/11 基线 | 已实施；整域已冻结（2026-11-13） |
 | [`accounting-analytics.md`](./accounting-analytics.md) | Accounting & Analytics | `solution.md` §31 | Design 已完成（2026-11-10），覆盖 AA-W1..AA-W7 七个实施包；Implementation 已完成；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12） |
-| — | Platform | — | **尚无 Domain Technical Design** |
+| [`platform.md`](./platform.md) | Platform | `solution.md` §32 | Design 已完成（2026-11-13），覆盖五个子系统 + 通用 SOD 引擎 + Audit schema 升级；**Implementation `NOT_AUTHORIZED`**，需业务所有者批准后方可开工 |
 
 > 状态列依据见 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §35.3；
 > M1-Core 首期包级 Acceptance 的当前状态见同表 §37.55，B3101 / B3121 静态代码审计基线见同表 §38

@@ -27,7 +27,7 @@
 | Finance Operations | [`docs/design/finance-operations.md`](docs/design/finance-operations.md) | §28.0–§28.29 |
 | Sales & Customer | [`docs/design/sales-customer/README.md`](docs/design/sales-customer/README.md) | §29 + §30 + Wave 8/9/11 基线 |
 | Accounting & Analytics | [`docs/design/accounting-analytics.md`](docs/design/accounting-analytics.md) | §31（Accounting & Analytics Domain Technical Design，2026-11-10 建立；AA-W1..AA-W7 七个实施包；Implementation `NOT_AUTHORIZED`，等待业务所有者批准） |
-| Platform | **尚无 Domain Technical Design** | — |
+| Platform | [`docs/design/platform.md`](docs/design/platform.md) | §32（Platform 平台层域 Domain Technical Design，2026-11-13 建立；覆盖 Generic Workflow 引擎 / Attachment / Org Scope / Notification 生产者 / Numbering 服务 / 通用 SOD 引擎 / Audit schema 升级；Implementation `NOT_AUTHORIZED`） |
 
 ### 0.2 章节编号迁移规则
 

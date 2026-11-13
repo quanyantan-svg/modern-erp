@@ -51,14 +51,16 @@
 | Finance Operations | §33 Complete | Complete | — | 已冻结 | `FINANCE_OPERATIONS_DOMAIN_ACCEPTANCE_PASS`（2026-11-12） | 未见 | 未就绪 |
 | Sales & Customer | §34 FROZEN | Complete（Wave 0–10 + W11） | Wave 6/7/9 + Gate A PASS | 整域已冻结 | `SALES_CUSTOMER_DOMAIN_ACCEPTANCE_PASS`（2026-11-13） | 未见 | 未就绪 |
 | Accounting & Analytics | §35 Complete | Complete | — | 已冻结 | `ACCOUNTING_ANALYTICS_DOMAIN_ACCEPTANCE_PASS`（2026-11-12） | 未见 | 未就绪 |
-| Platform | **无 Domain Closure Requirement** | Partial | — | — | 未见 | **未闭合**（B3122） | 未就绪 |
+| Platform | §36 Complete（2026-11-13） | **未实施**（Implementation `NOT_AUTHORIZED`） | — | — | 未见 | **未闭合**（B3122） | 未就绪 |
 
 > **（2026-11-13 刷新）** 本表原为 2026-10-31 基线快照。此后 §51–§60 已陆续签发八个业务域的
 > Domain-Level Acceptance 与 Capability Freeze，上表各列据此更新。
 > **Manual Capability Closure 与 Release Readiness 两层对所有域、所有手册均未签发** ——
 > 它们是业务所有者的独立决定，不由域级 Acceptance 自动跟随。
-> **Platform（B3122）仍未开工**：无 Domain Closure Requirement、无 Domain Closure Design，
-> 逐 Capability 审计台账见 [`docs/audits/`](../audits/)。
+> **Platform（B3122）**：域级 Requirement（§36）与 Design（§32）已于 2026-11-13 建立并获业务所有者批准，
+> 21 项能力目标 17 `COVERED` / 4 `OUT_OF_SCOPE`；**Implementation 尚未授权开工**，
+> 域级 Acceptance 与 Capability Freeze 未签发。审计台账见
+> [`docs/audits/platform-capability-audit-20261113.md`](../audits/platform-capability-audit-20261113.md)。
 
 **没有任何 Domain 达到 Release Readiness。** 生产发布仍未获授权（`document.md:11187`）。
 
@@ -81,7 +83,7 @@
 | B3119 生产管理 | §29.3 | MQ-01..43 | 已实现；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12） |
 | B3120 计划 | §30.2 | PL-01..45 | 已实现并冻结（2026-11-12） |
 | B3121 委外 | §31.3.3 + VMI-01..05 | OUT-01..23 | Requirement 完成；域级 Acceptance 与 Capability Freeze 已签发（2026-11-11） |
-| B3122 工作流 | §22.22 | — | **仍然开放（正确）**：Platform 无 Domain Closure Requirement / Design，尚未开工 |
+| B3122 工作流 | §36（Platform Domain Closure Requirement） | PL-01..PL-13 + WF-01..WF-08（21 项） | **域级 Requirement 与 Design 已建立并获批准（2026-11-13）**；目标 17 `COVERED` / 4 `OUT_OF_SCOPE`；Implementation 未开工 |
 
 ### 35.5 已验收、待验收与未实施
 
@@ -4603,3 +4605,64 @@ Requirement §33.39 的 **15 个 Finance race**（RACE-01..15）实现齐备（`
 
 - 本轮**未**执行真实环境 migration、业务数据库写入、push / merge / tag / 发布 / 部署。
 - 下一个可推进项：剩余的 Manual Closure 与 Release Readiness 仍需业务所有者单独决定；本域不阻塞其余域的收尾。
+
+## 61. Platform 平台层域：域级审计、Requirement 与 Design 建立（2026-11-13）
+
+### 61.1 授权与本轮边界
+
+- **授权来源**：业务所有者 2026-11-13 指示「指导我完成 Platform 域闭合，按照已有文档要求完整建 Platform（Generic Workflow 引擎 + Attachment + Org Scope + Notification 生产者 + Numbering 服务）」。
+- **连续阶段授权**：按 AGENTS.md §4.0，AUDIT / COVERAGE → REQUIREMENT → DESIGN 三阶段连续执行；**DESIGN 完成后 HARD STOP**，Implementation 未获授权。
+- **本轮边界**：AUDIT / COVERAGE / REQUIREMENT / DESIGN 四个阶段；**Implementation 未授权**。
+- **本轮未执行**：真实环境 migration、业务数据库写入、真实 MySQL Gate、push / merge / tag / 发布 / 部署；**未签发任何 Acceptance 或 Freeze 标识**。
+
+### 61.2 AUDIT / COVERAGE 结论
+
+- 台账：[`docs/audits/platform-capability-audit-20261113.md`](../audits/platform-capability-audit-20261113.md)（`v1.0`，基准 SHA `63bb7c5`）。
+- 覆盖 `document.md §17` 的 13 项平台长期能力（PL-01～PL-13）+ `§22.22` 的 8 项 B3122 手册能力（WF-01～WF-08），合计 **21 项**。
+- 判定：**3 `COVERED` / 7 `PARTIAL` / 11 `MISSING` / 0 `SEMANTIC_MISMATCH` / 0 `OUT_OF_SCOPE`**。
+- 登记 **12 项结构缺口**（`PL-GAP-01`～`12`）与 **16 项真实缺陷**（`PL-DEF-01`～`16`）。
+- **8 项 B3122 手册基线判定全部维持**（3 `PARTIAL` + 5 `MISSING`），只把每项精确到具体代码事实。
+- 最重缺陷：`PL-DEF-01` 生产订单审批**无自审批防护**（6 族中唯一缺口）；`PL-DEF-08` / `PL-DEF-09` 期间控制**三闸门并存**且 canonical 断言只覆盖 2 张表；`PL-DEF-11` 编号分配在单据事务**之外**产生孤儿号。
+
+### 61.3 业务所有者三项裁定
+
+| ID | 裁定 | 记录 |
+|---|---|---|
+| `PL-DEC-01` | **闭合范围**：建 Generic Workflow 引擎 / Attachment / Org Scope / Notification 生产者 / Numbering 服务五个子系统 **+ 通用 SOD 引擎 + 修生产订单自审批**；PL-06 通用化增量 / PL-07 通用单据关系 / PL-08 通用转换抽象 / PL-13 期间控制收敛**显式 `OUT_OF_SCOPE`**（延期后续版本） | [`docs/decisions/platform-domain-closure-decisions-20261113.md`](../decisions/platform-domain-closure-decisions-20261113.md) §2.1 |
+| `PL-DEC-02` | **Organization 归属**：主数据所有权由 Master & Engineering **正式移交 Platform**；M&E 的 Multi-Organization **业务数据隔离**仍维持 `OUT_OF_SCOPE` | 同上 §2.2；[`docs/requirements/master-engineering.md`](../requirements/master-engineering.md) §28.1 / §28.9 已同步修订 |
+| `PL-DEC-03` | **审计 schema 升级纳入本域**：`audit_logs` 新增 `business_date` / `request_id` / before-after 结构化字段与索引，Platform 主导，Finance Operations 为共同 Owner 域 | 同上 §2.3 |
+
+### 61.4 REQUIREMENT
+
+- 正文：[`docs/requirements/platform.md`](../requirements/platform.md) §36（`APPROVED`）。
+- 21 项能力 → **目标 17 `COVERED` / 4 `OUT_OF_SCOPE` / 0 `PARTIAL` / 0 `MISSING`**。
+- 含 §36.3 Generic Workflow 八段需求、§36.4 通用 SOD 引擎、§36.5 Organization Scope、§36.6 Attachment、§36.7 Notification 生产者、§36.8 Numbering 服务、§36.9 Audit schema 升级、§36.10 既有能力封顶、§36.11 跨域契约 10 条、§36.12 验收标准、§36.13 `OUT_OF_SCOPE` 清单 11 项、§36.14 未解决事项 4 项。
+
+### 61.5 DESIGN
+
+- 正文：[`docs/design/platform.md`](../design/platform.md) §32（`APPROVED`，Implementation `NOT_AUTHORIZED`）。
+- 含 §32.0 设计纪律、§32.1 模块与文件清单、§32.2 Schema 与 Migration 计划（17 张新表 + `notifications` / `audit_logs` 的 ALTER）、§32.3 通用工作流引擎、§32.4 SOD 引擎、§32.5 Organization Scope、§32.6 Attachment、§32.7 Notification、§32.8 Numbering 服务、§32.9 Audit schema 升级、§32.10 既有能力封顶、§32.11 兼容性与回归约束 10 条、§32.12 测试计划、§32.13 回滚策略、§32.14 未解决事项 5 项。
+- **跨域代码变更点已显式登记**：SOD 与通知的接线分布在 6 个业务域的 7 个决策点（`server/modules/sales-orders.js:800`、`server/app.js:5242`、`server/modules/planning-documents.js:823`、`server/modules/inventory-stocktake.js:292`、`server/app.js:5960`、`server/modules/manufacturing-orders.js:156`、`server/modules/credit-special-approval.js:230`），每个接线点为一行调用。
+
+### 61.6 连带修正的合同表述漂移
+
+| 漂移 | 修正 |
+|---|---|
+| `PL-DEF-10`：`document.md §5`、`:§17` 与 `solution.md §20.6` 称「五审批族」，代码实际为 **6 类授权事件 + 1 个独立信用特批机制** | `document.md §5` 补 `PRODUCTION_ORDER` 并登记信用特批为独立机制；`document.md §17` 与 `solution.md §20.6` 改为「六类授权事件」 |
+
+### 61.7 门禁
+
+| 门禁 | 结果 |
+|---|---|
+| `node scripts/docs/check-doc-consistency.mjs --mode current --target HEAD` | N1 / N3 / N4 / N5 / N6 / N8 / N9 **PASS**；N2 `RETIRED`；**N7 FAIL 为既有失败**（2026-11-03 / 2026-11-09 历史提交），本轮改动未新增 N7 问题 |
+| `node scripts/qa/verify-acceptance-records.mjs` | **PASS**（77 份记录：CURRENT 24 / NEEDS_REVIEW 53 / RELOCATED_UNRESOLVED 0 / BROKEN 0） |
+| `pnpm test:fast` / `pnpm test` / `pnpm test:heavy` / `pnpm build` | **未执行** —— 本轮无代码变更 |
+| 真实 MySQL 8 Gate | **未执行** —— 本轮无实现 |
+
+### 61.8 未解决事项与暂停点
+
+- **`PL-OPEN-01`**：`audit_logs` schema 升级影响 Finance Operations 等 8 个已冻结域的既有验收证据当前有效性，须按 AGENTS.md §4.6 在 Platform 域级 Acceptance 轮逐域复核登记。
+- **`PL-D-OPEN-02`**：SOD 与通知的跨域接线点变更触及 6 个业务域，各域的域级 Acceptance 证据同样须复核登记。
+- **`PL-D-OPEN-03`**：采购申请单号格式变更（`PREQ-YYYYMMDD-N` → `PRQ-YYYYMM-00001`）需 Planning 域 Owner 确认无外部依赖。
+- **`PL-D-OPEN-05`**：本域专属 ACK-4 campaign 清单需业务所有者批准（受保护入口限制见 `docs/decisions/mysql-evidence-policy-20261112.md`）。
+- **HARD STOP**：Design 已完成，**不得自动进入 Implementation**（AGENTS.md §4.3 / §4.0）。下一可推进项是业务所有者明确批准 Platform 域 Implementation。
