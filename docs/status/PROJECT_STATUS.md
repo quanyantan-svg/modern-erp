@@ -4474,3 +4474,46 @@ Requirement §33.39 的 **15 个 Finance race**（RACE-01..15）实现齐备（`
 
 - **下一域**：按就绪度顺序继续域 5 —— **Inventory & Warehouse**（INV-01..44）。该域的已知缺口在审计中已定位：8 个模块未在 `server/app.js` 注册路由、5 个死引用未接线、INV-17 组装拆卸未实现、条码无生成与打印、ABC 无写入、盘点走 legacy tuple 写入、`INV-27` 过滤集缺列、`inventory-hub.jsx` / `inventory-overview.jsx` 为调用不存在 API 的孤儿页。
 - 本轮**未**执行真实环境 migration、业务数据库写入、push / merge / tag / 发布 / 部署。
+
+## 59. Inventory & Warehouse 库存与仓储域：写入口收敛、前端工作面补齐与域级验收候签（2026-11-13）
+
+### 59.1 授权与范围
+
+- **授权来源**：业务所有者 2026-11-12「现在完成剩下几个业务域的收尾工作」「最终目标是该 mobile erp 系统各业务域的 acceptance 完成整个项目验收」，并就真实 MySQL 证据口径裁定「逐域新建专属 campaign」；2026-11-13 追加裁定「收敛到 canonical 模块 + 单一 canonical 工作面」。
+- **本轮范围**：域 5 —— Inventory & Warehouse（§32.3 共 44 项能力 INV-01～INV-44）的写入口收敛、缺失 operator 工作面补齐、浏览器证据去空洞、专属 campaign 取证与域级验收**候签材料**。
+- **状态**：**域级 Acceptance 与 Capability Freeze 尚未签发**（候选建议见 [`docs/acceptance/inventory-warehouse-domain-acceptance-candidate-20261112.md`](../acceptance/inventory-warehouse-domain-acceptance-candidate-20261112.md)）。
+
+### 59.2 审计结论
+
+- 台账：[`docs/audits/inventory-warehouse-capability-audit-20261112.md`](../audits/inventory-warehouse-capability-audit-20261112.md) —— 44 项逐项判定；整改后 = **42 `COVERED` / 2 `PARTIAL` / 0 `OUT_OF_SCOPE` / 0 `MISSING`**（整改前 29 / 15）。
+- 登记 **21 项真实缺陷**（`INV-DEF-01..21`），其中最关键的五项：
+  - `INV-DEF-01` canonical 盘点模块调用 `transaction` 却从未 import —— 路由一调即 `ReferenceError`；
+  - `INV-DEF-02` 调拨在同一张 `inventory_transfers` 表上并存两个写入口，且一个丢失进侧估值承接；
+  - `INV-DEF-03` legacy 盘点写入口按 warehouse+product tuple 写入，不经 canonical 位置身份与 `applyInventoryMutation`；
+  - `INV-DEF-17` 即时库存查询路由每次调用 500（过滤函数收到 `url` 而非 `url.searchParams`）；
+  - `INV-DEF-19` 锁库的防超锁检查在事务外读已锁量，可并发超锁。
+
+### 59.3 写入口收敛与前端工作面
+
+- **写入口收敛（按所有者裁定）**：`inventory-stocktake.js` 与 `inventory-transfer.js` 分别成为盘点与调拨的**唯一**写入口；legacy 的盘点写入口、重复的调拨写入口与 legacy 容器写入口退役为 `410 Gone`；盘点补齐 DRAFT → SUBMIT → APPROVE 全链、权威业务日期 fail closed、事务内复读 + 状态 CAS、创建人 ≠ 审批人、账存快照乐观复核、盘盈盘亏估值与 `INVENTORY_COUNT` 系统凭证。
+- **前端收敛到单一 canonical 工作面**：`src/pages/inventory-work.jsx` 承载本域全部工作面（21 个页签）；`master-data.jsx` 的孤儿库存作业屏与 9 个零调用方组件删除；P6 / P8 / V1.2 / D6 / E8 五份冻结合同的库存界面断言迁移到 canonical 工作面，四页签原型与旧库存列表 / 详情 / 盘点编辑器断言按**显式 Supersession** 退役并写入台账。
+- **补齐 Requirement §32.9 F 的 11 个 operator workflow**：初始化与期初、其他入库 / 出库 / 受托料、分步调拨（在途）、库存状态调整、锁库 / 解锁、库存台账 / 库龄 / 呆滞 / 预警。
+
+### 59.4 浏览器证据去空洞
+
+- 响应式验收脚本此前**从未真正加载目标屏**（注入 token 后未重载，壳层停留在登录页），其绿色为空洞证据。去空洞后暴露并修复 `INV-DEF-17`（即时库存查询 500）、`INV-DEF-18`（容器装箱 `ReferenceError` 与拆包写入不存在列）、`INV-DEF-20`（脚本空洞）、`INV-DEF-21`（空态选择器与导航遮挡判定）。修正后 **108/108 PASS**（6 界面 × 4 档宽度 = 24；21 页签 × 4 档宽度 = 84），判定口径为真实数据或显式空态、全部可点目标 ≥44px、无横向溢出、无控制台错误、底部导航固定且内容预留其高度。
+
+### 59.5 真实 MySQL 8.0.37 证据（本域专属 campaign）
+
+- Manifest `INVENTORY_WAREHOUSE_MYSQL_V1`（`RESET_SCHEMA_PRE_RUN` → `BOOTSTRAP_CURRENT_SCHEMA` → `RUN_INVENTORY_WAREHOUSE_RACES` → `CLEANUP_SCHEMA_POST_RUN`）。
+- **通过**：run `a52fe068-8508-483e-8c76-fd4ca8e88d16`、commit `3eece1b`，`RESULT = PASS`、`ACK-4 STATE = FINISHED`（清理由 Root 的独立 post-flight 证明；独立只读复核 `tables=0 views=0 triggers=0 routines=0 events=0`），竞态套件 **4/4 PASS**。
+- **失败运行如实登记**：run `c3e4b44c-99e7-479e-8192-bb6f26af4b99`、commit `9b205a7`，`RESULT = FAIL` / `ACK-4 STATE = FAILED`，cleanup 经独立 post-flight 证明；失败原因是测试装置缺陷（竞态 worker 漏 `await`），被测生产代码未执行到；INV-RACE-01～03 在该次运行中已 PASS。修正见 `3eece1b`。
+
+### 59.6 门禁
+
+`pnpm test:fast` 632/632、`pnpm test` 3766/3766、`pnpm test:heavy` 67/67、`pnpm build` PASS、`git diff --check` PASS；功能 UAT 28/28；浏览器 108/108；文档一致性 `current` N1、N3～N6、N8、N9 PASS、N2 `RETIRED`、**N7 FAIL**（既有历史提交的追溯债务，与本域无关），`migration` C1～C6 全 PASS。
+
+### 59.7 未解决事项与暂停点
+
+- **待业务所有者裁定**：域级 Acceptance 与 Capability Freeze 的签发；`INV-DEC-01`（INV-21 的确认路径未进入 canonical 变更合同）与 `INV-DEC-02`（INV-25 可选辅助属性）建议作为显式残余随冻结接受。
+- 本轮**未**执行真实环境 migration、业务数据库写入、push / merge / tag / 发布 / 部署。

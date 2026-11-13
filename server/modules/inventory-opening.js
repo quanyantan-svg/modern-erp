@@ -136,3 +136,40 @@ export function confirmOpeningDocument(db, res, actor, docId) {
   });
   return send(res, 200, { ok: true, status: 'CONFIRMED' });
 }
+
+// The canonical read model of the opening inventory documents.
+export function listOpeningDocuments(db, res, actor, url) {
+  allowAny(actor, ['INVENTORY_OPENING_VIEW', 'INVENTORY_OPENING_MANAGE']);
+  const clauses = [];
+  const params = [];
+  const status = url?.searchParams?.get('status');
+  if (status) { clauses.push('od.status=?'); params.push(String(status).toUpperCase()); }
+  const rows = db.prepare(`
+    SELECT od.*, creator.display_name creatorName, confirmer.display_name confirmedByName
+    FROM opening_inventory_documents od
+    LEFT JOIN users creator ON creator.id=od.creator_id
+    LEFT JOIN users confirmer ON confirmer.id=od.confirmed_by
+    ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
+    ORDER BY od.created_at DESC LIMIT 200`).all(...params);
+  const documents = rows.map((row) => ({
+    id: row.id,
+    docNo: row.doc_no,
+    status: row.status,
+    businessDate: row.business_date,
+    notes: row.notes,
+    creatorName: row.creatorName,
+    confirmedByName: row.confirmedByName,
+    createdAt: row.created_at,
+    items: db.prepare(`SELECT oi.*, p.code productCode, p.name productName, p.unit
+      FROM opening_inventory_items oi LEFT JOIN products p ON p.id=oi.product_id
+      WHERE oi.document_id=? ORDER BY oi.id`).all(row.id)
+      .map((item) => ({
+        id: item.id, productId: item.product_id, productCode: item.productCode,
+        productName: item.productName, unit: item.unit, warehouseId: item.warehouse_id,
+        binId: item.bin_id, ownerType: item.owner_type, ownerId: item.owner_id,
+        stockStatus: item.stock_status, lotId: item.lot_id, serialId: item.serial_id,
+        quantity: Number(item.quantity),
+      })),
+  }));
+  return send(res, 200, { openingDocuments: documents });
+}

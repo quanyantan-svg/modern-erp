@@ -389,8 +389,11 @@ try {
 // =======================================================================
 let regCheckId;
 try {
-  const c = ok(await api('POST', '/api/inventory-checks', {
-    warehouseId: 'warehouse-001', productId: 'product-001', actualQuantity: 20,
+  // V24: the canonical stocktake write entry is /api/inventory-stocktakes and it
+  // counts on the canonical position identity.
+  const c = ok(await api('POST', '/api/inventory-stocktakes', {
+    warehouseId: 'warehouse-001', checkKind: 'REGULAR',
+    items: [{ productId: 'product-001', physicalQuantity: 20 }],
     businessDate: today, reason: 'UAT-15 regular',
   }));
   regCheckId = c.id;
@@ -401,8 +404,9 @@ try {
 // UAT-16 Cycle Stocktake
 // =======================================================================
 try {
-  const c = ok(await api('POST', '/api/inventory-checks', {
-    warehouseId: 'warehouse-001', productId: 'product-002', actualQuantity: 100,
+  const c = ok(await api('POST', '/api/inventory-stocktakes', {
+    warehouseId: 'warehouse-001', checkKind: 'CYCLE', scopeStrategy: 'CYCLE', cyclePeriodKey: today.slice(0, 7),
+    items: [{ productId: 'product-002', physicalQuantity: 100 }],
     businessDate: today, reason: 'UAT-16 cycle',
   }));
   record('UAT-16', 'Cycle stocktake', true, `check=${c.id}; product=002 actual=100`);
@@ -414,14 +418,15 @@ try {
 let stocktakeGainLossCheckId;
 try {
   const before = await inventoryAt('warehouse-001', 'product-001');
-  const c = ok(await api('POST', '/api/inventory-checks', {
-    warehouseId: 'warehouse-001', productId: 'product-001', actualQuantity: before - 2,
+  const c = ok(await api('POST', '/api/inventory-stocktakes', {
+    warehouseId: 'warehouse-001', checkKind: 'REGULAR',
+    items: [{ productId: 'product-001', physicalQuantity: before - 2 }],
     businessDate: today, reason: 'UAT-17 gain/loss (loss)',
   }));
   stocktakeGainLossCheckId = c.id;
-  await api('PATCH', `/api/inventory-checks/${stocktakeGainLossCheckId}`, { action: 'SUBMIT' });
+  await api('POST', `/api/inventory-stocktakes/${stocktakeGainLossCheckId}/submit`, undefined);
   // Reviewer has INVENTORY_CHECK_APPROVE; admin creates the check so can't approve own
-  await api('PATCH', `/api/inventory-checks/${stocktakeGainLossCheckId}`, { action: 'APPROVE' }, reviewerToken);
+  await api('POST', `/api/inventory-stocktakes/${stocktakeGainLossCheckId}/approve`, undefined, reviewerToken);
   const after = await inventoryAt('warehouse-001', 'product-001');
   if (after !== before - 2) throw new Error(`expected ${before - 2}, got ${after}`);
   record('UAT-17', 'Stocktake gain/loss via adjustment', true,
@@ -562,8 +567,10 @@ try {
 // UAT-23 Barcode Stocktake (scan does not create second truth)
 // =======================================================================
 try {
-  const c = ok(await api('POST', '/api/inventory-checks', {
-    warehouseId: 'warehouse-001', productId: 'product-002', actualQuantity: 100,
+  // V24: the canonical stocktake write entry and the canonical scan entry.
+  const c = ok(await api('POST', '/api/inventory-stocktakes', {
+    warehouseId: 'warehouse-001', checkKind: 'REGULAR',
+    items: [{ productId: 'product-002', physicalQuantity: 100 }],
     businessDate: today, reason: 'UAT-23 barcode stocktake',
   }));
   const cid = c.id;
@@ -574,9 +581,9 @@ try {
   await api('POST', '/api/barcode/bindings', {
     ruleId: rule23.id, entityType: 'product', entityId: 'product-002', barcode: 'PRD-P002',
   });
-  const scan = await api('POST', `/api/inventory-checks/${cid}/scan`, { code: 'PRD-P002', quantity: 1 });
+  const scan = await api('POST', `/api/inventory-stocktakes/${cid}/scan`, { code: 'PRD-P002', quantity: 1 });
   if (scan.status !== 200) throw new Error(`scan status=${scan.status} ${JSON.stringify(scan.data)}`);
-  const reloaded = await api('GET', `/api/inventory-checks/${cid}`);
+  const reloaded = await api('GET', `/api/inventory-stocktakes`);
   record('UAT-23', 'Barcode stocktake: no second truth', true,
     `check=${cid}; scan status=${scan.status}; reloaded status=${reloaded.status}`);
 } catch (e) { record('UAT-23', 'Barcode stocktake: no second truth', false, e.message); }
@@ -599,14 +606,20 @@ try {
 // UAT-25 Container Pack / Unpack
 // =======================================================================
 try {
-  const container = ok(await api('POST', '/api/containers', {
+  // V24: the canonical container write entry is /api/inventory-containers. The
+  // container is a packing relation, never a second inventory balance: packing
+  // and unpacking must not change the canonical quantity.
+  const before = await inventoryAt('warehouse-001', 'product-001');
+  const container = ok(await api('POST', '/api/inventory-containers', {
     containerNo: 'UAT-CT-001', containerType: 'BOX', warehouseId: 'warehouse-001',
   }));
   const cid = container.id;
-  await api('POST', `/api/containers/${cid}/pack`, { items: [{ productId: 'product-001', quantity: 3 }] });
-  const contents = ok(await api('GET', `/api/containers/${cid}/contents`));
-  await api('POST', `/api/containers/${cid}/unpack`, { items: [{ productId: 'product-001', quantity: 3 }] });
-  const unpackedContents = ok(await api('GET', `/api/containers/${cid}/contents`));
+  await api('POST', `/api/inventory-containers/${cid}/pack`, { items: [{ productId: 'product-001', quantity: 3 }] });
+  const contents = ok(await api('GET', `/api/inventory-containers/${cid}/inventory`));
+  await api('POST', `/api/inventory-containers/${cid}/unpack`, {});
+  const unpackedContents = ok(await api('GET', `/api/inventory-containers/${cid}/inventory`));
+  const after = await inventoryAt('warehouse-001', 'product-001');
+  if (after !== before) throw new Error(`container must not create a balance: ${before} -> ${after}`);
   record('UAT-25', 'Container pack/unpack, no separate balance', true,
     `container=${cid}; after-pack items=${contents.items?.length || 'n/a'}; after-unpack items=${unpackedContents.items?.length || 'n/a'}`);
 } catch (e) { record('UAT-25', 'Container pack/unpack, no separate balance', false, e.message); }

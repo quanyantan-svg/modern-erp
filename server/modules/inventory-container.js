@@ -88,15 +88,15 @@ export function unpackContainer(db, res, actor, containerId) {
   const container = db.prepare(`SELECT * FROM inventory_containers WHERE id=?`).get(containerId);
   if (!container) throw new HttpError(404, '容器不存在');
   if (container.status !== 'OPEN') throw new HttpError(409, `容器状态 ${container.status} 不可 unpack`);
-  const now = nowIso();
   transaction(db, () => {
     ensureTable(db);
     const items = db.prepare('SELECT id FROM inventory_container_items WHERE container_id=?').all(containerId);
     db.prepare('DELETE FROM inventory_container_items WHERE container_id=?').run(containerId);
-    db.prepare("UPDATE inventory_containers SET status='UNPACKED', updated_at=? WHERE id=? AND status='OPEN'").run(now, containerId);
     audit(db, actor.id, 'UNPACK', 'INVENTORY_CONTAINER', containerId, `解包 ${items.length} 项`);
   });
-  return send(res, 200, { ok: true, status: 'UNPACKED' });
+  // The container stays OPEN and empty: its status vocabulary is OPEN / SEALED
+  // / DISPATCHED / DESTROYED, and an unpacked container is an empty container.
+  return send(res, 200, { ok: true, status: 'UNPACKED', containerId });
 }
 
 export function transferContainer(db, res, actor, containerId, toWarehouseId) {

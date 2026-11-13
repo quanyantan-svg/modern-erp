@@ -1827,6 +1827,12 @@ const WORK_TABS = [
   { key: 'scan', label: '扫码' },
   { key: 'transfer', label: '调拨' },
   { key: 'adjustment', label: '调整' },
+  { key: 'initialization', label: '初始化与期初' },
+  { key: 'native', label: '其他出入库' },
+  { key: 'step', label: '分步调拨' },
+  { key: 'status', label: '状态调整' },
+  { key: 'locks', label: '锁库' },
+  { key: 'reports', label: '库存报表' },
 ];
 
 export function InventoryWork({ user, notify }) {
@@ -1887,6 +1893,12 @@ export function InventoryWork({ user, notify }) {
       {tab === 'scan' && <InventoryScan user={user} notify={notify} references={references} />}
       {tab === 'transfer' && <InventoryTransferListV16 user={user} notify={notify} onOpen={(value) => setScreen({ kind: 'transfer', mode: 'detail', value })} onCreate={() => setScreen({ kind: 'transfer', mode: 'editor' })} />}
       {tab === 'adjustment' && <InventoryAdjustmentListV16 user={user} notify={notify} onOpen={(value) => setScreen({ kind: 'adjustment', mode: 'detail', value })} onCreate={() => setScreen({ kind: 'adjustment', mode: 'editor', value: null })} />}
+      {tab === 'initialization' && <InventoryInitialization user={user} notify={notify} references={references} />}
+      {tab === 'native' && <InventoryNativeDocuments user={user} notify={notify} references={references} />}
+      {tab === 'step' && <InventoryStepTransfer user={user} notify={notify} references={references} />}
+      {tab === 'status' && <InventoryStatusChange user={user} notify={notify} references={references} />}
+      {tab === 'locks' && <InventoryLocks user={user} notify={notify} references={references} />}
+      {tab === 'reports' && <InventoryReports user={user} notify={notify} />}
     </BusinessPageShell>
   );
 }
@@ -1956,3 +1968,623 @@ function InventoryEditorShellV16({ title, onSubmit, children }) { return <Busine
 function InventoryLinesEditorV16({ items, products, onAdd, onRemove, render }) { return <section className="v16-inventory-section"><header><h3>明细</h3><button type="button" className="secondary" onClick={onAdd}>添加一行</button></header><div className="v16-inventory-lines">{items.map((row, index) => <article key={index}><div className="v16-inventory-line-head"><b>第 {index + 1} 行</b><button type="button" className="ghost" disabled={items.length === 1} onClick={() => onRemove(index)}>移除</button></div>{render(row, index, products)}</article>)}</div></section>; }
 
 function InventoryLineSectionV16({ items = [], quantityKey, signed = false }) { return <section className="v16-inventory-section"><h3>明细</h3><div className="v16-inventory-list">{items.map((item, index) => { const amount = Number(item[quantityKey] || 0); return <div className="v16-inventory-line" key={item.id || index}><div><b>{item.productName}</b><small className="mono">{item.productCode}</small></div><strong className={amount < 0 ? 'negative' : amount > 0 && signed ? 'positive' : ''}>{signed && amount > 0 ? '+' : ''}{quantity(amount)} {item.unit || ''}</strong></div>; })}</div></section>; }
+
+// ---------------------------------------------------------------------------
+// INV-09 / INV-10 / INV-11 — 库存初始化 · 期初 · 初始化关闭
+//
+// The initialization state is the authority for whether opening inventory may
+// be recorded at all. The closing of the initialization is what forbids the
+// ordinary rewrite of the opening balance afterwards.
+// ---------------------------------------------------------------------------
+
+export function InventoryInitialization({ user, notify, references }) {
+  const { warehouses, products } = references;
+  const [state, setState] = useState(null);
+  const [documents, setDocuments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [confirming, setConfirming] = useState(null);
+  const [reason, setReason] = useState('');
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError('');
+    Promise.all([
+      api('/api/inventory-initialization').catch(() => ({ initialization: null })),
+      api('/api/inventory/opening-documents').catch(() => ({ openingDocuments: [] })),
+    ]).then(([init, docs]) => {
+      setState(init.initialization || null);
+      setDocuments(docs.openingDocuments || []);
+    }).catch((e) => { setError(e.message || '初始化状态加载失败'); notify(e.message || '初始化状态加载失败', 'error'); })
+      .finally(() => setLoading(false));
+  }, [notify]);
+  useEffect(() => { void load(); }, [load]);
+
+  const act = async (action) => {
+    try {
+      const body = action === 'reopen' ? { reason } : {};
+      const result = await api(`/api/inventory-initialization/${action}`, { method: 'POST', body });
+      setState(result.initialization || null);
+      notify(action === 'open' ? '库存初始化已开启' : action === 'close' ? '库存初始化已关闭' : '库存初始化已重新开启');
+      load();
+    } catch (e) { notify(e.message || '初始化操作失败', 'error'); }
+  };
+
+  const confirm = async () => {
+    try {
+      await api(`/api/inventory/opening-documents/${confirming.id}/confirm`, { method: 'POST' });
+      notify('期初单据已确认，期初余额已生效');
+      setConfirming(null);
+      load();
+    } catch (e) { notify(e.message || '期初单据确认失败', 'error'); }
+  };
+
+  const canManage = can(user, 'INVENTORY_OPENING_MANAGE');
+  return (
+    <InventoryWorkSection
+      title="库存初始化与期初"
+      description="初始化状态决定期初是否可录；关闭后不得再以普通草稿改写期初余额。"
+      actions={canManage && state?.status !== 'OPEN' ? <button type="button" className="primary" onClick={() => act('open')}>开启初始化</button> : null}
+    >
+      <InventoryWorkState loading={loading} error={error} onRetry={load} empty={false}>
+        <div className="inv-work-list">
+          <InventoryWorkRow
+            code={state?.id || '—'}
+            title={`初始化状态：${state?.status || '未知'}`}
+            lines={[`启用日期 ${state?.enabled_at || '—'}`, `状态 ${state?.status || '—'}`]}
+            onEdit={canManage ? (
+              <div className="inv-work-row__buttons">
+                {state?.status === 'OPEN' && <button type="button" className="secondary" onClick={() => act('close')}>关闭初始化</button>}
+                {state?.status !== 'OPEN' && <button type="button" className="secondary" onClick={() => act('reopen')}>重新开启</button>}
+                {state?.status === 'OPEN' && <button type="button" className="primary" onClick={() => setCreating(true)}>录入期初</button>}
+              </div>
+            ) : null}
+          />
+        </div>
+        {canManage && state?.status !== 'OPEN' && (
+          <div className="inv-work-form-grid">
+            <InventoryWorkInput label="重新开启原因" value={reason} onChange={setReason} placeholder="必填：重新开启初始化的原因" />
+          </div>
+        )}
+        <div className="inv-work-subsection">
+          <h4>期初单据</h4>
+          <div className="inv-work-list">
+            {documents.length ? documents.map((doc) => (
+              <InventoryWorkRow
+                key={doc.id}
+                code={doc.docNo}
+                title={`期初单据 · ${doc.items.length} 项`}
+                status={<StatusChip status={doc.status}>{doc.status === 'DRAFT' ? '草稿' : doc.status === 'CONFIRMED' ? '已确认' : doc.status}</StatusChip>}
+                lines={[`业务日期 ${doc.businessDate || '—'}`, `制单人 ${doc.creatorName || '—'}`, `数量合计 ${quantity(doc.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0))}`]}
+                onEdit={canManage && doc.status === 'DRAFT' ? <button type="button" className="primary" onClick={() => setConfirming(doc)}>确认</button> : null}
+              />
+            )) : <EmptyState title="暂无期初单据" />}
+          </div>
+        </div>
+      </InventoryWorkState>
+      {creating && (
+        <InventoryOpeningEditor
+          warehouses={warehouses}
+          products={products}
+          notify={notify}
+          onClose={() => setCreating(false)}
+          onSaved={() => { setCreating(false); load(); }}
+        />
+      )}
+      {confirming && (
+        <DangerSheet
+          title="确认期初单据？"
+          message={`期初单据 ${confirming.docNo} 确认后将按规范库存异动写入期初余额。`}
+          confirmLabel="确认期初"
+          onClose={() => setConfirming(null)}
+          onConfirm={confirm}
+        />
+      )}
+    </InventoryWorkSection>
+  );
+}
+
+function InventoryOpeningEditor({ warehouses, products, notify, onClose, onSaved }) {
+  const [form, setForm] = useState({ businessDate: todayIso(), notes: '', items: [{ productId: '', warehouseId: '', quantity: '' }] });
+  const update = (index, patch) => setForm({ ...form, items: form.items.map((row, i) => (i === index ? { ...row, ...patch } : row)) });
+  const save = async (event) => {
+    event.preventDefault();
+    const items = form.items
+      .filter((row) => row.productId && row.warehouseId && row.quantity !== '')
+      .map((row) => ({ productId: row.productId, warehouseId: row.warehouseId, quantity: Number(row.quantity) }));
+    if (!items.length) { notify('请至少填写一行有效期初明细', 'error'); return; }
+    try {
+      await api('/api/inventory/opening-documents', {
+        method: 'POST',
+        body: { businessDate: form.businessDate, notes: form.notes, items },
+      });
+      notify('期初单据已保存');
+      onSaved();
+    } catch (e) { notify(e.message || '期初单据保存失败', 'error'); }
+  };
+  return (
+    <InventoryWorkEditorShell title="录入期初库存" onSubmit={save} submitLabel="保存期初单据">
+      <div className="inv-work-form-grid">
+        <InventoryWorkInput label="业务日期" type="date" required value={form.businessDate} onChange={(v) => setForm({ ...form, businessDate: v })} />
+        <InventoryWorkInput label="备注" value={form.notes} onChange={(v) => setForm({ ...form, notes: v })} />
+      </div>
+      <section className="inv-work-subsection">
+        <header className="inv-work-section__head">
+          <h4>期初明细</h4>
+          <button type="button" className="secondary" onClick={() => setForm({ ...form, items: [...form.items, { productId: '', warehouseId: '', quantity: '' }] })}>添加一行</button>
+        </header>
+        {form.items.map((row, index) => (
+          <article key={index} className="inv-work-line">
+            <header><b>第 {index + 1} 行</b><button type="button" className="ghost" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== index) })}>移除</button></header>
+            <div className="inv-work-form-grid">
+              <InventoryWorkSelect label="货品" required value={row.productId} onChange={(v) => update(index, { productId: v })} options={productOptions(products)} />
+              <InventoryWorkSelect label="仓库" required value={row.warehouseId} onChange={(v) => update(index, { warehouseId: v })} options={warehouseOptions(warehouses)} />
+              <InventoryWorkInput label="期初数量" type="number" min="0.01" step="0.01" required value={row.quantity} onChange={(v) => update(index, { quantity: v })} />
+            </div>
+          </article>
+        ))}
+      </section>
+    </InventoryWorkEditorShell>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// INV-12 / INV-13 / INV-14 — 其他入库 · 其他出库 · 受托料登记
+//
+// The owner dimension is part of the native document line, so an entrusted
+// receipt (customer-owned at an enterprise warehouse) is recorded through the
+// same document as an ordinary other receipt — never as enterprise stock.
+// ---------------------------------------------------------------------------
+
+export function InventoryNativeDocuments({ user, notify, references }) {
+  const { warehouses, products } = references;
+  const [documents, setDocuments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [confirming, setConfirming] = useState(null);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError('');
+    api('/api/inventory/native-documents')
+      .then((data) => setDocuments(data.nativeDocuments || []))
+      .catch((e) => { setError(e.message || '库存原生单据加载失败'); notify(e.message || '库存原生单据加载失败', 'error'); })
+      .finally(() => setLoading(false));
+  }, [notify]);
+  useEffect(() => { void load(); }, [load]);
+
+  const confirm = async () => {
+    try {
+      await api(`/api/inventory/native-documents/${confirming.id}/confirm`, { method: 'POST' });
+      notify('库存原生单据已确认，数量已生效');
+      setConfirming(null);
+      load();
+    } catch (e) { notify(e.message || '库存原生单据确认失败', 'error'); }
+  };
+
+  const canManage = can(user, 'INVENTORY_NATIVE_DOCUMENT_MANAGE');
+  return (
+    <InventoryWorkSection
+      title="其他入库 / 其他出库 / 受托料"
+      description="库存原生单据：不伪装成采购收货或销售出库；受托料以 CUSTOMER 所有权登记在企业仓库。"
+      actions={canManage ? <button type="button" className="primary" onClick={() => setCreating(true)}>＋ 新建库存单据</button> : null}
+    >
+      <InventoryWorkState loading={loading} error={error} onRetry={load} empty={!documents.length}>
+        <div className="inv-work-list">
+          {documents.map((doc) => (
+            <InventoryWorkRow
+              key={doc.id}
+              code={doc.docNo}
+              title={`${doc.docKind === 'OTHER_RECEIPT' ? '其他入库' : '其他出库'} · ${doc.items.length} 项`}
+              status={<StatusChip status={doc.status}>{doc.status === 'DRAFT' ? '草稿' : doc.status === 'CONFIRMED' ? '已确认' : doc.status}</StatusChip>}
+              lines={[`业务日期 ${doc.businessDate || '—'}`, `制单人 ${doc.creatorName || '—'}`, doc.reason ? `原因 ${doc.reason}` : null]}
+              metric={quantity(doc.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0))}
+              onEdit={canManage && doc.status === 'DRAFT' ? <button type="button" className="primary" onClick={() => setConfirming(doc)}>确认</button> : null}
+            />
+          ))}
+        </div>
+      </InventoryWorkState>
+      {creating && (
+        <InventoryNativeDocumentEditor
+          warehouses={warehouses}
+          products={products}
+          notify={notify}
+          onClose={() => setCreating(false)}
+          onSaved={() => { setCreating(false); load(); }}
+        />
+      )}
+      {confirming && (
+        <DangerSheet
+          title="确认库存原生单据？"
+          message={`单据 ${confirming.docNo} 确认后将按规范库存异动生效。`}
+          confirmLabel="确认单据"
+          onClose={() => setConfirming(null)}
+          onConfirm={confirm}
+        />
+      )}
+    </InventoryWorkSection>
+  );
+}
+
+function InventoryNativeDocumentEditor({ warehouses, products, notify, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    docKind: 'OTHER_RECEIPT', businessDate: todayIso(), reason: '', notes: '',
+    items: [{ productId: '', warehouseId: '', quantity: '', ownerType: 'ENTERPRISE' }],
+  });
+  const update = (index, patch) => setForm({ ...form, items: form.items.map((row, i) => (i === index ? { ...row, ...patch } : row)) });
+  const save = async (event) => {
+    event.preventDefault();
+    const items = form.items
+      .filter((row) => row.productId && row.warehouseId && row.quantity !== '')
+      .map((row) => ({
+        productId: row.productId, warehouseId: row.warehouseId, quantity: Number(row.quantity),
+        ownerType: row.ownerType || 'ENTERPRISE',
+      }));
+    if (!items.length) { notify('请至少填写一行有效明细', 'error'); return; }
+    try {
+      await api('/api/inventory/native-documents', {
+        method: 'POST',
+        body: { docKind: form.docKind, businessDate: form.businessDate, reason: form.reason, notes: form.notes, items },
+      });
+      notify('库存原生单据已保存');
+      onSaved();
+    } catch (e) { notify(e.message || '库存原生单据保存失败', 'error'); }
+  };
+  return (
+    <InventoryWorkEditorShell title="新建库存原生单据" onSubmit={save} submitLabel="保存单据">
+      <div className="inv-work-form-grid">
+        <InventoryWorkSelect label="单据类型" value={form.docKind} onChange={(v) => setForm({ ...form, docKind: v })} options={[{ value: 'OTHER_RECEIPT', label: 'OTHER_RECEIPT · 其他入库' }, { value: 'OTHER_ISSUE', label: 'OTHER_ISSUE · 其他出库' }]} />
+        <InventoryWorkInput label="业务日期" type="date" required value={form.businessDate} onChange={(v) => setForm({ ...form, businessDate: v })} />
+        <InventoryWorkInput label="原因" value={form.reason} onChange={(v) => setForm({ ...form, reason: v })} />
+      </div>
+      <section className="inv-work-subsection">
+        <header className="inv-work-section__head">
+          <h4>明细</h4>
+          <button type="button" className="secondary" onClick={() => setForm({ ...form, items: [...form.items, { productId: '', warehouseId: '', quantity: '', ownerType: 'ENTERPRISE' }] })}>添加一行</button>
+        </header>
+        {form.items.map((row, index) => (
+          <article key={index} className="inv-work-line">
+            <header><b>第 {index + 1} 行</b><button type="button" className="ghost" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== index) })}>移除</button></header>
+            <div className="inv-work-form-grid">
+              <InventoryWorkSelect label="货品" required value={row.productId} onChange={(v) => update(index, { productId: v })} options={productOptions(products)} />
+              <InventoryWorkSelect label="仓库" required value={row.warehouseId} onChange={(v) => update(index, { warehouseId: v })} options={warehouseOptions(warehouses)} />
+              <InventoryWorkInput label="数量" type="number" min="0.01" step="0.01" required value={row.quantity} onChange={(v) => update(index, { quantity: v })} />
+              <InventoryWorkSelect label="所有权" value={row.ownerType} onChange={(v) => update(index, { ownerType: v })} options={OWNER_TYPE_OPTIONS} />
+            </div>
+          </article>
+        ))}
+      </section>
+    </InventoryWorkEditorShell>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// INV-16 — 分步调拨（在途）
+//
+// The step transfer issues the goods into the in-transit state first and
+// receives them into the destination warehouse afterwards. The in-transit
+// quantity is explicit.
+// ---------------------------------------------------------------------------
+
+export function InventoryStepTransfer({ user, notify, references }) {
+  const { products } = references;
+  const [transfers, setTransfers] = useState([]);
+  const [rows, setRows] = useState([]);
+  const [transferId, setTransferId] = useState('');
+  const [form, setForm] = useState({ productId: '', quantity: '', businessDate: todayIso() });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const loadTransfers = useCallback(() => {
+    setLoading(true);
+    setError('');
+    api('/api/inventory-transfers?status=DRAFT')
+      .then((data) => {
+        const list = data.inventoryTransfers || [];
+        setTransfers(list);
+        setTransferId((current) => current || list[0]?.id || '');
+      })
+      .catch((e) => { setError(e.message || '调拨单加载失败'); notify(e.message || '调拨单加载失败', 'error'); })
+      .finally(() => setLoading(false));
+  }, [notify]);
+  useEffect(() => { void loadTransfers(); }, [loadTransfers]);
+
+  const loadInTransit = useCallback(() => {
+    if (!transferId) { setRows([]); return; }
+    api(`/api/inventory-step-transfers/in-transit?stepTransferId=${encodeURIComponent(transferId)}`)
+      .then((data) => setRows(data.stepTransfers || []))
+      .catch(() => setRows([]));
+  }, [transferId]);
+  useEffect(() => { void loadInTransit(); }, [loadInTransit]);
+
+  const chosen = transfers.find((item) => item.id === transferId);
+  const issue = async () => {
+    try {
+      await api('/api/inventory-step-transfers/out', {
+        method: 'POST',
+        body: {
+          sourceTransferId: transferId, productId: form.productId, quantity: Number(form.quantity),
+          fromWarehouseId: chosen?.from_warehouse_id, toWarehouseId: chosen?.to_warehouse_id,
+          businessDate: form.businessDate,
+        },
+      });
+      notify('已发出调拨，货量进入在途');
+      loadInTransit();
+    } catch (e) { notify(e.message || '调拨发出失败', 'error'); }
+  };
+  const receive = async () => {
+    try {
+      await api('/api/inventory-step-transfers/in', {
+        method: 'POST',
+        body: {
+          sourceTransferId: transferId, productId: form.productId, quantity: Number(form.quantity),
+          fromWarehouseId: chosen?.from_warehouse_id, toWarehouseId: chosen?.to_warehouse_id,
+          businessDate: form.businessDate,
+        },
+      });
+      notify('在途货量已入目标仓');
+      loadInTransit();
+    } catch (e) { notify(e.message || '调拨接收失败', 'error'); }
+  };
+
+  const canExecute = can(user, 'INVENTORY_TRANSFER_CONFIRM');
+  return (
+    <InventoryWorkSection
+      title="分步调拨（发出 → 在途 → 接收）"
+      description="源仓与目标仓不能同时完成移动时，先发出进入在途，再由目标仓接收；在途量显式。"
+    >
+      <InventoryWorkState loading={loading} error={error} onRetry={loadTransfers} empty={!transfers.length}>
+        <div className="inv-work-form-grid">
+          <InventoryWorkSelect label="来源调拨单" value={transferId} onChange={setTransferId} options={transfers.map((item) => ({ value: item.id, label: `${item.transfer_no}` }))} />
+          <InventoryWorkSelect label="货品" required value={form.productId} onChange={(v) => setForm({ ...form, productId: v })} options={productOptions(products)} />
+          <InventoryWorkInput label="数量" type="number" min="0.01" step="0.01" required value={form.quantity} onChange={(v) => setForm({ ...form, quantity: v })} />
+          <InventoryWorkInput label="业务日期" type="date" required value={form.businessDate} onChange={(v) => setForm({ ...form, businessDate: v })} />
+        </div>
+        {canExecute && chosen && (
+          <div className="inv-work-row__buttons">
+            <button type="button" className="secondary" onClick={issue}>调出（进入在途）</button>
+            <button type="button" className="primary" onClick={receive}>调入（离开在途）</button>
+          </div>
+        )}
+        <div className="inv-work-subsection">
+          <h4>在途量</h4>
+          <div className="inv-work-list">
+            {rows.length ? rows.map((row) => (
+              <InventoryWorkRow
+                key={`${row.sourceTransferId}-${row.productId}`}
+                code={row.productId}
+                title={`在途 ${row.warehouseIdSource} → ${row.warehouseIdDestination}`}
+                status={<StatusChip status={row.status}>{row.status}</StatusChip>}
+                lines={[`已发出 ${quantity(row.issuedQty)}`, `已接收 ${quantity(row.receivedQty)}`]}
+                metric={`${quantity(row.inTransitQty)} 在途`}
+              />
+            )) : <EmptyState title="该调拨单当前没有在途量" />}
+          </div>
+        </div>
+      </InventoryWorkState>
+    </InventoryWorkSection>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// INV-19 — 库存状态调整
+//
+// A status change moves the same quantity between two statuses at the same
+// owner and location: the quantity, the owner and the location do not change.
+// ---------------------------------------------------------------------------
+
+export function InventoryStatusChange({ user, notify, references }) {
+  const { warehouses, products, stockStatuses } = references;
+  const [form, setForm] = useState({ warehouseId: '', productId: '', quantity: '', fromStatus: 'AVAILABLE', toStatus: '', businessDate: todayIso(), reason: '' });
+
+  const submit = async (event) => {
+    event.preventDefault();
+    if (!form.warehouseId || !form.productId || !form.toStatus) { notify('请选择仓库、货品与目标状态', 'error'); return; }
+    try {
+      await api('/api/inventory-stock-status-changes', {
+        method: 'POST',
+        body: {
+          warehouseId: form.warehouseId, productId: form.productId,
+          quantity: Number(form.quantity || 0), fromStatus: form.fromStatus, toStatus: form.toStatus,
+          businessDate: form.businessDate, reason: form.reason,
+        },
+      });
+      notify('库存状态已调整');
+      setForm({ ...form, quantity: '', reason: '' });
+    } catch (e) { notify(e.message || '库存状态调整失败', 'error'); }
+  };
+
+  return (
+    <InventoryWorkSection
+      title="库存状态调整"
+      description="同一物理库存在两个状态之间迁移：数量、所有权与仓位不变。"
+    >
+      <InventoryWorkEditorShell title="库存状态调整" onSubmit={submit} submitLabel="提交状态调整">
+        <div className="inv-work-form-grid">
+          <InventoryWorkSelect label="仓库" required value={form.warehouseId} onChange={(v) => setForm({ ...form, warehouseId: v })} options={warehouseOptions(warehouses)} />
+          <InventoryWorkSelect label="货品" required value={form.productId} onChange={(v) => setForm({ ...form, productId: v })} options={productOptions(products)} />
+          <InventoryWorkSelect label="原状态" value={form.fromStatus} onChange={(v) => setForm({ ...form, fromStatus: v })} options={statusOptions(stockStatuses)} />
+          <InventoryWorkSelect label="目标状态" required value={form.toStatus} onChange={(v) => setForm({ ...form, toStatus: v })} options={statusOptions(stockStatuses)} />
+          <InventoryWorkInput label="数量" type="number" min="0" step="0.01" required value={form.quantity} onChange={(v) => setForm({ ...form, quantity: v })} />
+          <InventoryWorkInput label="业务日期" type="date" required value={form.businessDate} onChange={(v) => setForm({ ...form, businessDate: v })} />
+          <InventoryWorkInput label="原因" value={form.reason} onChange={(v) => setForm({ ...form, reason: v })} />
+        </div>
+      </InventoryWorkEditorShell>
+    </InventoryWorkSection>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// INV-28 — 库存锁定 / 解锁
+//
+// The locked quantity never counts as available stock and the lock can never
+// exceed what the position holds.
+// ---------------------------------------------------------------------------
+
+export function InventoryLocks({ user, notify, references }) {
+  const { warehouses, products } = references;
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [releasing, setReleasing] = useState(null);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError('');
+    api('/api/inventory-locks')
+      .then((data) => setRows(data.locks || data.inventoryLocks || []))
+      .catch((e) => { setError(e.message || '锁库记录加载失败'); notify(e.message || '锁库记录加载失败', 'error'); })
+      .finally(() => setLoading(false));
+  }, [notify]);
+  useEffect(() => { void load(); }, [load]);
+
+  const release = async () => {
+    try {
+      await api(`/api/inventory-locks/${releasing.id}/release`, { method: 'POST' });
+      notify('锁库已释放');
+      setReleasing(null);
+      load();
+    } catch (e) { notify(e.message || '解锁失败', 'error'); }
+  };
+
+  const canManage = can(user, 'INVENTORY_LOCK_MANAGE');
+  return (
+    <InventoryWorkSection
+      title="库存锁定 / 解锁"
+      description="锁定的数量不进入可用库存；锁库量不得超过该库存位置的实际数量。"
+      actions={canManage ? <button type="button" className="primary" onClick={() => setCreating(true)}>＋ 新建锁库</button> : null}
+    >
+      <InventoryWorkState loading={loading} error={error} onRetry={load} empty={!rows.length}>
+        <div className="inv-work-list">
+          {rows.map((row) => (
+            <InventoryWorkRow
+              key={row.id}
+              code={row.productId}
+              title={`${row.warehouseId || '—'} · ${row.reason || '锁库'}`}
+              status={<StatusChip status={row.status}>{row.status === 'ACTIVE' ? '锁定中' : '已释放'}</StatusChip>}
+              lines={[`锁定人 ${row.lockedBy || '—'}`, `锁定时间 ${row.lockedAt || '—'}`]}
+              metric={`${quantity(row.quantity)}`}
+              onEdit={canManage && row.status === 'ACTIVE' ? <button type="button" className="secondary" onClick={() => setReleasing(row)}>解锁</button> : null}
+            />
+          ))}
+        </div>
+      </InventoryWorkState>
+      {creating && (
+        <InventoryLockEditor
+          warehouses={warehouses}
+          products={products}
+          notify={notify}
+          onClose={() => setCreating(false)}
+          onSaved={() => { setCreating(false); load(); }}
+        />
+      )}
+      {releasing && (
+        <DangerSheet
+          title="释放锁库？"
+          message={`锁库 ${releasing.id} 释放后该数量重新计入可用库存。`}
+          confirmLabel="释放锁库"
+          onClose={() => setReleasing(null)}
+          onConfirm={release}
+        />
+      )}
+    </InventoryWorkSection>
+  );
+}
+
+function InventoryLockEditor({ warehouses, products, notify, onClose, onSaved }) {
+  const [form, setForm] = useState({ productId: '', warehouseId: '', quantity: '', reason: '' });
+  const save = async (event) => {
+    event.preventDefault();
+    if (!form.productId || !form.warehouseId || !form.quantity || !form.reason) {
+      notify('请填写货品、仓库、数量与锁定原因', 'error');
+      return;
+    }
+    try {
+      await api('/api/inventory-locks', {
+        method: 'POST',
+        body: { productId: form.productId, warehouseId: form.warehouseId, quantity: Number(form.quantity), reason: form.reason },
+      });
+      notify('锁库已创建');
+      onSaved();
+    } catch (e) { notify(e.message || '锁库创建失败', 'error'); }
+  };
+  return (
+    <InventoryWorkEditorShell title="新建锁库" onSubmit={save} submitLabel="创建锁库">
+      <div className="inv-work-form-grid">
+        <InventoryWorkSelect label="货品" required value={form.productId} onChange={(v) => setForm({ ...form, productId: v })} options={productOptions(products)} />
+        <InventoryWorkSelect label="仓库" required value={form.warehouseId} onChange={(v) => setForm({ ...form, warehouseId: v })} options={warehouseOptions(warehouses)} />
+        <InventoryWorkInput label="锁定数量" type="number" min="0.01" step="0.01" required value={form.quantity} onChange={(v) => setForm({ ...form, quantity: v })} />
+        <InventoryWorkInput label="锁定原因" required value={form.reason} onChange={(v) => setForm({ ...form, reason: v })} />
+      </div>
+    </InventoryWorkEditorShell>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// INV-34 / INV-35 / INV-36 / INV-37 — 库存台账 · 库龄 · 呆滞 · 预警
+//
+// All four reports read the canonical inventory facts; none of them uses the
+// stale `products.stock_quantity`.
+// ---------------------------------------------------------------------------
+
+export function InventoryReports({ user, notify }) {
+  const [reports, setReports] = useState({ ledger: [], aging: [], slowMoving: [], alerts: [] });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError('');
+    Promise.all([
+      api('/api/inventory-ledger').catch(() => ({ ledger: [] })),
+      api('/api/inventory-aging').catch(() => ({ aging: [] })),
+      api('/api/inventory-slow-moving').catch(() => ({ slowMoving: [] })),
+      api('/api/inventory/alerts').catch(() => ({ alerts: [] })),
+    ]).then(([ledger, aging, slowMoving, alerts]) => {
+      setReports({
+        ledger: ledger.ledger || [],
+        aging: aging.aging || [],
+        slowMoving: slowMoving.slowMoving || [],
+        alerts: alerts.alerts || [],
+      });
+    }).catch((e) => { setError(e.message || '库存报表加载失败'); notify(e.message || '库存报表加载失败', 'error'); })
+      .finally(() => setLoading(false));
+  }, [notify]);
+  useEffect(() => { void load(); }, [load]);
+
+  const section = (title, rows, describe) => (
+    <div className="inv-work-subsection">
+      <h4>{title}</h4>
+      <div className="inv-work-list">
+        {rows.length ? rows.map((row, index) => (
+          <InventoryWorkRow
+            key={row.id || row.productId || index}
+            code={row.productCode || row.productId || row.warehouseCode || '—'}
+            title={row.productName || row.warehouseName || row.type || title}
+            status={<StatusChip status={row.status || row.severity || row.level || 'OK'}>{row.status || row.severity || row.level || ''}</StatusChip>}
+            lines={describe(row)}
+            metric={row.quantity !== undefined ? `${quantity(row.quantity)}` : undefined}
+          />
+        )) : <EmptyState title={`${title}暂无数据`} />}
+      </div>
+    </div>
+  );
+
+  return (
+    <InventoryWorkSection
+      title="库存报表"
+      description="台账、库龄、呆滞与预警全部读取 canonical 库存事实。"
+      actions={<button type="button" className="secondary" onClick={load}>刷新</button>}
+    >
+      <InventoryWorkState loading={loading} error={error} onRetry={load} empty={false}>
+        {section('库存台账', reports.ledger, (row) => [`仓库 ${row.warehouseName || row.warehouse_id || '—'}`, `货品 ${row.productName || row.product_id || '—'}`, `业务日期 ${row.business_date || row.businessDate || '—'}`])}
+        {section('库存库龄', reports.aging, (row) => [`仓库 ${row.warehouseName || row.warehouse_id || '—'}`, `货品 ${row.productName || row.product_id || '—'}`, `库龄 ${row.ageDays ?? row.age_days ?? '—'} 天`])}
+        {section('呆滞库存', reports.slowMoving, (row) => [`仓库 ${row.warehouseName || row.warehouse_id || '—'}`, `货品 ${row.productName || row.product_id || '—'}`, `最后移动 ${row.lastMovementDate || row.last_movement_date || '—'}`])}
+        {section('库存预警', reports.alerts, (row) => [`货品 ${row.productName || row.productId || '—'}`, `仓库 ${row.warehouseName || row.warehouseId || '—'}`, `数量 ${quantity(row.quantity ?? 0)}`])}
+      </InventoryWorkState>
+    </InventoryWorkSection>
+  );
+}

@@ -4,7 +4,7 @@
 
 import { transaction, id as genId } from '../db.js';
 import { audit } from '../lib/audit.js';
-import { HttpError, allow, assertAllowedFields, readJson, send } from '../lib/http.js';
+import { HttpError, allow, allowAny, assertAllowedFields, readJson, send } from '../lib/http.js';
 import { applyInventoryMutation } from '../lib/inventory-mutation.js';
 import { transitionSerialForInventoryMovement } from './traceability-quality.js';
 
@@ -92,4 +92,47 @@ export function confirmNativeDocument(db, res, actor, docId) {
     audit(db, actor.id, 'CONFIRM', 'INVENTORY_NATIVE_DOCUMENT', docId, `Confirm ${doc.doc_kind} ${doc.doc_no}`);
   });
   return send(res, 200, { ok: true, status: 'CONFIRMED' });
+}
+
+// The canonical read model of the inventory-native documents. The UI needs a
+// real list to work from; the document body is never reconstructed from a
+// second truth.
+export function listNativeDocuments(db, res, actor, url) {
+  allowAny(actor, ['INVENTORY_NATIVE_DOCUMENT_VIEW', 'INVENTORY_NATIVE_DOCUMENT_MANAGE']);
+  const clauses = [];
+  const params = [];
+  const status = url?.searchParams?.get('status');
+  if (status) { clauses.push('nd.status=?'); params.push(String(status).toUpperCase()); }
+  const docKind = url?.searchParams?.get('docKind');
+  if (docKind) { clauses.push('nd.doc_kind=?'); params.push(String(docKind).toUpperCase()); }
+  const rows = db.prepare(`
+    SELECT nd.*, creator.display_name creatorName, confirmer.display_name confirmedByName
+    FROM inventory_native_documents nd
+    LEFT JOIN users creator ON creator.id=nd.creator_id
+    LEFT JOIN users confirmer ON confirmer.id=nd.confirmed_by
+    ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
+    ORDER BY nd.created_at DESC LIMIT 200`).all(...params);
+  const documents = rows.map((row) => ({
+    id: row.id,
+    docNo: row.doc_no,
+    docKind: row.doc_kind,
+    status: row.status,
+    businessDate: row.business_date,
+    reason: row.reason,
+    notes: row.notes,
+    creatorName: row.creatorName,
+    confirmedByName: row.confirmedByName,
+    createdAt: row.created_at,
+    items: db.prepare(`SELECT ni.*, p.code productCode, p.name productName, p.unit
+      FROM inventory_native_items ni LEFT JOIN products p ON p.id=ni.product_id
+      WHERE ni.document_id=? ORDER BY ni.line_no`).all(row.id)
+      .map((item) => ({
+        id: item.id, productId: item.product_id, productCode: item.productCode,
+        productName: item.productName, unit: item.unit, warehouseId: item.warehouse_id,
+        binId: item.bin_id, ownerType: item.owner_type, ownerId: item.owner_id,
+        stockStatus: item.stock_status, lotId: item.lot_id, serialId: item.serial_id,
+        quantity: Number(item.quantity),
+      })),
+  }));
+  return send(res, 200, { nativeDocuments: documents });
 }

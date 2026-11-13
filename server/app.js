@@ -122,16 +122,16 @@ import {
 } from './modules/inventory-lock.js';
 import {
   closeInitialization, getOrCreateInitialization, openInitialization, reopenInitialization,
-  createOpeningDocument, confirmOpeningDocument,
+  createOpeningDocument, confirmOpeningDocument, listOpeningDocuments,
 } from './modules/inventory-opening.js';
 import {
-  createNativeDocument, confirmNativeDocument,
+  createNativeDocument, confirmNativeDocument, listNativeDocuments,
 } from './modules/inventory-native-document.js';
 import {
   transferOut, transferIn, getInTransit,
 } from './modules/inventory-step-transfer.js';
 import {
-  createContainer, inventoryOfContainer, transferContainer, unpackContainer,
+  createContainer, pack as packContainer, inventoryOfContainer, transferContainer, unpackContainer,
 } from './modules/inventory-container.js';
 import {
   parseBarcode, createBarcodeRule, createBarcodeBinding, listBarcodeRules,
@@ -3281,15 +3281,17 @@ ownedRouteTable.register({
 
 // INV-27 - the canonical identity filter set, shared by the instant query
 // and the scan query.
-const inventoryQueryFilters = (query) => ({
-  warehouseId: query.get('warehouseId') || query.get('warehouse') || null,
-  productId: query.get('productId') || query.get('product') || null,
-  binId: query.get('binId') || query.get('bin') || null,
-  ownerType: query.get('ownerType') || query.get('owner') || null,
-  ownerId: query.get('ownerId') || null,
-  stockStatus: query.get('stockStatus') || query.get('status') || null,
-  lotId: query.get('lotId') || query.get('lot') || null,
-  serialId: query.get('serialId') || query.get('serial') || null,
+// The canonical identity filter set of the instant inventory query. The
+// parameter source is the request's URLSearchParams, not the request URL.
+const inventoryQueryFilters = (params) => ({
+  warehouseId: params.get('warehouseId') || params.get('warehouse') || null,
+  productId: params.get('productId') || params.get('product') || null,
+  binId: params.get('binId') || params.get('bin') || null,
+  ownerType: params.get('ownerType') || params.get('owner') || null,
+  ownerId: params.get('ownerId') || null,
+  stockStatus: params.get('stockStatus') || params.get('status') || null,
+  lotId: params.get('lotId') || params.get('lot') || null,
+  serialId: params.get('serialId') || params.get('serial') || null,
 });
   // INV-03 - warehouse bin / location
   ownedRouteTable.register({
@@ -3486,7 +3488,7 @@ const inventoryQueryFilters = (query) => ({
     path: /^\/api\/inventory-containers\/([^/]+)\/pack$/,
     handler: async ({ db, req, res, actor, params }) => {
       const body = await readJson(req);
-      return pack(db, res, actor, params[0], body.items || body.allocations || []);
+      return packContainer(db, res, actor, params[0], body.items || body.allocations || []);
     },
     owner: 'server/modules/inventory-container.js',
   });
@@ -3518,7 +3520,7 @@ const inventoryQueryFilters = (query) => ({
     path: '/api/inventory/instant-query',
     handler: ({ db, res, actor, url }) => {
       allow(actor, 'INVENTORY_VIEW');
-      const filters = inventoryQueryFilters(url);
+      const filters = inventoryQueryFilters(url.searchParams);
       return send(res, 200, {
         summary: instantInventoryQuery(db, filters),
         positions: inventoryPositionsList(db, filters),
@@ -3562,7 +3564,7 @@ const inventoryQueryFilters = (query) => ({
     path: '/api/inventory/scan/query',
     handler: ({ db, res, actor, url }) => {
       allow(actor, 'INVENTORY_VIEW');
-      const filters = inventoryQueryFilters(url);
+      const filters = inventoryQueryFilters(url.searchParams);
       return send(res, 200, { positions: inventoryPositionsList(db, filters) });
     },
     owner: 'server/lib/inventory-reports.js',
@@ -4349,10 +4351,12 @@ async function handleApi(db, req, res, url) {
     return send(res, 200, { initialization: reopenInitialization(db, actor, body.reason || '') });
   }
   if (pathname === '/api/inventory/opening-documents' && req.method === 'POST') return createOpeningDocument(db, req, res, actor);
+  if (pathname === '/api/inventory/opening-documents' && req.method === 'GET') return listOpeningDocuments(db, res, actor, url);
   const openingConfirmMatch = pathname.match(/^\/api\/inventory\/opening-documents\/([^/]+)\/confirm$/);
   if (openingConfirmMatch && req.method === 'POST') return confirmOpeningDocument(db, res, actor, openingConfirmMatch[1]);
 
   if (pathname === '/api/inventory/native-documents' && req.method === 'POST') return createNativeDocument(db, req, res, actor);
+  if (pathname === '/api/inventory/native-documents' && req.method === 'GET') return listNativeDocuments(db, res, actor, url);
   const nativeConfirmMatch = pathname.match(/^\/api\/inventory\/native-documents\/([^/]+)\/confirm$/);
   if (nativeConfirmMatch && req.method === 'POST') return confirmNativeDocument(db, res, actor, nativeConfirmMatch[1]);
 
