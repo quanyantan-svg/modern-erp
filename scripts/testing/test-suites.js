@@ -78,6 +78,8 @@ const FULL = [
   // 17 张新表的 SQLite 形状、迁移幂等性，以及 MySQL 侧由 SQLite 快照派生的
   // CREATE TABLE / ADD COLUMN 语句（离线，不需要 MySQL）。
   'server/platform-domain-schema.test.js',
+  // 通用工作流引擎合同（FAST 已含，此处随 FULL 一并登记）。
+  'server/platform-workflow-engine.test.js',
   // ----- Sales & Customer Domain — Wave 0 migration infrastructure -----
   // Canonical zero-step registry, deterministic runner, fail-closed errors,
   // SQLite fresh/reopen wiring, and zero future Sales business schema.
@@ -887,6 +889,9 @@ const FULL = [
 //
 // Invariant: every file in FAST must also be present in FULL.
 const FAST = [
+  // Platform 平台层域 —— 通用工作流引擎合同：定义校验、条件白名单求值、参与人解析、
+  // 绑定解析、实例启动幂等、任务完成状态机与乐观锁、SOD 拒绝、动作失败回滚、实例控制。
+  'server/platform-workflow-engine.test.js',
   // M1-Core WP-0 static infrastructure contract; no DB, MySQL or migration execution.
   'server/m1c-wp0-infrastructure.test.js',
   'server/m15-tracked-identity-key.test.js',

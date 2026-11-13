@@ -304,6 +304,9 @@ RUNNING ──────────────► COMPLETED          │
 | `PLATFORM_WORKFLOW_TASK_CONFLICT` | 409 | 乐观锁冲突（并发完成） |
 | `PLATFORM_WORKFLOW_NODE_UNREACHABLE` | 422 | 动作目标节点不在实例快照中 |
 | `PLATFORM_WORKFLOW_ACTION_FAILED` | 409 | 节点动作执行失败（事务已回滚） |
+| `PLATFORM_WORKFLOW_PARTICIPANT_UNRESOLVED` | 409 | 审批节点解析不到参与人（失败即拒绝，见 §32.3.7 第 2 条） |
+| `PLATFORM_WORKFLOW_TASK_NOT_ASSIGNED` | 403 | 操作人不是该任务的被指派参与人（见 §32.3.7 第 3 条） |
+| `PLATFORM_WORKFLOW_SOD_REJECTED` | 409 | 职责分离规则拒绝本次操作（判定记录与审计在事务外补写，见 §32.4.2）。**引擎用自己的对外错误码**，不引用 `platform-sod.js` 的 `PLATFORM_SOD_RULE_VIOLATION` —— 消费方不得用生产方的错误码做自己的业务判断（XDC-01）；引擎改用**结构化判定载荷**（`error.sodOutcome`）决定证据落点 |
 
 #### 32.3.5 审计
 
@@ -322,6 +325,26 @@ RUNNING ──────────────► COMPLETED          │
 | `WORKFLOW_REDEPLOY` | 重新部署 | **新增**（与 `WORKFLOW_CONTROL` 分离，Requirement §36.3.8） |
 
 新码登记在 `server/db.js:60` 的 `PERMISSIONS` 目录。`roles.js:68` 强制 ADMIN 保留全部权限 → 新码自动流向 ADMIN；**其它角色不自动获得**（fail closed），由管理员显式授予。
+
+#### 32.3.7 实现期合同修正（2026-11-13，通用工作流引擎单元）
+
+以下六条在引擎实现期由**真实代码事实**确定，均为本 Design 的收敛而非合同变更（Requirement §36.3 的能力范围不变）。
+
+| # | 修正 | 依据 |
+|---|---|---|
+| 1 | **参与人类型白名单收窄为 `ROLE` / `USER` / `INITIATOR` / `FIELD_USER`**。`INITIATOR_MANAGER` **不可用**：本仓库 `users` 表没有部门归属，`departments.manager` 是自由文本且从未被查询使用 —— 没有权威的上级来源，不得凭空发明（AGENTS.md §6）。需要「发起人的上级」时，先建立用户↔部门归属，再把该类型加回白名单 | `server/db.js:1052` 的 `users` 表定义；`server/migrations/extended-schema.js:3-6`；`server/modules/extended.js:110`、`:119` |
+| 2 | **审批节点解析不到参与人时失败即拒绝**（409 `PLATFORM_WORKFLOW_PARTICIPANT_UNRESOLVED`）。静默跳过审批是正确性事故；知会节点（`NOTIFY` / `CC`）无参与人时跳过节点，不阻塞流程 | Requirement §36.3.1「参与人解析规则必须物化」；AGENTS.md §6 fail closed |
+| 3 | **只有被指派的参与人可以处理任务**（403 `PLATFORM_WORKFLOW_TASK_NOT_ASSIGNED`）。权限码只说明「可以做这类事」，不代表可以做**别人**的事 | §32.3.6 的权限语义 |
+| 4 | **`row_version` 乐观锁是纵深防御**：写事务被闸门串行化（SQLite `BEGIN IMMEDIATE`；MySQL 全局闸门行），因此并发方的**真实可达**结果是「任务已被处理」（409 `PLATFORM_WORKFLOW_TASK_ALREADY_COMPLETED`）；`PLATFORM_WORKFLOW_TASK_CONFLICT` 是绕过闸门的写者才会触发的分支 | §32.3.3；`server/db.js:2453` 的 `transaction()` |
+| 5 | **SOD 判定原语与引擎同批落地**：`server/modules/platform-sod.js` 提供 `evaluateSodCompliance` / `assertSodCompliance` 与 initiator resolver 注册表。§32.3.1 第③步要求引擎调用它，而 AGENTS.md §6 禁止同一原语出现第二份实现 → 判定原语必须先于引擎存在。**规则的维护面（CRUD）与既有 6 族的接线不在本单元**。引擎**不得引用**该模块的错误码：它调用判定原语、读取**结构化判定结果**，并以自己的对外码 `PLATFORM_WORKFLOW_SOD_REJECTED` 表达拒绝 | §32.3.1 第③步；AGENTS.md §6；`docs/decisions/cross-domain-error-code-policy-20261112.md` |
+| 6 | **SOD 规则一旦产生过判定记录即不可删除**：`sod_evaluations.rule_id` 的外键为 NO ACTION，判定记录是历史证据 → 规则只能**停用**（`status='INACTIVE'`），不能物理删除。规则的维护面必须只暴露停用，不暴露删除 | `server/migrations/platform-domain-schema.js` 的 `sod_evaluations` 定义 |
+
+**API 路径前缀**：`/api/platform/workflow-templates` / `-versions` / `-bindings` / `-instances` / `-tasks` / `-test-runs`。
+既有 `/api/approvals/**`（6 族 canonical）与 `/api/workflows/**`（退役中的旧流程 CRUD）**均不得**被通用引擎占用
+（`server/mobile-approval-center.test.js:166` 锁定前者）。
+
+**HTTP 层与领域层同名**：领域函数（`createWorkflowTemplate(db, {...})`）与 HTTP handler（`handleCreateWorkflowTemplate(db, req, res, actor)`）
+**必须使用不同名字**，HTTP 层一律加 `handle` 前缀 —— 同一模块内同名导出会导致 ESM 重复声明而使整个模块无法加载。
 
 ### 32.4 SOD 引擎设计
 

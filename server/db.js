@@ -334,6 +334,15 @@ export const PERMISSIONS = [
   ['FINANCE_CLOSE_VIEW', '查看财务业务关账'],
   ['FINANCE_CLOSE_MANAGE', '管理财务业务关账'],
 
+  // ----- Platform 平台层域（通用工作流引擎，Design §32.3.6）-----
+  // 通用工作流引擎的新权限码。既有 WORKFLOW_VIEW / WORKFLOW_MANAGE 继续沿用。
+  // 其它角色**不自动获得**这些码（fail closed），由管理员显式授予。
+  ['WORKFLOW_TASK_VIEW', '查看流程任务'],
+  ['WORKFLOW_TASK_ACT', '处理流程任务'],
+  ['WORKFLOW_INSTANCE_VIEW', '查看流程实例'],
+  ['WORKFLOW_CONTROL', '控制流程实例（暂停/恢复/终止）'],
+  ['WORKFLOW_REDEPLOY', '重新部署流程实例'],
+
 ];
 
 export function hashPassword(password, salt = randomBytes(16).toString('hex')) {

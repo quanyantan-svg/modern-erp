@@ -6,6 +6,13 @@ import { adjustInventory, adjustInventoryAtPosition, resolveCanonicalPosition, s
 import { listNotifications, markNotificationRead } from './modules/platform-notifications.js';
 import { createWorkflow, listWorkflows } from './modules/platform-workflows.js';
 import {
+  getWorkflowInstance, getWorkflowTemplate, handleActivateWorkflowBinding, handleCompleteWorkflowTask,
+  handleCreateWorkflowTemplate, handleCreateWorkflowVersion, handlePublishWorkflowVersion,
+  handleRedeployWorkflowInstances, handleResumeWorkflowInstance, handleRetireWorkflowVersion,
+  handleSuspendWorkflowInstance, handleTerminateWorkflowInstance, listWorkflowBindings,
+  listWorkflowInstances, listWorkflowTasks, listWorkflowTemplates, testWorkflowRun,
+} from './modules/platform-workflow-engine.js';
+import {
   listCurrencies, listVoucherWords, createVoucherWord, listVoucherTemplates,
 } from './modules/accounting-config.js';
 import {
@@ -2680,6 +2687,114 @@ ownedRouteTable.register({
   path: '/api/workflows',
   handler: ({ db, req, res, actor }) => createWorkflow(db, req, res, actor),
   owner: 'server/modules/platform-workflows.js',
+});
+
+// Platform 平台层域 —— 通用工作流引擎（docs/design/platform.md §32.3）。
+//
+// 路径前缀统一为 /api/platform/workflow-*：既有 /api/approvals/** 与 /api/workflows/**
+// 是 canonical 的既有审批族与退役中的旧流程 CRUD，通用引擎**不得**在其下新增变更入口
+// （server/mobile-approval-center.test.js:166 锁定该约束）。
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/platform/workflow-templates',
+  handler: ({ db, res, actor }) => listWorkflowTemplates(db, res, actor),
+  owner: 'server/modules/platform-workflow-engine.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/platform/workflow-templates',
+  handler: ({ db, req, res, actor }) => handleCreateWorkflowTemplate(db, req, res, actor),
+  owner: 'server/modules/platform-workflow-engine.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/platform\/workflow-templates\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getWorkflowTemplate(db, res, actor, params[0]),
+  owner: 'server/modules/platform-workflow-engine.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/platform\/workflow-templates\/([^/]+)\/versions$/,
+  handler: ({ db, req, res, actor, params }) => handleCreateWorkflowVersion(db, req, res, actor, params[0]),
+  owner: 'server/modules/platform-workflow-engine.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/platform\/workflow-versions\/([^/]+)\/publish$/,
+  handler: ({ db, req, res, actor, params }) => handlePublishWorkflowVersion(db, req, res, actor, params[0]),
+  owner: 'server/modules/platform-workflow-engine.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/platform\/workflow-versions\/([^/]+)\/retire$/,
+  handler: ({ db, req, res, actor, params }) => handleRetireWorkflowVersion(db, req, res, actor, params[0]),
+  owner: 'server/modules/platform-workflow-engine.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/platform/workflow-bindings',
+  handler: ({ db, res, actor }) => listWorkflowBindings(db, res, actor),
+  owner: 'server/modules/platform-workflow-engine.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/platform/workflow-bindings',
+  handler: ({ db, req, res, actor }) => handleActivateWorkflowBinding(db, req, res, actor),
+  owner: 'server/modules/platform-workflow-engine.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/platform/workflow-instances',
+  handler: ({ db, res, actor, url }) => listWorkflowInstances(db, res, actor, url),
+  owner: 'server/modules/platform-workflow-engine.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/platform\/workflow-instances\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getWorkflowInstance(db, res, actor, params[0]),
+  owner: 'server/modules/platform-workflow-engine.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/platform\/workflow-instances\/([^/]+)\/suspend$/,
+  handler: ({ db, req, res, actor, params }) => handleSuspendWorkflowInstance(db, req, res, actor, params[0]),
+  owner: 'server/modules/platform-workflow-engine.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/platform\/workflow-instances\/([^/]+)\/resume$/,
+  handler: ({ db, req, res, actor, params }) => handleResumeWorkflowInstance(db, req, res, actor, params[0]),
+  owner: 'server/modules/platform-workflow-engine.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/platform\/workflow-instances\/([^/]+)\/terminate$/,
+  handler: ({ db, req, res, actor, params }) => handleTerminateWorkflowInstance(db, req, res, actor, params[0]),
+  owner: 'server/modules/platform-workflow-engine.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/platform/workflow-instances/redeploy',
+  handler: ({ db, req, res, actor }) => handleRedeployWorkflowInstances(db, req, res, actor),
+  owner: 'server/modules/platform-workflow-engine.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/platform/workflow-tasks',
+  handler: ({ db, res, actor }) => listWorkflowTasks(db, res, actor),
+  owner: 'server/modules/platform-workflow-engine.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/platform\/workflow-tasks\/([^/]+)\/complete$/,
+  handler: ({ db, req, res, actor, params }) => handleCompleteWorkflowTask(db, req, res, actor, params[0]),
+  owner: 'server/modules/platform-workflow-engine.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/platform/workflow-test-runs',
+  handler: ({ db, req, res, actor }) => testWorkflowRun(db, req, res, actor),
+  owner: 'server/modules/platform-workflow-engine.js',
 });
 
 // V17 Master & Engineering Domain Closure — Wave B: BOM Governance.

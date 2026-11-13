@@ -1,9 +1,24 @@
 import { id } from '../db.js';
 import { HttpError } from './http.js';
 
-export function audit(db, userId, action, entityType, entityId, detail) {
-  db.prepare('INSERT INTO audit_logs(id,user_id,action,entity_type,entity_id,detail,created_at) VALUES(?,?,?,?,?,?,?)')
-    .run(id(), userId ?? null, action, entityType, entityId ?? null, detail ?? '', new Date().toISOString());
+/**
+ * 写审计。
+ *
+ * `extra` 是**可选**的结构化证据（Design §32.9）：`businessDate` / `requestId` /
+ * `before` / `after`。既有调用点一律不改 —— 缺省时新增列写 NULL，
+ * 因此 8 个已冻结域的审计行为完全不变（向后兼容契约）。
+ */
+export function audit(db, userId, action, entityType, entityId, detail, extra = null) {
+  const businessDate = extra?.businessDate ?? null;
+  const requestId = extra?.requestId ?? null;
+  const beforeJson = extra?.before === undefined || extra?.before === null ? null : JSON.stringify(extra.before);
+  const afterJson = extra?.after === undefined || extra?.after === null ? null : JSON.stringify(extra.after);
+  db.prepare('INSERT INTO audit_logs(id,user_id,action,entity_type,entity_id,detail,created_at,business_date,request_id,before_json,after_json)'
+    + ' VALUES(?,?,?,?,?,?,?,?,?,?,?)')
+    .run(
+      id(), userId ?? null, action, entityType, entityId ?? null, detail ?? '',
+      new Date().toISOString(), businessDate, requestId, beforeJson, afterJson,
+    );
 }
 
 /**

@@ -132,7 +132,10 @@ describe('navigation state and regression contracts', () => {
     // PROJECT_MANAGE (110). Batch A adds six bounded Sales permissions.
     // Wave 10 adds CREDIT_EVALUATE and CREDIT_SPECIAL_APPROVE (226).
     // M1-Core M-17 adds SUPPLIER_BILL_MANAGE (227).
-    assert.equal(PERMISSIONS.length, 247);
+    // 2026-11-13: Platform domain closure adds five generic workflow engine
+    // codes (WORKFLOW_TASK_VIEW / WORKFLOW_TASK_ACT / WORKFLOW_INSTANCE_VIEW /
+    // WORKFLOW_CONTROL / WORKFLOW_REDEPLOY) → 252.
+    assert.equal(PERMISSIONS.length, 252);
     assert.equal(PERMISSIONS.filter(([code]) => code === 'CREDIT_VIEW').length, 1);
     assert.equal(PERMISSIONS.filter(([code]) => code === 'CREDIT_MANAGE').length, 1);
     assert.equal(PERMISSIONS.filter(([code]) => code === 'CREDIT_EVALUATE').length, 1);
