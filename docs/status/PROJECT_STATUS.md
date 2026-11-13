@@ -4665,7 +4665,7 @@ Requirement §33.39 的 **15 个 Finance race**（RACE-01..15）实现齐备（`
 - **`PL-D-OPEN-02`**：**行为影响已消解**（2026-11-13 矛盾消解轮，见 §61.9）。原 Design 把 SOD 写作「前置统一闸门」，经核查发现**既有 5 族的自审批防护状态码与文案各不相同**（4 族 409 + 凭证族 403，5 种中文文案）—— 前置会改变既有行为，违反 Requirement §36.4 与 Design §32.11 约束 #1。已修正为**置于既有防护之后**（Design §32.4.3 接线规则表），并新增跨域回归专项测试 `server/platform-frozen-domain-regression.test.js`。通知接线不写 `audit_logs`、无测试统计 `notifications` 行数 → 不受影响。剩余：Acceptance 轮复核登记。
 - **`PL-D-OPEN-03`**：**已由证据关闭**（2026-11-13 矛盾消解轮，见 §61.9）。全仓库**无任何生产代码解析 `requisition_no` 格式** —— `makeCode`（`server/modules/planning-documents.js:85-92`）是唯一生成点；其余命中（`server/uat-r6-procurement-batching.test.js:51`、`server/v12-lifecycle-cleanup.test.js:62`、`server/v12-lifecycle-foundation.test.js:61`、`scripts/acceptance/v161-procurement-batching.mjs:23`）均为字面量夹具，不依赖格式。
 - **`PL-D-OPEN-05`**：本域专属 ACK-4 campaign 清单需业务所有者批准（受保护入口限制见 `docs/decisions/mysql-evidence-policy-20261112.md`）。
-- **N7 门禁既有 FAIL**：4 个历史提交（`a40e356` / `59eccd5` / `171ade5` / `4403a80`）提交信息缺 §id 或完整路径，且**均已推送到 `github/master`**。修复需改写已发布历史 → 需业务所有者单独裁定（见 §61.9）。
+- **N7 门禁既有 FAIL**：**已解决**（2026-11-13 §61.10）。业务所有者裁定采用窄口径「变更追溯台账」；四个**已推送**历史提交的可追溯性由台账提供，**无需改写已发布历史**。N7 现为 PASS，全部门禁绿。
 - **`PL-DEF-08` / `PL-DEF-09`**：期间控制三闸门并存、`operating` / `finance` 关闭对 canonical 闸门不可见 —— 已按 `PL-DEC-01` 归入 `OUT_OF_SCOPE`，作为显式残余随冻结接受；仅能由后续版本的域解冻立项解决。
 - **Manual Closure 与 Release Readiness**：对全部 22 本手册仍未签发 —— 是业务所有者对每本手册的独立决定，不由域级 Acceptance 跟随。
 - **HARD STOP**：Design 已完成，**不得自动进入 Implementation**（AGENTS.md §4.3 / §4.0）。下一可推进项是业务所有者明确批准 Platform 域 Implementation。
@@ -4692,3 +4692,41 @@ Requirement §33.39 的 **15 个 Finance race**（RACE-01..15）实现齐备（`
 
 **未发生**：未修改 `server/`、`src/`、`scripts/` 任何代码；未执行真实环境 migration、
 业务数据库写入、真实 MySQL Gate、push / merge / tag / 发布 / 部署；未签发任何 Acceptance 或 Freeze 标识。
+
+### 61.10 N7 变更追溯台账（2026-11-13）：既有 N7 失败已消除，未触碰任何已发布历史
+
+**授权来源**：业务所有者 2026-11-13 裁定「引入窄口径变更追溯台账（推荐）」。
+
+**问题**：`a40e356` / `59eccd5` / `171ade5` / `4403a80` 四个历史提交的提交信息缺 §id 或完整路径，
+且**均已推送到 `github/master`**。N7 遍历 `anchor..HEAD` 的全部提交，后来的提交不能豁免早先提交；
+唯一传统修法是改写**已发布历史**（需 §11.5 批准，且会使既有 release tag 脱离分支祖先链）。
+
+**决定与实现**：引入**变更追溯台账**作为 N7 的第二个「变更记录」来源。
+
+| 项 | 内容 |
+|---|---|
+| 治理决定 | [`docs/decisions/n7-traceability-ledger-policy-20261113.md`](../decisions/n7-traceability-ledger-policy-20261113.md)（`N7-LEDGER-01`，`APPROVED`） |
+| 台账正文 | [`docs/acceptance/n7-traceability-ledger.md`](../acceptance/n7-traceability-ledger.md)（5 个条目，覆盖 4 个历史提交） |
+| 实现 | `scripts/docs/lib/n7-traceability-ledger.mjs`（只读模块）+ `scripts/docs/check-doc-consistency.mjs` 的 N7 接入 |
+| 窄口径合同 | SHA 精确相等（完整 40 位十六进制）＋ 受治理文件精确相等 ＋ 章节 id 集合与实际触达集合**完全相等** ＋ 引用的所有者决定已 `APPROVED` |
+| 反后门守卫 | 条目不再对应任何实际不合规提交时**必须被报出并删除**；台账文件自身登记为受治理文件，其变更同样必须可追溯；**不得**豁免受治理文件的整体删除或移动 |
+| 断言强度 | 提交信息路径**完全保留**；既有断言未删除、未跳过、未降低 |
+
+**门禁结果**：
+
+| 门禁 | 结果 |
+|---|---|
+| `node scripts/docs/check-doc-consistency.mjs --mode current --target HEAD` | **N1 / N3 / N4 / N5 / N6 / N7 / N8 / N9 全部 PASS**；N2 `RETIRED`（不参与判定）—— **首次全绿** |
+| `node scripts/qa/verify-acceptance-records.mjs` | **PASS**（无悬空或未登记漂移的证据指针） |
+| `node --test scripts/docs/check-doc-consistency.test.js` | **3/3 PASS**（T01–T26 对抗矩阵、T27–T31 历史受治理路径矩阵、**T32–T41 变更追溯台账矩阵**，共 85 秒） |
+
+**T32–T41 台账矩阵**（正例 + 9 个负例，证明台账不是后门）：
+T32a 负对照（无台账时不合规提交仍 FAIL）→ T32b 台账精确匹配则 PASS →
+T33 章节 id 集合**少于**实际触达 → FAIL → T34 **多于**实际触达 → FAIL →
+T35 文件路径不符 → FAIL → T36 决定未 `APPROVED` → FAIL → T37 决定文件不存在 → FAIL →
+T38 条目已失效 → FAIL（必须删除）→ T39 短 SHA → FAIL（格式非法）→
+T40 台账不得豁免整体删除 → FAIL → T41 预授权不存在的提交 → FAIL。
+
+**未发生**：未改写任何已发布历史；四个历史提交的提交信息保持原样；未修改 `server/`、`src/` 任何业务代码；
+未执行真实环境 migration、业务数据库写入、真实 MySQL Gate、push / merge / tag / 发布 / 部署；
+未签发任何 Acceptance 或 Freeze 标识。

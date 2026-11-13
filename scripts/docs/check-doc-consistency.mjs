@@ -532,6 +532,8 @@ function traceabilityProblems(anchor, target, cur) {
    * scripts/docs/lib/n7-traceability-ledger.mjs 的窄口径合同。
    */
   const failures = [];
+  /** 「整体删除或移动」这类**台账不得豁免**的提交-文件配对。 */
+  const noWaiverPairs = new Set();
 
   for (const commit of commits) {
     const parents = git(REPO_ROOT, ['show', '-s', '--format=%P', commit]).trim().split(/\s+/).filter(Boolean);
@@ -552,6 +554,7 @@ function traceabilityProblems(anchor, target, cur) {
       const short = commit.slice(0, 12);
       if (before !== null && after === null) {
         problems.push(`  ${short} 整体删除或移动受治理文件，N7 无豁免: ${f}`);
+        noWaiverPairs.add(`${commit} ${f}`);
         continue;
       }
       if (before === null && after !== null) {
@@ -644,6 +647,10 @@ function traceabilityProblems(anchor, target, cur) {
     if (usedEntryKeys.has(key)) continue;
     if (entryIssues.has(key)) {
       problems.push(entryIssues.get(key));
+      continue;
+    }
+    if (noWaiverPairs.has(`${entry.sha} ${entry.file}`)) {
+      problems.push(`  台账不得豁免受治理文件的整体删除或移动: ${entry.sha.slice(0, 12)} ${entry.file}`);
       continue;
     }
     problems.push(`  台账条目不再对应任何不合规提交（可能已修复或提交已消失），必须删除: ${entry.sha.slice(0, 12)} ${entry.file}`);

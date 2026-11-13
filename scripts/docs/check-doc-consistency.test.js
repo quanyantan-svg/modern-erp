@@ -12,6 +12,7 @@ const checkerSource = join(here, 'check-doc-consistency.mjs');
 const indexSource = join(here, 'lib', 'current-index.mjs');
 const governedSource = join(here, 'lib', 'governed-paths.mjs');
 const migrationIndexSource = join(here, 'lib', 'migration-index.mjs');
+const ledgerSource = join(here, 'lib', 'n7-traceability-ledger.mjs');
 
 // 隔离临时子进程的 Git 配置读取：不触碰用户全局/系统配置，
 // 也避免 core.excludesFile 指向不可访问路径时产生警告与额外开销。
@@ -133,6 +134,7 @@ function createClone(root, label) {
   copyNormalized(indexSource, join(clone, 'scripts', 'docs', 'lib', 'current-index.mjs'));
   copyNormalized(governedSource, join(clone, 'scripts', 'docs', 'lib', 'governed-paths.mjs'));
   copyNormalized(migrationIndexSource, join(clone, 'scripts', 'docs', 'lib', 'migration-index.mjs'));
+  copyNormalized(ledgerSource, join(clone, 'scripts', 'docs', 'lib', 'n7-traceability-ledger.mjs'));
   writeFileSync(join(clone, 'document.md'), contractBody('1'), 'utf8');
   writeFileSync(join(clone, 'solution.md'), contractBody('2'), 'utf8');
   writeFileSync(join(clone, 'docs', 'status', 'PROJECT_STATUS.md'), contractBody('36'), 'utf8');
@@ -369,6 +371,188 @@ test('N7 historical governed path matrix T27-T31', { timeout: 20 * 60 * 1000 }, 
       console.log(`${row.id} | input=${row.input} | command=${row.command} | expected=${row.expected} | actual=${row.actual} | exit=${row.exit}`);
     }
     assert.equal(results.length, 5);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+/*
+ * N7-LEDGER-01 —— 变更追溯台账矩阵 T32-T41。
+ *
+ * 台账是 N7 的第二个「变更记录」来源，因此它本身必须**窄口径**：
+ * 只有 SHA + 受治理文件 + 章节 id 集合完全相等、且引用已批准决定的条目才可覆盖。
+ * 本矩阵同时给出正例（T32）与负例（T33-T41），证明台账不能被用作
+ * 「让不合规提交通过」或「预授权未来提交」的后门。
+ */
+test('N7 变更追溯台账矩阵 T32-T41', { timeout: 20 * 60 * 1000 }, () => {
+  const { tempRoot, clone, base } = createClone(repoRoot, 'n7l');
+  const results = [];
+
+  try {
+    const reset = () => {
+      assert.ok(resolve(clone).startsWith(resolve(tempRoot)), 'destructive reset must stay in temp clone');
+      git(clone, 'reset', '--hard', base);
+      git(clone, 'clean', '-fd');
+    };
+    const addSections = (...ids) => appendFileSync(join(clone, 'solution.md'),
+      ids.map(id => `\n## ${id} N7 regression section\n\ncontent ${id}\n`).join(''), 'utf8');
+    const commit = (message) => {
+      git(clone, 'add', '-A');
+      git(clone, 'commit', '--quiet', '-m', message);
+      return git(clone, 'rev-parse', 'HEAD');
+    };
+    const run = (id, input, expected, target = 'HEAD') => {
+      const actual = runCheck(clone, target);
+      expectGate(actual, 'N7', expected);
+      const parsed = parseGate(actual.output, 'N7');
+      results.push({
+        id, input, command: actual.command, expected,
+        actual: parsed.verdict, exit: actual.status,
+      });
+      return actual;
+    };
+
+    const LEDGER_FILE = join(clone, 'docs', 'acceptance', 'n7-traceability-ledger.md');
+    const LEDGER_PATH = 'docs/acceptance/n7-traceability-ledger.md';
+    const DECISION = 'docs/decisions/n7-ledger-decision.md';
+
+    const writeDecision = (state) => {
+      mkdirSync(join(clone, 'docs', 'decisions'), { recursive: true });
+      writeFileSync(join(clone, ...DECISION.split('/')), [
+        '# N7 台账测试决定', '',
+        `> 状态：\`${state}\``,
+        '> Owner：N7 Regression',
+        '> 权威来源：测试专用决定', '',
+        '## 1 决定', '', '仅用于临时克隆中的台账判定验证。', '',
+      ].join('\n'), 'utf8');
+    };
+    const writeLedger = (rows) => {
+      mkdirSync(join(clone, 'docs', 'acceptance'), { recursive: true });
+      writeFileSync(LEDGER_FILE, [
+        '# N7 变更追溯台账', '',
+        '## N7-LEDGER-01 台账条目', '',
+        '| 提交 SHA | 受治理文件 | 章节 ID | 所有者决定 |',
+        '|---|---|---|---|',
+        ...rows, '',
+      ].join('\n'), 'utf8');
+    };
+    /** 登记台账的提交本身必须可追溯：台账是受治理文件。 */
+    const commitLedger = () => commit(`docs: 登记变更追溯台账 ${LEDGER_PATH}`);
+
+    /* T32：台账条目精确匹配 → 合规提交被台账追溯 → PASS */
+    reset();
+    writeDecision('APPROVED');
+    commit('docs: 登记台账测试决定');
+    addSections('901');
+    const illegal = commit('docs: 更新合同但未写明追溯信息');
+    run('T32a', 'illegal commit without any trace reference', 'FAIL', illegal);
+    writeLedger([`| \`${illegal}\` | \`solution.md\` | \`901\` | \`${DECISION}\` |`]);
+    commitLedger();
+    const t32 = run('T32b', 'ledger entry matches SHA + file + section set exactly', 'PASS', 'HEAD');
+    assert.match(t32.output, /台账追溯通过/, 'T32 must report the ledger trace');
+
+    /* T33：台账章节 id 集合**少于**实际触达集合 → FAIL */
+    reset();
+    writeDecision('APPROVED');
+    commit('docs: 登记台账测试决定');
+    addSections('901'); addSections('902');
+    const few = commit('docs: 更新合同但未写明追溯信息');
+    writeLedger([`| \`${few}\` | \`solution.md\` | \`901\` | \`${DECISION}\` |`]);
+    commitLedger();
+    const t33 = run('T33', 'ledger section set is smaller than the touched set', 'FAIL', 'HEAD');
+    assert.match(t33.output, /章节 ID 集合与实际触达集合不一致/, 'T33 must report the section-set mismatch');
+
+    /* T34：台账章节 id 集合**多于**实际触达集合 → FAIL */
+    reset();
+    writeDecision('APPROVED');
+    commit('docs: 登记台账测试决定');
+    addSections('901');
+    const extra = commit('docs: 更新合同但未写明追溯信息');
+    writeLedger([`| \`${extra}\` | \`solution.md\` | \`901\`, \`902\` | \`${DECISION}\` |`]);
+    commitLedger();
+    const t34 = run('T34', 'ledger section set is larger than the touched set', 'FAIL', 'HEAD');
+    assert.match(t34.output, /章节 ID 集合与实际触达集合不一致/, 'T34 must report the section-set mismatch');
+
+    /* T35：台账条目的受治理文件与实际不符 → FAIL */
+    reset();
+    writeDecision('APPROVED');
+    commit('docs: 登记台账测试决定');
+    addSections('901');
+    const wrongFile = commit('docs: 更新合同但未写明追溯信息');
+    writeLedger([`| \`${wrongFile}\` | \`document.md\` | \`901\` | \`${DECISION}\` |`]);
+    commitLedger();
+    const t35 = run('T35', 'ledger entry names a different governed file', 'FAIL', 'HEAD');
+    assert.match(t35.output, /不再对应任何不合规提交|未引用全部变更章节/, 'T35 must not be covered');
+
+    /* T36：台账引用的决定未批准 → FAIL */
+    reset();
+    writeDecision('PENDING');
+    commit('docs: 登记台账测试决定');
+    addSections('901');
+    const pending = commit('docs: 更新合同但未写明追溯信息');
+    writeLedger([`| \`${pending}\` | \`solution.md\` | \`901\` | \`${DECISION}\` |`]);
+    commitLedger();
+    const t36 = run('T36', 'ledger entry references a decision that is not APPROVED', 'FAIL', 'HEAD');
+    assert.match(t36.output, /所有者决定不存在或未批准/, 'T36 must reject the unapproved decision');
+
+    /* T37：台账引用的决定文件不存在 → FAIL */
+    reset();
+    addSections('901');
+    const missing = commit('docs: 更新合同但未写明追溯信息');
+    writeLedger([`| \`${missing}\` | \`solution.md\` | \`901\` | \`docs/decisions/does-not-exist.md\` |`]);
+    commitLedger();
+    const t37 = run('T37', 'ledger entry references a missing decision file', 'FAIL', 'HEAD');
+    assert.match(t37.output, /所有者决定不存在或未批准/, 'T37 must reject the missing decision');
+
+    /* T38：台账条目已失效（对应提交本身合规）→ FAIL（必须删除） */
+    reset();
+    writeDecision('APPROVED');
+    commit('docs: 登记台账测试决定');
+    addSections('901');
+    const compliant = commit('docs: 更新 §901');
+    writeLedger([`| \`${compliant}\` | \`solution.md\` | \`901\` | \`${DECISION}\` |`]);
+    commitLedger();
+    const t38 = run('T38', 'ledger entry no longer corresponds to an illegal commit', 'FAIL', 'HEAD');
+    assert.match(t38.output, /不再对应任何不合规提交/, 'T38 must report the stale entry');
+
+    /* T39：台账行的提交 SHA 不是完整 40 位 → FAIL（格式非法） */
+    reset();
+    writeDecision('APPROVED');
+    commit('docs: 登记台账测试决定');
+    addSections('901');
+    const shortSha = commit('docs: 更新合同但未写明追溯信息');
+    writeLedger([`| \`${shortSha.slice(0, 12)}\` | \`solution.md\` | \`901\` | \`${DECISION}\` |`]);
+    commitLedger();
+    const t39 = run('T39', 'ledger row carries a short SHA instead of the full 40 hex', 'FAIL', 'HEAD');
+    assert.match(t39.output, /提交 SHA 非法/, 'T39 must reject the malformed SHA');
+
+    /* T40：台账不得豁免受治理文件的整体删除 → FAIL */
+    reset();
+    writeDecision('APPROVED');
+    commit('docs: 登记台账测试决定');
+    git(clone, 'rm', '--quiet', 'solution.md');
+    const removed = commit('docs: 移除 solution.md');
+    writeLedger([`| \`${removed}\` | \`solution.md\` | （无归属章节） | \`${DECISION}\` |`]);
+    commitLedger();
+    const t40 = run('T40', 'ledger cannot exempt a whole governed file deletion', 'FAIL', 'HEAD');
+    assert.match(t40.output, /整体删除或移动受治理文件|台账不得豁免/, 'T40 must keep the deletion unwaived');
+
+    /* T41：台账不得为尚未发生的提交预授权 → FAIL */
+    reset();
+    writeDecision('APPROVED');
+    commit('docs: 登记台账测试决定');
+    addSections('901');
+    const real = commit('docs: 更新合同但未写明追溯信息');
+    writeLedger([`| \`0000000000000000000000000000000000000000\` | \`solution.md\` | \`901\` | \`${DECISION}\` |`]);
+    commitLedger();
+    const t41 = run('T41', 'ledger pre-authorises a commit that does not exist', 'FAIL', 'HEAD');
+    assert.match(t41.output, /不再对应任何不合规提交/, 'T41 must reject the pre-authorised entry');
+    assert.ok(real !== '0000000000000000000000000000000000000000', 'T41 must use a distinct real commit');
+
+    for (const row of results) {
+      console.log(`${row.id} | input=${row.input} | command=${row.command} | expected=${row.expected} | actual=${row.actual} | exit=${row.exit}`);
+    }
+    assert.equal(results.length, 11);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
