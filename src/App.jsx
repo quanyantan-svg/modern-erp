@@ -134,12 +134,25 @@ export default function App() {
   useEffect(() => {
     if (!user) { setUnreadNotificationCount(0); setPendingWorkflowTaskCount(0); return undefined; }
     let current = true;
-    api('/api/notifications?limit=1').then((data) => { if (current) setUnreadNotificationCount(data.unreadCount || 0); })
-      .catch(() => { if (current) setUnreadNotificationCount(0); });
-    api('/api/platform/workflow-tasks').then((data) => {
-      if (!current) return;
-      setPendingWorkflowTaskCount((data.tasks || []).filter((task) => task.status === 'PENDING').length);
-    }).catch(() => { if (current) setPendingWorkflowTaskCount(0); });
+    // 徽标请求必须遵守 route permission exposure：没有通知 / 流程任务权限的账号
+    // **不得**发起这两个请求，否则会产生预期外的 403（Requirement §36.16.5）。
+    // 这里使用与 route 判定完全相同的 access predicate，不维护第二份权限清单。
+    const canReadNotifications = userCanAccessRoute(user, applicationRouteFor('notifications'));
+    const canReadWorkflowTasks = userCanAccessRoute(user, applicationRouteFor('workflow-tasks'));
+    if (canReadNotifications) {
+      api('/api/notifications?limit=1').then((data) => { if (current) setUnreadNotificationCount(data.unreadCount || 0); })
+        .catch(() => { if (current) setUnreadNotificationCount(0); });
+    } else if (current) {
+      setUnreadNotificationCount(0);
+    }
+    if (canReadWorkflowTasks) {
+      api('/api/platform/workflow-tasks').then((data) => {
+        if (!current) return;
+        setPendingWorkflowTaskCount((data.tasks || []).filter((task) => task.status === 'PENDING').length);
+      }).catch(() => { if (current) setPendingWorkflowTaskCount(0); });
+    } else if (current) {
+      setPendingWorkflowTaskCount(0);
+    }
     return () => { current = false; };
   }, [user]);
 

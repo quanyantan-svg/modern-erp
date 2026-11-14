@@ -885,6 +885,9 @@ const FULL = [
   // PL-RI-05 —— 目标环境发布证据门禁（TLS 模板占位符 fail-closed、
   // preflight 零值泄漏与缺项 fail closed、目标验证器不可达即失败）。
   'scripts/admin/release-target-readiness.test.js',
+  // PL-RI-04 —— canonical 浏览器门禁的结构合同（registry 驱动、四档宽度、
+  // 五类 canonical 角色、三类失败分类与 INCOMPLETE 语义）。
+  'scripts/acceptance/release-browser-readiness.contract.test.js',
   'scripts/git/check-commit-traceability.test.js',
   'scripts/gates/ack4-runtime.test.js',
   'scripts/gates/m1-core-g07-child-lifecycle.test.js',

@@ -48,6 +48,7 @@
     "reset-data": "node server/reset-data.js",
     "verify:dependencies": "node scripts/qa/verify-production-dependencies.mjs",
     "verify:migration-fail-closed": "node scripts/qa/verify-migration-fail-closed.mjs",
+    "test:release:browser": "node scripts/acceptance/release-browser-readiness.mjs",
     "backup-db": "node scripts/admin/backup-db.mjs",
     "restore-db": "node scripts/admin/restore-db.mjs",
     "setup-admin": "node scripts/admin/setup-admin.mjs"
