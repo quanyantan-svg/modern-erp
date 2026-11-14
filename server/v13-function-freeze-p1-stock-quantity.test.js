@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { beforeEach, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { createServer } from 'node:http';
-import { hashPassword } from './db.js';
+import { hashPassword, transaction } from './db.js';
 import { createTempDb } from './test-utils/temp-db.js';
 import { receiveValue, issueValue } from './modules/financial-inventory.js';
 import { upsertCanonicalInventory } from './test-support/inventory-canonical-fixture.js';
@@ -49,7 +49,7 @@ function plantInventory(db, productId, warehouseId, quantity) {
   });
   // Plant a POSTED balance movement at the canonical standard cost so
   // downstream flows (issueValue, etc.) find a non-LEGACY_UNVALUED row.
-  receiveValue(db, { businessDate: '2026-09-25', productId, warehouseId, quantity, valueCents: 1000, movementType: 'OPENING_BALANCE', sourceType: 'OPENING_BATCH', sourceId: `ob-${productId}-${warehouseId}`, valuationBasis: 'CONTROLLED_OPENING' });
+  transaction(db, () => receiveValue(db, { businessDate: '2026-09-25', productId, warehouseId, quantity, valueCents: 1000, movementType: 'OPENING_BALANCE', sourceType: 'OPENING_BATCH', sourceId: `ob-${productId}-${warehouseId}`, valuationBasis: 'CONTROLLED_OPENING' }));
 }
 
 async function setupServer() {
@@ -170,7 +170,7 @@ describe('V1.3 function-freeze P1 stock-quantity cleanup', () => {
       // We use the same primitive the receipt / delivery flows use to
       // prove the canonical inventory table is the only source of truth.
       database.prepare("UPDATE inventory SET quantity=quantity-20, updated_at=? WHERE product_id=? AND warehouse_id=?").run(new Date().toISOString(), 'p-normal', 'wh-p1');
-      issueValue(database, { businessDate: '2026-09-26', productId: 'p-normal', warehouseId: 'wh-p1', quantity: 20, movementType: 'SALES_DELIVERY_COGS', sourceType: 'SALES_DELIVERY', sourceId: 'sd-p1', sourceItemId: 'sdi-p1' });
+      transaction(database, () => issueValue(database, { businessDate: '2026-09-26', productId: 'p-normal', warehouseId: 'wh-p1', quantity: 20, movementType: 'SALES_DELIVERY_COGS', sourceType: 'SALES_DELIVERY', sourceId: 'sd-p1', sourceItemId: 'sdi-p1' }));
 
       const after = database.prepare('SELECT COALESCE((SELECT SUM(i.quantity) FROM inventory i WHERE i.product_id = ?), 0) q, stock_quantity FROM products WHERE id = ?').get('p-normal', 'p-normal');
       assert.equal(Number(after.q), 30, 'canonical SUM(inventory.quantity) shrinks by issue quantity');

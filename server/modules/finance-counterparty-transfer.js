@@ -18,8 +18,9 @@ import { audit } from '../lib/audit.js';
 import { id } from '../db.js';
 import { refreshOpenAmount, assertOpenAmountReconciled } from './finance-refresh-open-amount.js';
 import { resolveRecognitionPolicy } from './finance-recognition-policy.js';
-import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 import { applyCreditAdjustment } from './settlement-core.js';
+import { guardPeriodAction } from './period-control.js';
+import { financeActionCode } from './period-action-registry.js';
 
 export async function postCounterpartyTransfer(db, req, res, actor) {
   allow(actor, 'FINANCE_TRANSFER_MANAGE');
@@ -40,7 +41,7 @@ export async function postCounterpartyTransfer(db, req, res, actor) {
 
   let totalCents = 0;
   runInTransaction(db, () => {
-    assertFinanceBusinessDateOpen(db, side, businessDate);
+    guardPeriodAction(db, { actionCode: financeActionCode(side), businessDate: businessDate });
     db.prepare(
       `INSERT INTO finance_counterparty_transfers(id, transfer_no, side, source_party_id, target_party_id,
         business_date, reason, status, creator_id, confirmer_id, created_at, confirmed_at)

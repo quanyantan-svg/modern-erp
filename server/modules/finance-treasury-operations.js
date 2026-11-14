@@ -2,8 +2,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { allow, allowAny, HttpError, optionalText, readJson, requiredText, send } from '../lib/http.js';
-import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 import { applyTreasuryMovement, assertBalanceReconciled } from './finance-treasury-movement.js';
+import { guardPeriodAction } from './period-control.js';
+import { financeActionCode } from './period-action-registry.js';
 
 const stamp = () => new Date().toISOString();
 const number = (prefix) => `${prefix}-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0, 6).toUpperCase()}`;
@@ -107,7 +108,7 @@ export async function actOnNote(db, req, res, actor, noteId, action) {
     if (!row) throw new HttpError(404, '票据不存在');
     if (!['HELD', 'ENDORSED', 'DISCOUNTED'].includes(row.status)) throw new HttpError(409, '票据状态不允许结算');
     const businessDate = requiredText(body.businessDate, 'businessDate', 16);
-    assertFinanceBusinessDateOpen(db, row.direction === 'RECEIVABLE' ? 'AR' : 'AP', businessDate);
+    guardPeriodAction(db, { actionCode: financeActionCode(row.direction === 'RECEIVABLE' ? 'AR' : 'AP', 'SETTLEMENT'), businessDate: businessDate });
     movementId = applyTreasuryMovement(db, { settlementAccountId: requiredText(body.settlementAccountId, 'settlementAccountId', 64), direction: row.direction === 'RECEIVABLE' ? 'IN' : 'OUT', amountCents: row.face_amount_cents, businessDate, sourceType: 'NOTE_SETTLEMENT', sourceId: noteId, idempotencyKey: `NOTE_SETTLEMENT:${noteId}`, createdBy: actor.id });
     const now = stamp();
     db.prepare("UPDATE finance_notes SET status='SETTLED',settlement_account_id=?,settlement_movement_id=?,settled_by=?,settled_at=?,updated_at=? WHERE id=?").run(body.settlementAccountId, movementId, actor.id, now, now, noteId);
@@ -148,7 +149,7 @@ export async function actOnPaymentRequest(db, req, res, actor, requestId, action
   } else if (action === 'execute') {
     if (row.status !== 'APPROVED') throw new HttpError(409, '仅已审批申请可执行');
     transaction(db, () => {
-      assertFinanceBusinessDateOpen(db, row.side, row.business_date);
+      guardPeriodAction(db, { actionCode: financeActionCode(row.side, 'SETTLEMENT'), businessDate: row.business_date });
       const movementId = applyTreasuryMovement(db, { settlementAccountId: requiredText(body.settlementAccountId, 'settlementAccountId', 64), direction: 'OUT', amountCents: row.amount_cents, businessDate: row.business_date, sourceType: 'PAYMENT_REQUEST', sourceId: requestId, idempotencyKey: `PAYMENT_REQUEST:${requestId}`, createdBy: actor.id });
       db.prepare("UPDATE finance_payment_requests SET status='EXECUTED',executor_id=?,executed_at=?,settlement_account_id=?,payment_method=?,treasury_movement_id=? WHERE id=?").run(actor.id, now, body.settlementAccountId, body.paymentMethod || 'BANK', movementId, requestId);
       audit(db, actor.id, 'EXECUTE', 'FINANCE_PAYMENT_REQUEST', requestId, movementId);
@@ -182,7 +183,7 @@ export async function confirmCashCount(db, req, res, actor, countId) {
   allow(actor, 'FINANCE_CASH_COUNT_MANAGE'); await readJson(req);
   transaction(db, () => {
     const row = db.prepare('SELECT * FROM finance_cash_counts WHERE id=?').get(countId); if (!row) throw new HttpError(404, '现金盘点不存在'); if (row.status !== 'DRAFT') throw new HttpError(409, '仅草稿可确认');
-    assertFinanceBusinessDateOpen(db, 'TREASURY', row.count_date); assertBalanceReconciled(db, row.settlement_account_id);
+    guardPeriodAction(db, { actionCode: 'FINANCE_TREASURY_MUTATION', businessDate: row.count_date }); assertBalanceReconciled(db, row.settlement_account_id);
     db.prepare("UPDATE finance_cash_counts SET status='CONFIRMED',confirmer_id=?,confirmed_at=? WHERE id=?").run(actor.id, stamp(), countId);
     audit(db, actor.id, 'CONFIRM', 'FINANCE_CASH_COUNT', countId, String(row.difference_cents));
   });
@@ -205,7 +206,7 @@ export async function importBankStatement(db, req, res, actor) {
   const account = db.prepare('SELECT id FROM bank_accounts WHERE id=? AND active=1').get(body.bankAccountId); if (!account) throw new HttpError(409, '银行账户不存在或未启用');
   const importId = randomUUID(); const statementId = randomUUID(); const now = stamp();
   transaction(db, () => {
-    assertFinanceBusinessDateOpen(db, 'TREASURY', requiredText(body.statementDate, 'statementDate', 16));
+    guardPeriodAction(db, { actionCode: 'FINANCE_TREASURY_MUTATION', businessDate: requiredText(body.statementDate, 'statementDate', 16) });
     db.prepare("INSERT INTO finance_bank_statement_imports(id,file_name,fingerprint,status,statement_id,created_at) VALUES(?,?,?,'PENDING',?,?)").run(importId, fileName, supplied, statementId, now);
     let debit = 0; let credit = 0;
     const normalized = lines.map((line, index) => {
@@ -243,7 +244,7 @@ export async function matchBankReconciliation(db, req, res, actor, reconciliatio
   allow(actor, 'FINANCE_RECONCILE_MANAGE'); const body = await readJson(req); const amount = positiveCents(body.matchedAmountCents, 'matchedAmountCents');
   transaction(db, () => {
     const reconciliation = db.prepare('SELECT r.*,s.statement_date FROM finance_bank_reconciliations r JOIN bank_statements s ON s.id=r.statement_id WHERE r.id=?').get(reconciliationId); if (!reconciliation) throw new HttpError(404, '银行对账不存在'); if (reconciliation.status === 'CLOSED') throw new HttpError(409, '银行对账已关闭');
-    assertFinanceBusinessDateOpen(db, 'TREASURY', reconciliation.statement_date);
+    guardPeriodAction(db, { actionCode: 'FINANCE_TREASURY_MUTATION', businessDate: reconciliation.statement_date });
     const line = db.prepare('SELECT * FROM bank_statement_items WHERE id=? AND statement_id=?').get(body.statementLineId, reconciliation.statement_id); if (!line) throw new HttpError(404, '银行流水行不存在');
     const movement = db.prepare("SELECT * FROM finance_treasury_movements WHERE id=? AND settlement_account_id=? AND status='CONFIRMED'").get(body.treasuryMovementId, reconciliation.settlement_account_id); if (!movement) throw new HttpError(404, '资金流水不存在');
     const lineAmount = Number(line.amount_cents || line.debit_cents || line.credit_cents); const lineMatched = Number(db.prepare('SELECT COALESCE(SUM(matched_amount_cents),0) n FROM finance_bank_reconciliation_matches WHERE statement_line_id=?').get(line.id).n);

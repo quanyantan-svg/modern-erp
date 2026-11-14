@@ -899,7 +899,9 @@ function createUncertainCommitDb(sqliteDb, uncertainError) {
       if (/GET_LOCK/i.test(text)) return { get: () => ({ acquired: 1 }) };
       if (/RELEASE_LOCK/i.test(text)) return { get: () => ({ released: 1 }) };
       if (/mysql_transaction_gates/i.test(text)) return { get: () => ({ gate_id: 1 }) };
-      return sqliteDb.prepare(sql);
+      // 真实 MySQL adapter 支持 FOR UPDATE 行锁；本替身跑在 SQLite 上，
+      // 因此在交给 SQLite 之前去掉该后缀。
+      return sqliteDb.prepare(sql.replace(/\s+FOR\s+UPDATE\s*$/i, ''));
     },
     quarantine(reason) {
       db.quarantined = true;

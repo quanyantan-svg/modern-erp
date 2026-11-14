@@ -8,8 +8,8 @@ import { audit } from '../lib/audit.js';
 import { id, transaction } from '../db.js';
 import { resolveRecognitionPolicy } from './finance-recognition-policy.js';
 import { refreshOpenAmount, assertOpenAmountReconciled } from './finance-refresh-open-amount.js';
-import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 import { applyDueScheduleForOpenItem } from './finance-due-plan.js';
+import { guardPeriodAction } from './period-control.js';
 
 export function listAccountPayables(db, res, actor, query = {}) {
   allow(actor, 'FINANCE_AP_VIEW');
@@ -46,7 +46,7 @@ export async function createManualAccountPayable(db, req, res, actor) {
   const now = new Date().toISOString();
   const apId = id();
   runInTransaction(db, () => {
-    assertFinanceBusinessDateOpen(db, 'AP', businessDate);
+    guardPeriodAction(db, { actionCode: 'FINANCE_AP_MUTATION', businessDate: businessDate });
     db.prepare(
       `INSERT INTO account_payables(
          id, voucher_no, supplier_id, source_type, source_id,
@@ -75,7 +75,7 @@ export function createProvisionalAP(db, source, amountCents, businessDate, party
   if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
     throw new HttpError(400, 'PROVISIONAL AP 金额非法');
   }
-  assertFinanceBusinessDateOpen(db, 'AP', businessDate);
+  guardPeriodAction(db, { actionCode: 'FINANCE_AP_MUTATION', businessDate: businessDate });
   const now = new Date().toISOString();
   const apId = id();
   db.prepare(

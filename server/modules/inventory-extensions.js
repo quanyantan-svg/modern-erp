@@ -38,7 +38,8 @@ import {
 } from '../lib/http.js';
 import { lifecycleArchiveFilter } from './lifecycle-engine.js';
 import { postTrackedMovement, saveTrackedAllocations, sourceTrackingAllocations } from './traceability-quality.js';
-import { assertFinancialPeriodsOpen, createSystemVoucher, inventoryAccountRole, issueSourceValue } from './financial-inventory.js';
+import { createSystemVoucher, inventoryAccountRole, issueSourceValue } from './financial-inventory.js';
+import { guardPeriodAction } from './period-control.js';
 
 const SCRAP_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 
@@ -239,7 +240,7 @@ export function confirmInventoryScrap(db, res, actor, scrapId) {
     const header = db.prepare('SELECT * FROM inventory_scraps WHERE id=?').get(scrapId);
     if (!header) throw new HttpError(404, '库存报废单不存在');
     if (header.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态的报废单可以确认');
-    assertFinancialPeriodsOpen(db,header.scrap_date);
+    guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate: header.scrap_date });
     const items = db.prepare('SELECT * FROM inventory_scrap_items WHERE scrap_id=? ORDER BY line_no, id').all(scrapId);
     if (!items.length) throw new HttpError(409, '报废单没有明细，无法确认');
     // INV-07: the scrap writes the canonical position identity and goes

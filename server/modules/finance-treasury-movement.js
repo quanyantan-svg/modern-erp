@@ -16,7 +16,7 @@
 import { HttpError, allow, send, readJson, requiredText } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
 import { id, transaction } from '../db.js';
-import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
+import { guardPeriodAction, runGuardedMutation } from './period-control.js';
 
 export function applyTreasuryMovement(db, input) {
   const settlementAccountId = requiredText(input.settlementAccountId, 'settlementAccountId', 64);
@@ -30,41 +30,46 @@ export function applyTreasuryMovement(db, input) {
   const idempotencyKey = requiredText(input.idempotencyKey, 'idempotencyKey', 256);
   const movementGroupId = input.movementGroupId || idempotencyKey;
 
-  assertFinanceBusinessDateOpen(db, 'TREASURY', businessDate);
-  const lock = db.dialect === 'mysql' && db.isTransaction ? ' FOR UPDATE' : '';
-  const account = db.prepare(`SELECT id, active FROM bank_accounts WHERE id=?${lock}`).get(settlementAccountId);
-  if (!account || !account.active) throw new HttpError(409, '结算账户不存在或未启用');
-  const existing = db.prepare(`SELECT * FROM finance_treasury_movements WHERE idempotency_key=?`).get(idempotencyKey);
-  if (existing) {
-    const same = existing.settlement_account_id === settlementAccountId
-      && existing.direction === direction
-      && Number(existing.amount_cents) === amountCents
-      && existing.business_date === businessDate
-      && existing.source_type === sourceType
-      && existing.source_id === sourceId;
-    if (!same) throw new HttpError(409, '同一 Treasury 幂等键不能用于不同经济事项');
-    return existing.id;
-  }
+  // The treasury movement is the canonical writer for cash/bank facts. It owns
+  // its write transaction when it is reached without one, so the period guard
+  // always runs in the same transaction as the money write.
+  return runGuardedMutation(db, () => {
+    guardPeriodAction(db, { actionCode: 'FINANCE_TREASURY_MUTATION', businessDate: businessDate });
+    const lock = db.dialect === 'mysql' && db.isTransaction ? ' FOR UPDATE' : '';
+    const account = db.prepare(`SELECT id, active FROM bank_accounts WHERE id=?${lock}`).get(settlementAccountId);
+    if (!account || !account.active) throw new HttpError(409, '结算账户不存在或未启用');
+    const existing = db.prepare(`SELECT * FROM finance_treasury_movements WHERE idempotency_key=?`).get(idempotencyKey);
+    if (existing) {
+      const same = existing.settlement_account_id === settlementAccountId
+        && existing.direction === direction
+        && Number(existing.amount_cents) === amountCents
+        && existing.business_date === businessDate
+        && existing.source_type === sourceType
+        && existing.source_id === sourceId;
+      if (!same) throw new HttpError(409, '同一 Treasury 幂等键不能用于不同经济事项');
+      return existing.id;
+    }
 
-  const movementId = id();
-  const now = new Date().toISOString();
-  db.prepare(
-    `INSERT INTO finance_treasury_movements(
+    const movementId = id();
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO finance_treasury_movements(
        id, settlement_account_id, direction, amount_cents, business_date,
        source_type, source_id, counterparty_type, counterparty_id, external_reference,
        reversal_of_movement_id, movement_group_id, accounting_event_id, status, idempotency_key,
        created_by, created_at)
      VALUES(
        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CONFIRMED', ?, ?, ?)`
-  ).run(
-    movementId, settlementAccountId, direction, amountCents, businessDate,
-    sourceType, sourceId, input.counterpartyType || '', input.counterpartyId || '', input.externalReference || '',
-    input.reversalOfMovementId || null, movementGroupId, input.accountingEventId || null,
-    idempotencyKey, input.createdBy || 'system', now,
-  );
-  refreshSettlementAccountBalance(db, settlementAccountId);
-  audit(db, input.createdBy || 'system', 'TREASURY_MOVEMENT', movementId, idempotencyKey);
-  return movementId;
+    ).run(
+      movementId, settlementAccountId, direction, amountCents, businessDate,
+      sourceType, sourceId, input.counterpartyType || '', input.counterpartyId || '', input.externalReference || '',
+      input.reversalOfMovementId || null, movementGroupId, input.accountingEventId || null,
+      idempotencyKey, input.createdBy || 'system', now,
+    );
+    refreshSettlementAccountBalance(db, settlementAccountId);
+    audit(db, input.createdBy || 'system', 'TREASURY_MOVEMENT', movementId, idempotencyKey);
+    return movementId;
+  });
 }
 
 export function refreshSettlementAccountBalance(db, accountId) {

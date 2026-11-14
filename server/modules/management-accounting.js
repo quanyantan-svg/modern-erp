@@ -24,6 +24,8 @@
 import { HttpError, allow, allowAny, readJson, requiredText, send } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
 import { id, transaction } from '../db.js';
+import { guardOperatingAction, lockPeriodAxes } from './period-control.js';
+import { PERIOD_AXES } from './period-action-registry.js';
 
 export const MANAGEMENT_BOOK_STATUSES = Object.freeze(['OPEN', 'CLOSED']);
 export const ALLOCATION_BASIS_TYPES = Object.freeze(['VALUE', 'EQUAL', 'DRIVER']);
@@ -247,6 +249,7 @@ export async function collectOperatingLedger(db, req, res, actor) {
 
   const planId = id();
   transaction(db, () => {
+    guardOperatingAction(db, 'OPERATING_COLLECT', period, bookId);
     db.prepare('INSERT INTO cost_collection_plans(id,management_book_id,period,source_json,status,created_by,created_at) VALUES(?,?,?,?,?,?,?)')
       .run(planId, bookId, period, JSON.stringify(source), 'COLLECTED', actor.id, nowIso());
     for (const entry of entries) {
@@ -367,6 +370,7 @@ export async function runAllocation(db, req, res, actor) {
   }
   const planId = collectionPlan.id;
   transaction(db, () => {
+    guardOperatingAction(db, 'OPERATING_ALLOCATE', period, bookId);
     for (const item of plan) {
       db.prepare(`INSERT INTO allocation_results(
           id,plan_id,rule_id,source_json,target_profit_center_id,allocated_cents,status,created_at)
@@ -498,26 +502,28 @@ export async function closeOperatingPeriod(db, req, res, actor) {
   loadBook(db, bookId);
   const period = requiredPeriod(body.period);
 
-  const existing = db.prepare('SELECT * FROM operating_period_closures WHERE management_book_id=? AND period=?').get(bookId, period);
-  if (existing && existing.status === 'CLOSED') {
-    throw new HttpError(409, '该经营期间已关闭', { code: 'MANAGEMENT_PERIOD_ALREADY_CLOSED' });
-  }
-  const plans = db.prepare("SELECT COUNT(*) n FROM cost_collection_plans WHERE management_book_id=? AND period=? AND status='COLLECTED'")
-    .get(bookId, period);
-  if (Number(plans.n) === 0) {
-    throw new HttpError(409, '该期间尚未完成经营台账归集，不得关账', { code: 'MANAGEMENT_COLLECTION_INCOMPLETE' });
-  }
-  const allocations = db.prepare(`SELECT COUNT(*) n FROM allocation_results
-    WHERE plan_id IN (SELECT id FROM cost_collection_plans WHERE management_book_id=? AND period=?)`).get(bookId, period);
-  if (Number(allocations.n) === 0) {
-    throw new HttpError(409, '该期间尚未完成费用分摊，不得关账', { code: 'MANAGEMENT_ALLOCATION_INCOMPLETE' });
-  }
-  const legalClosed = db.prepare("SELECT COUNT(*) n FROM period_closures WHERE period=? AND status='CLOSED'").get(period);
-  if (Number(legalClosed.n) === 0) {
-    throw new HttpError(409, '法定会计期间尚未关闭，经营期间不得先关闭', { code: 'MANAGEMENT_LEGAL_PERIOD_NOT_CLOSED' });
-  }
-  const closureId = existing ? existing.id : id();
+  let closureId;
   transaction(db, () => {
+    lockPeriodAxes(db, [PERIOD_AXES.LEGAL_ACCOUNTING, PERIOD_AXES.OPERATING], { managementBookId: bookId });
+    const existing = db.prepare('SELECT * FROM operating_period_closures WHERE management_book_id=? AND period=?').get(bookId, period);
+    if (existing && existing.status === 'CLOSED') {
+      throw new HttpError(409, '该经营期间已关闭', { code: 'MANAGEMENT_PERIOD_ALREADY_CLOSED' });
+    }
+    const plans = db.prepare("SELECT COUNT(*) n FROM cost_collection_plans WHERE management_book_id=? AND period=? AND status='COLLECTED'")
+      .get(bookId, period);
+    if (Number(plans.n) === 0) {
+      throw new HttpError(409, '该期间尚未完成经营台账归集，不得关账', { code: 'MANAGEMENT_COLLECTION_INCOMPLETE' });
+    }
+    const allocations = db.prepare(`SELECT COUNT(*) n FROM allocation_results
+      WHERE plan_id IN (SELECT id FROM cost_collection_plans WHERE management_book_id=? AND period=?)`).get(bookId, period);
+    if (Number(allocations.n) === 0) {
+      throw new HttpError(409, '该期间尚未完成费用分摊，不得关账', { code: 'MANAGEMENT_ALLOCATION_INCOMPLETE' });
+    }
+    const legalClosed = db.prepare("SELECT COUNT(*) n FROM period_closures WHERE period=? AND status='CLOSED'").get(period);
+    if (Number(legalClosed.n) === 0) {
+      throw new HttpError(409, '法定会计期间尚未关闭，经营期间不得先关闭', { code: 'MANAGEMENT_LEGAL_PERIOD_NOT_CLOSED' });
+    }
+    closureId = existing ? existing.id : id();
     if (existing) {
       db.prepare("UPDATE operating_period_closures SET status='CLOSED', closed_by=?, closed_at=?, reopen_reason=NULL, reopened_by=NULL, reopened_at=NULL WHERE id=?")
         .run(actor.id, nowIso(), closureId);
@@ -535,12 +541,17 @@ export async function reopenOperatingPeriod(db, req, res, actor, closureId) {
   allowAny(actor, MANAGE_PERMISSIONS);
   const body = await readJson(req);
   const reason = requiredText(body.reason, '反关账原因', 200);
-  const closure = db.prepare('SELECT * FROM operating_period_closures WHERE id=?').get(closureId);
-  if (!closure) throw new HttpError(404, '经营期间关闭记录不存在', { code: 'MANAGEMENT_CLOSURE_NOT_FOUND' });
-  if (closure.status !== 'CLOSED') {
-    throw new HttpError(409, '只有已关闭的经营期间可以反关账', { code: 'MANAGEMENT_PERIOD_NOT_CLOSED' });
-  }
   transaction(db, () => {
+    const initial = db.prepare('SELECT management_book_id FROM operating_period_closures WHERE id=?').get(closureId);
+    if (!initial) throw new HttpError(404, '经营期间关闭记录不存在', { code: 'MANAGEMENT_CLOSURE_NOT_FOUND' });
+    lockPeriodAxes(db, [PERIOD_AXES.OPERATING], { managementBookId: initial.management_book_id });
+    const closure = db.prepare('SELECT * FROM operating_period_closures WHERE id=?').get(closureId);
+    if (closure.status !== 'CLOSED') {
+      throw new HttpError(409, '只有已关闭的经营期间可以反关账', { code: 'MANAGEMENT_PERIOD_NOT_CLOSED' });
+    }
+    const later = db.prepare("SELECT period FROM operating_period_closures WHERE management_book_id=? AND period>? AND status='CLOSED' ORDER BY period DESC LIMIT 1")
+      .get(closure.management_book_id, closure.period);
+    if (later) throw new HttpError(409, `必须先反关账最新经营期间 ${later.period}`, { code: 'PERIOD_NOT_LATEST' });
     db.prepare("UPDATE operating_period_closures SET status='OPEN', reopen_reason=?, reopened_by=?, reopened_at=? WHERE id=?")
       .run(reason, actor.id, nowIso(), closureId);
     audit(db, actor.id, 'REOPEN', 'OPERATING_PERIOD_CLOSURE', closureId, `反关账 ${closure.period}：${reason}`);

@@ -9,8 +9,8 @@
 import { allow, HttpError, send, readJson, requiredText } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
 import { transaction } from '../db.js';
-import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 import { refreshSettlementAccountBalance } from './finance-treasury-movement.js';
+import { guardPeriodAction } from './period-control.js';
 
 export function postTreasuryOpening(db, req, res, actor) {
   allow(actor, 'FINANCE_TREASURY_MANAGE');
@@ -24,7 +24,7 @@ export function postTreasuryOpening(db, req, res, actor) {
     const businessDate = requiredText(body.businessDate, 'businessDate', 16);
     const now = new Date().toISOString();
     transaction(db, () => {
-      assertFinanceBusinessDateOpen(db, 'TREASURY', businessDate);
+      guardPeriodAction(db, { actionCode: 'FINANCE_TREASURY_MUTATION', businessDate: businessDate });
       const account = db.prepare(`SELECT id FROM bank_accounts WHERE id=? AND active=1`).get(accountId);
       if (!account) throw new HttpError(409, 'settlement account not found or inactive');
       db.prepare(`UPDATE bank_accounts SET opening_balance_cents=?, updated_at=? WHERE id=?`)

@@ -124,6 +124,10 @@ function periodOf(value) {
   return /^\d{4}-\d{2}/.test(text) ? text.slice(0, 7) : '';
 }
 
+// The archive preflight asks whether the document's **own** period is closed.
+// It is a CHECK surface (a blocker list for the operator), not a dated
+// economic mutation, so it keeps the period-exact question instead of the
+// canonical date-based guard.
 function isPeriodClosed(db, period) {
   if (!period) return false;
   const finance = db.prepare("SELECT 1 FROM period_closures WHERE period=? AND status='CLOSED' LIMIT 1").get(period);

@@ -45,6 +45,14 @@ function closeInventoryGate(db, period) {
     .run('aa-w3-inv-' + period, period, new Date().toISOString(), JSON.stringify({ overallStatus: 'PASS', checks: [] }));
 }
 
+// R-02：法定关账还要求三个 Finance 业务轴已关至该期间末。
+function closeFinanceGate(db, period) {
+  const [year, month] = period.split('-').map(Number);
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  db.prepare('UPDATE finance_business_close_state SET closed_through_date=?,updated_at=?,updated_by=?')
+    .run(`${period}-${String(lastDay).padStart(2, '0')}`, new Date().toISOString(), 'user-admin');
+}
+
 function openPeriodClosure(db, period, id) {
   const [year, month] = period.split('-').map(Number);
   db.prepare("INSERT OR REPLACE INTO period_closures(id,period,period_year,period_month,closure_type,status,created_at) VALUES(?,?,?,?,'MONTH','OPEN',?)")
@@ -159,7 +167,8 @@ describe('AA-W3 凭证纠错：冲销与补记走同一条 canonical 路径', ()
       .run(PERIOD, new Date().toISOString());
     const result = await fixture.request('POST', '/api/accounting/vouchers/w3-v-closed/reverse', fixture.tokens.accounting, { reason: '已关账' });
     assert.equal(result.status, 409);
-    assert.equal(result.data.code, 'PERIOD_CLOSED');
+    // R-02：法定期间拒绝统一使用 canonical 错误码。
+    assert.equal(result.data.code, 'FINANCIAL_PERIOD_CLOSED');
   });
 
   test('AA-W3.4 补记凭证与原凭证关联且差异可比', async () => {
@@ -481,6 +490,7 @@ describe('AA-W3 真实损益结转：权益承接、关账拦截与受控反结�
     });
     openPeriodClosure(db, PERIOD, 'w3-close-period');
     closeInventoryGate(db, PERIOD);
+    closeFinanceGate(db, PERIOD);
     const blocked = await fixture.request('POST', '/api/period-closures/w3-close-period/close', fixture.tokens.admin);
     assert.equal(blocked.status, 409, '未结转时关账必须被拦截');
     assert.equal(blocked.data.code, 'PROFIT_NOT_TRANSFERRED');

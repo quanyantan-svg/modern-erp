@@ -39,7 +39,8 @@ import { resolveDatabaseConfig } from '../../server/database/config.js';
 import { transaction } from '../../server/db.js';
 import { applyTreasuryMovement } from '../../server/modules/finance-treasury-movement.js';
 import { recordSettlementMovement } from '../../server/modules/financial-controls.js';
-import { assertFinanceBusinessDateOpen } from '../../server/modules/finance-business-close.js';
+import { guardPeriodAction } from '../../server/modules/period-control.js';
+import { financeActionCode } from '../../server/modules/period-action-registry.js';
 import { unappliedBalanceSnapshot } from '../../server/modules/settlement-core.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -123,7 +124,7 @@ function applyCollectionAllocate(db, command) {
     if (command.amountCents > openCents) {
       throw Object.assign(new Error('INSUFFICIENT_OPEN'), { code: 'INSUFFICIENT_OPEN' });
     }
-    assertFinanceBusinessDateOpen(db, 'AR', command.businessDate);
+    guardPeriodAction(db, { actionCode: 'FINANCE_AR_MUTATION', businessDate: command.businessDate });
     const collectionId = randomUUID();
     db.prepare(`INSERT INTO payment_collections(id, collection_no, customer_id, receivable_id, amount_cents, payment_method, collection_date, remark, creator_id, created_at, status, bank_account, confirmed_by, confirmed_at, updated_at, external_reference, reversed_amount_cents, reversal_status, settlement_account_id, unapplied_amount_cents, explicit_unapplied)
       VALUES(?,?,?,?,?,?,?,?,?,?,'CONFIRMED','',?,?,?,'',0,'NONE',?,0,0)`)
@@ -154,7 +155,7 @@ function applyPaymentAllocate(db, command) {
     if (command.amountCents > openCents) {
       throw Object.assign(new Error('INSUFFICIENT_OPEN'), { code: 'INSUFFICIENT_OPEN' });
     }
-    assertFinanceBusinessDateOpen(db, 'AP', command.businessDate);
+    guardPeriodAction(db, { actionCode: 'FINANCE_AP_MUTATION', businessDate: command.businessDate });
     const paymentId = randomUUID();
     db.prepare(`INSERT INTO payment_disbursements(id, disbursement_no, supplier_id, payable_id, amount_cents, payment_method, disbursement_date, remark, creator_id, created_at, status, bank_account, confirmed_by, confirmed_at, updated_at, external_reference, reversed_amount_cents, reversal_status, settlement_account_id, unapplied_amount_cents, explicit_unapplied)
       VALUES(?,?,?,?,?,?,?,?,?,?,'CONFIRMED','',?,?,?,'',0,'NONE',?,0,0)`)
@@ -184,7 +185,7 @@ function reverseCollection(db, command) {
     const document = db.prepare(`SELECT * FROM payment_collections WHERE id=?${lock}`).get(command.documentId);
     if (!document) throw Object.assign(new Error('NOT_FOUND'), { code: 'NOT_FOUND' });
     if (document.status !== 'CONFIRMED') throw Object.assign(new Error('STATUS_NOT_CONFIRMED'), { code: 'STATUS_NOT_CONFIRMED' });
-    assertFinanceBusinessDateOpen(db, 'AR', command.businessDate || document.collection_date);
+    guardPeriodAction(db, { actionCode: 'FINANCE_AR_MUTATION', businessDate: command.businessDate || document.collection_date });
     db.prepare(`UPDATE payment_collections SET status='REVERSED', reversed_amount_cents=amount_cents, reversal_status='CONFIRMED', updated_at=? WHERE id=?`)
       .run(isoNow(), command.documentId);
     if (document.receivable_id) {
@@ -201,7 +202,7 @@ function reversePayment(db, command) {
     const document = db.prepare(`SELECT * FROM payment_disbursements WHERE id=?${lock}`).get(command.documentId);
     if (!document) throw Object.assign(new Error('NOT_FOUND'), { code: 'NOT_FOUND' });
     if (document.status !== 'CONFIRMED') throw Object.assign(new Error('STATUS_NOT_CONFIRMED'), { code: 'STATUS_NOT_CONFIRMED' });
-    assertFinanceBusinessDateOpen(db, 'AP', command.businessDate || document.disbursement_date);
+    guardPeriodAction(db, { actionCode: 'FINANCE_AP_MUTATION', businessDate: command.businessDate || document.disbursement_date });
     db.prepare(`UPDATE payment_disbursements SET status='REVERSED', reversed_amount_cents=amount_cents, reversal_status='CONFIRMED', updated_at=? WHERE id=?`)
       .run(isoNow(), command.documentId);
     if (document.payable_id) {
@@ -229,7 +230,7 @@ function applyBalanceApplication(db, command) {
     const openCents = Number(target.amount_cents) - Number(target.paid_cents) - Number(target.write_off_cents);
     if (command.amountCents > openCents) throw Object.assign(new Error('INSUFFICIENT_OPEN'), { code: 'INSUFFICIENT_OPEN' });
     const side = command.side;
-    assertFinanceBusinessDateOpen(db, side, command.businessDate);
+    guardPeriodAction(db, { actionCode: financeActionCode(side), businessDate: command.businessDate });
     const applicationId = randomUUID();
     db.prepare(`INSERT INTO balance_applications(id, application_no, side, balance_kind, balance_id, target_open_item_id, amount_cents, business_date, reason, creator_id, created_at, status)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,'CONFIRMED')`)
@@ -251,7 +252,7 @@ function refundFromBalance(db, command) {
     if (remainingCents < command.amountCents) {
       throw Object.assign(new Error('INSUFFICIENT_BALANCE'), { code: 'INSUFFICIENT_BALANCE' });
     }
-    assertFinanceBusinessDateOpen(db, balance.side === 'CUSTOMER' ? 'AR' : 'AP', command.businessDate);
+    guardPeriodAction(db, { actionCode: financeActionCode(balance.side === 'CUSTOMER' ? 'AR' : 'AP'), businessDate: command.businessDate });
     const refundId = randomUUID();
     const refundNo = `RACE-REF-${refundId.slice(0, 8)}`;
     db.prepare(`INSERT INTO financial_refunds(id, refund_no, side, balance_id, party_id, amount_cents, business_date, settlement_account_id, payment_method, reference, reason, status, creator_id, created_at)
@@ -282,7 +283,7 @@ function writeOffOpenItem(db, command) {
     if (openCents !== command.openAmountCents) {
       throw Object.assign(new Error('STATE_DRIFT'), { code: 'STATE_DRIFT' });
     }
-    assertFinanceBusinessDateOpen(db, command.side, command.businessDate);
+    guardPeriodAction(db, { actionCode: financeActionCode(command.side), businessDate: command.businessDate });
     const writeOffId = randomUUID();
     db.prepare(`INSERT INTO financial_write_offs(id, writeoff_no, side, party_id, source_open_item_id, open_item_kind, business_date, amount_cents, reason, status, confirmed_by, confirmed_at, creator_id, created_at)
       VALUES(?,?,?,?,?,?,?,?,?,'CONFIRMED',?,?,?,?)`)
@@ -302,7 +303,7 @@ function convertProvisional(db, command) {
     const source = db.prepare(`SELECT * FROM account_receivables WHERE id=? AND item_kind='PROVISIONAL'${lock}`).get(command.sourceOpenItemId);
     if (!source) throw Object.assign(new Error('PROVISIONAL_NOT_FOUND'), { code: 'PROVISIONAL_NOT_FOUND' });
     if (source.conversion_state !== 'OPEN') throw Object.assign(new Error('CONVERTED'), { code: 'CONVERTED' });
-    assertFinanceBusinessDateOpen(db, 'AR', command.businessDate);
+    guardPeriodAction(db, { actionCode: 'FINANCE_AR_MUTATION', businessDate: command.businessDate });
     db.prepare(`UPDATE account_receivables SET conversion_state='CONVERTED', updated_at=? WHERE id=?`)
       .run(isoNow(), command.sourceOpenItemId);
     db.prepare(`UPDATE account_receivables SET conversion_state='CONVERTED', provisional_origin_id=?, updated_at=? WHERE id=?`)
@@ -322,7 +323,7 @@ function transferOpenItem(db, command) {
     if (Number(source.amount_cents - source.paid_cents - source.write_off_cents) !== command.amountCents) {
       throw Object.assign(new Error('STATE_DRIFT'), { code: 'STATE_DRIFT' });
     }
-    assertFinanceBusinessDateOpen(db, side, command.businessDate);
+    guardPeriodAction(db, { actionCode: financeActionCode(side), businessDate: command.businessDate });
     db.prepare(`UPDATE ${table} SET status='COMPLETED', updated_at=? WHERE id=?`)
       .run(isoNow(), command.sourceOpenItemId);
     const targetId = randomUUID();
@@ -343,7 +344,7 @@ function transferOpenItem(db, command) {
 
 function postTreasuryTransfer(db, command) {
   return transaction(db, () => {
-    assertFinanceBusinessDateOpen(db, 'TREASURY', command.businessDate);
+    guardPeriodAction(db, { actionCode: 'FINANCE_TREASURY_MUTATION', businessDate: command.businessDate });
     const fromMovementId = applyTreasuryMovement(db, {
       settlementAccountId: command.fromAccountId,
       direction: 'OUT',
@@ -568,7 +569,7 @@ function postSalesInvoiceRaceSafe(db, command) {
     if (!invoice) throw Object.assign(new Error('NOT_FOUND'), { code: 'NOT_FOUND' });
     if (invoice.status === 'POSTED') return { alreadyPosted: true, invoiceId: command.invoiceId };
     if (invoice.status !== 'DRAFT') throw Object.assign(new Error('STATUS_NOT_DRAFT'), { code: 'STATUS_NOT_DRAFT', status: invoice.status });
-    assertFinanceBusinessDateOpen(db, 'AR', command.invoiceDate || BUSINESS_DATE);
+    guardPeriodAction(db, { actionCode: 'FINANCE_AR_MUTATION', businessDate: command.invoiceDate || BUSINESS_DATE });
     const existingVoucher = db.prepare(`SELECT id FROM accounting_vouchers WHERE source_type=? AND source_id=?${lock}`).get('SALES_INVOICE', command.invoiceId);
     let voucherId = existingVoucher?.id;
     if (!voucherId) {
@@ -606,7 +607,7 @@ function postSupplierBillRaceSafe(db, command) {
     if (bill.status === 'POSTED') return { alreadyPosted: true, billId: command.billId };
     if (bill.status === 'WAITING_MATCH') throw Object.assign(new Error('STATUS_NOT_MATCHED'), { code: 'STATUS_NOT_MATCHED', status: bill.status });
     if (bill.status !== 'DRAFT') throw Object.assign(new Error('STATUS_NOT_MATCHED'), { code: 'STATUS_NOT_MATCHED', status: bill.status });
-    assertFinanceBusinessDateOpen(db, 'AP', command.billDate || BUSINESS_DATE);
+    guardPeriodAction(db, { actionCode: 'FINANCE_AP_MUTATION', businessDate: command.billDate || BUSINESS_DATE });
     const existingVoucher = db.prepare(`SELECT id FROM accounting_vouchers WHERE source_type=? AND source_id=?${lock}`).get('SUPPLIER_BILL', command.billId);
     let voucherId = existingVoucher?.id;
     if (!voucherId) {

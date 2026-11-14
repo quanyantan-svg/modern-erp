@@ -9,11 +9,10 @@ import { assertQualityGate } from './quality-gates.js';
 import { assertSupplierBillGlPostable, resolveProcessingFeeAccountingProfile } from './outsourcing-gl-policy.js';
 import { executeOutsourcingBackflush, receiveOutsourcingFinishedGoods, recordWipTransferIdentity } from './outsourcing-inventory.js';
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
-import { assertInventoryPeriodOpen } from '../lib/inventory-mutation.js';
-import { assertFinancialPeriodsOpen, createSystemVoucher, reverseSystemVoucher } from './financial-inventory.js';
-import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 import { recognizeFinanceExposure } from './finance-recognition.js';
 import { RECOGNITION_MODES } from './finance-recognition-policy.js';
+import { guardPeriodAction } from './period-control.js';
+import { createSystemVoucher, reverseSystemVoucher } from './financial-inventory.js';
 
 // ---------------------------------------------------------------------------
 // OUT-20 委外加工费正式过账 —— 会计口径（C-P01..C-P04）
@@ -52,7 +51,7 @@ import { RECOGNITION_MODES } from './finance-recognition-policy.js';
 //     `sourceType='SUPPLIER_BILL'`，与普通采购账单同一套 INVOICE_DRIVEN 口径。
 //   - 凭证：`createSystemVoucher`（`financial-inventory.js`），角色码来自
 //     `outsourcing_processing_fee_accounting_profiles` 档案（见 `outsourcing-gl-policy.js`）。
-//   - 期间：`assertFinancialPeriodsOpen` + `assertFinanceBusinessDateOpen('AP', ...)`。
+//   - 期间：canonical 守卫 `FINANCE_AP_BILL`（AP + 存货 + 法定三轴一次取锁）。
 //   - 税额：沿用 `calculateLineTax` 的 `NO_TAX / EXCLUSIVE / INCLUSIVE` 三种模式，
 //     税率取 `supplier_bill_items.tax_rate_numerator/denominator`，**不自写税额算法**。
 //
@@ -604,7 +603,7 @@ function buildProcessingFeeVoucherEntries(bill, lines, profile) {
  *
  * 与普通采购账单**共用同一套 canonical 财务原语**：
  *   `recognizeFinanceExposure`（应付确认）→ `createSystemVoucher`（凭证）
- *   → `assertFinancialPeriodsOpen` / `assertFinanceBusinessDateOpen`（期间）
+ *   → canonical 期间守卫（AP + 存货 + 法定）
  *   → `refreshOutsourcingCostEvidence`（OUT-21 FINAL 口径）。
  *
  * 委外来源的科目角色码来自已批准的会计档案（C-P02），不在业务代码里硬编码。
@@ -647,9 +646,8 @@ export async function postProcessingFeeBill(db, req, res, actor, billId) {
       if (!lines.length) {
         throw processingFeePolicyConflict('加工费账单缺少委外来源明细', 'NO_OUTSOURCING_SOURCE_LINES');
       }
-      // 期间与关期门禁（canonical，与普通采购账单同一套）。
-      assertFinanceBusinessDateOpen(db, 'AP', lockedBill.bill_date);
-      assertFinancialPeriodsOpen(db, lockedBill.bill_date);
+      // 期间与关期门禁（canonical，与普通采购账单同一套）：AP + 存货 + 法定三轴一次取锁。
+      guardPeriodAction(db, { actionCode: 'FINANCE_AP_BILL', businessDate: lockedBill.bill_date });
       // 应付确认：与普通供应商账单**同一个** sourceType / 同一个 canonical 路径。
       const sources = lines.map((line) => ({
         sourceType: 'SUPPLIER_BILL', sourceId: billId, sourceNo: lockedBill.bill_no,
@@ -751,8 +749,7 @@ export async function reverseProcessingFeeBill(db, req, res, actor, billId) {
       if (lockedBill.processing_fee_posting_state === 'REVERSED') {
         throw new HttpError(409, '加工费账单已被红冲，不可重复红冲', { code: OUTSOURCING_PROCESSING_FEE_CODES.REVERSAL_NOT_REVERSIBLE });
       }
-      assertFinanceBusinessDateOpen(db, 'AP', businessDate);
-      assertFinancialPeriodsOpen(db, businessDate);
+      guardPeriodAction(db, { actionCode: 'FINANCE_AP_BILL', businessDate: businessDate });
       const touchedBills = new Set();
       for (const item of items) {
         const line = db.prepare('SELECT * FROM supplier_bill_items WHERE id=? AND bill_id=?').get(item.billItemId, billId);
@@ -1112,7 +1109,7 @@ export async function createWipTransfer(db, req, res, actor) {
       const targetCapacity = Number(targetMaterial.issued_quantity) + Number(targetMaterial.supplemented_quantity)
         - Number(targetMaterial.returned_quantity) - Number(targetMaterial.backflushed_quantity);
       readReconciledWipIdentity(db, targetMaterial, targetCapacity, 'OUTSOURCING_WIP_TRANSFER_SOURCE_UNVERIFIED');
-      assertInventoryPeriodOpen(db, businessDate);
+      guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate: businessDate });
       // ── 转移事实：既有 `material_list_id` 继续表示**目标行**（§26.34.4.2 / I3b-2）──
       transferId = randomUUID();
       transferNo = buildWipTransferNo(businessDate);

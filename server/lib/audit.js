@@ -31,13 +31,17 @@ export function auditBusinessRejection(db, actor, context, error, { onlyCodes = 
   if (!(error instanceof HttpError) || error.status !== 409) return;
   if (error.businessRejectionAudited) return;
   if (onlyCodes && !onlyCodes.includes(error.code)) return;
+  const evidence = ['actionCode', 'businessDate', 'axis', 'closeType', 'closedThrough', 'period', 'managementBookId']
+    .filter((key) => error.details?.[key] !== undefined)
+    .map((key) => `${key}=${error.details[key]}`)
+    .join('; ');
   audit(
     db,
     actor?.id ?? null,
     'REJECT',
     context.entityType,
     context.entityId ?? null,
-    `${context.action} 拒绝：${error.code || 'BUSINESS_RULE_BLOCKED'} ${error.message}`,
+    `${context.action} 拒绝：${error.code || 'BUSINESS_RULE_BLOCKED'} ${error.message}${evidence ? `; ${evidence}` : ''}`,
   );
   error.businessRejectionAudited = true;
 }

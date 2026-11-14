@@ -5,10 +5,11 @@ import { HttpError, allowAny, assertAllowedFields, normalizeBusinessDate, readJs
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 import { resolveRecognitionPolicy, RECOGNITION_MODES } from './finance-recognition-policy.js';
 import { recognizeFinanceExposure } from './finance-recognition.js';
-import { assertFinancialPeriodsOpen, createSystemVoucher } from './financial-inventory.js';
 import { assertGroupScope, requireSalesPermission } from './sales-scope.js';
 import { discoverSalesPrepaymentGatePlan, authorizeSalesPrepaymentGateWithPlan } from './sales-prepayment-gate.js';
 import { isGateRetryAdmissionExpired, startGateRetryAdmission } from './sales-gate-retry-admission.js';
+import { guardPeriodAction } from './period-control.js';
+import { createSystemVoucher } from './financial-inventory.js';
 
 const lock = (db) => db.dialect === 'mysql' ? ' FOR UPDATE' : '';
 const now = () => new Date().toISOString();
@@ -101,7 +102,7 @@ export function createServiceFulfillmentCommand(db, input, actor, key) {
   if (replay) return { ...replay, replayed: true };
   let result;
   transaction(db, () => {
-    assertFinancialPeriodsOpen(db, businessDate);
+    guardPeriodAction(db, { actionCode: 'INVENTORY_GATED_POSTING', businessDate: businessDate });
     const source = sourceRow(db, input.salesOrderItemId, true);
     assertScope(db, actor, { ...source, business_date: businessDate }, true);
     const ordered = micros(source.document_quantity_num ?? Math.round(Number(source.quantity) * 1_000_000), '订单数量');
@@ -223,7 +224,7 @@ export function confirmServiceFulfillmentCommand(db, fulfillmentId, expectedVers
     let result;
     try {
       transaction(db, () => {
-        assertFinancialPeriodsOpen(db, plan.businessDate);
+        guardPeriodAction(db, { actionCode: 'INVENTORY_GATED_POSTING', businessDate: plan.businessDate });
         authorizeSalesPrepaymentGateWithPlan(db, plan.gatePlan, { stage: 'DELIVERY', actorId: actor.id, mutationKey: `SERVICE:${fulfillmentId}:${key}` });
         // §35.18.11.5 order: the SO line is the first capacity lock, ahead of the fulfillment
         // row. A3 invoice posting locks the same pair in this order, so taking them in the

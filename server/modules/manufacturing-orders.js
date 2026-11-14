@@ -15,10 +15,11 @@ import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, optionalText, readJson, requiredText, send } from '../lib/http.js';
 import { resolveEffectiveBomForCaller } from './engineering-bom.js';
 import { snapshotManufacturingExecution, assertRoutedCompletion, deriveProductionCost } from './manufacturing-execution.js';
-import { assertFinancialPeriodsOpen, createSystemVoucher, postWipMovement } from './financial-inventory.js';
 import { productionNetReceived, productionRequirementSummary } from './production-workflow.js';
 import { assertApprovalSod } from './platform-sod.js';
 import { notifyApprovalHandled, notifyApprovalPending } from './platform-notifications.js';
+import { guardPeriodAction } from './period-control.js';
+import { createSystemVoucher, postWipMovement } from './financial-inventory.js';
 
 const EPS = 1e-9;
 const PO_STATUS = Object.freeze({
@@ -215,7 +216,7 @@ function transitionOrder(db, actor, order, target, body) {
     const drafts = Number(db.prepare("SELECT (SELECT COUNT(*) FROM production_material_issues WHERE production_order_id=? AND status='DRAFT')+(SELECT COUNT(*) FROM production_receipts WHERE production_order_id=? AND status='DRAFT') total").get(order.id, order.id).total);
     if (drafts) throw new HttpError(409, '存在未处理的草稿领料或生产入库，请先确认、取消或删除');
     const businessDate = now.slice(0, 10);
-    assertFinancialPeriodsOpen(db, businessDate);
+    guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate: businessDate });
     const residual = Number(db.prepare('SELECT COALESCE(SUM(amount_cents),0) n FROM production_wip_movements WHERE production_order_id=?').get(order.id).n);
     if (residual !== 0) {
       const voucherId = createSystemVoucher(db, {

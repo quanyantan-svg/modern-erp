@@ -4,8 +4,8 @@
 > Owner：Inventory & Warehouse
 > 权威来源：`solution.md` §27
 > 来源：`solution.md` §27（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
-> 2026-11-14：业务所有者批准 Requirement §32.12 并授权 Design；新增 §27.56 状态
-> `PENDING_APPROVAL`，Implementation `NOT_AUTHORIZED`，既有域级 Acceptance / Freeze 仅作有界解冻。
+> 2026-11-14：业务所有者批准 Requirement §32.12 与新增 §27.56（Design `APPROVED`）并授权实施；
+> 既有域级 Acceptance / Freeze 仅作有界解冻。
 
 ## 27. Inventory & Warehouse Domain Technical Design
 
@@ -1996,8 +1996,8 @@ Final verification evidence：`pnpm test:mysql`、`pnpm test:mysql:concurrency`�
 
 ### 27.56 Inventory 统一期间控制接入设计（R-02）
 
-> 状态：`PENDING_APPROVAL`；上游合同：Requirement §32.12；公共 guard 合同：Platform Design §32.15；
-> Implementation：`NOT_AUTHORIZED`。本节只解冻期间控制接入，不改变 44 项能力、canonical position identity、
+> 状态：`APPROVED`（业务所有者 2026-11-14 批准）；上游合同：Requirement §32.12；公共 guard 合同：Platform Design §32.15；
+> Implementation：已授权（2026-11-14 起实施）。本节只解冻期间控制接入，不改变 44 项能力、canonical position identity、
 > valuation 或既有域级 Freeze 的其他结论。
 
 #### 27.56.1 Owner、action 与调用流
@@ -2054,8 +2054,8 @@ LOT/SERIAL/valuation 零副作用、幂等与 rejection audit exactly once；更
 与 Platform/Finance/Accounting 作为单一逻辑单元，不 DROP anchor、不改历史、不单独恢复旧双 gate；整体回退后
 R-02 重新阻塞发布。
 
-本节 Design：`PENDING_APPROVAL`；Implementation：`NOT_AUTHORIZED`。
-**HARD STOP**：等待业务所有者批准 Design。
+本节 Design：`APPROVED`（2026-11-14）；Implementation：已授权，并于 2026-11-14 起实施。
+**HARD STOP**：专属 ACK-4 campaign（handler-vs-handler 竞态）仍须业务所有者单独批准后方可运行。
 
 ---
 

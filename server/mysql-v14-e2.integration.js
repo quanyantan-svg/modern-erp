@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { createApp } from './app.js';
-import { createDatabase, hashPassword } from './db.js';
+import { createDatabase, hashPassword, transaction } from './db.js';
 import { receiveValue } from './modules/financial-inventory.js';
 import { upsertCanonicalInventory } from './test-support/inventory-canonical-fixture.js';
 import { createTempDb } from './test-utils/temp-db.js';
@@ -48,9 +48,11 @@ describe('V1.4-E2 MySQL business dates and transfer execution', () => {
       { warehouseId: 'e2-wh-a', productId: 'e2-serial', quantity: 1, position: { serialId: 'e2-serial-id' } },
       { warehouseId: 'e2-wh-b', productId: 'e2-serial', quantity: 0, position: { serialId: 'e2-serial-id' } },
     ]) upsertCanonicalInventory(db, row);
-    receiveValue(db,{businessDate,productId:'e2-none',warehouseId:'e2-wh-a',quantity:20,valueCents:20000,movementType:'E2_SEED',sourceType:'E2_SEED',sourceId:'e2-none-seed',sourceItemId:'e2-none-seed'});
-    receiveValue(db,{businessDate,productId:'e2-lot',warehouseId:'e2-wh-a',lotId:'e2-lot-id',quantity:2,valueCents:4000,movementType:'E2_SEED',sourceType:'E2_SEED',sourceId:'e2-lot-seed',sourceItemId:'e2-lot-seed'});
-    receiveValue(db,{businessDate,productId:'e2-serial',warehouseId:'e2-wh-a',serialId:'e2-serial-id',quantity:1,valueCents:3000,movementType:'E2_SEED',sourceType:'E2_SEED',sourceId:'e2-serial-seed',sourceItemId:'e2-serial-seed'});
+    transaction(db, () => {
+      receiveValue(db,{businessDate,productId:'e2-none',warehouseId:'e2-wh-a',quantity:20,valueCents:20000,movementType:'E2_SEED',sourceType:'E2_SEED',sourceId:'e2-none-seed',sourceItemId:'e2-none-seed'});
+      receiveValue(db,{businessDate,productId:'e2-lot',warehouseId:'e2-wh-a',lotId:'e2-lot-id',quantity:2,valueCents:4000,movementType:'E2_SEED',sourceType:'E2_SEED',sourceId:'e2-lot-seed',sourceItemId:'e2-lot-seed'});
+      receiveValue(db,{businessDate,productId:'e2-serial',warehouseId:'e2-wh-a',serialId:'e2-serial-id',quantity:1,valueCents:3000,movementType:'E2_SEED',sourceType:'E2_SEED',sourceId:'e2-serial-seed',sourceItemId:'e2-serial-seed'});
+    });
 
     server = createServer(createApp(db, { distDir: resolve('dist') }));
     await new Promise((done) => server.listen(0, '127.0.0.1', done));

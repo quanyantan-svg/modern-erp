@@ -200,6 +200,15 @@ function seedClosedInventoryPeriod(db, period) {
     .run(`inventory-gate-${period}`, period, new Date().toISOString(), JSON.stringify({ overallStatus: 'PASS', checks: [] }));
 }
 
+// R-02：法定关账还要求三个 Finance 业务轴已关至该期间末。
+function seedClosedFinanceThrough(db, period) {
+  const [year, month] = period.split('-').map(Number);
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const date = `${period}-${String(lastDay).padStart(2, '0')}`;
+  db.prepare("UPDATE finance_business_close_state SET closed_through_date=?,updated_at=?,updated_by=?")
+    .run(date, new Date().toISOString(), 'user-admin');
+}
+
 async function createVoucher(token, voucherDate, status = 'ENTERED', target = baseUrl) {
   const body = {
     voucherDate,
@@ -334,12 +343,13 @@ describe('Phase E — period checklist blocking coverage (fresh DB)', () => {
     });
     const cv = await c.json();
     seedClosedInventoryPeriod(db, '2080-01');
+    seedClosedFinanceThrough(db, '2080-01');
     await createVoucher(creator, '2080-01-15', 'ENTERED', url);
 
     const r = await fetch(`${url}/api/period-closures/${cv.id}/close`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${adm}` },
     });
-    assert.equal(r.status, 400);
+    assert.equal(r.status, 409);
     const body = await rawJson(r);
     assert.match(body.error || '', /录入/);
   });
@@ -354,12 +364,13 @@ describe('Phase E — period checklist blocking coverage (fresh DB)', () => {
     });
     const cv = await c.json();
     seedClosedInventoryPeriod(db, '2080-02');
+    seedClosedFinanceThrough(db, '2080-02');
     await createVoucher(creator, '2080-02-15', 'SUBMITTED', url);
 
     const r = await fetch(`${url}/api/period-closures/${cv.id}/close`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${adm}` },
     });
-    assert.equal(r.status, 400);
+    assert.equal(r.status, 409);
     const body = await rawJson(r);
     assert.match(body.error || '', /待审核/);
   });
@@ -374,12 +385,13 @@ describe('Phase E — period checklist blocking coverage (fresh DB)', () => {
     });
     const cv = await c.json();
     seedClosedInventoryPeriod(db, '2080-03');
+    seedClosedFinanceThrough(db, '2080-03');
     await createVoucher(creator, '2080-03-15', 'REJECTED', url);
 
     const r = await fetch(`${url}/api/period-closures/${cv.id}/close`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${adm}` },
     });
-    assert.equal(r.status, 400);
+    assert.equal(r.status, 409);
     const body = await rawJson(r);
     assert.match(body.error || '', /驳回/);
   });
@@ -394,6 +406,7 @@ describe('Phase E — period checklist blocking coverage (fresh DB)', () => {
     });
     const cv = await c.json();
     seedClosedInventoryPeriod(db, '2080-04');
+    seedClosedFinanceThrough(db, '2080-04');
     await createVoucher(creator, '2080-04-15', 'POSTED', url);
 
     const r = await fetch(`${url}/api/period-closures/${cv.id}/close`, {
@@ -436,6 +449,7 @@ describe('Phase E — closed period protects voucher create + audit trail', () =
     });
     const cv = await c.json();
     seedClosedInventoryPeriod(db, '2081-09');
+    seedClosedFinanceThrough(db, '2081-09');
     await fetch(`${url}/api/period-closures/${cv.id}/close`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${adm}` },
     });
@@ -455,7 +469,8 @@ describe('Phase E — closed period protects voucher create + audit trail', () =
     });
     assert.equal(r.status, 409, `voucher create must 409 in CLOSED period, got ${r.status}`);
     const j = await rawJson(r);
-    assert.match(j.error || '', /2081-09\s*已结账/);
+    // R-02：canonical 守卫的法定期间拒绝文案。
+    assert.match(j.error || '', /会计期间已结至 2081-09/);
   });
 
   test('closePeriod writes CLOSE_PERIOD audit log; unclosePeriod writes UNCLOSE_PERIOD audit log', async () => {
@@ -467,6 +482,7 @@ describe('Phase E — closed period protects voucher create + audit trail', () =
     });
     const cv = await c.json();
     seedClosedInventoryPeriod(db, '2082-01');
+    seedClosedFinanceThrough(db, '2082-01');
 
     // No vouchers → close should succeed
     const closeRes = await fetch(`${url}/api/period-closures/${cv.id}/close`, {
@@ -497,6 +513,7 @@ describe('Phase E — closed period protects voucher create + audit trail', () =
     });
     const cv = await c.json();
     seedClosedInventoryPeriod(db, '2083-06');
+    seedClosedFinanceThrough(db, '2083-06');
     for (let i = 0; i < 3; i++) {
       const closeRes = await fetch(`${url}/api/period-closures/${cv.id}/close`, {
         method: 'POST', headers: { 'Authorization': `Bearer ${adm}` },
@@ -523,6 +540,7 @@ describe('Phase E — closed period protects voucher create + audit trail', () =
     });
     const cv = await c.json();
     seedClosedInventoryPeriod(db, '2084-01');
+    seedClosedFinanceThrough(db, '2084-01');
     await fetch(`${url}/api/period-closures/${cv.id}/close`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${adm}` },
     });

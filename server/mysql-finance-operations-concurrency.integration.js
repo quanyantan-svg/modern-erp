@@ -813,7 +813,7 @@ describe('V22 Finance Operations real MySQL race matrix (15 races)', () => {
   // request behind A's transaction. After A commits, B's lock attempt
   // unblocks — its re-read of the anchor sees closed_through_date=dateLate.
   // When B then attempts the dated economic write, its
-  // assertFinanceBusinessDateOpen re-checks the anchor and rejects
+  // the canonical period guard re-checks the anchor and rejects
   // (CLOSED_DATE). B's held tx is then rolled back. Zero economic
   // side-effect from B.
   const dateLate = '2026-10-15';
@@ -863,7 +863,7 @@ describe('V22 Finance Operations real MySQL race matrix (15 races)', () => {
   assert.equal(lockB.closedThroughDate, dateLate, 'RACE-15B: B sees the new committed closed_through_date');
 
   // Step 8: Worker B attempts the dated collection INSIDE its held tx.
-  // assertFinanceBusinessDateOpen fires CLOSED_DATE because the close
+  // the canonical period guard fires CLOSED_DATE because the close
   // guard re-reads the anchor and sees businessDate=dateLate <= closed.
   // The action throws; heldSession is still in error state.
   let bCollectionError = null;

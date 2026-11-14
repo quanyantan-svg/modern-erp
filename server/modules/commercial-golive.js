@@ -5,13 +5,14 @@ import { audit } from '../lib/audit.js';
 import { foldSearchText } from '../lib/search-fold.js';
 import { applyCreditAdjustment, ensurePayableSource, ensureReceivableSource, openItemSnapshot, reverseCreditAdjustment } from './settlement-core.js';
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
-import { assertFinancialPeriodsOpen, createSystemVoucher, inventoryAccountRole, receiveValue, reverseSystemVoucher, systemHealth } from './financial-inventory.js';
 import { setInventoryQuantity } from '../lib/stock.js';
 import { discoverInvoiceSourcePlan, lockInvoiceSourcePlan, recognizeFinanceExposure } from './finance-recognition.js';
 import { RECOGNITION_MODES } from './finance-recognition-policy.js';
-import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 import { assertSupplierBillGlPostable } from './outsourcing-gl-policy.js';
 import { allocateDocumentNumber as allocatePlatformNumber } from './platform-numbering.js';
+import { guardPeriodAction } from './period-control.js';
+import { financeActionCode } from './period-action-registry.js';
+import { createSystemVoucher, inventoryAccountRole, receiveValue, reverseSystemVoucher, systemHealth } from './financial-inventory.js';
 
 const stamp = () => new Date().toISOString();
 const int = (value, label, { min = 0 } = {}) => {
@@ -112,7 +113,7 @@ function prepareSalesLines(db, customerId, date, mode, inputs) {
 export function createSalesInvoice(db, input) {
   return atomic(db, () => {
     const existing = input.idempotencyKey && db.prepare('SELECT * FROM sales_invoices WHERE idempotency_key=?').get(input.idempotencyKey); if (existing) return existing;
-    const date = input.invoiceDate; assertFinanceBusinessDateOpen(db, 'AR', date); assertFinancialPeriodsOpen(db, date); const lines = prepareSalesLines(db, input.customerId, date, input.taxMode || 'NO_TAX', input.items); const totals = sumLines(lines);
+    const date = input.invoiceDate; guardPeriodAction(db, { actionCode: 'FINANCE_AR_INVOICE', businessDate: date }); const lines = prepareSalesLines(db, input.customerId, date, input.taxMode || 'NO_TAX', input.items); const totals = sumLines(lines);
     const invoiceId = randomUUID(); const now = stamp(); const invoiceNo = allocateDocumentNumber(db, 'SI', date, input.idempotencyKey || `SI:${invoiceId}`);
     db.prepare(`INSERT INTO sales_invoices(id,invoice_no,customer_id,invoice_date,status,tax_mode,net_cents,tax_cents,gross_cents,tax_snapshot_json,creator_id,created_at,idempotency_key)
       VALUES(?,?,?,?,'DRAFT',?,?,?,?,?,?,?,?)`).run(invoiceId, invoiceNo, input.customerId, date, input.taxMode || 'NO_TAX', totals.netCents, totals.taxCents, totals.grossCents, JSON.stringify(lines.map(x => x.tax)), input.actorId, now, input.idempotencyKey || null);
@@ -228,7 +229,7 @@ export function postSalesInvoice(db, invoiceId, actorId) {
       return replayInvoice;
     }
     const invoice = db.prepare('SELECT * FROM sales_invoices WHERE id=?').get(invoiceId); if (!invoice) throw new HttpError(404, '销售发票不存在'); if (invoice.status === 'POSTED') return invoice; if (invoice.status !== 'DRAFT') throw new HttpError(409, '只能过账草稿发票');
-    assertFinanceBusinessDateOpen(db, 'AR', invoice.invoice_date); assertFinancialPeriodsOpen(db, invoice.invoice_date); const lines = db.prepare('SELECT * FROM sales_invoice_items WHERE invoice_id=?').all(invoiceId);
+    guardPeriodAction(db, { actionCode: 'FINANCE_AR_INVOICE', businessDate: invoice.invoice_date }); const lines = db.prepare('SELECT * FROM sales_invoice_items WHERE invoice_id=?').all(invoiceId);
     const containsService = db.prepare(`SELECT 1 FROM sales_invoice_items i JOIN product_commercial_classification c ON c.product_id=i.product_id
       WHERE i.invoice_id=? AND c.service_classification=1 AND c.active=1 LIMIT 1`).get(invoiceId);
     if (containsService && invoice.tax_mode !== 'NO_TAX') throw new HttpError(409, 'Taxed service invoices are not supported', { code: 'SERVICE_INVOICE_TAX_MODE_UNSUPPORTED' });
@@ -271,7 +272,7 @@ function prepareBillLines(db, supplierId, date, mode, inputs) {
 export function createSupplierBill(db, input) {
   return atomic(db, () => {
     const existing = input.idempotencyKey && db.prepare('SELECT * FROM supplier_bills WHERE idempotency_key=?').get(input.idempotencyKey); if (existing) return existing;
-    assertFinanceBusinessDateOpen(db, 'AP', input.billDate); assertFinancialPeriodsOpen(db, input.billDate);
+    guardPeriodAction(db, { actionCode: 'FINANCE_AP_BILL', businessDate: input.billDate });
     const lines = prepareBillLines(db, input.supplierId, input.billDate, input.taxMode || 'NO_TAX', input.items); const totals = sumLines(lines); const grni = lines.reduce((sum, x) => sum + x.grniCents, 0); const matched = lines.every(x => x.source?.receipt_status === 'CONFIRMED');
     const id = randomUUID(); const now = stamp(); const no = allocateDocumentNumber(db, 'PB', input.billDate, input.idempotencyKey || `PB:${id}`);
     db.prepare(`INSERT INTO supplier_bills(id,bill_no,supplier_id,supplier_invoice_no,bill_date,status,tax_mode,net_cents,tax_cents,gross_cents,grni_cents,variance_cents,tax_snapshot_json,creator_id,created_at,idempotency_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
@@ -301,7 +302,7 @@ export function postSupplierBill(db, billId, actorId) {
   assertSupplierBillGlPostable(db, billId, actorId, 'POST_SUPPLIER_BILL');
   return atomic(db, () => {
     const bill = db.prepare('SELECT * FROM supplier_bills WHERE id=?').get(billId); if (!bill) throw new HttpError(404, '供应商账单不存在'); if (bill.status === 'POSTED') return bill; if (bill.status === 'WAITING_MATCH') throw new HttpError(409, '发票尚未完成收货匹配'); if (bill.status !== 'DRAFT') throw new HttpError(409, '只能过账草稿账单');
-    assertFinanceBusinessDateOpen(db, 'AP', bill.bill_date); assertFinancialPeriodsOpen(db, bill.bill_date); const variance = Number(bill.variance_cents);
+    guardPeriodAction(db, { actionCode: 'FINANCE_AP_BILL', businessDate: bill.bill_date }); const variance = Number(bill.variance_cents);
     const sources = supplierBillRecognitionSources(db, billId);
     if (!sources.length) throw new HttpError(409, '供应商账单缺少已确认收货来源');
     const recognition = recognizeFinanceExposure(db, {
@@ -375,7 +376,7 @@ function serviceCreditTargets(db, invoiceId, requestedCents, currentCreditId) {
 
 export function createCommercialCreditNote(db, input) {
   const execute = () => {
-    assertFinanceBusinessDateOpen(db, input.side, input.creditDate); assertFinancialPeriodsOpen(db, input.creditDate);
+    guardPeriodAction(db, { actionCode: financeActionCode(input.side, 'INVOICE'), businessDate: input.creditDate });
     const sales = input.side === 'AR'; const header = db.prepare(`SELECT * FROM ${sales ? 'sales_invoices' : 'supplier_bills'} WHERE id=? AND status='POSTED'`).get(input.sourceId); if (!header) throw new HttpError(409, '只能对已过账发票/账单开具贷项');
     const gross = int(input.grossCents ?? header.gross_cents, '贷项总额', { min: 1 }); if (gross > header.gross_cents) throw new HttpError(409, '贷项不能超过原单');
     const remainingCreditable = Number(header.gross_cents) - Number(header.credited_amount_cents || 0);
@@ -509,10 +510,8 @@ export function reverseCommercialCreditNote(db, input) {
       throw new HttpError(409, '贷项调整金额与贷项单不一致', { code: 'COMMERCIAL_CREDIT_REVERSAL_EVIDENCE_MISMATCH' });
     }
 
-    assertFinanceBusinessDateOpen(db, plan.side, note.credit_date);
-    assertFinanceBusinessDateOpen(db, plan.side, reversalDate);
-    assertFinancialPeriodsOpen(db, note.credit_date);
-    assertFinancialPeriodsOpen(db, reversalDate);
+    guardPeriodAction(db, { actionCode: financeActionCode(plan.side, 'INVOICE'), businessDate: note.credit_date });
+    guardPeriodAction(db, { actionCode: financeActionCode(plan.side, 'INVOICE'), businessDate: reversalDate });
 
     for (const adjustment of adjustments) {
       const consumed = db.prepare(`SELECT 1 FROM balance_applications WHERE balance_id IN
@@ -565,7 +564,7 @@ export function cancelDraftInvoice(db, side, invoiceId, actorId) {
     if (!row) throw new HttpError(404, '发票不存在');
     if (row.status === 'CANCELLED') return row;
     if (!['DRAFT', 'WAITING_MATCH'].includes(row.status)) throw new HttpError(409, '只有未过账发票可以取消');
-    assertFinanceBusinessDateOpen(db, side, row[spec.date]);
+    guardPeriodAction(db, { actionCode: financeActionCode(side), businessDate: row[spec.date] });
     db.prepare(`UPDATE ${spec.table} SET status='CANCELLED' WHERE id=?`).run(invoiceId);
     audit(db, actorId, 'CANCEL', spec.sourceType, invoiceId, '取消未过账发票');
     return db.prepare(`SELECT * FROM ${spec.table} WHERE id=?`).get(invoiceId);
@@ -578,7 +577,7 @@ export function voidPostedInvoice(db, side, invoiceId, actorId, reason = '') {
     if (!row) throw new HttpError(404, '发票不存在');
     if (row.status === 'REVERSED') return row;
     if (row.status !== 'POSTED') throw new HttpError(409, '只有已过账发票可以作废');
-    assertFinanceBusinessDateOpen(db, side, row[spec.date]); assertFinancialPeriodsOpen(db, row[spec.date]);
+    guardPeriodAction(db, { actionCode: financeActionCode(side, 'INVOICE'), businessDate: row[spec.date] });
     if (row.credit_state !== 'NONE') throw new HttpError(409, '存在已过账贷项，必须先处理贷项后再作废');
 
     const openItem = row.open_item_id ? db.prepare(`SELECT * FROM ${spec.ledger} WHERE id=?`).get(row.open_item_id) : null;
@@ -617,7 +616,7 @@ export function transitionSupplierBillVerification(db, billId, action, actorId, 
   return atomic(db, () => {
     const bill = db.prepare('SELECT * FROM supplier_bills WHERE id=?').get(billId);
     if (!bill) throw new HttpError(404, '供应商发票不存在');
-    assertFinanceBusinessDateOpen(db, 'AP', bill.bill_date);
+    guardPeriodAction(db, { actionCode: 'FINANCE_AP_MUTATION', businessDate: bill.bill_date });
     const nextByAction = { verify: 'VERIFIED', certify: 'CERTIFIED', reject: 'REJECTED' };
     const next = nextByAction[action];
     if (!next) throw new HttpError(400, '无效的发票认证动作');

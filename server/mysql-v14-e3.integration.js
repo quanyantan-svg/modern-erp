@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import { createTempDb } from './test-utils/temp-db.js';
-import { assertFinancialPeriodsOpen } from './modules/financial-inventory.js';
+import { transaction } from './db.js';
+import { guardPeriodAction } from './modules/period-control.js';
 import {
   closeInventoryPeriodCommand, getInventoryPeriodStatusData, reopenInventoryPeriodCommand,
   runInventoryCloseChecks,
@@ -26,8 +27,8 @@ describe('V1.4-E3 real MySQL inventory period close', () => {
     assert.equal(replay.id, first.id);
     assert.equal(replay.repeated, true);
     assert.equal(db.prepare("SELECT COUNT(*) n FROM inventory_period_closures WHERE period_key='2026-06'").get().n, 1);
-    assert.throws(() => assertFinancialPeriodsOpen(db, '2026-05-31'), (error) => error.code === 'INVENTORY_PERIOD_CLOSED');
-    assert.doesNotThrow(() => assertFinancialPeriodsOpen(db, '2026-07-01'));
+    assert.throws(() => transaction(db, () => guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate: '2026-05-31' })), (error) => error.code === 'INVENTORY_PERIOD_CLOSED');
+    assert.doesNotThrow(() => transaction(db, () => guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate: '2026-07-01' })));
     const reopened = reopenInventoryPeriodCommand(db, actor, first.id, 'MySQL E3 UAT');
     assert.equal(reopened.status, 'REOPENED');
     assert.equal(getInventoryPeriodStatusData(db, '2026-09-27').nextClosablePeriod, '2026-06');

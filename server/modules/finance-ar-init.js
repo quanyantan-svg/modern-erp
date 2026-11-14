@@ -5,7 +5,7 @@
 import { allow, HttpError, send } from '../lib/http.js';
 import { id, transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
-import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
+import { guardPeriodAction } from './period-control.js';
 
 export function listArInitialization(db, res, actor) {
   allow(actor, 'FINANCE_AR_VIEW');
@@ -20,7 +20,7 @@ export function postArOpening(db, body, actor) {
   const openingId = id();
   const now = new Date().toISOString();
   transaction(db, () => {
-    assertFinanceBusinessDateOpen(db, 'AR', body.businessDate);
+    guardPeriodAction(db, { actionCode: 'FINANCE_AR_MUTATION', businessDate: body.businessDate });
     db.prepare(
       `INSERT INTO account_receivables(
          id, voucher_no, customer_id, source_type, source_id,

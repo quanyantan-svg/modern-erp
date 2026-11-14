@@ -4,6 +4,7 @@
 
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
+import { transaction as runTransaction } from './db.js';
 import { createProcurementFixture } from './test-support/procurement-http-fixture.js';
 import { buildM1CoreG07HttpFixtures } from './test-support/m1-core-g07-http-fixture-builder.js';
 import {
@@ -47,10 +48,10 @@ describe('M1C-G07 same-source SQLite HTTP setup', () => {
           lotId: input.lotId, serialId: null, quantity: input.quantity, direction: 'IN', businessDate: input.businessDate,
         });
         changeValuationMethod(fx.db, input.productId, 'LOT_SPECIFIC_POOL');
-        receiveValue(fx.db, {
+        runTransaction(fx.db, () => receiveValue(fx.db, {
           ...input, serialId: null, movementType: 'G07_SOURCE_INVENTORY_L2', sourceType: 'OTHER_RECEIPT',
           sourceItemId: input.sourceId, inventoryTransactionId: transaction.id, valuationBasis: 'G07_DISPOSABLE_L2',
-        });
+        }));
         const balance = fx.db.prepare('SELECT quantity,value_cents FROM inventory_valuation_balances WHERE product_id=? AND warehouse_id=? AND lot_id=?').get(input.productId, input.warehouseId, input.lotId);
         return Object.freeze({ prerequisite, admitted: true, quantity: Number(balance.quantity), valueCents: Number(balance.value_cents), lotId: input.lotId, sourceId: input.sourceId });
       },

@@ -6,32 +6,18 @@
 // lock target for RACE-15).
 // finance_business_closures (NEW table #20; history rows).
 //
-// assertFinanceBusinessDateOpen(closeType, businessDate)
-//   1. SELECT * FROM finance_business_close_state WHERE close_type=? FOR UPDATE
-//   2. assert closed_through_date == '' OR businessDate > closed_through_date
-//
-// Every dated Finance write MUST declare which close guard applies.
-
+// Every dated Finance write declares its close axis through the canonical
+// Platform guard (server/modules/period-control.js). This module owns the
+// AR / AP / TREASURY close and reopen state machine and the stable
+// finance_business_close_state rows that guard locks.
 import { HttpError, allow, send, readJson, requiredText, optionalText } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
 import { id, transaction } from '../db.js';
+import { lockPeriodAxes, normalizeBusinessDate, periodEndDate } from './period-control.js';
+import { PERIOD_AXES } from './period-action-registry.js';
 
 export const VALID_CLOSE_TYPES = Object.freeze(['AR', 'AP', 'TREASURY']);
 
-export function assertFinanceBusinessDateOpen(db, closeType, businessDate) {
-  if (!VALID_CLOSE_TYPES.includes(closeType)) {
-    throw new HttpError(400, 'closeType 必须是 AR / AP / TREASURY');
-  }
-  const lock = db.dialect === 'mysql' && db.isTransaction ? ' FOR UPDATE' : '';
-  const row = db.prepare(
-    `SELECT closed_through_date FROM finance_business_close_state WHERE close_type=?${lock}`
-  ).get(closeType);
-  if (!row) throw new HttpError(500, `business-close anchor missing for ${closeType}`);
-  const closedThrough = row.closed_through_date || '';
-  if (closedThrough && businessDate && businessDate <= closedThrough) {
-    throw new HttpError(409, `${closeType} 业务日期 ${businessDate} 已结账至 ${closedThrough}`);
-  }
-}
 
 export function listBusinessCloseState(db, res, actor) {
   allow(actor, 'FINANCE_CLOSE_VIEW', 'AR_VIEW', 'AP_VIEW');
@@ -47,11 +33,11 @@ export function listBusinessCloseState(db, res, actor) {
 // 会影响该侧敞口的单据」。委外是**双侧**来源：
 //
 //   - **AP 侧**：委外加工费通过 canonical 供应商账单产生应付；
-//     其过账路径已经调用 `assertFinanceBusinessDateOpen('AP', ...)`。
+//     其过账路径已经通过 canonical guard 声明 AP 轴。
 //   - **存货价值侧**：委外发料 / 补料 / 退料 / 倒冲改变材料价值，
 //     加工费金额以「收货生效时确认的消耗材料价值 + 加工费」为基准，
 //     因此这些动作在**存货期间关闭**后必须被拒绝 —— 由
-//     `assertInventoryPeriodOpen` 负责（canonical 存货期间门禁）。
+//     canonical 存货期间闸门（inventory axis）负责。
 //
 // 本函数**只读**，不建立第二套关闭轴：它把委外侧仍然未结的敞口汇总出来，
 // 复用既有 `finance_business_close_state` 锚点，让业务关闭人看到
@@ -149,14 +135,21 @@ export async function closeBusiness(db, req, res, actor, closeType) {
   allow(actor, 'FINANCE_CLOSE_MANAGE');
   if (!VALID_CLOSE_TYPES.includes(closeType)) throw new HttpError(400, 'closeType 非法');
   const body = await readJson(req);
-  const closedThroughDate = requiredText(body.closedThroughDate, 'closedThroughDate', 16);
+  const closedThroughDate = normalizeBusinessDate(requiredText(body.closedThroughDate, 'closedThroughDate', 16));
   const now = new Date().toISOString();
   runInTransaction(db, () => {
-    const lock = db.dialect === 'mysql' ? ' FOR UPDATE' : '';
-    const row = db.prepare(`SELECT closed_through_date FROM finance_business_close_state WHERE close_type=?${lock}`).get(closeType);
+    const axis = closeType === 'AR' ? PERIOD_AXES.FINANCE_AR : closeType === 'AP' ? PERIOD_AXES.FINANCE_AP : PERIOD_AXES.FINANCE_TREASURY;
+    lockPeriodAxes(db, [axis, PERIOD_AXES.LEGAL_ACCOUNTING]);
+    const row = db.prepare('SELECT closed_through_date FROM finance_business_close_state WHERE close_type=?').get(closeType);
     if (!row) throw new HttpError(500, `business-close anchor missing for ${closeType}`);
     if (row.closed_through_date && row.closed_through_date >= closedThroughDate) {
       throw new HttpError(409, `${closeType} 已结账至 ${row.closed_through_date}，不可回退`);
+    }
+    const legal = db.prepare("SELECT period FROM period_closures WHERE status='CLOSED' ORDER BY period DESC LIMIT 1").get();
+    if (legal && periodEndDate(legal.period) > (row.closed_through_date || '')) {
+      throw new HttpError(409, `法定会计期间 ${legal.period} 已关闭，不能补做 ${closeType} 关账`, {
+        code: 'PERIOD_SEQUENCE_INVALID', axis,
+      });
     }
     db.prepare(`UPDATE finance_business_close_state SET closed_through_date=?, updated_at=?, updated_by=? WHERE close_type=?`)
       .run(closedThroughDate, now, actor.id, closeType);
@@ -174,12 +167,20 @@ export async function reopenBusiness(db, req, res, actor, closeType) {
   if (!VALID_CLOSE_TYPES.includes(closeType)) throw new HttpError(400, 'closeType 非法');
   const body = await readJson(req);
   const reopenReason = optionalText(body.reopenReason ?? '', 256);
+  if (!reopenReason) throw new HttpError(400, '重开必须填写原因', { code: 'PERIOD_REOPEN_REASON_REQUIRED' });
   const now = new Date().toISOString();
   runInTransaction(db, () => {
-    const lock = db.dialect === 'mysql' ? ' FOR UPDATE' : '';
-    const row = db.prepare(`SELECT closed_through_date FROM finance_business_close_state WHERE close_type=?${lock}`).get(closeType);
+    const axis = closeType === 'AR' ? PERIOD_AXES.FINANCE_AR : closeType === 'AP' ? PERIOD_AXES.FINANCE_AP : PERIOD_AXES.FINANCE_TREASURY;
+    lockPeriodAxes(db, [axis, PERIOD_AXES.LEGAL_ACCOUNTING]);
+    const row = db.prepare('SELECT closed_through_date FROM finance_business_close_state WHERE close_type=?').get(closeType);
     if (!row || !row.closed_through_date) {
       throw new HttpError(409, `${closeType} 未结账，无需重开`);
+    }
+    const legal = db.prepare("SELECT period FROM period_closures WHERE status='CLOSED' ORDER BY period DESC LIMIT 1").get();
+    if (legal) {
+      throw new HttpError(409, `法定会计期间 ${legal.period} 仍关闭，必须先反结账`, {
+        code: 'PERIOD_DEPENDENCY_NOT_CLOSED', axis,
+      });
     }
     db.prepare(`UPDATE finance_business_close_state SET closed_through_date='', updated_at=?, updated_by=? WHERE close_type=?`)
       .run(now, actor.id, closeType);

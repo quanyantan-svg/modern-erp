@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { AppLink } from '../navigation/AppNavigationContext.jsx';
-import { money } from '../components/ui.jsx';
+import { Modal, can, money } from '../components/ui.jsx';
 import {
   BusinessAction, BusinessPageHeader, BusinessPageShell, EmptyState, InlineAlert,
   RecordCard, RecordList, SegmentedControl, Skeleton, SummaryCard,
@@ -43,10 +43,11 @@ const TREASURY_TABS = [
   { value: 'bank', label: '银行对账' }, { value: 'close', label: '业务关账' },
 ];
 
-export function FinanceTreasury({ notify }) {
+export function FinanceTreasury({ user, notify }) {
   const [tab, setTab] = useState('accounts');
   const [data, setData] = useState({ accounts: [], movements: [], requests: [], notes: [], statements: [], reconciliations: [], closes: [] });
   const [loading, setLoading] = useState(true);
+  const [closeEditor, setCloseEditor] = useState(null);
   const load = async () => {
     setLoading(true);
     try {
@@ -59,6 +60,20 @@ export function FinanceTreasury({ notify }) {
     finally { setLoading(false); }
   };
   useEffect(() => { void load(); }, []);
+  const canManageClose = can(user, 'FINANCE_CLOSE_MANAGE');
+  const submitClose = async (event) => {
+    event.preventDefault();
+    const mode = closeEditor.mode;
+    const body = mode === 'close'
+      ? { closedThroughDate: closeEditor.closedThroughDate }
+      : { reopenReason: closeEditor.reopenReason.trim() };
+    try {
+      await api(`/api/finance/business-close/${closeEditor.closeType.toLowerCase()}/${mode}`, { method: 'POST', body });
+      notify(mode === 'close' ? `${closeEditor.closeType} 业务关账已完成` : `${closeEditor.closeType} 业务关账已重开`);
+      setCloseEditor(null);
+      await load();
+    } catch (error) { notify(error.message, 'error'); }
+  };
   const totalBalance = useMemo(() => data.accounts.reduce((sum, row) => sum + Number(row.balance_cents || 0), 0), [data.accounts]);
   const body = {
     accounts: data.accounts.map((row) => <RecordCard key={row.id} title={row.account_name} subtitle={`${row.code || row.account_no} · ${row.account_type}`} status={<span className="status-chip status-chip--posted">{row.active ? '启用' : '停用'}</span>} facts={[{ label: '当前余额', value: money(row.balance_cents) }, { label: '币种', value: row.currency }]} actions={<AppLink page="bank-accounts">维护账户</AppLink>}/>),
@@ -66,7 +81,7 @@ export function FinanceTreasury({ notify }) {
     requests: data.requests.map((row) => <RecordCard key={row.id} title={row.request_no} subtitle={`${row.side} · ${row.business_date}`} status={<span className="status-chip">{row.status}</span>} facts={[{ label: '金额', value: money(row.amount_cents) }, { label: '事由', value: row.reason }]}/>),
     notes: data.notes.map((row) => <RecordCard key={row.id} title={row.note_no} subtitle={`${row.direction} · 到期 ${row.due_date}`} status={<span className="status-chip">{row.status}</span>} facts={[{ label: '票面金额', value: money(row.face_amount_cents) }, { label: '承兑行', value: row.bank_name || '—' }]}/>),
     bank: [...data.statements.map((row) => <RecordCard key={`s:${row.id}`} title={row.statement_no} subtitle={`银行对账单 · ${row.statement_date}`} facts={[{ label: '期末余额', value: money(row.closing_balance_cents) }, { label: '流水数', value: row.total_count }]} />), ...data.reconciliations.map((row) => <RecordCard key={`r:${row.id}`} title="银行对账任务" subtitle={row.statement_id} status={<span className="status-chip">{row.status}</span>} />)],
-    close: data.closes.map((row) => <RecordCard key={row.close_type} title={`${row.close_type} 业务关账`} subtitle={row.closed_through_date ? `已关至 ${row.closed_through_date}` : '尚未关账'} status={<span className="status-chip">{row.status}</span>} />),
+    close: data.closes.map((row) => <RecordCard key={row.close_type} title={`${row.close_type} 业务关账`} subtitle={row.closed_through_date ? `已关至 ${row.closed_through_date}` : '尚未关账'} status={<span className="status-chip">{row.status}</span>} actions={canManageClose ? <span className="inline-actions"><BusinessAction onClick={() => setCloseEditor({ mode: 'close', closeType: row.close_type, closedThroughDate: '', reopenReason: '' })}>关账</BusinessAction>{row.closed_through_date ? <BusinessAction onClick={() => setCloseEditor({ mode: 'reopen', closeType: row.close_type, closedThroughDate: '', reopenReason: '' })}>重开</BusinessAction> : null}</span> : null} />),
   }[tab] || [];
   return <BusinessPageShell className="finance-hub finance-treasury-hub" width="rail">
     <BusinessPageHeader title="资金管理" context="结算账户、资金流水、票据、付款申请、银行对账与资金关账" secondaryActions={<BusinessAction onClick={load}>刷新</BusinessAction>}/>
@@ -74,5 +89,6 @@ export function FinanceTreasury({ notify }) {
     <SegmentedControl label="资金工作区" options={TREASURY_TABS} value={tab} onChange={setTab}/>
     {tab === 'bank' && !data.statements.length && <InlineAlert tone="info" title="尚无银行对账单">通过银行流水导入建立只读银行事实，再与资金流水匹配。</InlineAlert>}
     {loading ? <Skeleton lines={4}/> : body.length ? <RecordList className="finance-record-grid">{body}</RecordList> : <EmptyState title="当前工作区暂无记录" description="数据建立后会在此形成可追溯列表。"/>}
+    {closeEditor ? <Modal title={`${closeEditor.closeType} 业务${closeEditor.mode === 'close' ? '关账' : '重开'}`} onClose={() => setCloseEditor(null)}><form className="form-grid" onSubmit={submitClose}>{closeEditor.mode === 'close' ? <label className="full">关账截止日期<input type="date" value={closeEditor.closedThroughDate} onChange={(event) => setCloseEditor({ ...closeEditor, closedThroughDate: event.target.value })} required/></label> : <label className="full">重开原因<textarea value={closeEditor.reopenReason} onChange={(event) => setCloseEditor({ ...closeEditor, reopenReason: event.target.value })} required/></label>}<div className="form-actions full"><button type="button" className="secondary" onClick={() => setCloseEditor(null)}>取消</button><button type="submit" className="primary" disabled={closeEditor.mode === 'close' ? !closeEditor.closedThroughDate : !closeEditor.reopenReason.trim()}>确认</button></div></form></Modal> : null}
   </BusinessPageShell>;
 }

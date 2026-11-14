@@ -5,7 +5,7 @@
 import { allow, HttpError, send } from '../lib/http.js';
 import { id, transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
-import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
+import { guardPeriodAction } from './period-control.js';
 
 export function listApInitialization(db, res, actor) {
   allow(actor, 'FINANCE_AP_VIEW');
@@ -20,7 +20,7 @@ export function postApOpening(db, body, actor) {
   const openingId = id();
   const now = new Date().toISOString();
   transaction(db, () => {
-    assertFinanceBusinessDateOpen(db, 'AP', body.businessDate);
+    guardPeriodAction(db, { actionCode: 'FINANCE_AP_MUTATION', businessDate: body.businessDate });
     db.prepare(
       `INSERT INTO account_payables(
          id, voucher_no, supplier_id, source_type, source_id,

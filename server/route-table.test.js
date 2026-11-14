@@ -3129,25 +3129,25 @@ describe('V2 Wave 4D — Discount Draft Lifecycle Route Ownership Migration', ()
     const salesConfirmLiteral = '/^\\/api\\/sales-discounts\\/([^/]+)\\/confirm$/';
     assert.ok(appSource.includes(salesConfirmLiteral),
       'Wave 4D: confirm-only legacy regex literal for sales-discounts must remain');
-    assert.ok(appSource.includes('confirmSalesDiscount(db, res, actor, salesDiscountConfirm[1], generateVoucher, checkPeriodNotClosedForVoucher)'),
-      'Wave 4D: confirmSalesDiscount legacy dispatch must pass generateVoucher + checkPeriodNotClosedForVoucher dependencies exactly');
+    assert.ok(appSource.includes('confirmSalesDiscount(db, res, actor, salesDiscountConfirm[1], generateVoucher)'),
+      'R-02: confirmSalesDiscount dispatch must not inject the retired app-local period gate');
     // Confirm-only legacy regex literal for purchase-discounts.
     const purchaseConfirmLiteral = '/^\\/api\\/purchase-discounts\\/([^/]+)\\/confirm$/';
     assert.ok(appSource.includes(purchaseConfirmLiteral),
       'Wave 4D: confirm-only legacy regex literal for purchase-discounts must remain');
-    assert.ok(appSource.includes('confirmPurchaseDiscount(db, res, actor, purchaseDiscountConfirm[1], generateVoucher, checkPeriodNotClosedForVoucher)'),
-      'Wave 4D: confirmPurchaseDiscount legacy dispatch must pass generateVoucher + checkPeriodNotClosedForVoucher dependencies exactly');
+    assert.ok(appSource.includes('confirmPurchaseDiscount(db, res, actor, purchaseDiscountConfirm[1], generateVoucher)'),
+      'R-02: confirmPurchaseDiscount dispatch must not inject the retired app-local period gate');
     // Reverse legacy regex literals must remain for both sides.
     const salesReverseLiteral = '/^\\/api\\/sales-discounts\\/([^/]+)\\/reverse$/';
     assert.ok(appSource.includes(salesReverseLiteral),
       'Wave 4D: sales-discounts reverse legacy regex literal must remain');
-    assert.ok(appSource.includes('reverseSalesDiscount(db, req, res, actor, salesDiscountReverse[1], generateVoucher, checkPeriodNotClosedForVoucher)'),
-      'Wave 4D: reverseSalesDiscount legacy dispatch must pass generateVoucher + checkPeriodNotClosedForVoucher dependencies exactly');
+    assert.ok(appSource.includes('reverseSalesDiscount(db, req, res, actor, salesDiscountReverse[1], generateVoucher)'),
+      'R-02: reverseSalesDiscount dispatch must not inject the retired app-local period gate');
     const purchaseReverseLiteral = '/^\\/api\\/purchase-discounts\\/([^/]+)\\/reverse$/';
     assert.ok(appSource.includes(purchaseReverseLiteral),
       'Wave 4D: purchase-discounts reverse legacy regex literal must remain');
-    assert.ok(appSource.includes('reversePurchaseDiscount(db, req, res, actor, purchaseDiscountReverse[1], generateVoucher, checkPeriodNotClosedForVoucher)'),
-      'Wave 4D: reversePurchaseDiscount legacy dispatch must pass generateVoucher + checkPeriodNotClosedForVoucher dependencies exactly');
+    assert.ok(appSource.includes('reversePurchaseDiscount(db, req, res, actor, purchaseDiscountReverse[1], generateVoucher)'),
+      'R-02: reversePurchaseDiscount dispatch must not inject the retired app-local period gate');
     // Discounts module remains the canonical implementation source.
     // Note: createSalesDiscount / createPurchaseDiscount / updateSalesDiscount
     // / updatePurchaseDiscount are declared `async`; allow that keyword.

@@ -2,11 +2,12 @@ import { HttpError } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
 import { id, transaction } from '../db.js';
 import { ensurePayableSource, ensureReceivableSource } from './settlement-core.js';
-import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 import { createProvisionalAR } from './finance-ar-open-item.js';
 import { createProvisionalAP } from './finance-ap-open-item.js';
 import { convertProvisionalToFinancial } from './finance-provisional-conversion.js';
 import { RECOGNITION_MODES, resolveRecognitionPolicy } from './finance-recognition-policy.js';
+import { guardPeriodAction } from './period-control.js';
+import { financeActionCode } from './period-action-registry.js';
 
 const TABLES = {
   AR: { table: 'account_receivables', partyColumn: 'customer_id', ensure: ensureReceivableSource, provisional: createProvisionalAR },
@@ -239,7 +240,7 @@ function updateInvoiceRecognition(db, invoice, recognitionMode, openItemId, prov
 export function recognizeFinanceExposure(db, input) {
   validateInput(input);
   return atomic(db, () => {
-    assertFinanceBusinessDateOpen(db, input.side, input.businessDate);
+    guardPeriodAction(db, { actionCode: financeActionCode(input.side), businessDate: input.businessDate });
     const sources = input.sources?.length ? input.sources : [input.source];
     const recognitionMode = input.recognitionMode || resolveRecognitionModeForSources(db, input.side, sources, input.businessDate);
 

@@ -5,8 +5,9 @@ import { transaction } from '../db.js';
 import { lifecycleArchiveFilter } from './lifecycle-engine.js';
 import { checkSettlementInvariants, openItemSnapshot, refreshOpenItem, unappliedBalanceSnapshot } from './settlement-core.js';
 import { idempotencyReplay, recordPrepayment, recordSettlementMovement, requestFingerprint, requireSettlementAccount, saveIdempotency } from './financial-controls.js';
-import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 import { acquireParentBalanceLock } from './sales-prepayment-finance-adapter.js';
+import { guardPeriodAction } from './period-control.js';
+import { financeActionCode } from './period-action-registry.js';
 
 const STATUS_OUT = { PENDING: 'OPEN', PARTIAL: 'PARTIALLY_SETTLED', COMPLETED: 'SETTLED', WRITTEN_OFF: 'SETTLED' };
 const STATUS_LABEL = { OPEN: '未结清', PARTIALLY_SETTLED: '部分收款', SETTLED: '已结清' };
@@ -245,7 +246,7 @@ export async function confirmSettlementDocument(db, req, res, actor, kind, docum
   const replay = idempotencyReplay(db, `${kind}_CONFIRM`, documentId, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
   transaction(db, () => {
     const document = db.prepare(`SELECT * FROM ${cfg.table} WHERE id=?`).get(documentId); if (!document) throw new HttpError(404, `${cfg.auditNoun}不存在`); if (document.status !== 'DRAFT') throw new HttpError(409, `${cfg.auditNoun}不是可确认的草稿状态`);
-    assertFinanceBusinessDateOpen(db, cfg.side, document[cfg.dateColumn]);
+    guardPeriodAction(db, { actionCode: financeActionCode(cfg.side, 'SETTLEMENT'), businessDate: document[cfg.dateColumn] });
     const documentFk = cfg.table === 'payment_collections' ? 'collection_id' : 'disbursement_id'; const allocations = db.prepare(`SELECT ai.*,s.${cfg.partyColumn} partyId FROM ${cfg.itemTable} ai JOIN ${cfg.sourceTable} s ON s.id=ai.${cfg.sourceFk} WHERE ai.${documentFk}=?`).all(documentId);
     const total = allocations.reduce((sum, item) => sum + item.amount_cents, 0);
     if (total + Number(document.unapplied_amount_cents) !== document.amount_cents) throw new HttpError(409, '单据金额必须等于核销合计加明确保留的未核销金额');
@@ -322,7 +323,7 @@ export async function reverseSettlementDocument(db, req, res, actor, kind, docum
     const document = db.prepare(`SELECT * FROM ${cfg.table} WHERE id=?`).get(documentId);
     if (!document) throw new HttpError(404, `${cfg.auditNoun}不存在`);
     if (document.status !== 'CONFIRMED') throw new HttpError(409, `${cfg.auditNoun}尚未确认`);
-    assertFinanceBusinessDateOpen(db, cfg.side, businessDate);
+    guardPeriodAction(db, { actionCode: financeActionCode(cfg.side, 'SETTLEMENT'), businessDate: businessDate });
     const documentFk = kind === 'COLLECTION' ? 'collection_id' : 'disbursement_id';
     const allocations = db.prepare(`SELECT * FROM ${cfg.itemTable} WHERE ${documentFk}=?`).all(documentId);
     const remainingTotal = Number(document.amount_cents) - Number(document.reversed_amount_cents);

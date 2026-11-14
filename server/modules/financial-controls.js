@@ -5,8 +5,9 @@ import { allow, allowAny, HttpError, readJson, send } from '../lib/http.js';
 import { openItemSnapshot, refreshOpenItem, unappliedBalanceSnapshot } from './settlement-core.js';
 import { setInventoryQuantity } from '../lib/stock.js';
 import { applyTreasuryMovement } from './finance-treasury-movement.js';
-import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 import { acquireParentBalanceLock } from './sales-prepayment-finance-adapter.js';
+import { guardPeriodAction } from './period-control.js';
+import { financeActionCode } from './period-action-registry.js';
 
 const now = () => new Date().toISOString();
 const today = () => now().slice(0, 10);
@@ -155,7 +156,7 @@ export async function applyUnappliedBalance(db, req, res, actor) {
   if (amount > available || amount > snap.openCents) throw new HttpError(409, '应用金额超过可用余额或目标未结金额');
   const id = randomUUID(); const at = now(); const applicationNo = number(side === 'AR' ? 'ARAPP' : 'APAPP');
   transaction(db, () => {
-    assertFinanceBusinessDateOpen(db, side, date(body.businessDate));
+    guardPeriodAction(db, { actionCode: financeActionCode(side), businessDate: date(body.businessDate) });
     // R-SAL-15 bounded extension: serialize on the canonical V22 PREPAYMENT parent
     // balance lock when this application reduces a PREPAYMENT-eligible balance.
     acquireParentBalanceLock(db, balance.id);
@@ -178,7 +179,7 @@ export async function reverseBalanceApplication(db, req, res, actor, application
   if (application.status !== 'CONFIRMED') throw new HttpError(409, '余额应用已经冲销');
   if (!String(body.reason || '').trim()) throw new HttpError(400, '请填写冲销原因');
   transaction(db, () => {
-    assertFinanceBusinessDateOpen(db, application.side, date(body.businessDate));
+    guardPeriodAction(db, { actionCode: financeActionCode(application.side), businessDate: date(body.businessDate) });
     db.prepare("UPDATE balance_applications SET status='REVERSED',reversed_by=?,reversed_at=?,reversal_reason=? WHERE id=?").run(actor.id, now(), String(body.reason).trim(), applicationId);
     refreshOpenItem(db, application.side, application.target_open_item_id);
     audit(db, actor.id, 'REVERSE', 'BALANCE_APPLICATION', applicationId, String(body.reason).trim());
@@ -199,7 +200,7 @@ export async function createRefund(db, req, res, actor, generateVoucher) {
   const key = req.headers['idempotency-key']; const fingerprint = requestFingerprint(body); const idempotencyScope = `${side}:${balance.id}`;
   const replay = idempotencyReplay(db, 'REFUND_CONFIRM', idempotencyScope, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
   transaction(db, () => {
-    assertFinanceBusinessDateOpen(db, side === 'CUSTOMER' ? 'AR' : 'AP', businessDate);
+    guardPeriodAction(db, { actionCode: financeActionCode(side === 'CUSTOMER' ? 'AR' : 'AP'), businessDate: businessDate });
     // R-SAL-15 bounded extension: serialize on the canonical V22 PREPAYMENT parent
     // balance lock when this refund reduces a PREPAYMENT-eligible balance.
     acquireParentBalanceLock(db, balance.id);
@@ -242,7 +243,7 @@ export async function reverseRefund(db, req, res, actor, refundId, generateVouch
   const key = req.headers['idempotency-key']; const fingerprint = requestFingerprint(body);
   const replay = idempotencyReplay(db, 'REFUND_REVERSAL', refundId, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
   transaction(db, () => {
-    assertFinanceBusinessDateOpen(db, refund.side === 'CUSTOMER' ? 'AR' : 'AP', businessDate);
+    guardPeriodAction(db, { actionCode: financeActionCode(refund.side === 'CUSTOMER' ? 'AR' : 'AP'), businessDate: businessDate });
     const voucher = db.prepare("SELECT id FROM accounting_vouchers WHERE source_type='FINANCIAL_REFUND' AND source_id=?").get(refundId);
     const entries = db.prepare('SELECT subject_id subjectId,direction,amount_cents amountCents FROM accounting_entries WHERE voucher_id=?').all(voucher.id)
       .map((e) => ({ ...e, direction: e.direction === 'DEBIT' ? 'CREDIT' : 'DEBIT' }));
@@ -289,7 +290,7 @@ export async function actOnWriteOff(db, req, res, actor, writeOffId, action, gen
   const key = req.headers['idempotency-key']; const fingerprint = requestFingerprint(body);
   const replay = idempotencyReplay(db, 'WRITE_OFF_CONFIRM', writeOffId, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
   transaction(db, () => {
-    assertFinanceBusinessDateOpen(db, row.side, row.business_date);
+    guardPeriodAction(db, { actionCode: financeActionCode(row.side), businessDate: row.business_date });
     const snap = openItemSnapshot(db, row.side, row.open_item_id);
     if (!snap || snap.row.item_class !== 'SOURCE' || snap.row.item_kind !== 'FINAL' || snap.row.conversion_state !== 'OPEN') throw new HttpError(409, '目标应收/应付已不可核销');
     if (row.amount_cents > snap.openCents) throw new HttpError(409, '核销金额超过当前未结余额');
@@ -314,7 +315,7 @@ export async function reverseWriteOff(db, req, res, actor, writeOffId, generateV
   const reason = String(body.reason || '').trim(); if (!reason) throw new HttpError(400, '请填写冲销原因');
   const businessDate = date(body.businessDate); const id = randomUUID(); const reversalNo = number('WOR');
   transaction(db, () => {
-    assertFinanceBusinessDateOpen(db, row.side, businessDate);
+    guardPeriodAction(db, { actionCode: financeActionCode(row.side), businessDate: businessDate });
     const original = db.prepare("SELECT id FROM accounting_vouchers WHERE source_type='FINANCIAL_WRITE_OFF' AND source_id=?").get(writeOffId);
     const entries = db.prepare('SELECT subject_id subjectId,direction FROM accounting_entries WHERE voucher_id=?').all(original.id).map((e) => ({ ...e, amountCents: amount, direction: e.direction === 'DEBIT' ? 'CREDIT' : 'DEBIT' }));
     generateVoucher(db, 'FINANCIAL_WRITE_OFF_REVERSAL', id, entries, actor, businessDate);

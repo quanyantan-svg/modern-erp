@@ -98,6 +98,8 @@ const FULL = [
   'server/platform-audit-upgrade.test.js',
   // Platform 编号服务合同（PL-09）：既有单号逐字符不变、幂等原子性、规则表。
   'server/platform-numbering.test.js',
+  // R-02 canonical 期间守卫合同（FAST 已含）。
+  'server/period-control-contract.test.js',
   // ----- Sales & Customer Domain — Wave 0 migration infrastructure -----
   // Canonical zero-step registry, deterministic runner, fail-closed errors,
   // SQLite fresh/reopen wiring, and zero future Sales business schema.

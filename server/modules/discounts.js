@@ -44,6 +44,8 @@ import {
   HttpError, allow, allowAny, readJson, requiredText, optionalText, send,
 } from '../lib/http.js';
 import { lifecycleArchiveFilter } from './lifecycle-engine.js';
+import { guardPeriodAction } from './period-control.js';
+import { financeActionCode } from './period-action-registry.js';
 
 const SALES_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 const PURCHASE_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
@@ -225,7 +227,7 @@ export async function updateSalesDiscount(db, req, res, actor, discountId) {
   return send(res, 200, { ok: true });
 }
 
-export function confirmSalesDiscount(db, res, actor, discountId, generateVoucher, checkPeriodNotClosedForVoucher) {
+export function confirmSalesDiscount(db, res, actor, discountId, generateVoucher) {
   allow(actor, 'SALES_DISCOUNT_MANAGE');
   const now = nowIso();
   transaction(db, () => {
@@ -246,8 +248,7 @@ export function confirmSalesDiscount(db, res, actor, discountId, generateVoucher
       throw new HttpError(409, `折让金额超过来源应收剩余可折让额度 ${Math.max(0, Number(source.amount_cents) - usedCents)}`);
     }
 
-    // Closed period guard.
-    checkPeriodNotClosedForVoucher(db, discount.business_date, '生成业务');
+    guardPeriodAction(db, { actionCode: 'FINANCE_AR_MUTATION', businessDate: discount.business_date });
 
     applyCreditAdjustment(db, {
       side: 'AR', adjustmentType: 'DISCOUNT', sourceType: 'SALES_DISCOUNT', sourceId: discountId,
@@ -433,7 +434,7 @@ export async function updatePurchaseDiscount(db, req, res, actor, discountId) {
   return send(res, 200, { ok: true });
 }
 
-export function confirmPurchaseDiscount(db, res, actor, discountId, generateVoucher, checkPeriodNotClosedForVoucher) {
+export function confirmPurchaseDiscount(db, res, actor, discountId, generateVoucher) {
   allow(actor, 'PURCHASE_DISCOUNT_MANAGE');
   const now = nowIso();
   transaction(db, () => {
@@ -451,7 +452,7 @@ export function confirmPurchaseDiscount(db, res, actor, discountId, generateVouc
       throw new HttpError(409, `折让金额超过来源应付剩余可折让额度 ${Math.max(0, Number(source.amount_cents) - usedCents)}`);
     }
 
-    checkPeriodNotClosedForVoucher(db, discount.business_date, '生成业务');
+    guardPeriodAction(db, { actionCode: 'FINANCE_AP_MUTATION', businessDate: discount.business_date });
 
     applyCreditAdjustment(db, {
       side: 'AP', adjustmentType: 'DISCOUNT', sourceType: 'PURCHASE_DISCOUNT', sourceId: discountId,
@@ -488,7 +489,7 @@ export function cancelPurchaseDiscount(db, res, actor, discountId) {
   return send(res, 200, { ok: true, status: 'CANCELLED' });
 }
 
-async function reverseDiscount(db, req, res, actor, side, discountId, generateVoucher, checkPeriodNotClosedForVoucher) {
+async function reverseDiscount(db, req, res, actor, side, discountId, generateVoucher) {
   const sales = side === 'AR';
   allow(actor, sales ? 'SALES_DISCOUNT_MANAGE' : 'PURCHASE_DISCOUNT_MANAGE');
   const table = sales ? 'sales_discounts' : 'purchase_discounts';
@@ -496,11 +497,11 @@ async function reverseDiscount(db, req, res, actor, side, discountId, generateVo
   const body = await readJson(req);
   const reversalDate = readBusinessDate(body.businessDate ?? body.business_date, nowIso().slice(0, 10));
   const reason = requiredText(body.reason, '冲销原因', MAX_REASON);
-  checkPeriodNotClosedForVoucher(db, reversalDate, '生成折让冲销');
   transaction(db, () => {
     const discount = db.prepare(`SELECT * FROM ${table} WHERE id=?`).get(discountId);
     if (!discount) throw new HttpError(404, sales ? '销售折让单不存在' : '采购折让单不存在');
     if (discount.status !== 'CONFIRMED') throw new HttpError(409, '只有已确认折让可以冲销');
+    guardPeriodAction(db, { actionCode: financeActionCode(side), businessDate: reversalDate });
     let credit;
     try { credit = reverseCreditAdjustment(db, side, sourceType, discountId, actor.id, reversalDate, reason); }
     catch (error) { throw new HttpError(409, error.message); }
@@ -514,10 +515,10 @@ async function reverseDiscount(db, req, res, actor, side, discountId, generateVo
   return send(res, 200, { ok: true, status: 'REVERSED' });
 }
 
-export function reverseSalesDiscount(db, req, res, actor, discountId, generateVoucher, checkPeriodNotClosedForVoucher) {
-  return reverseDiscount(db, req, res, actor, 'AR', discountId, generateVoucher, checkPeriodNotClosedForVoucher);
+export function reverseSalesDiscount(db, req, res, actor, discountId, generateVoucher) {
+  return reverseDiscount(db, req, res, actor, 'AR', discountId, generateVoucher);
 }
 
-export function reversePurchaseDiscount(db, req, res, actor, discountId, generateVoucher, checkPeriodNotClosedForVoucher) {
-  return reverseDiscount(db, req, res, actor, 'AP', discountId, generateVoucher, checkPeriodNotClosedForVoucher);
+export function reversePurchaseDiscount(db, req, res, actor, discountId, generateVoucher) {
+  return reverseDiscount(db, req, res, actor, 'AP', discountId, generateVoucher);
 }

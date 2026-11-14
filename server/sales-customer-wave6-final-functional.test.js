@@ -10,6 +10,23 @@ import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { migrateSalesCustomerWave6Returns } from './migrations/sales-customer-wave6-returns.js';
 
+// R-02：canonical 期间守卫需要协调锚点表（锁对象，不是期间状态权威）。
+function bootstrapPeriodGuardAnchors(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS period_guard_anchors (
+      axis TEXT NOT NULL,
+      scope_key TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(axis, scope_key)
+    );
+  `);
+  const now = new Date().toISOString();
+  for (const axis of ['INVENTORY', 'LEGAL_ACCOUNTING']) {
+    db.prepare("INSERT OR IGNORE INTO period_guard_anchors(axis,scope_key,version,updated_at) VALUES(?,'GLOBAL',0,?)").run(axis, now);
+  }
+}
+
 function buildDb() {
   const db = new DatabaseSync(':memory:');
   db.exec('PRAGMA foreign_keys=ON');
@@ -48,11 +65,12 @@ function bootstrapProductValuationTables(db) {
     CREATE TABLE inventory_period_closures (id TEXT PRIMARY KEY, period_key TEXT NOT NULL, status TEXT NOT NULL, closed_by TEXT NOT NULL, closed_at TEXT NOT NULL, reopened_by TEXT, reopened_at TEXT);
     CREATE TABLE period_closures (id TEXT PRIMARY KEY, period TEXT NOT NULL, status TEXT NOT NULL, closed_by TEXT NOT NULL, closed_at TEXT NOT NULL, reopened_by TEXT, reopened_at TEXT);
   `);
-  // No CLOSED periods; assertFinancialPeriodsOpen will pass.
+  // No CLOSED periods; the canonical period guard will pass.
 }
 
 test('Wave6 Final - F5: return_reversals CHECK(amount_cents >= 0) physically present + legacy data preserved + 0 amount allowed', () => {
   const db = buildDb();
+  bootstrapPeriodGuardAnchors(db);
   bootstrapReversalTables(db);
   db.exec(`INSERT INTO users(id) VALUES('u1')`);
   db.exec(`INSERT INTO return_orders(id,return_no,creator_id) VALUES('r1','LR-1','u1')`);
@@ -78,6 +96,7 @@ test('Wave6 Final - F5: return_reversals CHECK(amount_cents >= 0) physically pre
 
 test('Wave6 Final - F5 idempotent re-runs preserve legacy data and constraints', () => {
   const db = buildDb();
+  bootstrapPeriodGuardAnchors(db);
   bootstrapReversalTables(db);
   db.exec(`INSERT INTO users(id) VALUES('u1')`);
   db.exec(`INSERT INTO return_orders(id,return_no,creator_id) VALUES('r1','LR','u1')`);
@@ -96,6 +115,7 @@ test('Wave6 Final - applyWave6SalesReturnPoolValue fail-closed: pool absent + st
   const { applyWave6SalesReturnPoolValue } = await loadFinv();
   const { HttpError } = await import('./lib/http.js');
   const db = buildDb();
+  bootstrapPeriodGuardAnchors(db);
   bootstrapProductValuationTables(db);
   // Product has valuation_activated_at set, has forbidden standard cost, but pool absent
   db.prepare(`INSERT INTO products(id, valuation_activated_at, tracking_policy, valuation_method, standard_manufacturing_cost_cents) VALUES('p1','2026-01-01','NONE','MOVING_AVERAGE', 9999)`).run();
@@ -115,6 +135,7 @@ test('Wave6 Final - applyWave6SalesReturnPoolValue fail-closed: pool absent + st
 test('Wave6 Final - applyWave6SalesReturnPoolValue: positive MOVING_AVERAGE pool → proportional value', async () => {
   const { applyWave6SalesReturnPoolValue } = await loadFinv();
   const db = buildDb();
+  bootstrapPeriodGuardAnchors(db);
   bootstrapProductValuationTables(db);
   db.prepare(`INSERT INTO products(id, valuation_activated_at, tracking_policy, valuation_method) VALUES('p1','2026-01-01','NONE','MOVING_AVERAGE')`).run();
   db.prepare(`INSERT INTO inventory_valuation_balances(balance_key,valuation_method,product_id,warehouse_id,quantity,value_cents,updated_at) VALUES('NONE:w1:p1','MOVING_AVERAGE','p1','w1',100,10000,'2026-01-01')`).run();
@@ -132,6 +153,7 @@ test('Wave6 Final - applyWave6SalesReturnPoolValue: valuation_activated_at NULL 
   const { applyWave6SalesReturnPoolValue } = await loadFinv();
   const { HttpError } = await import('./lib/http.js');
   const db = buildDb();
+  bootstrapPeriodGuardAnchors(db);
   bootstrapProductValuationTables(db);
   db.prepare(`INSERT INTO products(id, valuation_activated_at, tracking_policy, valuation_method) VALUES('p1', NULL,'NONE','MOVING_AVERAGE')`).run();
   db.prepare(`INSERT INTO inventory_valuation_balances(balance_key,valuation_method,product_id,warehouse_id,quantity,value_cents,updated_at) VALUES('NONE:w1:p1','MOVING_AVERAGE','p1','w1',100,10000,'2026-01-01')`).run();

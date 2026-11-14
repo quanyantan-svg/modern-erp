@@ -1,8 +1,13 @@
 ﻿import { id, transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, readJson, send } from '../lib/http.js';
-import { systemHealth } from './financial-inventory.js';
-import { assertProfitTransferred } from './accounting-period-end.js';
+import {
+  closePeriod as closeAccountingPeriod,
+  createPeriodClosure as createAccountingPeriodClosure,
+  getClosureChecklist as getAccountingClosureChecklist,
+  listPeriodClosures as listAccountingPeriodClosures,
+  unclosePeriod as uncloseAccountingPeriod,
+} from './accounting-period-control.js';
 
 const IQC_OQC_STATUSES = ['PENDING', 'COMPLETED'];
 const IQC_OQC_RESULTS = ['PASS', 'FAIL'];
@@ -146,144 +151,23 @@ export async function createAuxProject(db, req, res, actor) {
 // ============ 月结/年结 ============
 
 export function listPeriodClosures(db, res, actor, url) {
-  allowAny(actor, ["PERIOD_CLOSE_VIEW", "PERIOD_CLOSE_MANAGE"]);
-  const year = url.searchParams.get("year") || new Date().getFullYear();
-  const closures = db.prepare("SELECT pc.*, u.display_name closed_by_name FROM period_closures pc LEFT JOIN users u ON u.id=pc.closed_by WHERE pc.period_year=? ORDER BY pc.period_month DESC").all(parseInt(year));
-  return send(res, 200, { closures });
+  return listAccountingPeriodClosures(db, res, actor, url);
 }
 
 export async function createPeriodClosure(db, req, res, actor) {
-  allow(actor, "PERIOD_CLOSE_MANAGE");
-  const body = await readJson(req);
-  const { year, month } = body;
-  const period = year + "-" + String(month).padStart(2, "0");
-  const exists = db.prepare("SELECT id FROM period_closures WHERE period=?").get(period);
-  if (exists) throw new HttpError(409, "期间已存在");
-  const now = new Date().toISOString();
-  const closureId = id();
-  db.prepare("INSERT INTO period_closures(id,period,period_year,period_month,closure_type,created_at) VALUES(?,?,?,?,?,?)").run(closureId, period, year, month, body.closure_type || "MONTH", now);
-  return send(res, 201, { id: closureId, period });
+  return createAccountingPeriodClosure(db, req, res, actor);
 }
 
-// ============ 期间关闭前置检查（内部函数）===========
-// 统一的检查逻辑，供 closePeriod 和 getClosureChecklist 共用
-// 返回 { passed: boolean, items: Array<{ item, passed, detail }> }
-
-function getPeriodClosureChecklist(db, period) {
-  const checklist = [];
-
-  // 检查1: 期间内是否存在 ENTERED 状态的凭证
-  const enteredCount = db.prepare("SELECT COUNT(*) cnt FROM accounting_vouchers WHERE voucher_date LIKE ? AND status='ENTERED'").get(period + '%').cnt;
-  const enteredPassed = enteredCount === 0;
-  checklist.push({
-    item: "录入中凭证",
-    passed: enteredPassed,
-    detail: enteredPassed ? "无录入中凭证" : `有 ${enteredCount} 张录入中凭证，请先提交或删除`
-  });
-
-  // 检查2: 期间内是否存在 SUBMITTED 状态的凭证
-  const submittedCount = db.prepare("SELECT COUNT(*) cnt FROM accounting_vouchers WHERE voucher_date LIKE ? AND status='SUBMITTED'").get(period + '%').cnt;
-  const submittedPassed = submittedCount === 0;
-  checklist.push({
-    item: "待审核凭证",
-    passed: submittedPassed,
-    detail: submittedPassed ? "无待审核凭证" : `有 ${submittedCount} 张待审核凭证，请先审核或驳回`
-  });
-
-  // 检查3: 期间内是否存在 REJECTED 状态的凭证
-  const rejectedCount = db.prepare("SELECT COUNT(*) cnt FROM accounting_vouchers WHERE voucher_date LIKE ? AND status='REJECTED'").get(period + '%').cnt;
-  const rejectedPassed = rejectedCount === 0;
-  checklist.push({
-    item: "已驳回凭证",
-    passed: rejectedPassed,
-    detail: rejectedPassed ? "无已驳回凭证" : `有 ${rejectedCount} 张已驳回凭证，请修改后重新提交或删除`
-  });
-
-  // 所有检查通过
-  const allPassed = checklist.every(c => c.passed);
-  return { passed: allPassed, items: checklist };
-}
 export function getClosureChecklist(db, res, actor, url) {
-  allow(actor, "PERIOD_CLOSE_MANAGE");
-  const period = url.searchParams.get("period");
-  if (!period) throw new HttpError(400, "请指定期间，格式: YYYY-MM");
-  
-  // 检查期间是否存在
-  const closure = db.prepare("SELECT * FROM period_closures WHERE period=?").get(period);
-  if (!closure) {
-    return send(res, 200, { 
-      checklist: [], 
-      passed: false, 
-      detail: "期间未初始化，请先创建期间记录" 
-    });
-  }
-  
-  if (closure.status === 'CLOSED') {
-    return send(res, 200, { 
-      checklist: [], 
-      passed: false, 
-      detail: "期间已结账" 
-    });
-  }
-  
-  const result = getPeriodClosureChecklist(db, period);
-  return send(res, 200, { 
-    checklist: result.items, 
-    passed: result.passed 
-  });
+  return getAccountingClosureChecklist(db, res, actor, url);
 }
 
 export async function closePeriod(db, req, res, actor, closureId) {
-  allow(actor, "PERIOD_CLOSE_MANAGE");
-
-  const closure = db.prepare("SELECT * FROM period_closures WHERE id=?").get(closureId);
-  if (!closure) throw new HttpError(404, "期间不存在");
-  if (closure.status === "CLOSED") throw new HttpError(400, "期间已结账");
-  if(!db.prepare("SELECT 1 FROM inventory_period_closures WHERE period_key=? AND status='CLOSED'").get(closure.period)) throw new HttpError(409,'必须先完成对应存货期间结账');
-  const endDate=`${closure.period}-${String(new Date(Number(closure.period.slice(0,4)),Number(closure.period.slice(5,7)),0).getDate()).padStart(2,'0')}`; const health=systemHealth(db,{asOfDate:endDate}); const blocking=health.checks.filter(x=>x.severity==='BLOCKING'&&x.status==='FAIL'); if(blocking.length) throw new HttpError(409,`会计结账健康检查失败: ${blocking.map(x=>x.code).join(', ')}`);
-  // AA-W3.16 — 期间仍有损益余额但未执行真实损益结转时，禁止关闭会计期间。
-  assertProfitTransferred(db, closure.period);
-
-  // 执行统一的关闭前置检查
-  const checklistResult = getPeriodClosureChecklist(db, closure.period);
-  if (!checklistResult.passed) {
-    const failedItems = checklistResult.items.filter(c => !c.passed);
-    const reasons = failedItems.map(c => c.detail).join("; ");
-    throw new HttpError(400, `结账前置检查未通过: ${reasons}`);
-  }
-
-  const now = new Date().toISOString();
-  transaction(db, () => {
-    db.prepare("UPDATE period_closures SET status=?,closed_by=?,closed_at=?,checklist_passed=1 WHERE id=?")
-      .run("CLOSED", actor.id, now, closureId);
-    db.prepare("INSERT INTO audit_logs(id,user_id,action,entity_type,entity_id,detail,created_at) VALUES(?,?,?,?,?,?,?)")
-      .run(id(), actor.id, "CLOSE_PERIOD", "PERIOD_CLOSURE", closureId, `结账期间 ${closure.period}`, now);
-  });
-
-  return send(res, 200, { ok: true, message: "期间结账成功" });
+  return closeAccountingPeriod(db, req, res, actor, closureId);
 }
 
 export async function unclosePeriod(db, req, res, actor, closureId) {
-  if (actor.roleCode !== 'ADMIN') throw new HttpError(403, '仅系统管理员可执行会计期间重新打开');
-  const body = await readJson(req);
-  const reason = String(body.reason || '').trim();
-  if (!reason) throw new HttpError(400, '重新打开期间必须填写原因');
-
-  const closure = db.prepare("SELECT * FROM period_closures WHERE id=?").get(closureId);
-  if (!closure) throw new HttpError(404, "期间不存在");
-  if (closure.status !== "CLOSED") throw new HttpError(400, "期间未结账，无需反结账");
-
-  const now = new Date().toISOString();
-  transaction(db, () => {
-    db.prepare("INSERT INTO period_reopen_history(id,period_closure_id,period,previous_closed_by,previous_closed_at,reason,reopened_by,reopened_at) VALUES(?,?,?,?,?,?,?,?)")
-      .run(id(), closureId, closure.period, closure.closed_by, closure.closed_at, reason, actor.id, now);
-    db.prepare("UPDATE period_closures SET status='OPEN',reopen_reason=?,checklist_passed=0 WHERE id=?")
-      .run(reason, closureId);
-    db.prepare("INSERT INTO audit_logs(id,user_id,action,entity_type,entity_id,detail,created_at) VALUES(?,?,?,?,?,?,?)")
-      .run(id(), actor.id, "UNCLOSE_PERIOD", "PERIOD_CLOSURE", closureId, `反结账期间 ${closure.period}：${reason}`, now);
-  });
-
-  return send(res, 200, { ok: true, message: "反结账成功" });
+  return uncloseAccountingPeriod(db, req, res, actor, closureId);
 }
 
 // ============ 银行对账单 ============

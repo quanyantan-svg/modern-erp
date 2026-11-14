@@ -1024,6 +1024,8 @@ export function ManagementAccounting({ user, notify }) {
   const [bookId, setBookId] = useState('');
   const [error, setError] = useState('');
   const [editor, setEditor] = useState(null);
+  const [reopenTarget, setReopenTarget] = useState(null);
+  const [reopenReason, setReopenReason] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -1077,8 +1079,10 @@ export function ManagementAccounting({ user, notify }) {
       await api(path, { method: 'POST', body });
       await load();
       notify(message);
+      return true;
     } catch (err) {
       notify(err.message || '操作未完成', 'error');
+      return false;
     }
   };
 
@@ -1211,13 +1215,29 @@ export function ManagementAccounting({ user, notify }) {
               status={<StatusChip status={row.status}>{CLOSURE_STATUS_LABELS[row.status] || row.status}</StatusChip>}
               metadata={[{ label: '关账时间', value: row.closed_at || '—' }]}
               action={canManage && row.status === 'CLOSED' ? (
-                <BusinessAction onClick={() => act(`/api/management/period-closures/${row.id}/reopen`, {}, '经营期间已反结账')}>受控反结账</BusinessAction>
+                <BusinessAction onClick={() => { setReopenReason(''); setReopenTarget(row); }}>受控反结账</BusinessAction>
               ) : null}
             />
           ))}
         </CompactRecordList>
         {!closures.length ? <Empty title="暂无经营期间关账记录" text="经营关账前必须完成台账归集与费用分摊，且差额必须可解释。" /> : null}
       </BusinessContentSection>
+
+      {reopenTarget ? (
+        <Modal title={`反结账经营期间 ${reopenTarget.period}`} onClose={() => setReopenTarget(null)}>
+          <div className="form-grid">
+            <label className="full">反结账原因<textarea value={reopenReason} onChange={(event) => setReopenReason(event.target.value)} required /></label>
+          </div>
+          <div className="form-actions">
+            <BusinessAction onClick={() => setReopenTarget(null)}>取消</BusinessAction>
+            <BusinessAction hierarchy="primary" disabled={!reopenReason.trim()} onClick={async () => {
+              const target = reopenTarget;
+              const ok = await act(`/api/management/period-closures/${target.id}/reopen`, { reason: reopenReason.trim() }, '经营期间已反结账');
+              if (ok !== false) setReopenTarget(null);
+            }}>确认反结账</BusinessAction>
+          </div>
+        </Modal>
+      ) : null}
 
       {editor ? (
         <ManagementEditorSheet

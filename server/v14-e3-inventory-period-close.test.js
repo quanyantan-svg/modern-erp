@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import { createTempDb } from './test-utils/temp-db.js';
-import { assertFinancialPeriodsOpen, createSystemVoucher, receiveValue } from './modules/financial-inventory.js';
+import { transaction } from './db.js';
+import { createSystemVoucher, receiveValue } from './modules/financial-inventory.js';
+import { guardPeriodAction } from './modules/period-control.js';
 import {
   closeInventoryPeriodCommand, getInventoryPeriodStatusData, reopenInventoryPeriodCommand,
   runInventoryCloseChecks,
@@ -35,12 +37,14 @@ describe('V1.4-E3 inventory period close workflow', () => {
     db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date)
       VALUES(?,?,?,?, 'IN',?,'INVENTORY_ADJUSTMENT',?,?, '',?,?,?)`)
       .run(txId, warehouseId, productId, quantity, currentQuantity, sourceId, `E3-ADJ-${suffix}`, actor.id, at, date);
-    receiveValue(db, { businessDate: date, productId, warehouseId, quantity, valueCents: quantity * 100,
-      movementType: 'INVENTORY_ADJUSTMENT_GAIN', sourceType: 'INVENTORY_ADJUSTMENT', sourceId,
-      sourceItemId: sourceId, inventoryTransactionId: txId });
-    createSystemVoucher(db, { sourceType: 'INVENTORY_ADJUSTMENT', sourceId, businessDate: date, actorId: actor.id,
-      entries: [{ role: 'OTHER_INVENTORY', direction: 'DEBIT', amountCents: quantity * 100 },
-        { role: 'INVENTORY_GAIN_LOSS', direction: 'CREDIT', amountCents: quantity * 100 }] });
+    transaction(db, () => {
+      receiveValue(db, { businessDate: date, productId, warehouseId, quantity, valueCents: quantity * 100,
+        movementType: 'INVENTORY_ADJUSTMENT_GAIN', sourceType: 'INVENTORY_ADJUSTMENT', sourceId,
+        sourceItemId: sourceId, inventoryTransactionId: txId });
+      createSystemVoucher(db, { sourceType: 'INVENTORY_ADJUSTMENT', sourceId, businessDate: date, actorId: actor.id,
+        entries: [{ role: 'OTHER_INVENTORY', direction: 'DEBIT', amountCents: quantity * 100 },
+          { role: 'INVENTORY_GAIN_LOSS', direction: 'CREDIT', amountCents: quantity * 100 }] });
+    });
     return { warehouseId, productId, sourceId, txId };
   }
 
@@ -105,8 +109,8 @@ describe('V1.4-E3 inventory period close workflow', () => {
     assert.equal(check.overallStatus, 'WARNING');
     assert.throws(() => closeInventoryPeriodCommand(db, actor, { period: '2026-06' }, { today: '2026-09-27' }), (error) => error.code === 'PRECHECK_WARNING_CONFIRMATION_REQUIRED');
     closeInventoryPeriodCommand(db, actor, { period: '2026-06', confirmWarnings: true }, { today: '2026-09-27', now: at });
-    assert.throws(() => assertFinancialPeriodsOpen(db, '2026-05-31'), (error) => error.code === 'INVENTORY_PERIOD_CLOSED');
-    assert.doesNotThrow(() => assertFinancialPeriodsOpen(db, '2026-07-01'));
+    assert.throws(() => transaction(db, () => guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate: '2026-05-31' })), (error) => error.code === 'INVENTORY_PERIOD_CLOSED');
+    assert.doesNotThrow(() => transaction(db, () => guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate: '2026-07-01' })));
   });
 
   test('legacy unknown dates block without created_at fallback', () => {

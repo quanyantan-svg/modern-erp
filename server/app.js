@@ -78,6 +78,7 @@ import {
   updatePurchaseReceiptCore,
 } from './modules/purchase-receipt-engine.js';
 import { auditBusinessRejection, NOTICE_ERROR_CODES } from './modules/procurement-notice-capacity.js';
+import { guardPeriodAction, guardVoucherAction } from './modules/period-control.js';
 import {
   activatePlanningForecast, cancelPlanningForecast, cancelMrpRun,
   createMrpRun, createPlanningForecast, executeMrpRun, getMrpRun,
@@ -203,7 +204,7 @@ import {
   changeProcessingFeeAccountingProfileState, createProcessingFeeAccountingProfile, listProcessingFeeAccountingProfiles,
 } from './modules/outsourcing-gl-policy.js';
 import {
-  assertFinancialPeriodsOpen, createSystemVoucher, generalLedgerHandler, inventoryAccountRole, inventoryRollForwardHandler, inventoryValuationReport,
+  createSystemVoucher, generalLedgerHandler, inventoryAccountRole, inventoryRollForwardHandler, inventoryValuationReport,
   issueSourceValue, postWipMovement, receivePositiveSourceValue, receiveSourceValue, receiveValue, restoreSourceValue, reverseSystemVoucher, reverseValuationSource, systemHealthHandler, wipRollForwardHandler,
 } from './modules/financial-inventory.js';
 import { allocateDocumentNumber, autoBillReceipt, autoInvoiceDelivery, commercialApiHandler, quantitySnapshot, rational, roundRational } from './modules/commercial-golive.js';
@@ -4189,6 +4190,24 @@ export function createApp(db, options = {}) {
       return serveStatic(res, url.pathname, distDir);
     } catch (error) {
       if (error instanceof HttpError) {
+        const periodRejectionCodes = new Set([
+          'INVENTORY_PERIOD_CLOSED', 'FINANCIAL_PERIOD_CLOSED', 'FINANCE_PERIOD_CLOSED',
+          'OPERATING_PERIOD_CLOSED', 'PERIOD_STATE_INVALID', 'PERIOD_DEPENDENCY_NOT_CLOSED',
+          'PERIOD_SEQUENCE_INVALID', 'PERIOD_NOT_LATEST',
+        ]);
+        if (periodRejectionCodes.has(error.code)) {
+          try {
+            auditBusinessRejection(db, req.actor, {
+              entityType: 'PERIOD_CONTROL', entityId: url.pathname, action: `${req.method} ${url.pathname}`,
+            }, error, { onlyCodes: [...periodRejectionCodes] });
+          } catch (auditError) {
+            (logger || createStructuredLogger()).error('period_rejection_audit_failed', {
+              requestId, method: req.method, route: url.pathname, userId: req.actor?.id ?? null,
+              category: auditError?.code || auditError?.name || 'Error',
+              stack: auditError?.stack || String(auditError),
+            });
+          }
+        }
         // Platform SOD 的拒绝 / 升级证据必须补写在**事务之外**：
         // 业务事务已回滚，判定记录与审计行会随之消失。留证失败不得掩盖原始错误。
         if (error.sodEvidenceRequired) {
@@ -4915,19 +4934,19 @@ async function handleApi(db, req, res, url) {
   // the bounded draft-lifecycle wave.
   const salesDiscountConfirm = pathname.match(/^\/api\/sales-discounts\/([^/]+)\/confirm$/);
   if (salesDiscountConfirm && req.method === 'POST') {
-    return confirmSalesDiscount(db, res, actor, salesDiscountConfirm[1], generateVoucher, checkPeriodNotClosedForVoucher);
+    return confirmSalesDiscount(db, res, actor, salesDiscountConfirm[1], generateVoucher);
   }
   const voucherReverseMatch = pathname.match(/^\/api\/accounting-vouchers\/([^/]+)\/reverse$/);
   if (voucherReverseMatch && req.method === 'POST') return reverseManualVoucher(db, req, res, actor, voucherReverseMatch[1]);
   const salesDiscountReverse = pathname.match(/^\/api\/sales-discounts\/([^/]+)\/reverse$/);
-  if (salesDiscountReverse && req.method === 'POST') return reverseSalesDiscount(db, req, res, actor, salesDiscountReverse[1], generateVoucher, checkPeriodNotClosedForVoucher);
+  if (salesDiscountReverse && req.method === 'POST') return reverseSalesDiscount(db, req, res, actor, salesDiscountReverse[1], generateVoucher);
 
   const purchaseDiscountConfirm = pathname.match(/^\/api\/purchase-discounts\/([^/]+)\/confirm$/);
   if (purchaseDiscountConfirm && req.method === 'POST') {
-    return confirmPurchaseDiscount(db, res, actor, purchaseDiscountConfirm[1], generateVoucher, checkPeriodNotClosedForVoucher);
+    return confirmPurchaseDiscount(db, res, actor, purchaseDiscountConfirm[1], generateVoucher);
   }
   const purchaseDiscountReverse = pathname.match(/^\/api\/purchase-discounts\/([^/]+)\/reverse$/);
-  if (purchaseDiscountReverse && req.method === 'POST') return reversePurchaseDiscount(db, req, res, actor, purchaseDiscountReverse[1], generateVoucher, checkPeriodNotClosedForVoucher);
+  if (purchaseDiscountReverse && req.method === 'POST') return reversePurchaseDiscount(db, req, res, actor, purchaseDiscountReverse[1], generateVoucher);
 
 
 
@@ -5229,7 +5248,7 @@ async function updateOrder(db, req, res, actor, orderId) {
 
 
 function generateVoucher(db, sourceType, sourceId, entries, actor, voucherDate = new Date().toISOString().slice(0, 10)) {
-  checkPeriodNotClosedForVoucher(db, voucherDate, '生成业务');
+  guardVoucherAction(db, voucherDate, 'LEGAL_VOUCHER');
   const existing = db.prepare('SELECT id FROM accounting_vouchers WHERE source_type=? AND source_id=?').get(sourceType, sourceId);
   if (existing) return existing.id;
   if (!Array.isArray(entries) || entries.length < 2) throw new HttpError(400, '凭证分录不完整');
@@ -5896,7 +5915,7 @@ export function changeInventoryAdjustmentState(db, res, actor, adjustmentId, act
   if (action === 'confirm') transaction(db, () => {
     const locked = db.prepare('SELECT * FROM inventory_adjustments WHERE id=?').get(adjustmentId);
     if (locked.status !== 'DRAFT') throw new HttpError(409, '库存调整单已处理');
-    assertFinancialPeriodsOpen(db,locked.adjustment_date);
+    guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate: locked.adjustment_date });
     const items = db.prepare('SELECT * FROM inventory_adjustment_items WHERE adjustment_id=? ORDER BY line_no').all(adjustmentId); const voucherEntries=[];
     for (const item of items) {
       // INV-07: the adjustment writes the canonical position identity and goes
@@ -5984,10 +6003,12 @@ async function reverseInventoryControl(db, req, res, actor, sourceType, sourceId
     if (existing) return send(res, 200, { id: existing.id, status: existing.status, replayed: true });
     const reason = requiredText(body.reason, '盘点冲销原因', 200);
     const businessDate = normalizeDocumentDate(body.businessDate || new Date().toISOString().slice(0, 10), '冲销日期');
-    assertFinancialPeriodsOpen(db, businessDate);
     const reversalId = id(); const now = new Date().toISOString();
-    db.prepare("INSERT INTO inventory_control_reversals(id,source_type,source_id,business_date,reason,status,creator_id,created_at) VALUES(?,?,?,?,?,'DRAFT',?,?)").run(reversalId, sourceType, sourceId, businessDate, reason, actor.id, now);
-    audit(db, actor.id, 'REQUEST_REVERSAL', sourceType, sourceId, `申请冲销：${reason}`);
+    transaction(db, () => {
+      guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate });
+      db.prepare("INSERT INTO inventory_control_reversals(id,source_type,source_id,business_date,reason,status,creator_id,created_at) VALUES(?,?,?,?,?,'DRAFT',?,?)").run(reversalId, sourceType, sourceId, businessDate, reason, actor.id, now);
+      audit(db, actor.id, 'REQUEST_REVERSAL', sourceType, sourceId, `申请冲销：${reason}`);
+    });
     return send(res, 201, { id: reversalId, status: 'DRAFT' });
   }
 
@@ -6003,9 +6024,9 @@ async function reverseInventoryControl(db, req, res, actor, sourceType, sourceId
 
   const reason = sourceType === 'INVENTORY_CHECK' ? existing.reason : requiredText(body.reason, '冲销原因', 200);
   const businessDate = sourceType === 'INVENTORY_CHECK' ? existing.business_date : normalizeDocumentDate(body.businessDate || new Date().toISOString().slice(0, 10), '冲销日期');
-  assertFinancialPeriodsOpen(db, businessDate);
   const reversalId = existing?.id || id(); const reversalSourceType = `${sourceType}_REVERSAL`; const now = new Date().toISOString();
   transaction(db, () => {
+    guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate });
     const lockedExisting = db.prepare('SELECT * FROM inventory_control_reversals WHERE source_type=? AND source_id=?').get(sourceType, sourceId);
     if (lockedExisting?.status === 'CONFIRMED') return;
     if (!lockedExisting) db.prepare("INSERT INTO inventory_control_reversals(id,source_type,source_id,business_date,reason,status,creator_id,created_at) VALUES(?,?,?,?,?,'DRAFT',?,?)").run(reversalId, sourceType, sourceId, businessDate, reason, actor.id, now);
@@ -6104,23 +6125,13 @@ function getAccountingVoucher(db, res, actor, voucherId) {
 
 // ============ 手动凭证录入 ============
 
-// 期间关闭保护辅助函数
-function checkPeriodNotClosedForVoucher(db, voucherDate, operation) {
-  const period = voucherDate.slice(0, 7);
-  const closure = db.prepare('SELECT * FROM period_closures WHERE period=? AND status=?').get(period, 'CLOSED');
-  if (closure) {
-    throw new HttpError(409, `会计期间 ${period} 已结账，禁止 ${operation} 凭证`);
-  }
-}
 
 async function createAccountingVoucher(db, req, res, actor) {
   allow(actor, 'VOUCHER_SUBMIT');
   const body = await readJson(req);
   const { voucherDate, remark, entries } = body;
 
-  // 检查期间是否已关闭
   const effectiveDate = voucherDate || new Date().toISOString().slice(0, 10);
-  checkPeriodNotClosedForVoucher(db, effectiveDate, '录入');
 
   if (!entries || !Array.isArray(entries) || entries.length < 2) {
     throw new HttpError(400, '凭证分录至少需要两条');
@@ -6153,6 +6164,7 @@ async function createAccountingVoucher(db, req, res, actor) {
   const effectiveVoucherDate = voucherDate || now.slice(0, 10);
 
   transaction(db, () => {
+    guardVoucherAction(db, effectiveVoucherDate, 'MANUAL_VOUCHER');
     db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,remark,creator_id,created_at,status,period) VALUES(?,?,?,?,?,?,?,?,?,?)`)
       .run(voucherId, voucherNo, 'MANUAL', voucherId, effectiveVoucherDate, remark || '', actor.id, now, 'ENTERED', effectiveVoucherDate.slice(0, 7));
     
@@ -6184,9 +6196,6 @@ async function updateAccountingVoucher(db, req, res, actor, voucherId) {
     throw new HttpError(409, '已审核凭证不能修改');
   }
 
-  // Check period status for ENTERED and REJECTED - closed period prohibits modification
-  checkPeriodNotClosedForVoucher(db, voucher.voucher_date, '修改');
-
   const body = await readJson(req);
   const { voucherDate, remark, entries } = body;
 
@@ -6216,6 +6225,7 @@ async function updateAccountingVoucher(db, req, res, actor, voucherId) {
   const newVoucherDate = voucherDate || voucher.voucher_date;
 
   transaction(db, () => {
+    guardVoucherAction(db, newVoucherDate, 'MANUAL_VOUCHER');
     // If editing REJECTED voucher, reset to ENTERED
     const newStatus = voucher.status === 'REJECTED' ? 'ENTERED' : voucher.status;
     db.prepare('UPDATE accounting_vouchers SET voucher_date = ?, remark = ?, status = ?, rejection_reason = ?, updated_at = ?, period = ? WHERE id = ?')
@@ -6252,10 +6262,8 @@ async function deleteAccountingVoucher(db, req, res, actor, voucherId) {
     throw new HttpError(409, '已审核凭证不能删除');
   }
 
-  // Check period closure
-  checkPeriodNotClosedForVoucher(db, voucher.voucher_date, '删除');
-
   transaction(db, () => {
+    guardVoucherAction(db, voucher.voucher_date, 'MANUAL_VOUCHER');
     db.prepare('DELETE FROM accounting_entries WHERE voucher_id = ?').run(voucherId);
     db.prepare('DELETE FROM accounting_vouchers WHERE id = ?').run(voucherId);
     audit(db, actor.id, 'DELETE', 'ACCOUNTING_VOUCHER', voucherId, '删除凭证 ' + voucher.voucher_no);
@@ -6269,9 +6277,6 @@ async function submitAccountingVoucher(db, req, res, actor, voucherId) {
   const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
   if (!voucher) throw new HttpError(404, '凭证不存在');
 
-  // Check if period is closed FIRST
-  checkPeriodNotClosedForVoucher(db, voucher.voucher_date, '提交');
-
   // Only ENTERED and REJECTED vouchers can be submitted
   if (!['ENTERED', 'REJECTED'].includes(voucher.status)) {
     throw new HttpError(409, '只有录入或已驳回的凭证可以提交');
@@ -6279,15 +6284,16 @@ async function submitAccountingVoucher(db, req, res, actor, voucherId) {
 
   const now = new Date().toISOString();
 
-  db.prepare('UPDATE accounting_vouchers SET status = ?, submitted_at = ?, submitted_by = ?, rejection_reason = ?, updated_at = ? WHERE id = ?')
-    .run('SUBMITTED', now, actor.id, '', now, voucherId);
-
-  audit(db, actor.id, 'SUBMIT', 'ACCOUNTING_VOUCHER', voucherId, '提交凭证 ' + voucher.voucher_no);
-
-  notifyApprovalPending(db, {
-    family: 'ACCOUNTING_VOUCHER', documentType: 'ACCOUNTING_VOUCHER',
-    documentId: voucherId, documentNo: voucher.voucher_no,
-    title: `凭证 ${voucher.voucher_no} 待审批`,
+  transaction(db, () => {
+    guardVoucherAction(db, voucher.voucher_date, 'MANUAL_VOUCHER');
+    db.prepare('UPDATE accounting_vouchers SET status = ?, submitted_at = ?, submitted_by = ?, rejection_reason = ?, updated_at = ? WHERE id = ?')
+      .run('SUBMITTED', now, actor.id, '', now, voucherId);
+    audit(db, actor.id, 'SUBMIT', 'ACCOUNTING_VOUCHER', voucherId, '提交凭证 ' + voucher.voucher_no);
+    notifyApprovalPending(db, {
+      family: 'ACCOUNTING_VOUCHER', documentType: 'ACCOUNTING_VOUCHER',
+      documentId: voucherId, documentNo: voucher.voucher_no,
+      title: `凭证 ${voucher.voucher_no} 待审批`,
+    });
   });
 
   return send(res, 200, { success: true });
@@ -6297,9 +6303,6 @@ async function approveAccountingVoucher(db, req, res, actor, voucherId) {
   if(actor.roleCode!=='REVIEWER') allow(actor, 'VOUCHER_APPROVE');
   const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
   if (!voucher) throw new HttpError(404, '凭证不存在');
-
-  // Check if period is closed FIRST
-  checkPeriodNotClosedForVoucher(db, voucher.voucher_date, '审核');
 
   // Only SUBMITTED vouchers can be approved
   if (voucher.status !== 'SUBMITTED') {
@@ -6321,15 +6324,16 @@ async function approveAccountingVoucher(db, req, res, actor, voucherId) {
 
   const now = new Date().toISOString();
 
-  db.prepare('UPDATE accounting_vouchers SET status = ?, approver_id = ?, approved_at = ?, updated_at = ? WHERE id = ?')
-    .run('POSTED', actor.id, now, now, voucherId);
-
-  audit(db, actor.id, 'APPROVE', 'ACCOUNTING_VOUCHER', voucherId, '审核通过凭证 ' + voucher.voucher_no);
-
-  notifyApprovalHandled(db, {
-    family: 'ACCOUNTING_VOUCHER', documentType: 'ACCOUNTING_VOUCHER',
-    documentId: voucherId, documentNo: voucher.voucher_no,
-    initiatorId: voucher.creator_id, outcome: 'APPROVED',
+  transaction(db, () => {
+    guardVoucherAction(db, voucher.voucher_date, 'MANUAL_VOUCHER');
+    db.prepare('UPDATE accounting_vouchers SET status = ?, approver_id = ?, approved_at = ?, updated_at = ? WHERE id = ?')
+      .run('POSTED', actor.id, now, now, voucherId);
+    audit(db, actor.id, 'APPROVE', 'ACCOUNTING_VOUCHER', voucherId, '审核通过凭证 ' + voucher.voucher_no);
+    notifyApprovalHandled(db, {
+      family: 'ACCOUNTING_VOUCHER', documentType: 'ACCOUNTING_VOUCHER',
+      documentId: voucherId, documentNo: voucher.voucher_no,
+      initiatorId: voucher.creator_id, outcome: 'APPROVED',
+    });
   });
 
   return send(res, 200, { success: true });
@@ -6339,9 +6343,6 @@ async function rejectAccountingVoucher(db, req, res, actor, voucherId) {
   if(actor.roleCode!=='REVIEWER') allow(actor, 'VOUCHER_APPROVE');
   const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
   if (!voucher) throw new HttpError(404, '凭证不存在');
-
-  // Check if period is closed FIRST
-  checkPeriodNotClosedForVoucher(db, voucher.voucher_date, '驳回');
 
   // Only SUBMITTED vouchers can be rejected
   if (voucher.status !== 'SUBMITTED') {
@@ -6358,10 +6359,12 @@ async function rejectAccountingVoucher(db, req, res, actor, voucherId) {
 
   const now = new Date().toISOString();
 
-  db.prepare('UPDATE accounting_vouchers SET status = ?, rejection_reason = ?, approver_id = ?, approved_at = ?, updated_at = ? WHERE id = ?')
-    .run('REJECTED', rejectionReason, actor.id, now, now, voucherId);
-
-  audit(db, actor.id, 'REJECT', 'ACCOUNTING_VOUCHER', voucherId, '驳回凭证 ' + voucher.voucher_no + ': ' + rejectionReason);
+  transaction(db, () => {
+    guardVoucherAction(db, voucher.voucher_date, 'MANUAL_VOUCHER');
+    db.prepare('UPDATE accounting_vouchers SET status = ?, rejection_reason = ?, approver_id = ?, approved_at = ?, updated_at = ? WHERE id = ?')
+      .run('REJECTED', rejectionReason, actor.id, now, now, voucherId);
+    audit(db, actor.id, 'REJECT', 'ACCOUNTING_VOUCHER', voucherId, '驳回凭证 ' + voucher.voucher_no + ': ' + rejectionReason);
+  });
 
   return send(res, 200, { success: true });
 }
@@ -7222,7 +7225,7 @@ export async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
           if (!so || so.status !== 'APPROVED') throw new HttpError(409, '来源销售订单不存在或未审批');
           if (locked.customer_id !== so.customer_id) throw new HttpError(409, '出货客户与来源销售订单不一致');
       assertQualityGate(db, 'OQC', deliveryId);
-      assertFinancialPeriodsOpen(db, locked.delivery_date);
+      guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate: locked.delivery_date });
       // §29.16 / Wave 7: bound Sales Delivery confirm to the DELIVERY stage
       // prepayment gate decision (PASS / WARN / OVERRIDE_REQUIRED). BLOCK
       // or missing evaluation refuses with 409 + SALES_PREPAYMENT_GATE_*
@@ -7464,7 +7467,7 @@ async function confirmSalesReturn(db, req, res, actor, returnId) {
       const delivery = db.prepare('SELECT * FROM sales_deliveries WHERE id=?').get(deliveryId);
       if (!delivery || delivery.status !== 'CONFIRMED') throw new HttpError(409, '来源销售出货单不存在或未确认');
       if (locked.customer_id !== delivery.customer_id || locked.warehouse_id !== delivery.warehouse_id) throw new HttpError(409, '退货客户或仓库与来源出货单不一致');
-      assertFinancialPeriodsOpen(db, locked.return_date);
+      guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate: locked.return_date });
       const authoritative = authoritativeLogisticsTotal(db, 'return_order_items', 'return_id', returnId);
       let restoredCogsCents=0; const restoredInventoryEntries=[];
       for (const item of authoritative.items) {
@@ -7581,7 +7584,7 @@ async function confirmPurchaseReturn(db, req, res, actor, returnId) {
       const receipt = db.prepare('SELECT * FROM purchase_receipts WHERE id=?').get(locked.receipt_id);
       if (!receipt || receipt.status !== 'CONFIRMED') throw new HttpError(409, '来源采购入库单不存在或未确认');
       if (locked.supplier_id !== receipt.supplier_id || locked.warehouse_id !== receipt.warehouse_id) throw new HttpError(409, '退货供应商或仓库与来源入库单不一致');
-      assertFinancialPeriodsOpen(db, locked.return_date);
+      guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate: locked.return_date });
       const authoritative = authoritativeLogisticsTotal(db, 'purchase_return_items', 'return_id', returnId);
       let carryingValueCents=0; const carryingEntries=[];
       for (const item of authoritative.items) {
@@ -7832,10 +7835,10 @@ async function createPaymentCollection(db, req, res, actor) {
   const now = new Date().toISOString();
   const effectiveDate = collectionDate || now.slice(0,10);
   if (!Number.isSafeInteger(Number(amountCents)) || Number(amountCents) < 0) throw new HttpError(400, '收款金额不正确');
-  checkPeriodNotClosedForVoucher(db, effectiveDate, '生成业务');
   const pcId = id();
   const pcNo = 'PC-' + Date.now().toString(36).toUpperCase();
   transaction(db, () => {
+    guardPeriodAction(db, { actionCode: 'FINANCE_COLLECTION', businessDate: effectiveDate });
     db.prepare('INSERT INTO payment_collections(id,collection_no,customer_id,amount_cents,payment_method,bank_account,collection_date,remark,creator_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run(pcId, pcNo, customerId, Number(amountCents), paymentMethod || 'BANK', bankAccount || '', effectiveDate, remark || '', actor.id, now);
     const itemStmt = db.prepare('INSERT INTO payment_collection_items(id,collection_id,receivable_id,amount_cents) VALUES(?,?,?,?)');
     for (const item of (items || [])) {
@@ -7887,10 +7890,10 @@ async function createPaymentDisbursement(db, req, res, actor) {
   const now = new Date().toISOString();
   const effectiveDate = disbursementDate || now.slice(0,10);
   if (!Number.isSafeInteger(Number(amountCents)) || Number(amountCents) < 0) throw new HttpError(400, '付款金额不正确');
-  checkPeriodNotClosedForVoucher(db, effectiveDate, '生成业务');
   const pdId = id();
   const pdNo = 'PD-' + Date.now().toString(36).toUpperCase();
   transaction(db, () => {
+    guardPeriodAction(db, { actionCode: 'FINANCE_PAYMENT', businessDate: effectiveDate });
     db.prepare('INSERT INTO payment_disbursements(id,disbursement_no,supplier_id,amount_cents,payment_method,bank_account,disbursement_date,remark,creator_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run(pdId, pdNo, supplierId, Number(amountCents), paymentMethod || 'BANK', bankAccount || '', effectiveDate, remark || '', actor.id, now);
     const itemStmt = db.prepare('INSERT INTO payment_disbursement_items(id,disbursement_id,payable_id,amount_cents) VALUES(?,?,?,?)');
     for (const item of (items || [])) {
@@ -8067,7 +8070,6 @@ async function reverseManualVoucher(db,req,res,actor,voucherId){
   const body=await readJson(req);
   const reason=requiredText(body.reason,'冲销原因',500);
   const businessDate=normalizeDocumentDate(body.businessDate||new Date().toISOString().slice(0,10),'冲销日期');
-  checkPeriodNotClosedForVoucher(db,businessDate,'冲销');
   // AA-W3.2 — manual and system reversals share the single canonical path.
   // The response shape is preserved; the reversal itself is now produced by
   // the domain implementation so the mirroring semantics cannot drift.
@@ -8175,7 +8177,7 @@ async function changeProductionOrderState(db, req, res, actor, poId) {
     }
     const drafts = Number(db.prepare("SELECT (SELECT COUNT(*) FROM production_material_issues WHERE production_order_id=? AND status='DRAFT')+(SELECT COUNT(*) FROM production_receipts WHERE production_order_id=? AND status='DRAFT') total").get(poId, poId).total);
     if (drafts) throw new HttpError(409, '存在未处理的草稿领料或生产入库，请先确认、取消或删除');
-    transaction(db, () => { const businessDate=now.slice(0,10); assertFinancialPeriodsOpen(db,businessDate); const residual=Number(db.prepare('SELECT COALESCE(SUM(amount_cents),0) n FROM production_wip_movements WHERE production_order_id=?').get(poId).n); if(residual!==0){ const voucherId=createSystemVoucher(db,{sourceType:'PRODUCTION_COMPLETION_VARIANCE',sourceId:poId,businessDate,actorId:actor.id,entries:residual>0?[{role:'MANUFACTURING_VARIANCE',direction:'DEBIT',amountCents:residual},{role:'WIP',direction:'CREDIT',amountCents:residual}]:[{role:'WIP',direction:'DEBIT',amountCents:-residual},{role:'MANUFACTURING_VARIANCE',direction:'CREDIT',amountCents:-residual}]}); postWipMovement(db,{productionOrderId:poId,businessDate,movementType:'COMPLETION_VARIANCE',amountCents:-residual,sourceType:'PRODUCTION_ORDER_COMPLETION',sourceId:poId,voucherId}); } db.prepare("UPDATE production_orders SET status='COMPLETED',actual_finish=?,updated_at=? WHERE id=?").run(now, now, poId); deriveProductionCost(db, poId, true); audit(db, actor.id, 'COMPLETE', 'PRODUCTION_ORDER', poId, '生产工单完工 ' + order.order_no); });
+    transaction(db, () => { const businessDate=now.slice(0,10); guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate }); const residual=Number(db.prepare('SELECT COALESCE(SUM(amount_cents),0) n FROM production_wip_movements WHERE production_order_id=?').get(poId).n); if(residual!==0){ const voucherId=createSystemVoucher(db,{sourceType:'PRODUCTION_COMPLETION_VARIANCE',sourceId:poId,businessDate,actorId:actor.id,entries:residual>0?[{role:'MANUFACTURING_VARIANCE',direction:'DEBIT',amountCents:residual},{role:'WIP',direction:'CREDIT',amountCents:residual}]:[{role:'WIP',direction:'DEBIT',amountCents:-residual},{role:'MANUFACTURING_VARIANCE',direction:'CREDIT',amountCents:-residual}]}); postWipMovement(db,{productionOrderId:poId,businessDate,movementType:'COMPLETION_VARIANCE',amountCents:-residual,sourceType:'PRODUCTION_ORDER_COMPLETION',sourceId:poId,voucherId}); } db.prepare("UPDATE production_orders SET status='COMPLETED',actual_finish=?,updated_at=? WHERE id=?").run(now, now, poId); deriveProductionCost(db, poId, true); audit(db, actor.id, 'COMPLETE', 'PRODUCTION_ORDER', poId, '生产工单完工 ' + order.order_no); });
   } else if (action === 'cancel') {
     allowAny(actor, ['PRODUCTION_ORDERS_CREATE', 'PRODUCTION_ORDERS_START']);
     if (order.status === 'COMPLETED') throw new HttpError(409, '已完工的工单不能取消');

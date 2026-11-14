@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createDatabase } from './db.js';
+import { createDatabase, transaction } from './db.js';
 import { listFinanceParameters, upsertFinanceParameter, getFinanceParameter } from './modules/finance-parameters.js';
 import { resolveRecognitionPolicy } from './modules/finance-recognition-policy.js';
 import { listFinancePaymentTerms, upsertFinancePaymentTerm } from './modules/finance-terms.js';
@@ -15,8 +15,8 @@ import {
   listBusinessCloseState,
   closeBusiness,
   reopenBusiness,
-  assertFinanceBusinessDateOpen,
 } from './modules/finance-business-close.js';
+import { guardPeriodAction } from './modules/period-control.js';
 import { createManualAccountReceivable, listAccountReceivables } from './modules/finance-ar-open-item.js';
 import { createManualAccountPayable, listAccountPayables } from './modules/finance-ap-open-item.js';
 import { refreshOpenAmount, computeCanonicalRemaining, assertOpenAmountReconciled } from './modules/finance-refresh-open-amount.js';
@@ -136,8 +136,8 @@ test('finance_business_close_state rejects no-row missing', () => {
   // but assertFinanceBusinessDateOpen must fail closed if no row found).
   db.prepare(`DELETE FROM finance_business_close_state WHERE close_type='AR'`).run();
   let threw = false;
-  try { assertFinanceBusinessDateOpen(db, 'AR', '2026-01-01'); }
-  catch (e) { threw = true; assert.match(e.message, /anchor missing/); }
+  try { transaction(db, () => guardPeriodAction(db, { actionCode: 'FINANCE_AR_MUTATION', businessDate: '2026-01-01' })); }
+  catch (e) { threw = true; assert.equal(e.code, 'PERIOD_STATE_INVALID'); }
   assert.equal(threw, true);
 });
 
@@ -216,11 +216,11 @@ test('finance_business_close guard blocks dated transaction behind close', () =>
   // close AR through 2026-06-30
   db.prepare(`UPDATE finance_business_close_state SET closed_through_date='2026-06-30' WHERE close_type='AR'`).run();
   let threw = false;
-  try { assertFinanceBusinessDateOpen(db, 'AR', '2026-06-30'); }
+  try { transaction(db, () => guardPeriodAction(db, { actionCode: 'FINANCE_AR_MUTATION', businessDate: '2026-06-30' })); }
   catch (e) { threw = true; assert.match(e.message, /已结账/); }
   assert.equal(threw, true);
   // date after close is allowed
-  assertFinanceBusinessDateOpen(db, 'AR', '2026-07-01');
+  transaction(db, () => guardPeriodAction(db, { actionCode: 'FINANCE_AR_MUTATION', businessDate: '2026-07-01' }));
 });
 
 test('manual AR creation respects recognition policy and refreshes open amount', () => {

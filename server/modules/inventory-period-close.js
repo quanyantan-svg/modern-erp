@@ -3,6 +3,8 @@ import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, optionalText, readJson, send } from '../lib/http.js';
 import { systemHealth } from './financial-inventory.js';
 import { expandApproverRecipients, notifyEvent } from './platform-notifications.js';
+import { lockPeriodAxes } from './period-control.js';
+import { PERIOD_AXES } from './period-action-registry.js';
 
 const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -340,6 +342,12 @@ export function closeInventoryPeriodCommand(db, actor, input, options = {}) {
   const notes = optionalText(input.notes || '', 200);
   const now = options.now || new Date().toISOString();
   return transaction(db, () => {
+    lockPeriodAxes(db, [PERIOD_AXES.INVENTORY, PERIOD_AXES.LEGAL_ACCOUNTING]);
+    if (db.prepare("SELECT 1 FROM period_closures WHERE period=? AND status='CLOSED'").get(period)) {
+      throw new HttpError(409, '对应法定会计期间已关闭，不能补做存货结账', {
+        code: 'PERIOD_SEQUENCE_INVALID', axis: PERIOD_AXES.INVENTORY,
+      });
+    }
     const checks = runInventoryCloseChecks(db, period, actor, options);
     if (checks.overallStatus === 'BLOCKED') throw blockedError(checks);
     if (checks.overallStatus === 'WARNING' && input.confirmWarnings !== true) {
@@ -369,6 +377,7 @@ export function reopenInventoryPeriodCommand(db, actor, closureId, reason, optio
   if (text.length > 200) throw new HttpError(400, '反结账原因不能超过 200 个字符');
   const now = options.now || new Date().toISOString();
   return transaction(db, () => {
+    lockPeriodAxes(db, [PERIOD_AXES.INVENTORY, PERIOD_AXES.LEGAL_ACCOUNTING]);
     const closure = db.prepare('SELECT * FROM inventory_period_closures WHERE id=?').get(closureId);
     if (!closure) throw new HttpError(404, '存货月结记录不存在');
     if (closure.status !== 'CLOSED') throw new HttpError(409, '该期间已经反结账', { code: 'PERIOD_NOT_LATEST' });

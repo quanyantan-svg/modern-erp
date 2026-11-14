@@ -10,11 +10,12 @@ import { HttpError, readJson, send, allow, allowAny } from '../lib/http.js';
 import { transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { requestFingerprint, idempotencyReplay, saveIdempotency } from './financial-controls.js';
-import { assertFinancialPeriodsOpen, createSystemVoucher, reverseSystemVoucher, consumeOriginalInboundValue, inventoryAccountRole, receiveValue, allocateProportionalCents } from './financial-inventory.js';
 import { applyCreditAdjustment, reverseCreditAdjustment, refreshOpenItem } from './settlement-core.js';
 import { applyInventoryMutation } from '../lib/inventory-mutation.js';
 import { postTrackedMovement, reverseTrackedSource } from './traceability-quality.js';
 import { reactReservationIntentToReturn } from './sales-reservation-intent.js';
+import { guardPeriodAction } from './period-control.js';
+import { createSystemVoucher, reverseSystemVoucher, consumeOriginalInboundValue, inventoryAccountRole, receiveValue, allocateProportionalCents } from './financial-inventory.js';
 
 function safeInt(value) {
   if (!Number.isFinite(Number(value))) return 0;
@@ -369,7 +370,7 @@ export async function confirmOptionAReturn(db, req, res, actor, returnId) {
     if (marker !== 'SO_BACKED' && marker !== 'NO_SOURCE') {
       throw new HttpError(409, '该 marker 必走 DELIVERY_BACKED 路径');
     }
-    assertFinancialPeriodsOpen(db, header.return_date);
+    guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate: header.return_date });
 
     const items = db.prepare(`SELECT * FROM return_order_items WHERE return_id=? ORDER BY id`).all(returnId);
     if (!items.length) throw new HttpError(409, '退货单无明细');
@@ -532,7 +533,7 @@ export async function reverseOptionCReturn(db, req, res, actor, returnId) {
     if (marker !== 'SO_BACKED' && marker !== 'NO_SOURCE') {
       throw new HttpError(409, '该 marker 不允许 Option C 冲销');
     }
-    assertFinancialPeriodsOpen(db, businessDate);
+    guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate: businessDate });
 
     const fulfillmentRows = db.prepare(`
       SELECT rf.id FROM sales_replacement_fulfillments rf

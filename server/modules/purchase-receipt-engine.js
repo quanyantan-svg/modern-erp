@@ -20,7 +20,6 @@ import { adjustInventory } from '../lib/stock.js';
 import { getActiveParameters } from './procurement-parameters.js';
 import { setSourceRecognitionPolicy, RECOGNITION_MODES } from './finance-recognition-policy.js';
 import { recognizeFinanceExposure } from './finance-recognition.js';
-import { assertFinancialPeriodsOpen, createSystemVoucher, inventoryAccountRole, receiveSourceValue } from './financial-inventory.js';
 import { postTrackedMovement } from './traceability-quality.js';
 import { autoBillReceipt } from './commercial-golive.js';
 import { assertQualityGate } from './quality-gates.js';
@@ -39,6 +38,8 @@ import {
   SCHEDULE_EFFECT_BUSINESS_EVENT_TYPE,
 } from './procurement-schedule-ledger.js';
 import { triggerLowerToleranceAutoClose } from './procurement-orders.js';
+import { guardPeriodAction } from './period-control.js';
+import { createSystemVoucher, inventoryAccountRole, receiveSourceValue } from './financial-inventory.js';
 
 const EPSILON = 1e-9;
 
@@ -238,7 +239,7 @@ export function confirmPurchaseReceiptCore(db, actor, receiptId, { idempotencyKe
   }
   if (locked.supplier_id !== po.supplier_id) throw new HttpError(409, '入库供应商与来源采购订单不一致');
   assertQualityGate(db, 'IQC', receiptId);
-  assertFinancialPeriodsOpen(db, locked.receipt_date);
+  guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate: locked.receipt_date });
   const authoritative = authoritativeLogisticsTotal(db, 'purchase_receipt_items', 'receipt_id', receiptId);
   const inventoryEntries = [];
   const perOrderLine = new Map();

@@ -13,7 +13,8 @@ import { HttpError, allow, send, readJson, requiredText, optionalText } from '..
 import { audit } from '../lib/audit.js';
 import { id } from '../db.js';
 import { transaction } from '../db.js';
-import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
+import { guardPeriodAction } from './period-control.js';
+import { financeActionCode } from './period-action-registry.js';
 
 export async function postBadDebtProvision(db, req, res, actor) {
   allow(actor, 'FINANCE_BAD_DEBT_MANAGE');
@@ -32,7 +33,7 @@ export async function postBadDebtProvision(db, req, res, actor) {
   const provisionId = id();
   const provisionNo = `BADDEBT-${now.slice(0, 10)}-${provisionId.slice(0, 6)}`;
   transaction(db, () => {
-    assertFinanceBusinessDateOpen(db, side, businessDate);
+    guardPeriodAction(db, { actionCode: financeActionCode(side), businessDate: businessDate });
     db.prepare(
       `INSERT INTO finance_bad_debt_provisions(
          id, provision_no, side, method, open_item_id, amount_cents,

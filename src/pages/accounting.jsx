@@ -197,6 +197,7 @@ function PeriodManagement({ user, notify }) {
 
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(null);
+  const [reopenReason, setReopenReason] = useState('');
 
   const canView = can(user, 'PERIOD_CLOSE_VIEW');
   const canManage = can(user, 'PERIOD_CLOSE_MANAGE');
@@ -273,9 +274,10 @@ function PeriodManagement({ user, notify }) {
   async function unclosePeriod(closureId) {
     setBusy(true);
     try {
-      await api(`/api/period-closures/${closureId}/unclose`, { method: 'POST', body: {} });
+      await api(`/api/period-closures/${closureId}/unclose`, { method: 'POST', body: { reason: reopenReason.trim() } });
       notify(`期间 ${selectedPeriod} 已重开`);
       setConfirm(null);
+      setReopenReason('');
       load();
       loadChecklist(selectedPeriod);
     } catch (e) {
@@ -366,7 +368,7 @@ function PeriodManagement({ user, notify }) {
           </>}
           {canManage && <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
             {selectedClosure.status === 'OPEN' && <button className="primary" disabled={busy || !checklist || !checklist.passed || Boolean(checklist.detail)} onClick={() => setConfirm({ kind: 'close', closureId: selectedClosure.id, period: selectedPeriod })}>关闭期间</button>}
-            {selectedClosure.status === 'CLOSED' && <button className="secondary" disabled={busy} onClick={() => setConfirm({ kind: 'unclose', closureId: selectedClosure.id, period: selectedPeriod })}>重开期间</button>}
+            {selectedClosure.status === 'CLOSED' && <button className="secondary" disabled={busy} onClick={() => { setReopenReason(''); setConfirm({ kind: 'unclose', closureId: selectedClosure.id, period: selectedPeriod }); }}>重开期间</button>}
           </div>}
         </>}
       </div>}
@@ -376,10 +378,11 @@ function PeriodManagement({ user, notify }) {
         <p>{confirm.kind === 'close'
           ? `确认关闭会计期间 ${confirm.period}?关闭后该期间的会计凭证将受到结账保护。`
           : `确认重开会计期间 ${confirm.period}?重开后可以再次在该期间录入凭证。`}</p>
+        {confirm.kind === 'unclose' && <label>重开原因<textarea value={reopenReason} onChange={(e) => setReopenReason(e.target.value)} required/></label>}
       </div>
       <div className="modal-footer">
         <button type="button" className="secondary" disabled={busy} onClick={() => setConfirm(null)}>取消</button>
-        <button type="button" className="primary" disabled={busy} onClick={() => confirm.kind === 'close' ? closePeriod(confirm.closureId) : unclosePeriod(confirm.closureId)}>
+        <button type="button" className="primary" disabled={busy || (confirm.kind === 'unclose' && !reopenReason.trim())} onClick={() => confirm.kind === 'close' ? closePeriod(confirm.closureId) : unclosePeriod(confirm.closureId)}>
           {confirm.kind === 'close' ? '关闭' : '重开'}
         </button>
       </div>

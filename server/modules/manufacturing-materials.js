@@ -10,8 +10,9 @@ import { HttpError, allow, optionalText, readJson, send } from '../lib/http.js';
 import { adjustInventory } from '../lib/stock.js';
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 import { postTrackedMovement, saveTrackedAllocations, sourceTrackingAllocations } from './traceability-quality.js';
-import { assertFinancialPeriodsOpen, createSystemVoucher, issueSourceValue, postWipMovement, inventoryAccountRole } from './financial-inventory.js';
 import { productionRequirementSummary } from './production-workflow.js';
+import { guardPeriodAction } from './period-control.js';
+import { createSystemVoucher, issueSourceValue, postWipMovement, inventoryAccountRole } from './financial-inventory.js';
 
 const EPS = 1e-9;
 const SOURCE = { SUPPLEMENT: 'PRODUCTION_MATERIAL_SUPPLEMENT', BATCH_ISSUE: 'PRODUCTION_BATCH_ISSUE' };
@@ -138,7 +139,7 @@ export function confirmProductionMaterialSupplement(db, req, res, actor, supplem
     if (supplement.status !== 'DRAFT') throw new HttpError(409, '只有草稿补料单可以确认');
     const order = loadOrder(db, supplement.production_order_id);
     requireActiveOrder(order);
-    assertFinancialPeriodsOpen(db, supplement.supplement_date);
+    guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate: supplement.supplement_date });
     const rows = db.prepare('SELECT * FROM production_material_supplement_items WHERE supplement_id=? ORDER BY line_no').all(supplementId);
     if (!rows.length) throw new HttpError(409, '补料单没有明细');
     const baseline = db.prepare('SELECT component_snapshot_json FROM production_cost_baselines WHERE production_order_id=?').get(order.id);
@@ -289,7 +290,7 @@ export function confirmProductionBatchIssue(db, req, res, actor, batchId) {
       if (!issue) throw new HttpError(409, `订单 ${link.production_order_id} 对应出库单不存在或已确认`);
       const order = loadOrder(db, link.production_order_id);
       if (order.status !== 'IN_PROGRESS') throw new HttpError(409, `订单 ${order.order_no} 状态不允许合并领料`);
-      assertFinancialPeriodsOpen(db, batch.issue_date);
+      guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate: batch.issue_date });
       const rows = db.prepare('SELECT * FROM production_material_issue_items WHERE issue_id=? ORDER BY line_no').all(issue.id);
       const baseline = db.prepare('SELECT component_snapshot_json FROM production_cost_baselines WHERE production_order_id=?').get(order.id);
       if (!baseline) throw new HttpError(409, `订单 ${order.order_no} 缺少冻结成本基线`);

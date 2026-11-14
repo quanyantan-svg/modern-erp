@@ -1,49 +1,9 @@
 import { id } from '../db.js';
 import { HttpError, allowAny, send } from '../lib/http.js';
+import { guardPeriodAction, guardVoucherAction, runGuardedMutation } from './period-control.js';
 
 const EPS = 1e-9;
 const VALUATION_BY_TRACKING = Object.freeze({ NONE: 'MOVING_AVERAGE', LOT: 'LOT_SPECIFIC_POOL', SERIAL: 'SPECIFIC_SERIAL' });
-
-function nextPeriodKey(period) {
-  const [year, month] = period.split('-').map(Number);
-  const date = new Date(Date.UTC(year, month, 1));
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
-}
-
-function closedThrough(rows, key) {
-  const periods = rows.map((row) => row[key]).filter(Boolean).sort();
-  if (!periods.length) return null;
-  let cutoff = periods[0];
-  for (let index = 1; index < periods.length; index += 1) {
-    if (periods[index] !== nextPeriodKey(cutoff)) break;
-    cutoff = periods[index];
-  }
-  return cutoff;
-}
-
-export function assertFinancialPeriodsOpen(db, businessDate, allowClosedInventoryPeriod = false) {
-  const date = String(businessDate || '');
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new HttpError(400, '业务日期格式不正确');
-  const inventoryCutoff = closedThrough(db.prepare("SELECT period_key FROM inventory_period_closures WHERE status='CLOSED' ORDER BY period_key").all(), 'period_key');
-  // AA-W3.16 — the profit-and-loss transfer and the period-end adjustments
-  // are **general-ledger only** operations. They never touch inventory
-  // quantities or valuation, so the inventory month-end cutoff must not
-  // block them. The accounting period cutoff still applies: a closed
-  // accounting period can never receive new postings.
-  if (!allowClosedInventoryPeriod && inventoryCutoff && date <= `${inventoryCutoff}-31`) {
-    throw new HttpError(409, `存货期间已结至 ${inventoryCutoff}`, {
-      code: 'INVENTORY_PERIOD_CLOSED',
-      resolution: '使用未结期间的业务日期，或先按治理流程反结账。',
-    });
-  }
-  const accountingCutoff = closedThrough(db.prepare("SELECT period FROM period_closures WHERE status='CLOSED' ORDER BY period").all(), 'period');
-  if (accountingCutoff && date <= `${accountingCutoff}-31`) {
-    throw new HttpError(409, `会计期间已结至 ${accountingCutoff}`, {
-      code: 'FINANCIAL_PERIOD_CLOSED',
-      resolution: '使用未结期间的业务日期，或先按治理流程反结账。',
-    });
-  }
-}
 
 export function valuationMethod(db, productId) {
   const product = db.prepare('SELECT tracking_policy,valuation_method FROM products WHERE id=?').get(productId);
@@ -100,12 +60,14 @@ function writeMovement(db, input, quantityDelta, valueDeltaCents, method, key) {
 function writeLegacyMovement(db,input,quantityDelta){ const now=input.createdAt||new Date().toISOString(),movementId=input.id||id(); db.prepare(`INSERT INTO inventory_valuation_movements(id,business_date,product_id,warehouse_id,lot_id,serial_id,quantity_delta,value_delta_cents,unit_cost_cents,valuation_basis,movement_type,source_type,source_id,source_item_id,inventory_transaction_id,production_order_id,reversal_of_id,status,created_at) VALUES(?,?,?,?,?,?,?,0,NULL,'LEGACY_UNVALUED',?,?,?,?,?,?,?,'LEGACY_UNVALUED',?)`).run(movementId,input.businessDate,input.productId,input.warehouseId,input.lotId||null,input.serialId||null,quantityDelta,input.movementType,input.sourceType,input.sourceId,input.sourceItemId||input.sourceId,input.inventoryTransactionId||null,input.productionOrderId||null,input.reversalOfId||null,now); if(input.inventoryTransactionId)db.prepare("UPDATE inventory_transactions SET business_date=?,valuation_status='LEGACY_UNVALUED' WHERE id=?").run(input.businessDate,input.inventoryTransactionId); return{id:movementId,quantityDelta,valueDeltaCents:0,unitCostCents:null,valuationMethod:'LEGACY_UNVALUED',lotId:input.lotId||null,serialId:input.serialId||null}; }
 
 export function receiveValue(db, input) {
-  assertFinancialPeriodsOpen(db, input.businessDate);
-  const quantity = Number(input.quantity); const value = Number(input.valueCents);
-  if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isSafeInteger(value) || value < 0) throw new HttpError(400, '入库估值数量或金额无效');
-  if(value===0&&input.valuationBasis==='LEGACY_UNVALUED'&&!db.prepare('SELECT valuation_activated_at FROM products WHERE id=?').get(input.productId)?.valuation_activated_at)return writeLegacyMovement(db,input,quantity);
-  const { method, key } = getBalance(db, input);
-  return writeMovement(db, input, quantity, value, method, key);
+  return runGuardedMutation(db, () => {
+    guardPeriodAction(db, { actionCode: 'INVENTORY_VALUATION', businessDate: input.businessDate });
+    const quantity = Number(input.quantity); const value = Number(input.valueCents);
+    if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isSafeInteger(value) || value < 0) throw new HttpError(400, '入库估值数量或金额无效');
+    if(value===0&&input.valuationBasis==='LEGACY_UNVALUED'&&!db.prepare('SELECT valuation_activated_at FROM products WHERE id=?').get(input.productId)?.valuation_activated_at)return writeLegacyMovement(db,input,quantity);
+    const { method, key } = getBalance(db, input);
+    return writeMovement(db, input, quantity, value, method, key);
+  });
 }
 
 /**
@@ -121,41 +83,52 @@ export function receiveValue(db, input) {
  * 校验目标余额，失败时整体回滚。
  */
 export function allocateValue(db, input) {
-  assertFinancialPeriodsOpen(db, input.businessDate);
-  const valueDeltaCents = Number(input.valueDeltaCents);
-  if (!Number.isSafeInteger(valueDeltaCents) || valueDeltaCents === 0) {
-    throw new HttpError(400, '价值调整金额必须是非零整数分');
-  }
-  const { method, key, row } = getBalance(db, input);
-  if (!row || Math.abs(Number(row.quantity)) <= EPS) {
-    throw new HttpError(409, '目标库存没有可调整的数量余额');
-  }
-  const movement = writeMovement(db, input, 0, valueDeltaCents, method, key);
-  return { ...movement, unitCostCents: null };
+  return runGuardedMutation(db, () => {
+    guardPeriodAction(db, { actionCode: 'INVENTORY_VALUATION', businessDate: input.businessDate });
+    const valueDeltaCents = Number(input.valueDeltaCents);
+    if (!Number.isSafeInteger(valueDeltaCents) || valueDeltaCents === 0) {
+      throw new HttpError(400, '价值调整金额必须是非零整数分');
+    }
+    const { method, key, row } = getBalance(db, input);
+    if (!row || Math.abs(Number(row.quantity)) <= EPS) {
+      throw new HttpError(409, '目标库存没有可调整的数量余额');
+    }
+    const movement = writeMovement(db, input, 0, valueDeltaCents, method, key);
+    return { ...movement, unitCostCents: null };
+  });
 }
 
 export function issueValue(db, input) {
-  assertFinancialPeriodsOpen(db, input.businessDate);
-  const quantity = Number(input.quantity); if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, '出库估值数量无效');
-  const { method, key, row } = getBalance(db, input);
-  if (!row) { const activated=db.prepare('SELECT valuation_activated_at FROM products WHERE id=?').get(input.productId)?.valuation_activated_at; if(!activated)return writeLegacyMovement(db,input,-quantity); throw new HttpError(409, '可估值库存不足'); }
-  if (Number(row.quantity) + EPS < quantity) throw new HttpError(409, '可估值库存不足；旧库存须在 Phase 6E 转换后使用');
-  const allocated = allocateProportionalCents(Number(row.value_cents), quantity, Number(row.quantity));
-  return writeMovement(db, input, -quantity, -allocated, method, key);
+  return runGuardedMutation(db, () => {
+    guardPeriodAction(db, { actionCode: 'INVENTORY_VALUATION', businessDate: input.businessDate });
+    const quantity = Number(input.quantity); if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, '出库估值数量无效');
+    const { method, key, row } = getBalance(db, input);
+    if (!row) { const activated=db.prepare('SELECT valuation_activated_at FROM products WHERE id=?').get(input.productId)?.valuation_activated_at; if(!activated)return writeLegacyMovement(db,input,-quantity); throw new HttpError(409, '可估值库存不足'); }
+    if (Number(row.quantity) + EPS < quantity) throw new HttpError(409, '可估值库存不足；旧库存须在 Phase 6E 转换后使用');
+    const allocated = allocateProportionalCents(Number(row.value_cents), quantity, Number(row.quantity));
+    return writeMovement(db, input, -quantity, -allocated, method, key);
+  });
 }
 
 export function restoreOriginalValue(db, input) {
-  assertFinancialPeriodsOpen(db, input.businessDate);
-  const original = db.prepare("SELECT * FROM inventory_valuation_movements WHERE id=? AND status='POSTED'").get(input.originalMovementId);
-  if (!original || original.quantity_delta >= 0) throw new HttpError(409, '原出库估值事件不存在');
-  const already = db.prepare('SELECT COALESCE(SUM(quantity_delta),0) quantity,COALESCE(SUM(value_delta_cents),0) value FROM inventory_valuation_movements WHERE reversal_of_id=?').get(original.id);
-  const maxQty = -Number(original.quantity_delta) - Number(already.quantity); const quantity = Number(input.quantity ?? maxQty);
-  if (quantity <= 0 || quantity > maxQty + EPS) throw new HttpError(409, '冲销数量超过原估值事件');
-  const value = Math.abs(quantity - maxQty) <= EPS ? -Number(original.value_delta_cents) - Number(already.value) : allocateProportionalCents(-Number(original.value_delta_cents), quantity, -Number(original.quantity_delta));
-  return receiveValue(db, { ...input, productId: original.product_id, warehouseId: input.warehouseId || original.warehouse_id, lotId: original.lot_id, serialId: original.serial_id, valueCents: value, quantity, reversalOfId: original.id, valuationBasis: 'ORIGINAL_COST' });
+  return runGuardedMutation(db, () => {
+    guardPeriodAction(db, { actionCode: 'INVENTORY_VALUATION', businessDate: input.businessDate });
+    const original = db.prepare("SELECT * FROM inventory_valuation_movements WHERE id=? AND status='POSTED'").get(input.originalMovementId);
+    if (!original || original.quantity_delta >= 0) throw new HttpError(409, '原出库估值事件不存在');
+    const already = db.prepare('SELECT COALESCE(SUM(quantity_delta),0) quantity,COALESCE(SUM(value_delta_cents),0) value FROM inventory_valuation_movements WHERE reversal_of_id=?').get(original.id);
+    const maxQty = -Number(original.quantity_delta) - Number(already.quantity); const quantity = Number(input.quantity ?? maxQty);
+    if (quantity <= 0 || quantity > maxQty + EPS) throw new HttpError(409, '冲销数量超过原估值事件');
+    const value = Math.abs(quantity - maxQty) <= EPS ? -Number(original.value_delta_cents) - Number(already.value) : allocateProportionalCents(-Number(original.value_delta_cents), quantity, -Number(original.quantity_delta));
+    return receiveValue(db, { ...input, productId: original.product_id, warehouseId: input.warehouseId || original.warehouse_id, lotId: original.lot_id, serialId: original.serial_id, valueCents: value, quantity, reversalOfId: original.id, valuationBasis: 'ORIGINAL_COST' });
+  });
 }
 
-export function consumeOriginalInboundValue(db,input){ assertFinancialPeriodsOpen(db,input.businessDate); const originals=db.prepare("SELECT * FROM inventory_valuation_movements WHERE source_type=? AND source_id=? AND source_item_id=? AND quantity_delta>0 AND status='POSTED' ORDER BY created_at,id").all(input.originalSourceType,input.originalSourceId,input.originalSourceItemId); if(!originals.length){const activated=db.prepare('SELECT valuation_activated_at FROM products WHERE id=?').get(input.productId)?.valuation_activated_at;if(!activated)return[writeLegacyMovement(db,input,-Number(input.quantity))];throw new HttpError(409,'原入库缺少权威估值事件');} let remaining=Number(input.quantity),out=[]; for(const original of originals){if(remaining<=EPS)break;const consumed=-Number(db.prepare('SELECT COALESCE(SUM(quantity_delta),0)n FROM inventory_valuation_movements WHERE reversal_of_id=?').get(original.id).n);const available=Number(original.quantity_delta)-consumed;if(available<=EPS)continue;const quantity=Math.min(remaining,available);const value=Math.abs(quantity-available)<=EPS?Number(original.value_delta_cents)-Number(db.prepare('SELECT COALESCE(SUM(-value_delta_cents),0)n FROM inventory_valuation_movements WHERE reversal_of_id=?').get(original.id).n):allocateProportionalCents(Number(original.value_delta_cents),quantity,Number(original.quantity_delta));const {method,key,row}=getBalance(db,{...input,lotId:original.lot_id,serialId:original.serial_id});if(!row||Number(row.quantity)+EPS<quantity||Number(row.value_cents)<value)throw new HttpError(409,'原入库身份/价值已不可用于冲销');out.push(writeMovement(db,{...input,lotId:original.lot_id,serialId:original.serial_id,reversalOfId:original.id},-quantity,-value,method,key));remaining-=quantity;}if(remaining>EPS)throw new HttpError(409,'冲销数量超过原入库未冲销数量');return out; }
+export function consumeOriginalInboundValue(db,input){
+return runGuardedMutation(db, () => {
+      guardPeriodAction(db, { actionCode: 'INVENTORY_VALUATION', businessDate: input.businessDate });
+  guardPeriodAction(db, { actionCode: 'INVENTORY_VALUATION', businessDate: input.businessDate }); const originals=db.prepare("SELECT * FROM inventory_valuation_movements WHERE source_type=? AND source_id=? AND source_item_id=? AND quantity_delta>0 AND status='POSTED' ORDER BY created_at,id").all(input.originalSourceType,input.originalSourceId,input.originalSourceItemId); if(!originals.length){const activated=db.prepare('SELECT valuation_activated_at FROM products WHERE id=?').get(input.productId)?.valuation_activated_at;if(!activated)return[writeLegacyMovement(db,input,-Number(input.quantity))];throw new HttpError(409,'原入库缺少权威估值事件');} let remaining=Number(input.quantity),out=[]; for(const original of originals){if(remaining<=EPS)break;const consumed=-Number(db.prepare('SELECT COALESCE(SUM(quantity_delta),0)n FROM inventory_valuation_movements WHERE reversal_of_id=?').get(original.id).n);const available=Number(original.quantity_delta)-consumed;if(available<=EPS)continue;const quantity=Math.min(remaining,available);const value=Math.abs(quantity-available)<=EPS?Number(original.value_delta_cents)-Number(db.prepare('SELECT COALESCE(SUM(-value_delta_cents),0)n FROM inventory_valuation_movements WHERE reversal_of_id=?').get(original.id).n):allocateProportionalCents(Number(original.value_delta_cents),quantity,Number(original.quantity_delta));const {method,key,row}=getBalance(db,{...input,lotId:original.lot_id,serialId:original.serial_id});if(!row||Number(row.quantity)+EPS<quantity||Number(row.value_cents)<value)throw new HttpError(409,'原入库身份/价值已不可用于冲销');out.push(writeMovement(db,{...input,lotId:original.lot_id,serialId:original.serial_id,reversalOfId:original.id},-quantity,-value,method,key));remaining-=quantity;}if(remaining>EPS)throw new HttpError(409,'冲销数量超过原入库未冲销数量');return out;
+});
+}
 
 function identityAllocations(db, sourceType, sourceId, sourceItemId) {
   return db.prepare(`SELECT lot_id lotId,serial_id serialId,quantity FROM tracked_source_allocations
@@ -201,17 +174,19 @@ export function receivePositiveSourceValue(db,input){
 }
 
 export function createSystemVoucher(db, input) {
-     assertFinancialPeriodsOpen(db, input.businessDate, input.allowClosedInventoryPeriod === true);
-  const existing = db.prepare("SELECT id FROM accounting_vouchers WHERE voucher_origin='SYSTEM' AND source_type=? AND source_id=?").get(input.sourceType,input.sourceId);
-  if (existing) return existing.id;
-  const normalized = input.entries.filter((e) => Number(e.amountCents) !== 0).map((e) => ({ ...e, amountCents: Math.abs(Number(e.amountCents)), subjectId: e.subjectId || accountForRole(db,e.role).id }));
-  const debit = normalized.filter((e)=>e.direction==='DEBIT').reduce((s,e)=>s+e.amountCents,0); const credit = normalized.filter((e)=>e.direction==='CREDIT').reduce((s,e)=>s+e.amountCents,0);
-  if (!normalized.length) return null;
-  if (!Number.isSafeInteger(debit) || debit !== credit) throw new HttpError(409, '系统凭证借贷不平衡');
-  const voucherId=id(); const now=new Date().toISOString();
-  db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,business_date,remark,creator_id,created_at,updated_at,status,voucher_origin,reversal_of_id,approved_at,approver_id,period)
-    VALUES(?,?,?,?,?,?,?,?,?,?,'POSTED','SYSTEM',?,?,?,?)`).run(voucherId,`SYS-${Date.now()}-${voucherId.slice(0,6)}`,input.sourceType,input.sourceId,input.businessDate,input.businessDate,input.remark||'',input.actorId,now,now,input.reversalOfId||null,now,input.actorId,input.businessDate.slice(0,7));
-  const stmt=db.prepare('INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary,line_no) VALUES(?,?,?,?,?,?,?)'); normalized.forEach((e,i)=>stmt.run(id(),voucherId,e.subjectId,e.direction,e.amountCents,e.summary||'',i+1)); return voucherId;
+    return runGuardedMutation(db, () => {
+    guardVoucherAction(db, input.businessDate, input.periodActionCode || 'LEGAL_VOUCHER');
+    const existing = db.prepare("SELECT id FROM accounting_vouchers WHERE voucher_origin='SYSTEM' AND source_type=? AND source_id=?").get(input.sourceType,input.sourceId);
+    if (existing) return existing.id;
+    const normalized = input.entries.filter((e) => Number(e.amountCents) !== 0).map((e) => ({ ...e, amountCents: Math.abs(Number(e.amountCents)), subjectId: e.subjectId || accountForRole(db,e.role).id }));
+    const debit = normalized.filter((e)=>e.direction==='DEBIT').reduce((s,e)=>s+e.amountCents,0); const credit = normalized.filter((e)=>e.direction==='CREDIT').reduce((s,e)=>s+e.amountCents,0);
+    if (!normalized.length) return null;
+    if (!Number.isSafeInteger(debit) || debit !== credit) throw new HttpError(409, '系统凭证借贷不平衡');
+    const voucherId=id(); const now=new Date().toISOString();
+    db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,business_date,remark,creator_id,created_at,updated_at,status,voucher_origin,reversal_of_id,approved_at,approver_id,period)
+      VALUES(?,?,?,?,?,?,?,?,?,?,'POSTED','SYSTEM',?,?,?,?)`).run(voucherId,`SYS-${Date.now()}-${voucherId.slice(0,6)}`,input.sourceType,input.sourceId,input.businessDate,input.businessDate,input.remark||'',input.actorId,now,now,input.reversalOfId||null,now,input.actorId,input.businessDate.slice(0,7));
+    const stmt=db.prepare('INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary,line_no) VALUES(?,?,?,?,?,?,?)'); normalized.forEach((e,i)=>stmt.run(id(),voucherId,e.subjectId,e.direction,e.amountCents,e.summary||'',i+1)); return voucherId;
+  });
 }
 
 // Wave 6 — Bounded Option A pool-only valuation adapter for Sales Return confirm.
@@ -219,88 +194,92 @@ export function createSystemVoucher(db, input) {
 // STANDARD_COST / LEGACY_UNVALUED / synthetic-zero / client-supplied fallbacks are forbidden.
 // Falls closed (HTTP 409) when no positive pool exists at the same identity.
 export function applyWave6SalesReturnPoolValue(db, input) {
-  assertFinancialPeriodsOpen(db, input.businessDate);
-  if (!input.productId || !input.warehouseId || !input.businessDate) {
-    throw new HttpError(409, 'Wave6 Option A: missing product/warehouse/businessDate');
-  }
-  if (!Number.isFinite(Number(input.quantity)) || Number(input.quantity) <= 0) {
-    throw new HttpError(409, 'Wave6 Option A: quantity must be positive');
-  }
-  // Pool identity must be MOVING_AVERAGE / LOT / SERIAL — strict, no lot for MOVING_AVERAGE
-  const method = valuationMethod(db, input.productId);
-  const lotId = input.lotId || null;
-  const serialId = input.serialId || null;
-  const requireCheck = db.prepare('SELECT valuation_activated_at FROM products WHERE id=?').get(input.productId);
-  if (!requireCheck || !requireCheck.valuation_activated_at) {
-    throw new HttpError(409, 'Wave6 Option A Gate: 估值未启用，禁止入库');
-  }
-  // Look up existing positive pool at the same identity
-  const key = method === 'LOT_SPECIFIC_POOL'
-    ? `LOT:${input.warehouseId}:${input.productId}:${lotId}`
-    : method === 'SPECIFIC_SERIAL'
-      ? `SERIAL:${serialId}`
-      : `NONE:${input.warehouseId}:${input.productId}`;
-  const row = db.prepare('SELECT * FROM inventory_valuation_balances WHERE balance_key=?').get(key);
-  if (!row || Number(row.quantity) <= 0 || Number(row.value_cents) <= 0) {
-    throw new HttpError(409, 'Wave6 Option A Gate: 同一身份无合法正数估值池，禁止入库');
-  }
-  if (lotId && lotId !== row.lot_id) throw new HttpError(409, 'Wave6 Option A Gate: LOT 身份不匹配');
-  const existing = Math.abs(Number(row.quantity) - Number(input.quantity)) <= 1e-9;
-  const newQty = Number(input.quantity);
-  const newValue = existing ? Number(row.value_cents) : allocateProportionalCents(Number(row.value_cents), newQty, Number(row.quantity));
-  if (!Number.isSafeInteger(newValue)) throw new HttpError(409, 'Wave6 Option A Gate: 分摊价值溢出 safe integer');
-  const basis = method === 'LOT_SPECIFIC_POOL' ? 'LOT_CARRYING' : method === 'SPECIFIC_SERIAL' ? 'SERIAL_EXISTING' : 'MOVING_AVERAGE';
-  return receiveValue(db, {
-    businessDate: input.businessDate,
-    productId: input.productId,
-    warehouseId: input.warehouseId,
-    lotId,
-    serialId,
-    quantity: newQty,
-    valueCents: newValue,
-    valuationBasis: basis,
-    movementType: input.movementType || 'WAVE6_SALES_RETURN_POOL_VALUE',
-    sourceType: input.sourceType,
-    sourceId: input.sourceId,
-    sourceItemId: input.sourceItemId,
-    inventoryTransactionId: input.inventoryTransactionId,
+    return runGuardedMutation(db, () => {
+    guardPeriodAction(db, { actionCode: 'INVENTORY_VALUATION', businessDate: input.businessDate });
+    if (!input.productId || !input.warehouseId || !input.businessDate) {
+      throw new HttpError(409, 'Wave6 Option A: missing product/warehouse/businessDate');
+    }
+    if (!Number.isFinite(Number(input.quantity)) || Number(input.quantity) <= 0) {
+      throw new HttpError(409, 'Wave6 Option A: quantity must be positive');
+    }
+    // Pool identity must be MOVING_AVERAGE / LOT / SERIAL — strict, no lot for MOVING_AVERAGE
+    const method = valuationMethod(db, input.productId);
+    const lotId = input.lotId || null;
+    const serialId = input.serialId || null;
+    const requireCheck = db.prepare('SELECT valuation_activated_at FROM products WHERE id=?').get(input.productId);
+    if (!requireCheck || !requireCheck.valuation_activated_at) {
+      throw new HttpError(409, 'Wave6 Option A Gate: 估值未启用，禁止入库');
+    }
+    // Look up existing positive pool at the same identity
+    const key = method === 'LOT_SPECIFIC_POOL'
+      ? `LOT:${input.warehouseId}:${input.productId}:${lotId}`
+      : method === 'SPECIFIC_SERIAL'
+        ? `SERIAL:${serialId}`
+        : `NONE:${input.warehouseId}:${input.productId}`;
+    const row = db.prepare('SELECT * FROM inventory_valuation_balances WHERE balance_key=?').get(key);
+    if (!row || Number(row.quantity) <= 0 || Number(row.value_cents) <= 0) {
+      throw new HttpError(409, 'Wave6 Option A Gate: 同一身份无合法正数估值池，禁止入库');
+    }
+    if (lotId && lotId !== row.lot_id) throw new HttpError(409, 'Wave6 Option A Gate: LOT 身份不匹配');
+    const existing = Math.abs(Number(row.quantity) - Number(input.quantity)) <= 1e-9;
+    const newQty = Number(input.quantity);
+    const newValue = existing ? Number(row.value_cents) : allocateProportionalCents(Number(row.value_cents), newQty, Number(row.quantity));
+    if (!Number.isSafeInteger(newValue)) throw new HttpError(409, 'Wave6 Option A Gate: 分摊价值溢出 safe integer');
+    const basis = method === 'LOT_SPECIFIC_POOL' ? 'LOT_CARRYING' : method === 'SPECIFIC_SERIAL' ? 'SERIAL_EXISTING' : 'MOVING_AVERAGE';
+    return receiveValue(db, {
+      businessDate: input.businessDate,
+      productId: input.productId,
+      warehouseId: input.warehouseId,
+      lotId,
+      serialId,
+      quantity: newQty,
+      valueCents: newValue,
+      valuationBasis: basis,
+      movementType: input.movementType || 'WAVE6_SALES_RETURN_POOL_VALUE',
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+      sourceItemId: input.sourceItemId,
+      inventoryTransactionId: input.inventoryTransactionId,
+    });
   });
 }
 
 export function reverseValuationSource(db, input) {
-  assertFinancialPeriodsOpen(db, input.businessDate);
-  const originals = db.prepare(`SELECT * FROM inventory_valuation_movements
-    WHERE source_type=? AND source_id=? AND status IN ('POSTED','LEGACY_UNVALUED')
-    ORDER BY created_at,id`).all(input.originalSourceType, input.originalSourceId);
-  if (!originals.length) throw new HttpError(409, '原单缺少价值流水，不能冲销');
-  const result = [];
-  for (const original of originals) {
-    if (db.prepare('SELECT 1 FROM inventory_valuation_movements WHERE reversal_of_id=? LIMIT 1').get(original.id)) throw new HttpError(409, '原价值事件已冲销');
-    const movementInput = {
-      businessDate: input.businessDate,
-      productId: original.product_id,
-      warehouseId: original.warehouse_id,
-      lotId: original.lot_id,
-      serialId: original.serial_id,
-      movementType: `${original.movement_type}_REVERSAL`,
-      sourceType: input.reversalSourceType,
-      sourceId: input.reversalSourceId,
-      sourceItemId: original.source_item_id,
-      inventoryTransactionId: input.transactionIdByOriginal?.get(original.inventory_transaction_id) || null,
-      reversalOfId: original.id,
-      valuationBasis: 'ORIGINAL_COST',
-    };
-    if (original.status === 'LEGACY_UNVALUED') {
-      result.push(writeLegacyMovement(db, movementInput, -Number(original.quantity_delta)));
-      continue;
+    return runGuardedMutation(db, () => {
+    guardPeriodAction(db, { actionCode: 'INVENTORY_VALUATION', businessDate: input.businessDate });
+    const originals = db.prepare(`SELECT * FROM inventory_valuation_movements
+      WHERE source_type=? AND source_id=? AND status IN ('POSTED','LEGACY_UNVALUED')
+      ORDER BY created_at,id`).all(input.originalSourceType, input.originalSourceId);
+    if (!originals.length) throw new HttpError(409, '原单缺少价值流水，不能冲销');
+    const result = [];
+    for (const original of originals) {
+      if (db.prepare('SELECT 1 FROM inventory_valuation_movements WHERE reversal_of_id=? LIMIT 1').get(original.id)) throw new HttpError(409, '原价值事件已冲销');
+      const movementInput = {
+        businessDate: input.businessDate,
+        productId: original.product_id,
+        warehouseId: original.warehouse_id,
+        lotId: original.lot_id,
+        serialId: original.serial_id,
+        movementType: `${original.movement_type}_REVERSAL`,
+        sourceType: input.reversalSourceType,
+        sourceId: input.reversalSourceId,
+        sourceItemId: original.source_item_id,
+        inventoryTransactionId: input.transactionIdByOriginal?.get(original.inventory_transaction_id) || null,
+        reversalOfId: original.id,
+        valuationBasis: 'ORIGINAL_COST',
+      };
+      if (original.status === 'LEGACY_UNVALUED') {
+        result.push(writeLegacyMovement(db, movementInput, -Number(original.quantity_delta)));
+        continue;
+      }
+      const { method, key, row } = getBalance(db, movementInput);
+      const quantityDelta = -Number(original.quantity_delta);
+      const valueDelta = -Number(original.value_delta_cents);
+      if (quantityDelta < 0 && (!row || Number(row.quantity) + EPS < -quantityDelta || Number(row.value_cents) < -valueDelta)) throw new HttpError(409, '原入库的数量或价值已不可用，不能冲销');
+      result.push(writeMovement(db, movementInput, quantityDelta, valueDelta, method, key));
     }
-    const { method, key, row } = getBalance(db, movementInput);
-    const quantityDelta = -Number(original.quantity_delta);
-    const valueDelta = -Number(original.value_delta_cents);
-    if (quantityDelta < 0 && (!row || Number(row.quantity) + EPS < -quantityDelta || Number(row.value_cents) < -valueDelta)) throw new HttpError(409, '原入库的数量或价值已不可用，不能冲销');
-    result.push(writeMovement(db, movementInput, quantityDelta, valueDelta, method, key));
-  }
-  return result;
+    return result;
+  });
 }
 
 export function reverseSystemVoucher(db, input) {

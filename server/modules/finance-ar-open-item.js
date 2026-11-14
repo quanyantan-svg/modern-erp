@@ -18,8 +18,8 @@ import { audit } from '../lib/audit.js';
 import { id, transaction } from '../db.js';
 import { resolveRecognitionPolicy, RECOGNITION_MODES } from './finance-recognition-policy.js';
 import { refreshOpenAmount, assertOpenAmountReconciled } from './finance-refresh-open-amount.js';
-import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 import { applyDueScheduleForOpenItem } from './finance-due-plan.js';
+import { guardPeriodAction } from './period-control.js';
 
 export function listAccountReceivables(db, res, actor, query = {}) {
   allow(actor, 'FINANCE_AR_VIEW');
@@ -57,7 +57,7 @@ export async function createManualAccountReceivable(db, req, res, actor) {
   const now = new Date().toISOString();
   const arId = id();
   runInTransaction(db, () => {
-    assertFinanceBusinessDateOpen(db, 'AR', businessDate);
+    guardPeriodAction(db, { actionCode: 'FINANCE_AR_MUTATION', businessDate: businessDate });
     db.prepare(
       `INSERT INTO account_receivables(
          id, voucher_no, customer_id, source_type, source_id,
@@ -87,7 +87,7 @@ export function createProvisionalAR(db, source, amountCents, businessDate, party
   if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
     throw new HttpError(400, 'PROVISIONAL AR 金额非法');
   }
-  assertFinanceBusinessDateOpen(db, 'AR', businessDate);
+  guardPeriodAction(db, { actionCode: 'FINANCE_AR_MUTATION', businessDate: businessDate });
   const now = new Date().toISOString();
   const arId = id();
   db.prepare(

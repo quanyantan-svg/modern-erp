@@ -20,6 +20,7 @@ import { HttpError, allow, allowAny, readJson, requiredText, send } from '../lib
 import { audit } from '../lib/audit.js';
 import { id, transaction } from '../db.js';
 import { createSystemVoucher, reverseSystemVoucher } from './financial-inventory.js';
+import { guardVoucherAction } from './period-control.js';
 
 export const CASHIER_REVIEW_STATUSES = Object.freeze([
   'NOT_REQUIRED',
@@ -36,16 +37,11 @@ function accountPeriod(voucher) {
   return String(date).slice(0, 7);
 }
 
-export function isPeriodClosed(db, period) {
-  if (!period) return false;
-  return Boolean(db.prepare("SELECT 1 FROM period_closures WHERE period=? AND status='CLOSED'").get(period));
-}
-
-function assertPeriodOpen(db, voucher, operation) {
-  const period = accountPeriod(voucher);
-  if (isPeriodClosed(db, period)) {
-    throw new HttpError(409, '会计期间 ' + period + ' 已结账，禁止' + operation, { code: 'PERIOD_CLOSED' });
-  }
+// The legal period of a posting is decided by the canonical period guard; this
+// module must not read the period tables itself.
+function assertPeriodOpen(db, voucher) {
+  const businessDate = voucher.business_date || voucher.voucher_date || '';
+  guardVoucherAction(db, businessDate, 'LEGAL_VOUCHER');
 }
 
 /**
@@ -127,8 +123,6 @@ export function reverseVoucher(db, { voucherId, actorId, reason, businessDate })
   if (alreadyReversed) {
     throw new HttpError(409, '凭证已被冲销', { code: 'VOUCHER_ALREADY_REVERSED' });
   }
-  assertPeriodOpen(db, original, '冲销');
-
   const entries = loadVoucherEntries(db, voucherId);
   if (!entries.length) {
     throw new HttpError(409, '凭证没有分录，无法冲销', { code: 'VOUCHER_HAS_NO_ENTRIES' });
@@ -141,6 +135,7 @@ export function reverseVoucher(db, { voucherId, actorId, reason, businessDate })
 
   const effectiveDate = businessDate || original.business_date || original.voucher_date;
   const reversalId = transaction(db, () => {
+    assertPeriodOpen(db, original);
     const reversed = createSystemVoucher(db, {
       sourceType: original.voucher_origin === 'SYSTEM' ? 'SYSTEM_REVERSAL' : 'MANUAL_REVERSAL',
       sourceId: original.id,
@@ -170,7 +165,6 @@ export function supplementVoucher(db, { voucherId, actorId, entries, reason, bus
   if (original.status !== 'POSTED') {
     throw new HttpError(409, '只有已过账凭证可以补记', { code: 'VOUCHER_CORRECTION_NOT_ALLOWED' });
   }
-  assertPeriodOpen(db, original, '补记');
   const normalized = (entries || [])
     .filter((entry) => Number(entry.amountCents) !== 0)
     .map((entry) => ({ ...entry, amountCents: Math.abs(Number(entry.amountCents)) }));
@@ -184,6 +178,7 @@ export function supplementVoucher(db, { voucherId, actorId, entries, reason, bus
   }
   const effectiveDate = businessDate || original.business_date || original.voucher_date;
   const supplementId = transaction(db, () => {
+    assertPeriodOpen(db, original);
     const created = createSystemVoucher(db, {
       sourceType: 'SUPPLEMENT',
       sourceId: original.id,

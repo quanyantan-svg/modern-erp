@@ -5,7 +5,7 @@
 // Existing mature primitives (settlement_unapplied_balances + balance_applications
 // + financial_refunds) are convergent. This module exposes Finance canonical
 // façade methods that:
-//   1. assertFinanceBusinessDateOpen
+//   1. canonical 期间守卫（FINANCE_AR / FINANCE_AP 轴 + 法定会计轴）
 //   2. delegate to canonical source-table writes
 //   3. refreshOpenAmount / assertOpenAmountReconciled
 //
@@ -18,8 +18,9 @@ import { HttpError, allow, send, readJson, requiredText } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
 import { id, transaction } from '../db.js';
 import { refreshOpenAmount, assertOpenAmountReconciled } from './finance-refresh-open-amount.js';
-import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 import { openItemSnapshot, unappliedBalanceSnapshot } from './settlement-core.js';
+import { guardPeriodAction } from './period-control.js';
+import { financeActionCode } from './period-action-registry.js';
 
 export async function postAdvanceReceipt(db, req, res, actor) {
   // FO23 customer-side prepayment. Side=CUSTOMER, balance_type=PREPAYMENT.
@@ -32,7 +33,7 @@ export async function postAdvanceReceipt(db, req, res, actor) {
   const now = new Date().toISOString();
   const balanceId = id();
   runInTransaction(db, () => {
-    assertFinanceBusinessDateOpen(db, 'AR', businessDate);
+    guardPeriodAction(db, { actionCode: 'FINANCE_AR_MUTATION', businessDate: businessDate });
     // create a payment_collections header (existing mature path) with explicit_unapplied=1
     db.prepare(
       `INSERT INTO payment_collections(id, collection_no, customer_id, receivable_id, amount_cents, payment_method, collection_date, remark, creator_id, created_at, status, external_reference, reversed_amount_cents, reversal_status, settlement_account_id, unapplied_amount_cents, explicit_unapplied)
@@ -63,7 +64,7 @@ export async function postBalanceApplication(db, req, res, actor) {
   const businessDate = requiredText(body.businessDate, 'businessDate', 16);
   const now = new Date().toISOString();
   runInTransaction(db, () => {
-    assertFinanceBusinessDateOpen(db, side, businessDate);
+    guardPeriodAction(db, { actionCode: financeActionCode(side), businessDate: businessDate });
     const balance = db.prepare('SELECT * FROM settlement_unapplied_balances WHERE id=?').get(balanceId);
     if (!balance || balance.status !== 'OPEN') throw new HttpError(409, '未核销余额不存在或已关闭');
     const expectedBalanceSide = side === 'AR' ? 'CUSTOMER' : side === 'AP' ? 'SUPPLIER' : null;

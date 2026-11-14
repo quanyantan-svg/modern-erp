@@ -11,7 +11,6 @@ import {
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 import { createPurchaseOrderDraftCanonical } from './procurement-orders.js';
 import { assertSupplierQualification } from './procurement-sourcing.js';
-import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 import { assertSourceControl, assertSupplierCategoryAllows } from './procurement-policy.js';
 import { resolvePurchaseLinePricing } from './procurement-pricing.js';
 import { applyInventoryMutation } from '../lib/inventory-mutation.js';
@@ -22,6 +21,7 @@ import {
   readOutsourcingReceivingContext, resolveOutsourcingOrderId,
 } from './outsourcing-read-models.js';
 import { deriveQualityState } from './quality-gates.js';
+import { guardPeriodAction } from './period-control.js';
 
 const VIEW_PERMISSIONS = ['OUTSOURCING_VIEW', 'OUTSOURCING_MANAGE', 'OUTSOURCING_RELEASE'];
 const MATERIAL_PERMISSIONS = ['OUTSOURCING_MATERIAL_EXECUTE'];
@@ -1144,11 +1144,6 @@ export async function createOutsourcingReceipt(db, req, res, actor) {
   const order = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(body.orderId);
   if (!order) throw new HttpError(404, '委外订单不存在');
   if (!['RELEASED'].includes(order.status)) throw new HttpError(409, '只有下达状态可收货');
-  // OUT-23：委外收货登记的是**加工费金额基准**（收货生效时确认，§26.20
-  // C-P01），它是 AP 侧敞口的起点。因此它必须受既有 AP 业务关闭门禁约束：
-  // 复用 `assertFinanceBusinessDateOpen('AP', ...)`（canonical 单一实现），
-  // 不新建第二套关闭规则，也不新增 close_type。
-  assertFinanceBusinessDateOpen(db, 'AP', body.businessDate || body.receivedDate || new Date().toISOString().slice(0, 10));
   const quantity = Number(body.quantity);
   const itemQuantity = body.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
   if (!Number.isFinite(quantity) || quantity <= 0 || body.items.some((item) => !Number.isFinite(Number(item.quantity)) || Number(item.quantity) <= 0)) {
@@ -1163,6 +1158,9 @@ export async function createOutsourcingReceipt(db, req, res, actor) {
   try { transaction(db, () => {
     const lockedOrder = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(body.orderId);
     if (!lockedOrder || lockedOrder.status !== 'RELEASED') throw businessConflict('OUTSOURCING_RECEIPT_SOURCE_MISMATCH', '委外订单状态已变化');
+    // OUT-23：委外收货登记的是加工费金额基准，是 AP 侧敞口的起点。
+    // 在同一写事务内锁定 canonical AP + Legal 期间轴后再继续任何写入。
+    guardPeriodAction(db, { actionCode: 'FINANCE_AP_MUTATION', businessDate: body.businessDate || body.receivedDate || now.slice(0, 10) });
     const processingPo = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(body.processingPoId);
     const processingPoItems = processingPo ? db.prepare('SELECT * FROM purchase_order_items WHERE order_id=? ORDER BY line_no').all(processingPo.id) : [];
     if (!processingPo || processingPo.status !== 'APPROVED' || processingPo.business_type !== 'OUTSOURCE_PROCESSING'

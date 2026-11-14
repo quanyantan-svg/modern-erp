@@ -186,7 +186,7 @@ function runDefinition(db, { actor, definition, period }) {
       remark: definition.name,
       // AA-W3.16 — 期末处理只写总账，不触碰存货数量与估值，因此不受存货
       // 月结截止限制；会计期间截止仍然生效。
-      allowClosedInventoryPeriod: true,
+      periodActionCode: 'GL_PERIOD_END',
       entries: [
         { subjectId: targetSubjectId, direction: definition.direction, amountCents, summary: definition.name },
         { subjectId: sourceSubjectId, direction: definition.direction === 'DEBIT' ? 'CREDIT' : 'DEBIT', amountCents, summary: definition.name },
@@ -341,7 +341,7 @@ function transferProfit(db, { actor, period, reason }) {
       remark: reason || '损益结转 ' + period,
       // AA-W3.16 — 损益结转是纯总账操作，存货月结已关闭时仍可执行；
       // 会计期间一旦关闭则永远拒绝新增过账。
-      allowClosedInventoryPeriod: true,
+      periodActionCode: 'GL_PERIOD_END',
       entries,
     }));
     transaction(db, () => {

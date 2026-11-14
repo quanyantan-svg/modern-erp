@@ -10,8 +10,8 @@
 > 裁定记录 [`docs/decisions/platform-domain-closure-decisions-20261113.md`](../decisions/platform-domain-closure-decisions-20261113.md)。
 > 平台目标形态来自 [`solution.md` §20.6、§20.7](../../solution.md)。
 > **Implementation 状态：`NOT_AUTHORIZED`** —— 按 AGENTS.md §4.3，Design 完成后 HARD STOP，须业务所有者明确批准方可开工。
-> **2026-11-14 有界解冻**：业务所有者已批准 Requirement §36.15，并授权进入 Design；新增 §32.15
-> 状态为 `PENDING_APPROVAL`，只覆盖 R-02 期间控制一致性，既有 §32.0–§32.14 结论不变。
+> **2026-11-14 有界解冻**：业务所有者已批准 Requirement §36.15 与新增 §32.15（Design `APPROVED`），
+> 并授权实施；§32.15 只覆盖 R-02 期间控制一致性，既有 §32.0–§32.14 结论不变。
 
 ## 32. Platform 平台层域 Domain Technical Design
 
@@ -1036,7 +1036,7 @@ MySQL 上返回同一单号（PL-DEF-12）；通知去重在真实 MySQL 上只�
 
 ### 32.15 Canonical Period Guard 与跨域协调设计（R-02）
 
-> 状态：`PENDING_APPROVAL`；上游合同：Requirement §36.15；Implementation：`NOT_AUTHORIZED`。
+> 状态：`APPROVED`（业务所有者 2026-11-14 批准）；上游合同：Requirement §36.15；Implementation：已授权（2026-11-14 起实施）。
 > 本节只统一「某动作在某业务日期必须通过哪些期间轴」的执行机制，不接管各 Domain 的关账业务语义，
 > 不把四类期间表合并成一张业务表。
 
@@ -1171,8 +1171,9 @@ mutation 先于 close 且已被 close 纳入；仅以 direct INSERT worker 制�
 
 #### 32.15.8 Design 状态与 HARD STOP
 
-本节 Design：`PENDING_APPROVAL`；Requirement §36.15：`APPROVED`；Implementation：
-`NOT_AUTHORIZED`。未解决前置项只有：Implementation 批准，以及 Acceptance 前对专属 ACK-4 campaign 的
+本节 Design：`APPROVED`（2026-11-14）；Requirement §36.15：`APPROVED`；Implementation：
+已授权，并于 2026-11-14 起实施。未解决前置项只剩一项：Acceptance 前对专属 ACK-4 campaign 的
 独立批准。
 
-**HARD STOP**：业务所有者明确批准本 Design 前，不得修改 schema、代码、测试或执行 MySQL campaign。
+**HARD STOP**：专属 ACK-4 campaign（manifest、目标库、执行入口）仍须业务所有者单独批准；在批准前
+不得运行，也不得以 SQLite 结果或历史 MySQL campaign 替代其并发证据。

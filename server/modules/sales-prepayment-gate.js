@@ -28,9 +28,9 @@ import {
   lockEligiblePrepaymentParents,
   resolveEligiblePrepaymentForSalesGate,
 } from './sales-prepayment-finance-adapter.js';
-import { assertFinancialPeriodsOpen } from './financial-inventory.js';
 import { assertReservationBehaviorEnabled, assertSalesOrderDeliveryScheduleEnabled } from './sales-parameters.js';
 import { isGateRetryAdmissionExpired, startGateRetryAdmission } from './sales-gate-retry-admission.js';
+import { guardPeriodAction } from './period-control.js';
 
 function now() { return new Date().toISOString(); }
 
@@ -514,7 +514,7 @@ export async function evaluateSalesPrepaymentGate(db, req, res, actor, salesOrde
           result.replayed = true;
           return;
         }
-        assertFinancialPeriodsOpen(db, asOf);
+        guardPeriodAction(db, { actionCode: 'INVENTORY_GATED_POSTING', businessDate: asOf });
         const lock = db.dialect === 'mysql' ? ' FOR UPDATE' : '';
         // L1 — canonical Finance PREPAYMENT parents by id ASC, before any Gate row lock.
         lockEligiblePrepaymentParents(db, plan.parentBalanceIds);

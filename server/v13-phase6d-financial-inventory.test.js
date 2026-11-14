@@ -3,12 +3,25 @@ import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { createApp } from './app.js';
+import { transaction } from './db.js';
 import { createTempDb } from './test-utils/temp-db.js';
 import {
-  allocateProportionalCents, assertFinancialPeriodsOpen, changeValuationMethod,
-  consumeOriginalInboundValue, createSystemVoucher, issueValue, receiveValue,
-  restoreOriginalValue, reverseSystemVoucher, reverseValuationSource, systemHealth, valuationMethod,
+  allocateProportionalCents, changeValuationMethod,
+  consumeOriginalInboundValue as consumeOriginalInboundValueCore, createSystemVoucher as createSystemVoucherCore,
+  issueValue as issueValueCore, receiveValue as receiveValueCore,
+  restoreOriginalValue as restoreOriginalValueCore, reverseSystemVoucher as reverseSystemVoucherCore,
+  reverseValuationSource as reverseValuationSourceCore, systemHealth, valuationMethod,
 } from './modules/financial-inventory.js';
+import { guardPeriodAction } from './modules/period-control.js';
+
+const inTransaction = (target, operation) => transaction(target, operation);
+const receiveValue = (target, input) => inTransaction(target, () => receiveValueCore(target, input));
+const issueValue = (target, input) => inTransaction(target, () => issueValueCore(target, input));
+const consumeOriginalInboundValue = (target, input) => inTransaction(target, () => consumeOriginalInboundValueCore(target, input));
+const restoreOriginalValue = (target, input) => inTransaction(target, () => restoreOriginalValueCore(target, input));
+const createSystemVoucher = (target, input) => inTransaction(target, () => createSystemVoucherCore(target, input));
+const reverseSystemVoucher = (target, input) => inTransaction(target, () => reverseSystemVoucherCore(target, input));
+const reverseValuationSource = (target, input) => inTransaction(target, () => reverseValuationSourceCore(target, input));
 
 let handle; let db;
 const at='2026-09-24T00:00:00.000Z';
@@ -62,8 +75,8 @@ describe('V1.3 Phase 6D financial inventory valuation',()=>{
   });
 
   test('closed inventory or accounting period blocks before mutation',()=>{
-    db.prepare("INSERT INTO inventory_period_closures(id,period_key,status,closed_by,closed_at,notes) VALUES('p6d-close','2026-10','CLOSED','user-admin',?,'')").run(at); assert.throws(()=>assertFinancialPeriodsOpen(db,'2026-10-01'),/存货期间/);
-    db.prepare("INSERT INTO period_closures(id,period,period_year,period_month,status,created_at) VALUES('p6d-ac','2026-11',2026,11,'CLOSED',?)").run(at); assert.throws(()=>assertFinancialPeriodsOpen(db,'2026-11-01'),/会计期间/);
+    db.prepare("INSERT INTO inventory_period_closures(id,period_key,status,closed_by,closed_at,notes) VALUES('p6d-close','2026-10','CLOSED','user-admin',?,'')").run(at); assert.throws(()=>transaction(db,()=>guardPeriodAction(db,{actionCode:'INVENTORY_VALUATION',businessDate:'2026-10-01'})),/存货期间/);
+    db.prepare("INSERT INTO period_closures(id,period,period_year,period_month,status,created_at) VALUES('p6d-ac','2026-11',2026,11,'CLOSED',?)").run(at); assert.throws(()=>transaction(db,()=>guardPeriodAction(db,{actionCode:'INVENTORY_VALUATION',businessDate:'2026-11-01'})),/会计期间/);
     // The period guards are shared state. Remove this test's synthetic closes
     // so later valuation/reversal cases continue in an intentionally open period.
     db.prepare("DELETE FROM inventory_period_closures WHERE id='p6d-close'").run();

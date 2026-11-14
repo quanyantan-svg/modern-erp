@@ -1,11 +1,13 @@
 // 治理守卫的回归测试（2026-11-12）
 //
-// 两个只读治理检查必须始终通过；它们把两个系统性问题变成门禁：
+// 三个只读治理检查必须始终通过；它们把三个系统性问题变成门禁：
 //   1. 跨域错误码耦合 —— 一个域的内部错误码被另一个域当作合同依赖。
 //   2. 历史验收记录的有效性 —— 验收记录引用了已不存在或未登记漂移的路径。
+//   3. 期间守卫覆盖 —— 生产 mutation 必须登记具名期间动作，旧闸门不得复活，
+//      mutation owner 不得自己读期间表（docs/design/platform.md §32.15.6）。
 //
 // 检查本身是独立脚本（scripts/qa/），此处只负责把它们纳入常规门禁。
-// 两个脚本都是只读的：不写文件、不碰数据库。
+// 三个脚本都是只读的：不写文件、不碰数据库。
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -21,6 +23,11 @@ const CHECKS = [
     label: 'acceptance record pointer guard',
     script: 'scripts/qa/verify-acceptance-records.mjs',
     expect: /BROKEN 0$/m,
+  },
+  {
+    label: 'period guard coverage guard',
+    script: 'scripts/qa/verify-period-guard-coverage.mjs',
+    expect: /旧闸门 0 处活跃调用/,
   },
 ];
 

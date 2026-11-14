@@ -4,8 +4,8 @@
 > Owner：Finance Operations
 > 权威来源：`solution.md` §28
 > 来源：`solution.md` §28.0–§28.29（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
-> 2026-11-14：业务所有者批准 Requirement §33.51 并授权 Design；新增 §28.30 状态
-> `PENDING_APPROVAL`，Implementation `NOT_AUTHORIZED`，不改变 §28.0–§28.29 的历史验收身份。
+> 2026-11-14：业务所有者批准 Requirement §33.51 与新增 §28.30（Design `APPROVED`）并授权实施；
+> 不改变 §28.0–§28.29 的历史验收身份。
 
 ## 28.0 Scope of This Section
 
@@ -2832,6 +2832,7 @@ Legal 依赖状态、预检阻塞项，提交前收集业务日期与 reason。�
 ### 28.30.4 Schema、错误、审计与兼容
 
 本域不新增第二张 close state 表；继续使用既有 state/history，由 Platform migration 只提供跨域协调 anchor。
+实施结果登记见 [`log/2026-11-14.md`](../../log/2026-11-14.md) 单元十八。
 错误采用 Platform §32.15 的结构：Finance 关闭返回 `FINANCE_PERIOD_CLOSED`（含具体 axis/cutoff）；Legal 关闭
 保持兼容 `FINANCIAL_PERIOD_CLOSED`；依赖、顺序和状态异常返回统一 409。成功 close/reopen audit 记录 axis、
 before/after cutoff、reason；拒绝记录 action、单据、业务日期和命中轴。
@@ -2849,5 +2850,5 @@ focused tests 覆盖三个 axis 的边界日、close 单调性、重开逆序、
 回滚必须与 Platform guard 和其他三域作为一个逻辑单元；保留 state/history/anchor 数据，不做 destructive
 down migration。若整体回退，R-02 恢复为生产发布 blocker。
 
-本节 Design：`PENDING_APPROVAL`；Implementation：`NOT_AUTHORIZED`。
-**HARD STOP**：等待业务所有者批准 Design。
+本节 Design：`APPROVED`（2026-11-14）；Implementation：已授权，并于 2026-11-14 起实施。
+**HARD STOP**：专属 ACK-4 campaign 仍须业务所有者单独批准后方可运行。

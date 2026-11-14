@@ -6,8 +6,8 @@
 > 来源：新增正文（2026-11-10 建立 Accounting & Analytics Domain Technical Design）。
 > 上游合同：`docs/requirements/accounting-analytics.md` `§35`（`APPROVED`，2026-11-10）。
 > 审计基线：`docs/audits/accounting-analytics-capability-audit-20261110.md`（`v0.1`，SHA `eee92c2`）。
-> 2026-11-14：业务所有者批准 Requirement §35.11 并授权 Design；新增 §31.16 状态
-> `PENDING_APPROVAL`，Implementation `NOT_AUTHORIZED`，既有域级 Acceptance / Freeze 仅作有界解冻。
+> 2026-11-14：业务所有者批准 Requirement §35.11 与新增 §31.16（Design `APPROVED`）并授权实施；
+> 既有域级 Acceptance / Freeze 仅作有界解冻。
 
 ## 31. Accounting & Analytics Domain Technical Design
 
@@ -1093,8 +1093,8 @@ AA-W1 → AA-W2 → AA-W5 → AA-W3 → AA-W6 → AA-W4 → AA-W7 → 整域 Acc
 
 ### 31.16 法定与经营期间控制接入设计（R-02）
 
-> 状态：`PENDING_APPROVAL`；上游合同：Requirement §35.11；公共 guard 合同：Platform Design §32.15；
-> Implementation：`NOT_AUTHORIZED`。本节是既有域级 Freeze 的有界解冻，不重开 AA-W1..AA-W7 其他能力。
+> 状态：`APPROVED`（业务所有者 2026-11-14 批准）；上游合同：Requirement §35.11；公共 guard 合同：Platform Design §32.15；
+> Implementation：已授权（2026-11-14 起实施）。本节是既有域级 Freeze 的有界解冻，不重开 AA-W1..AA-W7 其他能力。
 
 #### 31.16.1 Canonical owner 与迁移边界
 
@@ -1166,5 +1166,5 @@ ownership migration 必须逐步完成 caller proof；未切换前旧 owner 可�
 回滚按整个 R-02 逻辑单元执行，保留 additive anchor 与全部历史；禁止只恢复 `extended.js` 的旧 gate 或空 reason
 调用。整体回退后 R-02 必须重新标记为生产发布 blocker。
 
-本节 Design：`PENDING_APPROVAL`；Implementation：`NOT_AUTHORIZED`。
-**HARD STOP**：等待业务所有者批准 Design。
+本节 Design：`APPROVED`（2026-11-14）；Implementation：已授权并于 2026-11-14 实施。
+**HARD STOP**：专属 ACK-4 campaign 仍须业务所有者单独批准后方可运行。
