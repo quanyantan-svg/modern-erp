@@ -775,9 +775,18 @@ POST       /api/fixed-assets/stocktakes/:id/complete  盘点完成
 POST       /api/fixed-assets/depreciation     折旧计提（按期间）— 扩展既有端点语义
 GET        /api/fixed-assets/:id/depreciations
 POST       /api/fixed-assets/:id/disposals     处置单
+GET        /api/fixed-assets/:id/disposals     处置单查询（2026-11-14 有界增补，见下）
 POST       /api/fixed-assets/disposals/:id/submit
 POST       /api/fixed-assets/disposals/:id/approve
 ```
+
+**有界增补（2026-11-14）**：新增 `GET /api/fixed-assets/:id/disposals` 只读端点。
+原表只定义了处置单的**写入**链路（建单 / 提交 / 审核），缺少**读取**端点，
+而固定资产操作面（`src/pages/fixed-assets.jsx` 的「处置单」区块）必须读取该资产的处置单列表：
+调用此前恒定返回 404，且被前端的 `catch` 吞掉，导致处置单区块**永远为空**。
+本次增补只读、不引入 schema / 状态机 / 会计语义变更，响应形状为 `{ disposals: [...] }`
+（字段与 `asset_disposals` 表一致），权限为 `FIXED_ASSETS_VIEW` / `FIXED_ASSETS_MANAGE`。
+既有 AA-17 能力结论与冻结范围不变。
 
 **兼容**：既有 `GET/POST /api/fixed-assets`、`PATCH /api/fixed-assets/:id`、
 `POST /api/fixed-assets/depreciation`、`GET /api/fixed-assets/:id/depreciations` 的**路径保留**；

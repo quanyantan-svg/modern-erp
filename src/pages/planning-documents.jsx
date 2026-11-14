@@ -8,6 +8,7 @@
 // 生成的采购订单) using the canonical AppLink navigation.
 
 import { useEffect, useMemo, useState } from 'react';
+import { formatQuantity } from '../lib/format.js';
 import { api } from '../api.js';
 import { Badge, can, ConfirmDelete, Empty, FormActions, Loading, Modal, money, Panel, Status, Toolbar, YuanField } from '../components/ui.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
@@ -29,7 +30,7 @@ function fmtQty(value) {
   if (value === null || value === undefined || value === '') return '—';
   const n = Number(value);
   if (!Number.isFinite(n)) return '—';
-  return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 6 }).format(n);
+  return formatQuantity(n);
 }
 
 function fmtDate(value) {

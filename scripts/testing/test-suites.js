@@ -443,6 +443,8 @@ const FULL = [
   'server/planning-closure-remediation.test.js',
   // ----- 治理守卫：跨域错误码耦合 + 历史验收记录有效性（2026-11-12）-----
   'server/qa-governance-checks.test.js',
+  // ----- 前后端路由配对：前端调用点必须全部由后端分发（2026-11-14）-----
+  'server/route-parity.test.js',
   // ----- B3120 Finance Operations closure wiring (2026-11-12) -----
   'server/v22-finance-closure-wiring.test.js',
 

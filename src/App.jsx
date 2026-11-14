@@ -100,7 +100,7 @@ export default function App() {
     { ...options, replace: options.replace || options.writeHash === false },
   ), [navigate]);
 
-  const setHeaderBackAction = (action) => setDocumentBackAction(() => action);
+  const setHeaderBackAction = useCallback((action) => setDocumentBackAction(() => action), []);
   const registerHeaderBackAction = useCallback((action) => {
     const key = Symbol('v16-full-page-surface');
     modalBackActions.current.set(key, action); setModalBackVersion((version) => version + 1);
@@ -143,7 +143,10 @@ export default function App() {
     return () => { current = false; };
   }, [user]);
 
-  const notify = (message, type = 'success') => setToast({ message, type });
+  // Stable identity: `notify` is a dependency of ~25 page-level `load`
+  // callbacks. Rebuilding it on every App render made every toast — and the
+  // toast auto-dismiss timer — refetch the whole screen.
+  const notify = useCallback((message, type = 'success') => setToast({ message, type }), []);
   const mobileApplicationGroups = buildMobileApplicationGroups(visibleNav, {
     isItemVisible: (item) => userCanAccessLauncherEntry(user, item),
   });
@@ -185,18 +188,25 @@ export default function App() {
     return <MobileLauncher groups={mobileApplicationGroups} visibleNav={visibleNav} icons={ic} onItemSelect={handleMobileApplicationSelect} />;
   }
 
+  const compatibilityTarget = useMemo(
+    () => (Object.keys(currentLocation.target).length ? { page: currentLocation.routeKey, ...currentLocation.target } : null),
+    [currentLocation],
+  );
+  // A new provider value on every App render re-renders every consumer of the
+  // navigation context, so the value is memoized on its real inputs.
+  const navigationValue = useMemo(() => ({
+    currentLocation, currentRoute, currentPage: currentLocation.routeKey, target: compatibilityTarget,
+    canNavigate, navigate, hrefFor, navigateToPage, setHeaderBackAction, registerHeaderBackAction,
+  }), [currentLocation, currentRoute, compatibilityTarget, canNavigate, navigate, hrefFor, navigateToPage, setHeaderBackAction, registerHeaderBackAction]);
+
   if (checking) return <div className="boot"><div className="spinner"/><p>正在载入Modern ERP…</p></div>;
   if (!user) return <LazyLogin onLogin={setUser} notify={notify}/>;
 
-  const compatibilityTarget = Object.keys(currentLocation.target).length ? { page: currentLocation.routeKey, ...currentLocation.target } : null;
   const tabLabel = MOBILE_TABS.find((tab) => tab.key === mobileTab)?.label || 'Modern ERP';
   const workspaceTitle = mobileApplication?.label || (mobileTab === 'apps' ? '应用' : tabLabel);
   const registeredBackAction = [...modalBackActions.current.values()].at(-1) || null;
   return (
-    <AppNavigationProvider value={{
-      currentLocation, currentRoute, currentPage: currentLocation.routeKey, target: compatibilityTarget,
-      canNavigate, navigate, hrefFor, navigateToPage, setHeaderBackAction, registerHeaderBackAction,
-    }}>
+    <AppNavigationProvider value={navigationValue}>
       <MobileShell brand="Modern ERP" pageTitle={workspaceTitle} activeTab={mobileTab} onTabChange={handleMobileTabChange}
         backAction={registeredBackAction || documentBackAction || (mobileApplication ? returnToMobileApplications : null)}
         tabBadges={{ approvals: pendingApprovalCount, messages: unreadNotificationCount, workflowTasks: pendingWorkflowTaskCount }}>
@@ -208,5 +218,7 @@ export default function App() {
 }
 
 // Authentication is outside the application route inventory but remains lazy.
-const LoginScreen = lazy(() => import('./pages/master-data.jsx').then((module) => ({ default: module.Login })));
+// The login screen has its own module so the first visit does not download the
+// whole master-data chunk.
+const LoginScreen = lazy(() => import('./pages/login.jsx').then((module) => ({ default: module.Login })));
 function LazyLogin(props) { return <Suspense fallback={<div className="boot"><div className="spinner"/></div>}><LoginScreen {...props}/></Suspense>; }

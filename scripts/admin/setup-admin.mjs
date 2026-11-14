@@ -31,6 +31,7 @@ import { createDatabase, hashPassword } from '../../server/db.js';
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isMainModule } from './is-main-module.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -161,15 +162,4 @@ function main() {
   console.log(`数据库: ${dbPath}`);
 }
 
-function isMainModule() {
-  if (!process.argv[1]) return false;
-  const scriptPath = process.argv[1].replace(/\\/g, '/');
-  const moduleUrl = import.meta.url;
-  // URL-encoded version of the script path
-  const encoded = encodeURI(scriptPath);
-  if (moduleUrl === `file:///${encoded}` || moduleUrl === `file://${encoded}`) return true;
-  if (moduleUrl.endsWith(scriptPath.split('/').pop())) return true;
-  return false;
-}
-
-if (isMainModule()) main();
+if (isMainModule(import.meta.url)) main();

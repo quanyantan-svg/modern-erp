@@ -251,12 +251,16 @@ describe('V1.6 P4 purchase receipt presentation contract', () => {
     assert.equal(iqcRoute.parentRoute, 'purchase-receipts', 'IQC contextual parent must remain purchase-receipts');
 
     // The MobileShell header back registration chain is intact.
-    assert.match(app, /const setHeaderBackAction = \(action\) => setDocumentBackAction\(\(\) => action\)/);
+    // The handler must be stored as a value (not invoked as a state updater);
+    // the setter may wrap it in useCallback to keep a stable identity (2026-11-14).
+    assert.match(app, /setHeaderBackAction = (?:useCallback\(\s*)?\(action\) => setDocumentBackAction\(\(\) => action\)/);
     assert.match(app, /setHeaderBackAction,\s*registerHeaderBackAction/);
   });
 
   test('36. MobileShell header back registration stores handlers as values', () => {
-    assert.match(app, /const setHeaderBackAction = \(action\) => setDocumentBackAction\(\(\) => action\)/);
+    // The handler must be stored as a value (not invoked as a state updater);
+    // the setter may wrap it in useCallback to keep a stable identity (2026-11-14).
+    assert.match(app, /setHeaderBackAction = (?:useCallback\(\s*)?\(action\) => setDocumentBackAction\(\(\) => action\)/);
     assert.match(app, /setHeaderBackAction,\s*registerHeaderBackAction/);
   });
 });

@@ -39,17 +39,30 @@ describe('nginx reverse proxy config', () => {
 
     assert.match(config, /^\s*proxy_set_header\s+Host\s+\$host;$/m);
     assert.match(config, /^\s*proxy_set_header\s+X-Real-IP\s+\$remote_addr;$/m);
-    assert.match(config, /^\s*proxy_set_header\s+X-Forwarded-For\s+\$proxy_add_x_forwarded_for;$/m);
+    // The client may send its own X-Forwarded-For; only the peer address may
+    // be forwarded, otherwise the source IP in login lockout and audit records
+    // is attacker controlled.
+    assert.match(config, /^\s*proxy_set_header\s+X-Forwarded-For\s+\$remote_addr;$/m);
+    assert.doesNotMatch(config, /\$proxy_add_x_forwarded_for/);
     assert.match(config, /^\s*proxy_set_header\s+X-Forwarded-Proto\s+\$scheme;$/m);
   });
 
   test('keeps body size and timeout settings modest', () => {
     const config = readConfig();
 
-    assert.match(config, /^\s*client_max_body_size\s+1m;$/m);
+    // Must stay above the application attachment limit (HTTP_ATTACHMENT_LIMIT_BYTES,
+    // 10 MiB by default) so uploads are not rejected by the proxy.
+    assert.match(config, /^\s*client_max_body_size\s+12m;$/m);
     assert.match(config, /^\s*proxy_connect_timeout\s+10s;$/m);
     assert.match(config, /^\s*proxy_send_timeout\s+60s;$/m);
     assert.match(config, /^\s*proxy_read_timeout\s+60s;$/m);
     assert.doesNotMatch(config, /websocket|Upgrade|443|ssl|certbot|0\.0\.0\.0/i);
+  });
+
+  test('compresses JSON and static responses', () => {
+    const config = readConfig();
+
+    assert.match(config, /^\s*gzip\s+on;$/m);
+    assert.match(config, /^\s*gzip_types\s+.*application\/json.*$/m);
   });
 });

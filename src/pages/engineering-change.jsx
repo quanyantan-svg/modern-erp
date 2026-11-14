@@ -188,7 +188,7 @@ function EcoDetail({ eco, onClose, refresh, notify, canManage, canApprove }) {
   useEffect(() => { void load(); }, [eco.id]);
   const runPreview = async () => {
     try {
-      const r = await api(`/api/engineering/changes/${eco.id}/impact-preview`, {});
+      const r = await api(`/api/engineering/changes/${eco.id}/impact-preview`, { method: 'POST' });
       setPreview(r);
       notify('预览已生成（未应用）');
     } catch (err) { notify(err.message, 'error'); }

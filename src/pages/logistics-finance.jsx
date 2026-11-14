@@ -2331,7 +2331,19 @@ function ReturnModal({ user, value, onClose, notify, api }) {
 
 function ReplacementModal({ id, user, notify, onClose }) {
   const [item, setItem] = useState(null); const [deliveries, setDeliveries] = useState([]); const [selection, setSelection] = useState({ lineId: '', deliveryItemId: '', qty: '' }); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
-  const load = () => Promise.all([api(`/api/sales-order-replacements/${id}`).then((r) => setItem(r.replacement)), api('/api/sales-deliveries?status=CONFIRMED').then(async (r) => { const details = await Promise.all((r.salesDeliveries || []).map((d) => api(`/api/sales-deliveries/${d.id}`).then((x) => x.salesDelivery).catch(() => null))); setDeliveries(details.filter(Boolean)); })]).catch((e) => setError(e.message));
+  const load = async () => {
+    try {
+      const replacement = (await api(`/api/sales-order-replacements/${id}`)).replacement;
+      setItem(replacement);
+      // The picker only accepts deliveries of the same customer, so the list is
+      // narrowed by customer name. Without it the modal loaded every confirmed
+      // delivery in the plant (up to 100) plus one detail request each.
+      const customer = replacement && replacement.customer_name ? `&search=${encodeURIComponent(replacement.customer_name)}` : '';
+      const list = await api(`/api/sales-deliveries?status=CONFIRMED${customer}`);
+      const details = await Promise.all((list.salesDeliveries || []).map((d) => api(`/api/sales-deliveries/${d.id}`).then((x) => x.salesDelivery).catch(() => null)));
+      setDeliveries(details.filter(Boolean));
+    } catch (e) { setError(e.message); }
+  };
   useEffect(() => { void load(); }, [id]);
   const fulfill = async () => { setBusy(true); setError(''); try { await api(`/api/sales-order-replacements/${id}/fulfill`, { method: 'POST', body: { lines: [{ replacementLineId: selection.lineId, salesDeliveryItemId: selection.deliveryItemId, qty: Number(selection.qty) }] } }); notify('换货履行已登记'); await load(); } catch (e) { setError(e.status === 409 ? `履行被拒绝：${e.message}` : e.message); } finally { setBusy(false); } };
   const cancel = async () => { setBusy(true); setError(''); try { await api(`/api/sales-order-replacements/${id}`, { method: 'PATCH', body: {} }); notify('剩余换货义务已关闭，历史履行已保留'); await load(); } catch (e) { setError(e.message); } finally { setBusy(false); } };

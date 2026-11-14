@@ -57,6 +57,13 @@
     LOGIN_MAX_ATTEMPTS=5
     LOGIN_LOCK_MINUTES=15
     TOKEN_LENGTH=32
+    ERP_ATTACHMENT_DIR=/var/lib/modern-erp/attachments
+    HTTP_ATTACHMENT_LIMIT_BYTES=10485760
+
+`ERP_ATTACHMENT_DIR` 在 MySQL 部署中**必须**显式设置：附件是持久化数据，未设置时会回落到
+release 目录内的 `data/attachments`，既违反本文第 9 节的目录约定，也通常不可写。
+`HTTP_ATTACHMENT_LIMIT_BYTES`（默认 10 MiB，上限 50 MiB）必须不大于 Nginx 的
+`client_max_body_size`，否则大附件会在到达应用之前被代理拒绝。
 
 ### 4.1 MySQL 8 生产路径
 
@@ -69,7 +76,11 @@
     ERP_DB_SSL=false
     ERP_DB_SSL_REJECT_UNAUTHORIZED=true
 
-MySQL 参数不完整时应用会 fail closed。数据库账号应使用最小权限并限制网络来源。当前仓库提供 MySQL schema bootstrap、兼容 gate 和并发 gate，但没有可直接宣称为生产方案的 MySQL 备份/恢复自动化；上线前必须由运维独立定义、演练并记录备份、恢复、升级和回滚方案。
+MySQL 参数不完整时应用会 fail closed。**首次启动时目标库必须是空库**：schema bootstrap 会拒绝
+在已初始化的库上重建，并需要 `CREATE` / `ALTER` 权限；后续升级只执行受支持的幂等步骤。
+数据库账号应使用最小权限并限制网络来源。当前仓库提供 MySQL schema bootstrap、兼容 gate 和并发 gate，但没有可直接宣称为生产方案的 MySQL 备份/恢复自动化；该缺口已登记在
+[`docs/status/PROJECT_STATUS.md`](../../docs/status/PROJECT_STATUS.md) §62（含 RPO / RTO / 异机保存 / 演练频率的业务裁定），
+上线前必须由运维独立定义、演练并记录备份、恢复、升级和回滚方案。
 
 ### 4.2 SQLite 兼容路径
 
@@ -94,7 +105,10 @@ SQLite 可用于本地、测试或经明确评估的兼容部署。数据库不�
     sudo systemctl daemon-reload
     sudo systemctl enable --now modern-erp.service
 
-仅在使用 SQLite 且备份路径已验证时安装 backup service/timer。MySQL 环境不得把该 timer 当成 MySQL 备份方案。
+仅在使用 SQLite 且备份路径已验证时安装 backup service/timer。MySQL 环境不得把该 timer 当成 MySQL 备份方案；
+备份单元带 `ExecCondition`，在 `ERP_DB_BACKEND=mysql` 时直接跳过而不是每晚失败一次。
+主服务与备份单元均已启用 `network-online.target` 与基础 systemd 硬化（`NoNewPrivileges`、
+`PrivateTmp`、`ProtectSystem=full` 等）；数据目录必须对 `modern-erp` 用户可写。
 
 ## 6. Nginx
 
@@ -102,6 +116,16 @@ SQLite 可用于本地、测试或经明确评估的兼容部署。数据库不�
 
     sudo nginx -t
     sudo systemctl reload nginx
+
+配置要点：
+
+- `client_max_body_size 12m` 必须不小于应用的 `HTTP_ATTACHMENT_LIMIT_BYTES`（默认 10 MiB）；
+- `gzip on` 覆盖 JSON 与静态资源；Node 侧本身不压缩；
+- `X-Forwarded-For` 透传 `$remote_addr`（不使用 `$proxy_add_x_forwarded_for`）：客户端可以自带
+  该头，其首段是伪造的；应用侧优先取 `X-Real-IP`，其次取 `X-Forwarded-For` 末段。
+
+应用使用 hash 路由，因此 Nginx **不需要** SPA fallback 规则；Node 服务自身在缺少路径时回落到
+`index.html`，`/assets/` 下的缺失文件返回 404（不回落，避免浏览器把 HTML 当脚本执行）。
 
 公网只开放批准的 HTTP/HTTPS 端口；不要直接暴露 3001。TLS、证书续期、防火墙和云安全组必须按目标环境单独验收。
 

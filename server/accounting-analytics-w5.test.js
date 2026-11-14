@@ -485,6 +485,35 @@ describe('AA-W5 固定资产 · 处置', () => {
     assert.equal(subjectBalance(db, '6603', '2027-02'), RECEIPT_AMOUNT_CENTS - monthly);
   });
 
+  test('处置单可按资产读取（只读端点，2026-11-14 有界增补）', async () => {
+    const db = fixture.db;
+    seedReceipt(db);
+    const policyId = await createPolicy(fixture.tokens.accounting);
+    const card = await transferCard(fixture.tokens.accounting, { policyId });
+    const assetId = card.data.assets[0].id;
+
+    const before = await fixture.request('GET', `/api/fixed-assets/${assetId}/disposals`, fixture.tokens.accounting);
+    assert.equal(before.status, 200, JSON.stringify(before.data));
+    assert.deepEqual(before.data.disposals, []);
+
+    const created = await fixture.request('POST', `/api/fixed-assets/${assetId}/disposals`, fixture.tokens.accounting, {
+      disposal_type: 'SCRAP',
+      disposal_date: '2027-02-01',
+      reason: '设备报废',
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.data));
+
+    const listed = await fixture.request('GET', `/api/fixed-assets/${assetId}/disposals`, fixture.tokens.accounting);
+    assert.equal(listed.status, 200, JSON.stringify(listed.data));
+    assert.equal(listed.data.disposals.length, 1);
+    assert.equal(listed.data.disposals[0].id, created.data.id);
+    assert.equal(listed.data.disposals[0].disposal_no, created.data.disposal_no);
+    assert.equal(listed.data.disposals[0].status, 'DRAFT');
+
+    // The read endpoint must not create anything.
+    assert.equal(db.prepare('SELECT count(*) c FROM asset_disposals').get().c, 1);
+  });
+
   test('已处置资产不得再计提折旧', async () => {
     const db = fixture.db;
     seedReceipt(db);

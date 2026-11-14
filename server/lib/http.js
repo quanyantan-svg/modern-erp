@@ -269,7 +269,11 @@ export function serveStatic(res, pathname, distDir) {
   const root = resolve(distDir);
   let file = resolve(root, requested);
   const traversal = relative(root, file);
+  const isAsset = requested.startsWith('assets/');
   if (traversal.startsWith('..') || isAbsolute(traversal) || !existsSync(file) || statSync(file).isDirectory()) {
+    // A missing hashed asset must NOT be answered with index.html: the browser
+    // would execute HTML as a script and the application would fail to boot.
+    if (isAsset) throw new HttpError(404, '静态资源不存在');
     file = join(distDir, 'index.html');
   }
   const types = {
@@ -280,5 +284,10 @@ export function serveStatic(res, pathname, distDir) {
   };
   res.statusCode = 200;
   res.setHeader('Content-Type', types[extname(file)] ?? 'application/octet-stream');
+  // index.html must always be revalidated so a new release is picked up;
+  // content-hashed assets can be cached forever.
+  if (file.endsWith('index.html')) res.setHeader('Cache-Control', 'no-cache');
+  else if (isAsset) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  else res.setHeader('Cache-Control', 'public, max-age=3600');
   res.end(readFileSync(file));
 }

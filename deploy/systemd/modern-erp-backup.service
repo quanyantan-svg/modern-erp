@@ -1,6 +1,7 @@
 [Unit]
 Description=Modern ERP Database Backup
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
@@ -8,4 +9,17 @@ User=modern-erp
 Group=modern-erp
 WorkingDirectory=/opt/modern-erp
 EnvironmentFile=/etc/modern-erp/env
+# The SQLite backup tool does not apply to a MySQL deployment; skip instead of
+# failing every night and reporting a missing SQLite file.
+ExecCondition=/bin/sh -c 'test "$${ERP_DB_BACKEND}" != "mysql"'
 ExecStart=/usr/bin/node scripts/admin/backup-db.mjs
+# A large VACUUM INTO must not be killed by the 90s default start timeout.
+TimeoutStartSec=infinity
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true

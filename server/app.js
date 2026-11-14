@@ -2470,6 +2470,12 @@ ownedRouteTable.register({
   owner: 'server/modules/fixed-assets.js',
 });
 ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/fixed-assets\/([^/]+)\/disposals$/,
+  handler: ({ db, res, actor, params }) => fixedAssetsHandlers.listDisposals(db, res, actor, params[0]),
+  owner: 'server/modules/fixed-assets.js',
+});
+ownedRouteTable.register({
   method: 'POST',
   path: /^\/api\/fixed-assets\/([^/]+)\/disposals$/,
   handler: ({ db, req, res, actor, params }) => fixedAssetsHandlers.createDisposal(db, req, res, actor, params[0]),
@@ -5141,10 +5147,18 @@ function logout(db, req, res) {
 
 
 function getClientIp(req) {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (forwarded) return forwarded.split(',')[0].trim();
+  // X-Real-IP is written by the trusted reverse proxy with the real peer
+  // address and is therefore preferred. X-Forwarded-For is client-supplied
+  // and its head is attacker-controlled, so only its tail (the entry added by
+  // the closest trusted proxy) may be used. Login lockout and audit records
+  // depend on this value being the real client address.
   const realIp = req.headers['x-real-ip'];
-  if (realIp) return realIp;
+  if (realIp) return String(realIp).trim();
+  const forwarded = req.headers['x-forwarded-for'];
+  if (forwarded) {
+    const chain = String(forwarded).split(',').map((entry) => entry.trim()).filter(Boolean);
+    if (chain.length) return chain[chain.length - 1];
+  }
   return req.socket?.remoteAddress || '';
 }
 function authenticate(db, req) {

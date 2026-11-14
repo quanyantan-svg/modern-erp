@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { formatMoney } from '../lib/format.js';
 import { api } from '../api.js';
 import {
   EmptyState,
@@ -51,7 +52,7 @@ function queryString(values) {
 
 function money(cents) {
   if (cents == null) return '不设上限';
-  return new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY' }).format(Number(cents) / 100);
+  return formatMoney(cents);
 }
 
 function requestError(error, neutral404 = false) {

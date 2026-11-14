@@ -24,6 +24,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 
 const DEFAULT_LIMIT = 50;
+const QUERY_DEBOUNCE_MS = 250;
 
 function normalizeEntityType(value) {
   const text = String(value || '').trim().toUpperCase();
@@ -70,6 +71,9 @@ export function BusinessEntitySelector({
   const use = useMemo(() => normalizeUsage(usage), [usage]);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  // The lookup used to fire on every keystroke; the search term is debounced
+  // so a query costs one request instead of one per character.
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -88,6 +92,11 @@ export function BusinessEntitySelector({
   });
   const requestIdRef = useRef(0);
   const containerRef = useRef(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(query), QUERY_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [query]);
 
   // Re-hydrate the displayed chip whenever the upstream `value` changes
   // (e.g. URL deep-link, reset, navigation). Clears the chip when the
@@ -133,18 +142,19 @@ export function BusinessEntitySelector({
   }, [value, type, use]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) return undefined;
     let cancelled = false;
     const reqId = ++requestIdRef.current;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
     const params = new URLSearchParams();
     params.set('type', type);
     params.set('usage', use);
     params.set('limit', String(DEFAULT_LIMIT));
-    if (query) params.set('q', query);
+    if (debouncedQuery) params.set('q', debouncedQuery);
     if (value) params.set('selectedId', value);
-    api('/api/lookups/business-entities?' + params.toString())
+    api('/api/lookups/business-entities?' + params.toString(), { signal: controller.signal })
       .then((data) => {
         if (cancelled || reqId !== requestIdRef.current) return;
         setResults(data.items || []);
@@ -153,6 +163,8 @@ export function BusinessEntitySelector({
       })
       .catch((err) => {
         if (cancelled || reqId !== requestIdRef.current) return;
+        // An aborted request is a superseded query, not a failure.
+        if (controller.signal.aborted) return;
         setError(err && err.message ? err.message : '查询失败');
         setResults([]);
         setHasMore(false);
@@ -161,8 +173,8 @@ export function BusinessEntitySelector({
         if (cancelled || reqId !== requestIdRef.current) return;
         setLoading(false);
       });
-    return () => { cancelled = true; };
-  }, [open, query, type, use, value]);
+    return () => { cancelled = true; controller.abort(); };
+  }, [open, debouncedQuery, type, use, value]);
 
   // Click-outside / Escape close.
   useEffect(() => {

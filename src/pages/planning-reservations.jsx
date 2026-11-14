@@ -5,6 +5,7 @@
 // counted; backend is authoritative through `assertStrongReservationAvailability`.
 
 import { useEffect, useMemo, useState } from 'react';
+import { formatQuantity } from '../lib/format.js';
 import { api } from '../api.js';
 import { can, Loading } from '../components/ui.jsx';
 import {
@@ -14,7 +15,7 @@ import {
 import { useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import '../styles/planning-workbench.css';
 
-const qty = (value) => new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 6 }).format(Number(value || 0));
+const qty = (value) => formatQuantity(value);
 const dateLabel = (value) => (value ? String(value).slice(0, 10) : '—');
 
 const RES_TYPE_LABELS = { STRONG: '强预留', WEAK: '弱预留', MANUAL: '手动预留' };

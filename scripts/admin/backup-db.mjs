@@ -19,6 +19,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isMainModule } from './is-main-module.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -114,5 +115,4 @@ function main() {
   }
 }
 
-const isMain = import.meta.url === `file://${process.argv[1]}` || import.meta.url.endsWith(process.argv[1]);
-if (isMain) main();
+if (isMainModule(import.meta.url)) main();

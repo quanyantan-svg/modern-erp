@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { formatMicros, formatMoney } from '../lib/format.js';
 import { api } from '../api.js';
 import { can, Loading } from '../components/ui.jsx';
 import { BusinessPageShell, EmptyState, InlineAlert, StatusChip } from '../components/design-system.jsx';
@@ -7,8 +8,8 @@ import '../styles/wave8-sales.css';
 
 const day = () => new Date().toISOString().slice(0, 10);
 const key = (prefix) => `${prefix}:${crypto.randomUUID()}`;
-const microsLabel = (value) => new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 6 }).format(Number(value || 0) / 1_000_000);
-const centsLabel = (value) => new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY' }).format(Number(value || 0) / 100);
+const microsLabel = (value) => formatMicros(value);
+const centsLabel = (value) => formatMoney(value);
 
 function ErrorPanel({ error, retry }) {
   return <EmptyState title="加载失败" description={error || '请稍后重试'} action={<button type="button" className="secondary" onClick={retry}>重新加载</button>}/>;

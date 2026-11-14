@@ -6,6 +6,7 @@
 // ACTIVE forecasts; this page does not display MRP result terminology.
 
 import { useEffect, useState } from 'react';
+import { formatQuantity } from '../lib/format.js';
 import { api } from '../api.js';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { can, ConfirmDelete, Empty, FormActions, Loading, Modal, Panel, Status, Toolbar } from '../components/ui.jsx';
@@ -16,7 +17,7 @@ function fmtQty(value) {
   if (value === null || value === undefined || value === '') return '—';
   const n = Number(value);
   if (!Number.isFinite(n)) return '—';
-  return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 6 }).format(n);
+  return formatQuantity(n);
 }
 
 function fmtDate(value) {

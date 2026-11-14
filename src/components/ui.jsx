@@ -1,5 +1,5 @@
-export const money = (cents = 0) => new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY', currencyDisplay: 'narrowSymbol', minimumFractionDigits: 2 }).format((Number(cents) || 0) / 100);
-export const quantity = (value = 0) => new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 6 }).format(Number(value) || 0);
+export const money = formatMoneyNarrow;
+export const quantity = formatQuantity;
 export const dateTime = (value) => {
   if (!value) return '—';
   const date = new Date(value);
@@ -18,10 +18,17 @@ export function Panel({ title, subtitle, action, children }) { return <section c
 export function Toolbar({ search, setSearch, onSearch, placeholder, action, extra }) { return <div className={`toolbar${action && !extra ? ' toolbar--search-action' : ''}`}><form onSubmit={(e) => { e.preventDefault(); onSearch?.(); }} className="search" role="search"><SearchIcon size={18}/><input aria-label={placeholder || '搜索'} value={search} onChange={(e) => setSearch(e.target.value)} placeholder={placeholder}/>{search && <button type="button" className="search__clear" aria-label="清除搜索" onClick={() => { setSearch(''); queueMicrotask(() => onSearch?.()); }}><CloseIcon size={16}/></button>}</form>{extra}<div className="toolbar-spacer"/>{action}</div>; }
 export function Modal({ title, onClose, children, wide, presentation = 'page' }) {
   const { registerHeaderBackAction } = useAppNavigation();
+  // The header back action must be registered ONCE per mount. Depending on the
+  // `onClose` identity would re-register on every parent render; registration
+  // updates App state, which re-renders the parent, which produces a new
+  // `onClose` — an endless render loop (measured: 72 740 DOM attribute writes
+  // in 3 s while a modal was open). The latest callback is kept in a ref.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
   useEffect(() => {
     if (presentation === 'dialog') return undefined;
-    return registerHeaderBackAction?.(onClose);
-  }, [onClose, presentation, registerHeaderBackAction]);
+    return registerHeaderBackAction?.(() => onCloseRef.current?.());
+  }, [presentation, registerHeaderBackAction]);
   return <div className="modal-backdrop" data-presentation={presentation} role="presentation" onMouseDown={(e) => presentation === 'dialog' && e.target === e.currentTarget && onClose()}><section className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}><div className="modal-head"><h2>{title}</h2><button type="button" className="modal-close" aria-label="关闭" onClick={onClose}><CloseIcon size={18}/></button></div><div className="modal-body">{children}</div></section></div>;
 }
 export function ConfirmDelete({ label, onConfirm, buttonLabel = '删除', message }) {
@@ -50,10 +57,11 @@ export function Empty({ text, title = '暂无相关数据', action }) { return <
 
 export function Loading() { return <div className="loading" role="status"><div className="spinner"/><span>正在载入…</span></div>; }
 export function ErrorState({ message = '暂时无法获取数据，请稍后重试。', onRetry }) { return <div className="error-state" role="alert"><ErrorIcon size={28}/><strong>加载失败</strong><p>{message}</p>{onRetry && <button type="button" className="secondary" onClick={onRetry}>重新加载</button>}</div>; }
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CloseIcon, EmptyIcon, ErrorIcon, SearchIcon } from './icons.jsx';
 import { useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { centsToYuanInput, yuanToCents, yuanToNonNegativeCents } from '../lib/money.js';
+import { formatMoneyNarrow, formatQuantity } from '../lib/format.js';
 
 // V1.3 Phase 1: YuanField is the canonical yuan-facing money input.
 // The component stores integer cents in the parent form state

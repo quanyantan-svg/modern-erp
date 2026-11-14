@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { formatQuantity } from '../lib/format.js';
 import { api } from '../api.js';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { Loading } from '../components/ui.jsx';
@@ -16,7 +17,7 @@ function fmtQty(value) {
   if (value === null || value === undefined || value === '') return '—';
   const number = Number(value);
   if (!Number.isFinite(number)) return '—';
-  return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 6 }).format(number);
+  return formatQuantity(number);
 }
 function withUnit(value, unit) { const text = fmtQty(value); return unit && text !== '—' ? `${text} ${unit}` : text; }
 function fmtDate(value) {

@@ -1,6 +1,7 @@
 [Unit]
 Description=Modern ERP Application
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -8,10 +9,22 @@ User=modern-erp
 Group=modern-erp
 WorkingDirectory=/opt/modern-erp
 EnvironmentFile=/etc/modern-erp/env
+Environment=NODE_ENV=production
 ExecStart=/usr/bin/node server/index.js
 KillSignal=SIGTERM
 Restart=on-failure
 RestartSec=5s
+TimeoutStopSec=30s
+
+# Hardening: the service account only ever needs to read the release and write
+# its own data directories.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
 
 [Install]
 WantedBy=multi-user.target

@@ -13,6 +13,7 @@
 // primary action per state.
 
 import { useEffect, useMemo, useState } from 'react';
+import { formatQuantity } from '../lib/format.js';
 import { api } from '../api.js';
 import { can, Loading } from '../components/ui.jsx';
 import {
@@ -24,7 +25,7 @@ import '../styles/planning-workbench.css';
 
 // ------------------- shared formatters & labels -------------------
 
-const qty = (value) => new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 6 }).format(Number(value || 0));
+const qty = (value) => formatQuantity(value);
 const dateLabel = (value) => (value ? String(value).slice(0, 10) : '—');
 
 const ORDER_FILTERS = [

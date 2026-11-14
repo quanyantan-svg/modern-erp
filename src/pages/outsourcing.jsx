@@ -10,6 +10,7 @@
 // WIP 余额、成本或 IQC 结论，所有写入都走既有 canonical Writer。
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { formatQuantity } from '../lib/format.js';
 import { api } from '../api.js';
 import { can, Empty, FormActions, Modal } from '../components/ui.jsx';
 import {
@@ -46,7 +47,7 @@ function fmtDate(value) {
 function fmtNumber(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return '—';
-  return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 6 }).format(number);
+  return formatQuantity(number);
 }
 
 function partnerName(record) {

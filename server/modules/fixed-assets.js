@@ -1541,6 +1541,16 @@ function listDepreciations(db, res, actor, assetId) {
 // Disposal (AA-W5.17 / AA-W5.18)
 // ---------------------------------------------------------------------------
 
+function listDisposals(db, res, actor, assetId) {
+  allowAny(actor, ['FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE']);
+  loadAsset(db, assetId);
+  const disposals = db.prepare(
+    'SELECT id, disposal_no, asset_id, disposal_type, status, disposal_date, proceeds_cents, reason, submitted_at, approved_at, voucher_id, created_at'
+    + ' FROM asset_disposals WHERE asset_id = ? ORDER BY created_at DESC',
+  ).all(assetId);
+  return send(res, 200, { disposals });
+}
+
 async function createDisposal(db, req, res, actor, assetId) {
   allow(actor, 'FIXED_ASSET_DISPOSE');
   const asset = loadAsset(db, assetId);
@@ -1680,6 +1690,7 @@ export const fixedAssetsHandlers = {
   completeStocktake,
   postDepreciation,
   listDepreciations,
+  listDisposals,
   createDisposal,
   submitDisposal,
   approveDisposal,

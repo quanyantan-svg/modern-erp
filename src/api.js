@@ -1,6 +1,11 @@
 import { safeErrorMessage, classifyApiError } from './lib/copy.js';
 
 const TOKEN_KEY = 'modern_erp_token';
+const DEFAULT_TIMEOUT_MS = 30000;
+
+// Concurrent identical reads share a single request. Without it, several
+// components asking for the same list at the same time each paid a round trip.
+const inflightReads = new Map();
 
 export class ApiError extends Error {
   constructor({ message, status = 0, code = '', details, resolution, requestId, cause }) {
@@ -18,27 +23,30 @@ export class ApiError extends Error {
 export function getToken() { return localStorage.getItem(TOKEN_KEY) || ''; }
 export function setToken(token) { token ? localStorage.setItem(TOKEN_KEY, token) : localStorage.removeItem(TOKEN_KEY); }
 
-export async function api(path, options = {}) {
-  const headers = { ...options.headers };
-  // FormData 必须原样发送：浏览器自己写 multipart 边界，Content-Type 不能由本层设置。
-  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
-  if (options.body && typeof options.body !== 'string' && !isFormData) {
-    headers['Content-Type'] = 'application/json';
-    options = { ...options, body: JSON.stringify(options.body) };
+async function send(path, options, headers, timeoutMs) {
+  const controller = new AbortController();
+  const callerSignal = options.signal;
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+  const forwardAbort = () => controller.abort();
+  if (callerSignal) {
+    if (callerSignal.aborted) controller.abort();
+    else callerSignal.addEventListener('abort', forwardAbort, { once: true });
   }
-  const token = getToken();
-  if (token) headers.Authorization = 'Bearer ' + token;
   let response;
   try {
-    response = await fetch(path, { ...options, headers });
+    response = await fetch(path, { ...options, headers, signal: controller.signal });
   } catch (cause) {
     const wrapped = new ApiError({
-      message: safeErrorMessage({ network: true }),
+      message: timedOut ? '请求超时，请稍后重试' : safeErrorMessage({ network: true }),
       status: 0,
-      code: 'NETWORK_FAILURE',
+      code: timedOut ? 'REQUEST_TIMEOUT' : 'NETWORK_FAILURE',
       cause,
     });
     throw wrapped;
+  } finally {
+    clearTimeout(timer);
+    if (callerSignal) callerSignal.removeEventListener('abort', forwardAbort);
   }
   if (response.status === 401 && path !== '/api/auth/login') {
     setToken('');
@@ -65,6 +73,33 @@ export async function api(path, options = {}) {
     });
   }
   return data;
+}
+
+export async function api(path, options = {}) {
+  const headers = { ...options.headers };
+  // FormData 必须原样发送：浏览器自己写 multipart 边界，Content-Type 不能由本层设置。
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  if (options.body && typeof options.body !== 'string' && !isFormData) {
+    headers['Content-Type'] = 'application/json';
+    options = { ...options, body: JSON.stringify(options.body) };
+  }
+  const token = getToken();
+  if (token) headers.Authorization = 'Bearer ' + token;
+  const method = String(options.method || 'GET').toUpperCase();
+  const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : DEFAULT_TIMEOUT_MS;
+  const requestOptions = { ...options };
+  delete requestOptions.timeoutMs;
+  const shareKey = method === 'GET' ? `${method} ${path}` : null;
+  if (shareKey && inflightReads.has(shareKey)) return inflightReads.get(shareKey);
+  // A mutation invalidates the shared reads: a refresh issued right after a
+  // save must not be served by a request that was started before it.
+  if (!shareKey) inflightReads.clear();
+  const promise = send(path, requestOptions, headers, timeoutMs);
+  if (shareKey) {
+    inflightReads.set(shareKey, promise);
+    promise.then(() => inflightReads.delete(shareKey), () => inflightReads.delete(shareKey));
+  }
+  return promise;
 }
 
 export async function download(path) {

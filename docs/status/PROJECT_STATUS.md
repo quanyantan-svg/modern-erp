@@ -5245,3 +5245,99 @@ FAST **774/774**、HEAVY **67/67**、build 通过、三个 QA 守卫 PASS。
 
 **剩余**：九域整域能力矩阵的重签、Manual Closure（B3101–B3122 手册级关闭）与 Release Readiness
 **均未签发**；§62 的 MySQL 备份 / 恢复缺口仍为 Release Readiness 的未关闭闸门项。
+
+## 64. 部署就绪审计与修复轮次（2026-11-14）
+
+**状态**：`IMPLEMENTED` —— 审计与修复已实施并本地验证；**本节不是 Acceptance，不签发任何
+Acceptance / Capability Freeze / Manual Closure / Release Readiness**，也不改变能力矩阵任何一行的
+`状态`，不撤销任何已签发的域级结论。
+
+> **本节是 Release Readiness 前的技术收口登记**，用于回答「目前的功能能否部署」。结论见 §64.6。
+
+### 64.1 审计范围与方法
+
+| 维度 | 方法 | 覆盖 |
+|---|---|---|
+| 功能门禁 | `pnpm test:fast`、`pnpm test`、`pnpm test:heavy`、`pnpm build` | 仓库既有全部登记套件 |
+| 前后端页面匹配 | **新增** `scripts/qa/verify-route-parity.mjs`（活体探测 + 路由模式匹配） | 前端 **657** 个 API 调用点 / **519** 个唯一 method+path |
+| 前端渲染性能 | Edge 实测（MutationObserver 计数 + 控制台断言） | 弹窗打开期间的 DOM 变更与渲染循环 |
+| 部署路径 | `deploy/nginx/*`、`deploy/systemd/*`、`.env.example`、`docs/operations/deployment.md` | 生产反向代理、服务单元、首个管理员、备份恢复 |
+| 治理一致性 | `node scripts/docs/check-doc-consistency.mjs --mode current --target HEAD` | N1 / N3–N9 |
+
+### 64.2 已修复的缺陷（按严重度）
+
+| # | 缺陷 | 证据 | 修复 |
+|---|---|---|---|
+| P0-1 | **弹窗打开即进入无限渲染循环**：`ui.jsx` 的 `Modal` effect 依赖内联 `onClose` 身份 → 重注册 header back action → `App` 重渲染 → 新 `onClose`，28 处调用点全部命中 | 实测弹窗打开时 3 秒内 **72 740** 次 DOM 属性写入、基线为 **0**；A/B 实验：关闭注册后降至 **76** 次 | `Modal` 用 ref 持有最新 `onClose`，注册只发生一次（`src/components/ui.jsx`） |
+| P0-2 | `notify` 每次渲染重建身份（约 25 处 `load` 依赖它）→ 每次 toast 与 toast 自动消失各触发一次全量 refetch | 代码路径 + 依赖图 | `useCallback([])` 稳定身份，并 `useMemo` 稳定导航 context value（`src/App.jsx`） |
+| P0-3 | 生产启动崩溃：`server/index.js` 无条件 `mkdir data/`，在只读 release 目录 + MySQL 后端下直接退出 | `server/index.js:11` | 仅 SQLite 建目录，且目录取自 `ERP_DB_PATH`；新增 `HOST` 与 `server.on('error')` |
+| P0-4 | `X-Forwarded-For` 取首段（客户端可自带并伪造）→ 登录锁定计数与审计记录的来源 IP 可被污染 | `server/app.js` `getClientIp` | 优先 `X-Real-IP`，其次取 XFF **末段**；Nginx 改传 `$remote_addr` |
+| P0-5 | Nginx `client_max_body_size 1m` < 应用附件上限 10 MiB → 大附件在到达应用前被 413 拒绝 | `deploy/nginx/modern-erp.conf` | 上限提升到 `12m` 并在文档中绑定 `HTTP_ATTACHMENT_LIMIT_BYTES` |
+| P0-6 | 备份 / 恢复 CLI 在 Windows **静默空操作**（入口判断恒不匹配，退出码 0 但没有备份） | `scripts/admin/backup-db.mjs` | 抽出 `scripts/admin/is-main-module.mjs` 共享判定（绝对路径精确比较）；修复后实测生成 4.1 MB 备份且 `integrity_check = ok` |
+| P0-7 | 静态资源缺失回落 `index.html`（浏览器把 HTML 当脚本执行）+ 无缓存头 → 发布后可能白屏 | `server/lib/http.js` | `/assets/*` 缺失返回 404；`index.html` 为 `no-cache`，带指纹的资产为 `immutable` |
+| P1-1 | **前后端页面不匹配 2 处**：① `engineering-change.jsx` 以 GET 调用只接受 POST 的 `impact-preview`（恒 404）；② `fixed-assets.jsx` 读取处置单列表，但后端只定义了写入链路，列表恒为空 | 活体探测：GET 返回「接口不存在」，POST 正常进入业务处理 | ① 前端改用 POST；② 新增只读端点 `GET /api/fixed-assets/:id/disposals`（Design §31.5.4 有界增补 + 专门测试） |
+| P1-2 | 前端性能：`Intl.NumberFormat` 每个单元格重建（11 处重复实现）、实体选择器每次按键发一次请求、换货弹窗最多 **101** 次请求、登录页加载 116 KB 的 master-data chunk | 构建产物与代码路径 | 共享格式化器（`src/lib/format.js`）、查询防抖 250 ms + `AbortController`、换货弹窗按客户名收窄列表、登录页独立成 `src/pages/login.jsx` |
+
+### 64.3 新增的机器守卫
+
+| 守卫 | 入口 | 结论 |
+|---|---|---|
+| 前后端路由配对 | `node scripts/qa/verify-route-parity.mjs`（已登记进 FULL 套件：`server/route-parity.test.js`） | 前端 657 调用点 / 519 唯一路径 → **未匹配 0 个** |
+
+该守卫的判定依据是「路由自身的 404（`接口不存在`）」，与业务 404 区分；模板路径改用后端路由模式匹配。
+**负控已验证**：注入一个不存在的端点后守卫必须报出该 `file:line`（已验证报出 `src/…:2`）。
+
+### 64.4 本轮证据
+
+| 门禁 | 结果 |
+|---|---|
+| `pnpm test:fast` | **774 / 774 PASS** |
+| `pnpm test`（FULL） | 首轮 **4041 / 4045 PASS、4 FAIL**；4 项失败全部是本轮改动触发的源码形状断言与一处真实的跨模块错误码耦合（守卫有效拦截）；逐项修复后复跑 **4046 / 4046 PASS** |
+| `pnpm test:heavy` | **68 / 68 PASS**（含 nginx / systemd 部署契约、备份恢复、生产安全） |
+| `pnpm build` | 通过（3.7 s）；master-data chunk 115.8 KB → 110.9 KB，登录页独立 chunk |
+| 文档一致性（current 模式） | **ALL CHECKS PASSED**（N1 / N3–N9 PASS，N2 已退役） |
+| 路由配对守卫 | **未匹配 0 个** + 负控通过 |
+| 弹窗渲染 A/B 实测 | 修复前 35 866 → 修复后 **158** 次属性写入 / 3 秒 |
+| R-02 浏览器 UAT（回归） | **3 / 3 PASS**，0 浏览器错误 |
+
+### 64.5 本轮边界
+
+- **未**连接 MySQL、**未**执行任何受保护 ACK-4 campaign 或 MySQL Gate、**未**触碰业务数据库。
+- **未** push / tag / merge / deploy / release；`package.json` 版本与既有 release tag **未改变**。
+- **未**修改能力矩阵任何一行的 `状态`，**未**撤销任何已签发的域级 Acceptance / Capability Freeze。
+- 新增的 `GET /api/fixed-assets/:id/disposals` 属 **AA 域有界增补**：只读、无 schema / 状态机 /
+  会计语义变更，已在 `docs/design/accounting-analytics.md` §31.5.4 留痕；该增补**尚未**取得独立的
+  Acceptance / Freeze 记录。
+
+### 64.6 本轮门禁自身的回归（4 项，已关闭）
+
+FULL 首轮出现 4 项失败，全部由本轮改动触发，逐项修复后复跑通过：
+
+| # | 失败 | 原因 | 处置 |
+|---|---|---|---|
+| F-1 | 跨域错误码耦合守卫 FAIL | 本轮在实体选择器里用 `err.code === 'NETWORK_FAILURE'` 判定「被中止的请求」，构成对 `src/api.js` 错误码的**未登记跨模块耦合** | 改为只判断 `controller.signal.aborted`，不再引用错误码字符串；守卫复跑 PASS |
+| F-2～F-4 | `v16-p2-sales-deliveries.test.js:34`、`v16-p4-purchase-receipts.test.js:35/36` FAIL | 三处断言 `const setHeaderBackAction = (action) => ...` 的**源码字面量**；本轮为其加了 `useCallback` 以获得稳定身份 | 断言放宽为「允许 `useCallback` 包装，但必须仍以**值**形式保存 handler」，原意不变 |
+
+**说明**：F-1 证明治理守卫在本轮**有效拦截**了一次真实越界（未登记的错误码耦合），
+这是守卫设计的预期行为，不是守卫缺陷。
+
+### 64.7 部署结论与未关闭闸门
+
+**技术层面**：本轮修复后，仓库的本地运行、构建、回归、浏览器验收与生产反向代理 / 服务单元配置
+已具备部署条件；§64.2 的 P0 项全部关闭。
+
+**仍然阻塞生产发布**（均为既有登记项，本轮**未**关闭）：
+
+1. **§62 的 MySQL 备份 / 恢复能力缺口** —— 目标生产路径 MySQL 8 仍**没有**仓库提供的备份 / 恢复自动化
+   （业务输入 RPO 24h / RTO 4h / S3 兼容异机保存 / 季度演练已裁定，Requirement → Design → Implementation
+   **尚未开始**）。这是 Release Readiness 的**具体未关闭闸门项**。
+2. **Manual Capability Closure（B3101–B3122 手册级关闭）与 Release Readiness 对全部 9 个域均未签发**
+   —— 属业务所有者的独立决定，不由本节跟随。
+3. 本轮新增的 `GET /api/fixed-assets/:id/disposals` 需要一次独立的 Acceptance / Freeze 记录。
+
+### 64.8 Owner
+
+| 角色 | 承担者 | 说明 |
+|---|---|---|
+| 登记责任 Owner | **业务所有者** | 作为部署收口闸门项，由业务所有者持有推进决定权 |
+| 技术修复 Owner | 仓库 | 本轮为技术缺陷修复，不改变任何业务合同语义（除 §64.2 P1-1② 的 AA 有界增补） |
