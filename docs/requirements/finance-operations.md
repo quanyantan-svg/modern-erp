@@ -4,6 +4,10 @@
 > Owner：Finance Operations
 > 权威来源：`document.md` §33
 > 来源：`document.md` §33（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+>
+> **2026-11-14 有界解冻授权**：业务所有者授权解冻 FO51–FO53 及受期间守卫影响的 Finance
+> Operations 合同并进入 Requirement。§33.51 已由业务所有者于 2026-11-14 批准为 `APPROVED`；
+> Design 已授权，Implementation 未授权；既有域级 Acceptance 继续作为历史时点记录保留。
 
 ## 33. Finance Operations Domain Closure Requirement
 
@@ -1432,3 +1436,44 @@ Cross-domain dependency 是 acceptance dependency metadata，**不是** capabili
 **FINANCE OPERATIONS DOMAIN CLOSURE REQUIREMENT — COMPLETE / READY FOR USER REVIEW**
 
 ---
+
+### 33.51 FO51–FO53 与跨域期间守卫修订（`APPROVED`，2026-11-14）
+
+#### 33.51.1 身份与边界
+
+- 用途：关闭 R-02 暴露的 Finance 业务关闭绕过路径；Owner 为 Finance Operations，Platform 提供统一
+  守卫合同，Accounting & Analytics 拥有法定会计期间。
+- 本节获批后补充 §33.31、§33.40.2 与 §33.47，不改变 FO51 / FO52 / FO53 **彼此独立且不同于法定
+  会计期间**的既有合同。
+- 当前权威状态是 AR / AP / TREASURY 各自的关闭截止业务日期；关闭历史只用于审计，不得反推当前状态。
+
+#### 33.51.2 所有 Finance mutation 必须声明适用关闭轴
+
+1. 改变 AR 的动作必须同时通过 `FINANCE_AR + LEGAL_ACCOUNTING`；至少包括确认／识别、collection
+   核销、折让与贷项、冲销、write-off、坏账、转移、退款及期初写入。
+2. 改变 AP 的动作必须同时通过 `FINANCE_AP + LEGAL_ACCOUNTING`；至少包括账单识别、payment
+   核销、折让与贷项、冲销、write-off、转移、退款及期初写入。
+3. 改变现金／银行／资金流水的动作必须同时通过 `FINANCE_TREASURY + LEGAL_ACCOUNTING`。
+4. 同一动作影响多个事实轴时必须取并集，不得因已检查法定会计期间而跳过 Finance 业务关闭，也不得
+   因已检查 Finance 业务关闭而跳过法定会计期间。
+5. 销售折让与采购折让的确认、冲销属于 AR / AP 经济 mutation，必须分别受 AR / AP 业务关闭保护；
+   “只生成凭证”或“沿用凭证期间检查”不得作为绕过理由。
+6. 草稿创建与不改变经济事实的只读操作可不受关闭轴阻断，但后续确认／执行必须在同一事务内重新读取
+   权威业务日期与关闭状态，客户端日期不得成为 authority。
+
+#### 33.51.3 关闭、重开与法定关账前提
+
+- 三个业务关闭继续使用独立截止日期；关闭任一轴不得改变其他轴。
+- 关闭／重开与适用 mutation 必须锁定同一稳定权威对象，并发不得产生“关闭已成功但更早业务日期随后
+  提交”的结果。
+- 法定会计期间关闭前，AR、AP、Treasury 三个轴都必须分别关闭至该期间末日；任一不足即法定关账失败。
+- 重开必须强制原因、权限和审计；不得删除或覆盖历史关闭／重开证据。
+- Finance 业务关账 operator 工作面必须提供 pre-close、关闭、重开、当前截止日和历史证据，不能只展示状态。
+
+#### 33.51.4 验收增量
+
+- 折让确认与冲销：AR / AP 已关闭时 409 且 AR/AP、凭证、状态、审计业务副作用均为零；重开后成功。
+- 组合动作：分别证明 AR+Treasury、AP+Treasury 任一轴关闭都会拒绝，且锁顺序固定、无死锁。
+- 法定关账：AR / AP / Treasury 任一未关闭至期间末时拒绝；三者齐备且其他前置通过时才允许。
+- 真实 MySQL：关闭与 dated mutation 使用真实 handler 并发，证明共享锁权威与唯一合法提交顺序。
+- UAT 保持 §33.40.2 的三轴独立性，并新增 operator UI 在 320 / 390 / 430 / 680 四档可完成关闭与重开。

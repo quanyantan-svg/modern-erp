@@ -24,11 +24,11 @@
 | Manufacturing & Quality | [`docs/requirements/manufacturing-quality.md`](docs/requirements/manufacturing-quality.md) | §29 |
 | Planning | [`docs/requirements/planning.md`](docs/requirements/planning.md) | §30 |
 | Procurement & Outsourcing | [`docs/requirements/procurement-outsourcing.md`](docs/requirements/procurement-outsourcing.md) | §31（§31.12 = M1 全范围历史批准合同；§31.13 = M1-Core 首期已批准；§31.14 = Package A1 产品范围 Requirement，待业务所有者验收；§31.15 = 委外核心执行工作面有界 Requirement，已验收冻结；§31.16 = 完整 Active Contract 域级交付整改 Requirement，已批准并实施（`IMPLEMENTED`，待域级 Acceptance）；§31.17 = 受托裁定与补充合同（`IMPLEMENTED`）；§31.18 = 参数接线、商业快照与 PRC-26 范围裁定（`IMPLEMENTED`）） |
-| Inventory & Warehouse | [`docs/requirements/inventory-warehouse.md`](docs/requirements/inventory-warehouse.md) | §32 |
-| Finance Operations | [`docs/requirements/finance-operations.md`](docs/requirements/finance-operations.md) | §33 |
+| Inventory & Warehouse | [`docs/requirements/inventory-warehouse.md`](docs/requirements/inventory-warehouse.md) | §32（§32.12 = 期间控制一致性修订，`APPROVED`，2026-11-14；Design 已授权） |
+| Finance Operations | [`docs/requirements/finance-operations.md`](docs/requirements/finance-operations.md) | §33（§33.51 = FO51–FO53 与跨域期间守卫修订，`APPROVED`，2026-11-14；Design 已授权） |
 | Sales & Customer | [`docs/requirements/sales-customer/README.md`](docs/requirements/sales-customer/README.md) | §34 + Wave 8/9/10/11 修订 |
-| Accounting & Analytics | [`docs/requirements/accounting-analytics.md`](docs/requirements/accounting-analytics.md) | §35（Accounting & Analytics Domain Closure Requirement，2026-11-10 建立；AA-W1..AA-W7 全部纳入，AA-31 多币种 `OUT_OF_SCOPE`） |
-| Platform | [`docs/requirements/platform.md`](docs/requirements/platform.md) | §36（Platform 平台层域 Domain Closure Requirement，2026-11-13 建立；PL-01..PL-13 共 13 项平台长期能力 + WF-01..WF-08 共 8 项 B3122 手册能力，合计 21 项，目标 17 `COVERED` / 4 `OUT_OF_SCOPE`；`PL-DEC-01`～`PL-DEC-03` 已由业务所有者裁定） |
+| Accounting & Analytics | [`docs/requirements/accounting-analytics.md`](docs/requirements/accounting-analytics.md) | §35（Accounting & Analytics Domain Closure Requirement；§35.11 = 法定／经营期间一致性修订，`APPROVED`，2026-11-14；Design 已授权） |
+| Platform | [`docs/requirements/platform.md`](docs/requirements/platform.md) | §36（Platform 平台层域 Domain Closure Requirement；§36.15 = PL-13 期间控制收敛修订，`APPROVED`，2026-11-14；取代 PL-13 收敛增量继续延期口径，Design 已授权） |
 
 ### 0.2 章节编号迁移规则
 

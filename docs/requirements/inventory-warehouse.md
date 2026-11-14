@@ -4,6 +4,10 @@
 > Owner：Inventory & Warehouse
 > 权威来源：`document.md` §32
 > 来源：`document.md` §32（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+>
+> **2026-11-14 有界解冻授权**：业务所有者授权解冻 INV-32 及受统一期间守卫影响的合同并进入
+> Requirement。§32.12 已由业务所有者于 2026-11-14 批准为 `APPROVED`；Design 已授权，
+> Implementation 未授权；既有域级 Acceptance / Freeze 继续作为历史时点记录保留。
 
 ## 32. Inventory & Warehouse Domain Closure Requirement
 
@@ -586,3 +590,39 @@ step transfer:
 **INVENTORY & WAREHOUSE DOMAIN CLOSURE REQUIREMENT — COMPLETE / READY FOR USER REVIEW**
 
 ---
+
+### 32.12 INV-32 期间控制一致性修订（`APPROVED`，2026-11-14）
+
+#### 32.12.1 权威与范围
+
+- Inventory & Warehouse 继续是 `INVENTORY` 期间轴唯一业务 owner；库存期间与法定会计期间不得合并。
+- INV-32 的连续月结、precheck、快照、最新期间反结账、重结与审计语义继续有效。
+- 库存关闭历史和快照是证据；当前关闭状态必须来自单一权威状态，不得由多个守卫分别推导。
+
+#### 32.12.2 Mutation 保护
+
+- 所有改变库存数量、仓位、owner、stock status、LOT/SERIAL、库存价值或产生库存相关凭证的动作，
+  必须通过 Platform §36.15 的 canonical 守卫并声明 `INVENTORY + LEGAL_ACCOUNTING`。
+- 现有库存专用重复闸门必须退出生产判定；任何调用方不得只检查库存关闭而忽略法定会计期间，也不得
+  只检查法定会计期间而忽略库存关闭。
+- 权威业务日期必须来自事务内重读的业务单据／mutation 输入合同；不得用 `created_at`、客户端缓存状态
+  或当前日期替代既有单据的权威日期。
+- 关闭期间内的确认、冲销、反向移动、委外 WIP 逻辑移动、估值调整和生命周期清理，只要会改变受保护
+  库存事实，均须受同一守卫约束；合法例外必须在 Requirement 中逐项列明，不得静默 best effort。
+
+#### 32.12.3 关闭并发与顺序
+
+- 库存月结与库存 mutation 必须锁定同一稳定权威状态。真实 MySQL 并发时，只允许：mutation 先提交且
+  被月结检查／快照纳入，或月结先提交且 mutation 被拒绝；不得出现月结完成后更早业务日期写入。
+- 库存月结继续严格按连续月份执行，反结账继续仅允许最新已关闭期间；重结必须复用同一期间身份并重建
+  可验证快照。
+- 法定会计期间已关闭时不得反开对应库存期间；法定会计关账前必须证明库存已关闭至期间末。
+
+#### 32.12.4 验收增量
+
+- 同一业务日期经所有库存入口得到一致结果；无效日期、状态缺失、关闭链损坏全部 fail closed。
+- 覆盖普通出入库、转移、调整、盘点、报废、LOT/SERIAL、委外逻辑移动、估值与冲销的关闭期间负例，
+  并断言数量、身份、估值、凭证、审计业务副作用为零。
+- 真实 MySQL race 必须调用真实月结 handler 和真实 inventory mutation handler；直接插入关闭行、只检查
+  最终数量落在两个值之一、或允许双方成功但不证明快照包含 mutation，均不构成合格证据。
+- SQLite / MySQL 双路径必须保持相同关闭结果、错误语义、事务回滚和重开恢复行为。

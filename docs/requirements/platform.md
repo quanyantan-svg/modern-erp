@@ -11,6 +11,11 @@
 > - `PL-DEC-01` **闭合范围**：本域建设 Generic Workflow 引擎、Attachment、Org Scope、Notification 生产者、Numbering 服务五个子系统，**并**补齐通用 SOD 引擎与生产订单自审批缺口；Document Relation、Document Conversion、生命周期通用化、期间控制收敛四项**显式 `OUT_OF_SCOPE`**（延期后续版本）。
 > - `PL-DEC-02` **Organization 归属**：Organization 主数据所有权由 Master & Engineering **正式移交** Platform；Master & Engineering 的 Multi-Organization 业务铺开仍维持 `OUT_OF_SCOPE`。
 > - `PL-DEC-03` **审计 schema 升级**：`audit_logs` 结构化字段与索引升级**纳入本域**，由 Platform 主导，Finance Operations 为受影响的共同 Owner 域。
+>
+> **2026-11-14 有界解冻授权**：业务所有者明确批准解冻 PL-13 及受影响的 Finance Operations、
+> Accounting & Analytics、Inventory & Warehouse 合同并进入 Requirement 阶段。§36.15 是本次
+> 解冻形成的修订已由业务所有者于 2026-11-14 批准，状态为 `APPROVED`；Design 已授权，
+> Implementation 尚未授权。本次批准不把历史冻结记录改写为“从未冻结”。
 
 ## 36. Platform 平台层域 Domain Closure Requirement
 
@@ -308,3 +313,82 @@ Platform 是九域架构（8 Business Domains + Platform）中的**平台层**�
 | `PL-OPEN-02` | 附件最大 10 MB 的独立上限配置项需与运维手册 `docs/operations/` 对齐 | 待 Implementation 阶段落配置与文档 |
 | `PL-OPEN-03` | 通用工作流"业务回调"跨域调用允许的域集合与调用契约细则 | 待 Design 阶段明确；Requirement 只约束"必须走被调域 canonical API" |
 | `PL-OPEN-04` | 编号服务迁移既有 6 种单据时的 MySQL 并发窗口（旧 `mysql-worker.js:138-151` 的 upsert + 分离 SELECT）需在新服务中原子化 | 待 Design 阶段明确 |
+
+### 36.15 PL-13 期间控制一致性修订（`APPROVED`，2026-11-14）
+
+#### 36.15.1 修订身份与生效边界
+
+| 项 | 内容 |
+|---|---|
+| 用途 | 消除 Platform 验收残余 R-02 / `PL-DEF-08` / `PL-DEF-09`，防止已关闭期间继续发生不符合预期的经济 mutation |
+| Owner | Platform（统一守卫合同）+ Inventory & Warehouse / Finance Operations / Accounting & Analytics（各自期间轴业务语义） |
+| 状态 | `APPROVED`；业务所有者 2026-11-14 批准正文并授权 Design，Implementation / Acceptance 未授权 |
+| 权威来源 | `document.md` §7.10、§17、§22 与本文件 §36；域内细则分别见 §32.12、§33.51、§35.11 |
+| Supersession | 获批后仅取代 §36.2、§36.10、§36.13 中“PL-13 收敛增量 `OUT_OF_SCOPE` / 继续延期”的当前口径；不改写 2026-11-14 Platform Freeze 的历史事实 |
+
+#### 36.15.2 独立期间轴与权威事实
+
+系统必须保留以下相互独立的期间轴，不得以“统一”为名合并业务含义：
+
+1. `INVENTORY`：库存数量、追踪身份、库存估值及其相关 mutation 的库存期间；
+2. `LEGAL_ACCOUNTING`：凭证、GL、法定会计事件与法定财务报表的会计期间；
+3. `FINANCE_AR` / `FINANCE_AP` / `FINANCE_TREASURY`：三个彼此独立的 Finance Operations 业务日期关闭轴；
+4. `OPERATING(managementBookId)`：按经营账簿隔离的经营会计期间。
+
+`period_end_definitions` / `period_end_runs` / `profit_transfer_runs` 是期末处理与关账前置证据，
+不是新的期间状态权威；关闭历史表与反结账历史表是证据，不得被当作当前状态 owner。
+
+#### 36.15.3 单一期间守卫合同
+
+- 全仓库只允许一个 active canonical **期间守卫入口**。调用方提交：权威业务日期、业务动作标识、
+  明确的适用期间轴集合，以及适用时的经营账簿标识；调用方不得直接读取期间表自行判断。
+- 业务日期必须是日历有效的 ISO `YYYY-MM-DD`；缺失、格式错误、无效日期、未知期间轴、缺少必需
+  账簿标识、权威状态缺失或损坏时全部 fail closed。
+- 多轴动作取各轴约束的**并集**：任一适用轴关闭即拒绝。拒绝必须发生在任何经济副作用之前，
+  返回可定位的阻断轴、业务日期和关闭边界；失败副作用必须为零。
+- 守卫必须在 mutation 的同一数据库事务内重读并锁定权威状态；关闭／反关闭命令必须锁定同一权威
+  对象。并发结果只能是“mutation 先完成并被关闭快照／检查纳入”或“关闭先完成、mutation 被拒绝”。
+- 现有 `assertFinancialPeriodsOpen`、`assertInventoryPeriodOpen`、`checkPeriodNotClosedForVoucher`
+  的生产调用必须收敛到该入口；不得保留第二套可执行判定语义。
+- 期间错误码属于生产域内部错误，不得成为跨域业务判断合同；跨域只依赖统一的成功／拒绝语义和
+  结构化阻断轴。
+
+#### 36.15.4 动作到期间轴的最低映射
+
+| 动作类别 | 必须评估的期间轴 |
+|---|---|
+| 库存数量／身份／估值 mutation，以及同时生成库存相关凭证的动作 | `INVENTORY + LEGAL_ACCOUNTING` |
+| 手工凭证、系统凭证、会计事件生成、冲销、补记、更正 | `LEGAL_ACCOUNTING` |
+| AR 确认、调整、折让、冲销、核销、转移、坏账及退款的 AR 侧 | `FINANCE_AR + LEGAL_ACCOUNTING` |
+| AP 确认、调整、折让、冲销、核销、转移、付款及退款的 AP 侧 | `FINANCE_AP + LEGAL_ACCOUNTING` |
+| 资金收付、账户移动、内部转账、退款的资金侧 | `FINANCE_TREASURY + LEGAL_ACCOUNTING` |
+| 同时影响多个 Finance 事实的动作 | 上述所有受影响 Finance 轴 + `LEGAL_ACCOUNTING` |
+| 经营台账归集、经营分摊、内部结算及其他改变经营期间结果的动作 | `OPERATING(managementBookId)`；法定期间已关闭是其来源前提，不得反向阻断经营关账前的受控归集 |
+| 纯 GL 期末调整／损益结转 | `LEGAL_ACCOUNTING`；仅经明确登记的动作可跳过 `INVENTORY`，不得接受通用布尔绕过 |
+
+所有有业务日期且可能改变经济事实的 mutation 必须进入可审计的覆盖登记；新增动作未声明期间轴时，
+测试与发布门禁必须 fail closed。
+
+#### 36.15.5 关闭与反关闭顺序
+
+- 正向顺序：库存期间和三个 Finance 业务轴先完成各自关闭 → 法定会计期间关闭 → 各经营账簿期间关闭。
+- 法定会计期间只能按连续顺序关闭；存在更早开放期间时不得跳期关闭。反结账只能从最新已关闭期间
+  逆序执行，且必须先重开所有依赖该法定期间的已关闭经营账簿期间。
+- 法定会计期间关闭前，`INVENTORY` 必须关闭至期间末，`FINANCE_AR` / `FINANCE_AP` /
+  `FINANCE_TREASURY` 必须分别关闭至期间末；缺一即拒绝。
+- `FINANCE_AR` / `FINANCE_AP` / `FINANCE_TREASURY` 彼此独立，任一关闭不得隐式关闭另外两个。
+- 经营期间关闭后，归集、分摊、内部结算及其他会改变该账簿该期间结果的写入必须拒绝；受控重开后
+  方可恢复。经营重开不得隐式重开法定会计期间。
+- 关闭、反关闭、失败的关键 mutation 尝试均须留下可定位证据；不得在被回滚的业务事务中丢失拒绝证据。
+
+#### 36.15.6 Operator、权限与验收
+
+- 各期间轴必须有权限受控的状态、关闭、反关闭和历史证据面；Finance 业务关账不得只有只读状态卡。
+- 后端权限必须 fail closed；前端隐藏不构成授权。反关闭必须强制原因并写审计。
+- 期间工作面在 320 / 390 / 430 / 680 CSS px 下必须可完成核心任务，不依赖永久横向页面滚动。
+- 验收必须至少覆盖：关闭缺口、跳期关闭、逆序反关闭、无效日期、缺失权威状态、多轴组合、折让确认／
+  冲销、经营归集／分摊、纯 GL 期末例外、失败零副作用，以及 SQLite / MySQL 等价。
+- 真实 MySQL 必须覆盖法定会计关闭 vs 凭证／AR/AP mutation、库存关闭 vs 库存 mutation、经营关闭 vs
+  归集／分摊的并发；测试必须调用真实 canonical handler，不得用直接插入关闭行替代关闭命令。
+- 若关闭与 mutation 均成功，证据必须证明 mutation 先提交且被关闭检查／快照纳入；仅断言“两者均可成功”
+  不构成并发正确性证据。
