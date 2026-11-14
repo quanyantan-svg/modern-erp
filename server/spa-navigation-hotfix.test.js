@@ -135,7 +135,7 @@ describe('navigation state and regression contracts', () => {
     // 2026-11-13: Platform domain closure adds five generic workflow engine
     // codes (WORKFLOW_TASK_VIEW / WORKFLOW_TASK_ACT / WORKFLOW_INSTANCE_VIEW /
     // WORKFLOW_CONTROL / WORKFLOW_REDEPLOY) → 252.
-    assert.equal(PERMISSIONS.length, 264);
+    assert.equal(PERMISSIONS.length, 266);
     assert.equal(PERMISSIONS.filter(([code]) => code === 'CREDIT_VIEW').length, 1);
     assert.equal(PERMISSIONS.filter(([code]) => code === 'CREDIT_MANAGE').length, 1);
     assert.equal(PERMISSIONS.filter(([code]) => code === 'CREDIT_EVALUATE').length, 1);

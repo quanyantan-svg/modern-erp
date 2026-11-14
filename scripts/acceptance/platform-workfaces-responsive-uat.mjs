@@ -55,10 +55,12 @@ const surfaces = [
   { key: 'workflow-tasks', label: '我的流程任务', testid: 'platform-workflow-tasks-page' },
   { key: 'workflow-monitor', label: '流程监控', testid: 'platform-workflow-monitor-page' },
   { key: 'notifications', label: '通知中心', testid: 'platform-notifications-page' },
+  // PL-06 的 operator 工作面：生命周期记录 / 归档 / 恢复 / 清理。
+  { key: 'lifecycle', label: '生命周期与归档', testid: 'platform-lifecycle-page', rowSelector: ['.record-card'], emptySelector: ['.canonical-empty-state'] },
 ].map((surface) => ({
   ...surface,
-  rowSelector: ['.platform-ops__card'],
-  emptySelector: ['.platform-ops__empty', '.canonical-empty-state'],
+  rowSelector: surface.rowSelector || ['.platform-ops__card'],
+  emptySelector: surface.emptySelector || ['.platform-ops__empty', '.canonical-empty-state'],
 }));
 
 // 附件挂载点（PL-10）：面板挂在**业务单据详情页**里，因此它的屏根 testid 是附件面板

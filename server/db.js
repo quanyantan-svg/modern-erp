@@ -359,6 +359,10 @@ export const PERMISSIONS = [
   ['NOTIFICATION_MANAGE', '管理通知订阅'],
   ['NUMBERING_VIEW', '查看编号规则'],
   ['NUMBERING_MANAGE', '维护编号规则'],
+  // PL-DEF-04 的权限专化：文档生命周期 / 归档不再借用管理员权限。
+  // USERS_MANAGE 保留为**兼容别名**（Design §32.10），既有管理员不受影响。
+  ['LIFECYCLE_VIEW', '查看文档生命周期与归档记录'],
+  ['LIFECYCLE_MANAGE', '管理文档生命周期（归档 / 恢复 / 清理）'],
 
 ];
 

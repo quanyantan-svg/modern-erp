@@ -51,7 +51,7 @@ function assertRouteScreen(routeKey, modulePath, exportName) {
 
 // ----- 1. Route inventory assertions (derived from authoritative source) -----
 
-test('P8 route inventory: 81 enabled + 3 disabled = 84 entries', () => {
+test('P8 route inventory: 82 enabled + 2 disabled = 84 entries', () => {
   // Core Scope Cleanup removed the 6 extension routes
   // (projects, tasks, timesheets, contacts, followups, activities).
   // Planning Closure added 2 contextual routes (planning-reservations,
@@ -64,8 +64,8 @@ test('P8 route inventory: 81 enabled + 3 disabled = 84 entries', () => {
 // operator work faces (sales-parameters, sales-group-memberships,
 // sellable-scope-rules, product-classifications,
 // sales-price-override-authorizations). 79 + 6 = 85.
-  assert.equal(ROUTE_PRESENTATIONS.length, 92, 'ROUTE_PRESENTATIONS must include the W11-A U3 route, the 5 AA domain closure routes and the 7 Platform work surfaces');
-  assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 3, 'DISABLED_ROUTE_PRESENTATIONS must hold 3 removed/disabled routes');
+  assert.equal(ROUTE_PRESENTATIONS.length, 93, 'ROUTE_PRESENTATIONS must include the W11-A U3 route, the 5 AA domain closure routes and the 8 Platform work surfaces');
+  assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 2, 'DISABLED_ROUTE_PRESENTATIONS must hold 2 removed/disabled routes');
   assert.equal(ROUTE_PRESENTATIONS.length + DISABLED_ROUTE_PRESENTATIONS.length, 95);
 });
 
@@ -90,7 +90,7 @@ test('P8 route inventory: every enabled route has a concrete Registry screen reg
 
 test('P8 route inventory: every disabled route is one of the frozen four', () => {
   // AA-W5 enabled fixed-assets, so the frozen disabled set is now 4.
-  const expected = ['cash-journals', 'bills', 'data-cleanup'].sort();
+  const expected = ['cash-journals', 'bills'].sort();
   const actual = DISABLED_ROUTE_PRESENTATIONS.map((r) => r.route).sort();
   assert.deepEqual(actual, expected);
 });

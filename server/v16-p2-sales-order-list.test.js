@@ -204,13 +204,13 @@ describe('V1.6 P2 — sales order LIST contracts', () => {
     assert.ok(approvals, 'approvals route must remain enabled');
     assert.deepEqual(approvals.approvalFamilies, APPROVAL_FAMILIES, 'approval families must remain the canonical six');
 
-    assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 3, 'frozen disabled routes must remain disabled (the legacy workflows route was retired)');
+    assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 2, 'frozen disabled routes must remain disabled (the legacy workflows and data-cleanup routes were retired)');
 // The Sales & Customer domain closure adds 6 contextual routes and no launcher
 // tile: credit-evaluation (Wave 11-B/C) plus the SC01 / SC06 / SC07 / SC19
 // operator work faces (sales-parameters, sales-group-memberships,
 // sellable-scope-rules, product-classifications,
 // sales-price-override-authorizations). 79 + 6 = 85.
-    assert.equal(ROUTE_PRESENTATIONS.length, 92, 'canonical routes plus W11-A U3, the AA domain closure and the 7 Platform work surfaces must remain enabled');
+    assert.equal(ROUTE_PRESENTATIONS.length, 93, 'canonical routes plus W11-A U3, the AA domain closure and the 8 Platform work surfaces must remain enabled');
 
     // The Orders LIST surface still routes through the canonical route key.
     assert.match(masterData, /navigateToPage\(['"]orders['"]/);

@@ -1,6 +1,6 @@
 import { id, transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
-import { allow, HttpError, optionalText, readJson, requiredText, send } from '../lib/http.js';
+import { allow, allowAny, HttpError, optionalText, readJson, requiredText, send } from '../lib/http.js';
 import { setInventoryQuantity } from '../lib/stock.js';
 
 export const LIFECYCLE_CLASSIFICATIONS = Object.freeze([
@@ -84,6 +84,21 @@ const SOURCE_ENTITY_TYPES = Object.freeze({
   SALES_DISCOUNT: 'SALES_DISCOUNT', PURCHASE_DISCOUNT: 'PURCHASE_DISCOUNT',
   PAYMENT_COLLECTION: 'PAYMENT_COLLECTION', PAYMENT_DISBURSEMENT: 'PAYMENT_DISBURSEMENT',
 });
+
+/**
+ * 文档生命周期 / 归档的**权限专化**（PL-DEF-04）。
+ *
+ * 专用权限码是权威判定：`LIFECYCLE_VIEW` 看、`LIFECYCLE_MANAGE` 管。
+ * `USERS_MANAGE` 保留为**兼容别名**（Design §32.10）—— 既有管理员在权限目录变更后
+ * 仍然可用，但「管理员权限」不再等同于「文档生命周期能力」本身。
+ */
+function allowLifecycleView(actor) {
+  allowAny(actor, ['LIFECYCLE_VIEW', 'USERS_MANAGE']);
+}
+
+function allowLifecycleManage(actor) {
+  allowAny(actor, ['LIFECYCLE_MANAGE', 'USERS_MANAGE']);
+}
 
 function normalizeEntityType(value) {
   const normalized = String(value || '').trim().replace(/[\s-]+/g, '_').toUpperCase();
@@ -262,8 +277,9 @@ export function archiveCancelledDocument(db, actor, input) {
 }
 
 export function restoreArchivedDocument(db, actor, input) {
-  if (!hasAnyPermission(actor, ['USERS_MANAGE'])) {
-    throw new HttpError(403, '只有管理员可以恢复归档记录', { code: 'FORBIDDEN' });
+  // 恢复归档是**写**动作：与归档 / 清理同属生命周期管理权（PL-DEF-04 的权限专化）。
+  if (!hasAnyPermission(actor, ['LIFECYCLE_MANAGE', 'USERS_MANAGE'])) {
+    throw new HttpError(403, '只有具备生命周期管理权限的主体可以恢复归档记录', { code: 'FORBIDDEN' });
   }
   const entityType = normalizeEntityType(input.entityType);
   const entityId = requiredText(input.entityId, '业务记录', 100);
@@ -517,7 +533,7 @@ export function lifecycleAnalysis(db, res, actor, url) {
     const archiveEligibility = analyzeArchiveEligibility(db, actor, requestedType, url.searchParams.get('entityId'));
     return send(res, 200, { archiveEligibility });
   }
-  allow(actor, 'USERS_MANAGE');
+  allowLifecycleView(actor);
   const graph = analyzeLifecycleGraph(db, {
     entityType: requestedType,
     entityId: url.searchParams.get('entityId'),
@@ -532,7 +548,7 @@ export async function archiveLifecycleRecord(db, req, res, actor) {
   if (entityType === 'PURCHASE_RECEIPT') {
     return send(res, 200, archiveCancelledDocument(db, actor, { ...body, entityType }));
   }
-  allow(actor, 'USERS_MANAGE');
+  allowLifecycleManage(actor);
   const entityId = requiredText(body.entityId, '业务记录', 100);
   const reason = optionalText(body.reason, 500);
   const node = buildNode(db, entityType, entityId, false);
@@ -556,7 +572,7 @@ export async function restoreLifecycleRecord(db, req, res, actor) {
   if (entityType === 'PURCHASE_RECEIPT') {
     return send(res, 200, restoreArchivedDocument(db, actor, { ...body, entityType }));
   }
-  allow(actor, 'USERS_MANAGE');
+  allowLifecycleManage(actor);
   const entityId = requiredText(body.entityId, '业务记录', 100);
   rowFor(db, entityType, entityId);
   const current = db.prepare('SELECT active FROM lifecycle_archives WHERE entity_type=? AND entity_id=?').get(entityType, entityId);
@@ -606,7 +622,7 @@ function lifecycleRecordSummary(row, entityType) {
 }
 
 function listLifecycleRecords(db, actor, query = {}) {
-  allow(actor, 'USERS_MANAGE');
+  allowLifecycleView(actor);
   const requestedType = query.entityType ? normalizeEntityType(query.entityType) : null;
   const search = String(query.search || '').trim();
   const includeArchived = query.includeArchived === true;
@@ -661,7 +677,7 @@ function parseAuditJson(value, fallback) {
 }
 
 function listCleanupEvents(db, actor, query = {}) {
-  allow(actor, 'USERS_MANAGE');
+  allowLifecycleView(actor);
   const limit = Math.max(1, Math.min(100, Number(query.limit) || 30));
   const search = String(query.search || '').trim();
   const entityType = query.entityType ? normalizeEntityType(query.entityType) : '';
@@ -927,7 +943,7 @@ function deleteSelectedGraph(db, graph) {
 }
 
 export function cleanupLifecycleGraph(db, actor, input, options = {}) {
-  allow(actor, 'USERS_MANAGE');
+  allowLifecycleManage(actor);
   const entityType = normalizeEntityType(input.entityType);
   const entityId = requiredText(input.entityId, '业务记录', 100);
   const reason = requiredText(input.reason, '清理原因', 500);

@@ -13,9 +13,9 @@ test('D0 route presentation registry is complete and excludes aliases and disabl
 // operator work faces (sales-parameters, sales-group-memberships,
 // sellable-scope-rules, product-classifications,
 // sales-price-override-authorizations). 79 + 6 = 85.
-  assert.equal(ROUTE_PRESENTATIONS.length, 92);
-  assert.equal(new Set(ROUTE_PRESENTATIONS.map((item) => item.route)).size, 92);
-  assert.deepEqual(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route), ['cash-journals', 'bills', 'data-cleanup']);
+  assert.equal(ROUTE_PRESENTATIONS.length, 93);
+  assert.equal(new Set(ROUTE_PRESENTATIONS.map((item) => item.route)).size, 93);
+  assert.deepEqual(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route), ['cash-journals', 'bills']);
   assert.equal(ROUTE_PRESENTATIONS.some((item) => item.route === 'mrp'), false);
   assert.equal(TECHNICAL_ROUTE_ALIASES.mrp, 'material-requirements-plan');
   for (const item of ROUTE_PRESENTATIONS) {
@@ -25,7 +25,7 @@ test('D0 route presentation registry is complete and excludes aliases and disabl
 
 test('D0 presentation projection reconciles exactly with canonical application registry', () => {
   const active = new Set(ACTIVE_APPLICATION_ROUTES.map((entry) => entry.key));
-  assert.equal(active.size, 92);
+  assert.equal(active.size, 93);
   assert.deepEqual(active, new Set(ROUTE_PRESENTATIONS.map((item) => item.route)));
   assert.deepEqual(new Set(DISABLED_APPLICATION_ROUTES.map((entry) => entry.key)), new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)));
 });

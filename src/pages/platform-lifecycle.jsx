@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import {
-  BottomActionBar, DangerSheet, DependencyGraphSheet, EmptyState, FilterButton,
+  BottomActionBar, BusinessPageShell, DangerSheet, DependencyGraphSheet, EmptyState, FilterButton,
   FilterSheet, FormRow, InlineAlert, LifecycleBadge, PrimaryButton, RecordCard,
   RecordList, SearchField, SecondaryButton, Sheet, Skeleton, StatusChip,
   TertiaryButton,
@@ -27,8 +27,11 @@ function errorCopy(error) {
   return safeErrorMessage({ status: error?.status, code: error?.code, serverMessage: error?.message });
 }
 
-export default function DataCleanup({ user, notify }) {
-  const isAdmin = user?.permissions?.includes('USERS_MANAGE');
+export default function PlatformLifecycle({ user, notify }) {
+  // 权限专化（PL-DEF-04）：`LIFECYCLE_VIEW` / `LIFECYCLE_MANAGE` 是权威判定，
+  // `USERS_MANAGE` 保留为兼容别名（Design §32.10）。
+  const canView = Boolean(user?.permissions?.includes('LIFECYCLE_VIEW') || user?.permissions?.includes('USERS_MANAGE'));
+  const canManage = Boolean(user?.permissions?.includes('LIFECYCLE_MANAGE') || user?.permissions?.includes('USERS_MANAGE'));
   const [tab, setTab] = useState('records');
   const [records, setRecords] = useState(null);
   const [events, setEvents] = useState(null);
@@ -48,7 +51,7 @@ export default function DataCleanup({ user, notify }) {
   const [loadError, setLoadError] = useState('');
 
   const loadRecords = useCallback(async () => {
-    if (!isAdmin) return;
+    if (!canView) return;
     try {
       const params = new URLSearchParams({ limit: '80' });
       if (search.trim()) params.set('search', search.trim());
@@ -62,10 +65,10 @@ export default function DataCleanup({ user, notify }) {
       setRecords([]);
       setLoadError(errorCopy(error));
     }
-  }, [entityType, includeArchived, isAdmin, search]);
+  }, [entityType, includeArchived, canView, search]);
 
   const loadEvents = useCallback(async () => {
-    if (!isAdmin) return;
+    if (!canView) return;
     try {
       const params = new URLSearchParams({ limit: '50' });
       if (search.trim()) params.set('search', search.trim());
@@ -77,7 +80,7 @@ export default function DataCleanup({ user, notify }) {
       setEvents([]);
       setLoadError(errorCopy(error));
     }
-  }, [entityType, isAdmin, search]);
+  }, [entityType, canView, search]);
 
   useEffect(() => { if (tab === 'records') void loadRecords(); else void loadEvents(); }, [tab, loadEvents, loadRecords]);
 
@@ -145,9 +148,10 @@ export default function DataCleanup({ user, notify }) {
   const searchPlaceholder = tab === 'records' ? '搜索单号或编号' : '搜索清理单号或原因';
   const typeOptions = useMemo(() => [{ key: '', label: '全部类型' }, ...entityTypes], [entityTypes]);
 
-  if (!isAdmin) return <EmptyState title="没有权限" description="仅系统管理员可使用数据整理。"/>;
+  if (!canView) return <EmptyState title="没有权限" description="需要 LIFECYCLE_VIEW 权限才能查看文档生命周期与归档记录。"/>;
 
-  return <section className="mobile-cleanup" aria-label="数据整理">
+  return <BusinessPageShell className="platform-ops" width="rail" data-testid="platform-lifecycle-page">
+  <section className="mobile-cleanup" aria-label="生命周期与归档">
     <div className="segmented-control" role="tablist" aria-label="数据整理视图">
       {TABS.map((item) => <button key={item.key} type="button" role="tab" aria-selected={tab === item.key} className={tab === item.key ? 'is-selected' : ''} onClick={() => { setTab(item.key); setSearch(''); }}>{item.label}</button>)}
     </div>
@@ -207,8 +211,10 @@ export default function DataCleanup({ user, notify }) {
         </>}
       </div>
       <BottomActionBar>
-        {selected.archived ? <PrimaryButton type="button" onClick={() => setConfirmAction('restore')}>恢复</PrimaryButton> : <SecondaryButton type="button" onClick={() => setConfirmAction('archive')}>归档</SecondaryButton>}
-        {classification?.action && <PrimaryButton type="button" onClick={() => setConfirmAction('cleanup')}>{classification.action}</PrimaryButton>}
+        {canManage && (selected.archived
+          ? <PrimaryButton type="button" onClick={() => setConfirmAction('restore')}>恢复</PrimaryButton>
+          : <SecondaryButton type="button" onClick={() => setConfirmAction('archive')}>归档</SecondaryButton>)}
+        {canManage && classification?.action && <PrimaryButton type="button" onClick={() => setConfirmAction('cleanup')}>{classification.action}</PrimaryButton>}
       </BottomActionBar>
     </Sheet>}
 
@@ -227,5 +233,6 @@ export default function DataCleanup({ user, notify }) {
       {confirmAction !== 'cleanup' && <p>{confirmAction === 'archive' ? '归档只改变列表展示，不会改变库存、往来账、凭证或 MRP 运算。' : '恢复后记录将重新出现在正常业务列表中。'}</p>}
       {confirmAction !== 'restore' && <FormRow label={confirmAction === 'cleanup' ? '清理原因' : '归档原因'} required><textarea rows={3} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="请说明错误数据或归档原因"/></FormRow>}
     </DangerSheet>}
-  </section>;
+  </section>
+  </BusinessPageShell>;
 }

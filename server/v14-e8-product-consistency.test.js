@@ -10,7 +10,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const source = (path) => readFileSync(resolve(root, path), 'utf8');
 
 test('E8 audits the complete current user-facing application catalogue', () => {
-  const disabled = new Set(['cash-journals', 'bills', 'data-cleanup']);
+  const disabled = new Set(['cash-journals', 'bills']);
   const pages = new Set(ROUTE_PRESENTATIONS.map((item) => item.route));
   // Core Scope Cleanup removed the 6 extension routes
   // (projects, tasks, timesheets, contacts, followups, activities).
@@ -21,7 +21,7 @@ test('E8 audits the complete current user-facing application catalogue', () => {
 // operator work faces (sales-parameters, sales-group-memberships,
 // sellable-scope-rules, product-classifications,
 // sales-price-override-authorizations). 79 + 6 = 85, plus 7 Platform work surfaces = 92.
-  assert.equal(pages.size, 92);
+  assert.equal(pages.size, 93);
   assert.deepEqual(new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)), disabled);
   for (const page of ['business-overview', 'orders', 'inventory-transactions', 'decision-reports', 'traceability']) {
     assert.ok(pages.has(page), `missing audited page ${page}`);

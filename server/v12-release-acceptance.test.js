@@ -23,14 +23,14 @@ after(() => { rmSync(tempDir, { recursive: true, force: true }); });
 
 describe('V1.2 release registries', () => {
   test('permission, role, approval and lifecycle registries stay canonical', () => {
-    assert.equal(PERMISSIONS.length, 264);
+    assert.equal(PERMISSIONS.length, 266);
     assert.deepEqual(APPROVAL_DOCUMENT_TYPES, ['SALES_ORDER', 'PURCHASE_ORDER', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER', 'PURCHASE_REQUISITION', 'PRODUCTION_ORDER']);
     assert.equal(Object.keys(LIFECYCLE_ENTITIES).length, 25);
 
     const db = createDatabase(join(tempDir, 'registry.db'));
     // M1-P-03（Active Design §8.1.3）新增 role-outsourcing 与 role-outsourcing-receiving 两个系统角色。
     assert.equal(db.prepare('SELECT COUNT(*) count FROM roles').get().count, 7);
-    assert.equal(db.prepare("SELECT COUNT(*) count FROM role_permissions WHERE role_id='role-admin'").get().count, 264);
+    assert.equal(db.prepare("SELECT COUNT(*) count FROM role_permissions WHERE role_id='role-admin'").get().count, 266);
     assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
     db.close();
@@ -42,7 +42,7 @@ describe('V1.2 release registries', () => {
     const reopened = createDatabase(path);
     // AA-W1..AA-W7 add 20 permissions on top of the pre-domain 227 baseline;
     // the Platform generic workflow engine adds 5 more (2026-11-13) → 252.
-    assert.equal(reopened.prepare('SELECT COUNT(*) count FROM permissions').get().count, 264);
+    assert.equal(reopened.prepare('SELECT COUNT(*) count FROM permissions').get().count, 266);
     assert.equal(reopened.prepare('SELECT COUNT(*) count FROM roles').get().count, 7);
     assert.equal(reopened.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual(reopened.prepare('PRAGMA foreign_key_check').all(), []);

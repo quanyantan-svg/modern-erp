@@ -5059,3 +5059,25 @@ Design §32.4.2 原写「已通过人数 < N → **不违规**」，与实现（
 **剩余**：域级 Acceptance 与 Capability Freeze → Manual Closure / Release Readiness。
 **页面级观察（不判定）**：销售订单详情页的「查看业务流程 ›」触控目标高 36 px（低于 44 px）——
 该页**既有**问题，非本域引入，由 Sales & Customer 域自己的 UAT 负责。
+
+### 61.19 PL-06 补齐：文档生命周期的 operator 工作面与权限专化（2026-11-14）
+
+**发现来源**：域级 Acceptance 前的逐能力复核发现，Design §32.10 要求的 PL-06 改动
+（operator 工作面 + `PL-DEF-04` 权限专化）**尚未实施** —— 生命周期页面存在但其路由
+`data-cleanup` 自 v1.7 起一直是**停用**路由（operator 不可达），且引擎的 7 处权限判定
+全部借用 `USERS_MANAGE`。该能力因此仍为 `PARTIAL`，域级验收目标未达成。
+
+| 项 | 内容 |
+|---|---|
+| 权限专化 | 新增 `LIFECYCLE_VIEW` / `LIFECYCLE_MANAGE`（权限目录 264 → **266**）；`server/modules/lifecycle-engine.js` 的 7 处判定全部改为 `allowAny(actor, ['LIFECYCLE_VIEW', 'USERS_MANAGE'])` / `allowAny(actor, ['LIFECYCLE_MANAGE', 'USERS_MANAGE'])`；`USERS_MANAGE` 保留为**兼容别名**（Design §32.10） |
+| operator 工作面 | `src/pages/platform-lifecycle.jsx`（由停用路由的 `src/pages/data-cleanup.jsx` 迁移）：生命周期记录 / 清理审计 / 依赖分析 / 归档 / 恢复 / 清理，屏根 `platform-lifecycle-page`，读写动作按 `canView` / `canManage` 分权 |
+| 路由 | `lifecycle`（启用，权限 `LIFECYCLE_VIEW` / `LIFECYCLE_MANAGE`）；停用路由 `data-cleanup` 退役 |
+| 合同测试 | `server/platform-lifecycle.test.js`（**8/8 PASS**，登记 FAST / FULL）：权限目录登记、引擎不再裸用 `USERS_MANAGE`、只读主体可读不可写、管理主体可写、无权主体 403、别名仍然有效、工作面可达 |
+| 跨域影响 | 停用路由集合 3 → 2 条；**13 个既有冻结域前端合同测试文件**的路由清单事实（85 → **93** 条启用路由）随之同步，断言强度未降低。`server/v12-lifecycle-product.test.js` 的「data-cleanup 路由以 USERS_MANAGE 挂载」一条改写为「lifecycle 路由以专用权限码挂载」 |
+| 浏览器 UAT | 生命周期工作面纳入 UAT：10 屏 × 4 档宽度 = **40/40 PASS** |
+
+**PL-06 残余（封顶，不在本轮闭合范围）**：关系图仍是 30+ 处硬编码分支、25 个实体中只有
+`PURCHASE_RECEIPT` 可归档 —— 通用关系注册表与全实体可归档已由 Requirement §36.13 判为
+`OUT_OF_SCOPE`（延期理由与重启条件已登记）。
+
+**门禁**：`pnpm test`（FULL）**4020/4020 PASS**；`pnpm build` 通过；浏览器 UAT 40/40 PASS。

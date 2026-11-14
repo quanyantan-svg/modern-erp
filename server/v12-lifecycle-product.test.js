@@ -11,7 +11,7 @@ import { createDatabase } from './db.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
 const appSource = readFileSync(join(root, 'src', 'App.jsx'), 'utf8');
-const pageSource = readFileSync(join(root, 'src', 'pages', 'data-cleanup.jsx'), 'utf8');
+const pageSource = readFileSync(join(root, 'src', 'pages', 'platform-lifecycle.jsx'), 'utf8');
 const metadataSource = readFileSync(join(root, 'src', 'navigation', 'applicationMetadata.js'), 'utf8');
 const registrySource = readFileSync(join(root, 'src', 'navigation', 'applicationRegistry.js'), 'utf8');
 let db; let server; let baseUrl; let tempDir; let adminToken; let salesToken;
@@ -93,12 +93,14 @@ describe('Lifecycle product APIs', () => {
 });
 
 describe('Data cleanup product wiring', () => {
-  test('data-cleanup route is wired with USERS_MANAGE gate but excluded from launcher tiles', () => {
-    // V1.6 P1B: data-cleanup continues to be a reachable disabled route
-    // via the navigation registry but is NOT a primary launcher tile.
-    assert.match(registrySource, /route\('data-cleanup','数据整理'[\s\S]*?permission:'USERS_MANAGE'/);
-    assert.match(registrySource, /'data-cleanup': defaultScreen\('\.\.\/pages\/data-cleanup\.jsx'\)/);
-    assert.doesNotMatch(metadataSource, /\['data-cleanup', '数据整理'/);
+  test('lifecycle route is wired with the dedicated permission gates and excluded from launcher tiles', () => {
+    // Platform 域的 PL-06 闭合（Design §32.10）：工作面由 'data-cleanup'（停用路由）迁移为
+    // 'lifecycle'（启用），权限由 USERS_MANAGE 专化为 LIFECYCLE_VIEW / LIFECYCLE_MANAGE。
+    // Platform 路由**不进入**业务启动器分组（启动器合同排除 Platform）。
+    assert.match(registrySource, /route\('lifecycle','生命周期与归档'[\s\S]*?any:\['LIFECYCLE_VIEW','LIFECYCLE_MANAGE'\]/);
+    assert.match(registrySource, /'lifecycle': defaultScreen\('\.\.\/pages\/platform-lifecycle\.jsx'\)/);
+    assert.doesNotMatch(registrySource, /route\('data-cleanup'/);
+    assert.doesNotMatch(metadataSource, /\['lifecycle', '生命周期与归档'/);
   });
 
   test('cleanup UX uses one sheet at a time and requires destructive reasons', () => {

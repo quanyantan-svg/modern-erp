@@ -230,8 +230,8 @@ describe('V1.6 P3 — sales-order document contract', () => {
 // operator work faces (sales-parameters, sales-group-memberships,
 // sellable-scope-rules, product-classifications,
 // sales-price-override-authorizations). 79 + 6 = 85.
-    assert.equal(ROUTE_PRESENTATIONS.length, 92, 'canonical routes plus W11-A U3, the AA domain closure and the 7 Platform work surfaces must remain enabled');
-    assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 3, 'frozen disabled routes must remain disabled (the legacy workflows route was retired)');
+    assert.equal(ROUTE_PRESENTATIONS.length, 93, 'canonical routes plus W11-A U3, the AA domain closure and the 8 Platform work surfaces must remain enabled');
+    assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 2, 'frozen disabled routes must remain disabled (the legacy workflows and data-cleanup routes were retired)');
 
     const salesRoute = enabledByRoute.get('orders');
     assert.ok(salesRoute, 'orders route must remain enabled');

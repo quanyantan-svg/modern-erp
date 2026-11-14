@@ -107,12 +107,14 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('organizations','组织与作用域','platform','ADVANCED_CONFIGURATION','CONFIG','contextual','系统设置','users',{any:['ORGANIZATIONS_VIEW','ORGANIZATIONS_MANAGE']},{desktopExposure:'system-settings',mobileExposure:'system-settings'}),
   route('numbering','编号规则','platform','ADVANCED_CONFIGURATION','CONFIG','contextual','系统设置','inventory',{any:['NUMBERING_VIEW','NUMBERING_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
   route('sod-rules','职责分离规则','platform','ADVANCED_CONFIGURATION','CONFIG','contextual','系统设置','reservation',{any:['SOD_RULES_VIEW','SOD_RULES_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
+  // PL-06 的 operator 工作面（Design §32.10）：文档生命周期记录 / 归档 / 恢复 / 清理。
+  // 权限已专化为 LIFECYCLE_VIEW / LIFECYCLE_MANAGE（PL-DEF-04），USERS_MANAGE 为兼容别名。
+  route('lifecycle','生命周期与归档','platform','SYSTEM_SUPPORT','WORKFLOW','contextual','系统设置','cleanup',{any:['LIFECYCLE_VIEW','LIFECYCLE_MANAGE']},{desktopExposure:'system-settings',mobileExposure:'system-settings'}),
 ]);
 
 const DISABLED_ROUTE_DEFINITIONS = Object.freeze([
   route('cash-journals','现金日记账','finance-operations','SYSTEM_SUPPORT','LIST','contextual','财务运营','cashJournals',{any:['CASH_JOURNALS_VIEW','CASH_JOURNALS_MANAGE']},{enabled:false}),
   route('bills','票据管理','finance-operations','SYSTEM_SUPPORT','LIST','contextual','财务运营','bills',{any:['BILLS_VIEW','BILLS_MANAGE']},{enabled:false}),
-  route('data-cleanup','数据整理','platform','SYSTEM_SUPPORT','CONFIG','contextual','系统设置','cleanup',{permission:'USERS_MANAGE'},{enabled:false}),
 ]);
 
 export const TECHNICAL_ROUTE_ALIASES = Object.freeze({ mrp: 'material-requirements-plan' });
@@ -155,7 +157,7 @@ const loadScreenModule = (path) => {
     case '../pages/planning-workbench.jsx': return import('../pages/planning-workbench.jsx');
     case '../pages/planning-reservations.jsx': return import('../pages/planning-reservations.jsx');
     case '../pages/planning-configuration.jsx': return import('../pages/planning-configuration.jsx');
-    case '../pages/data-cleanup.jsx': return import('../pages/data-cleanup.jsx');
+    case '../pages/platform-lifecycle.jsx': return import('../pages/platform-lifecycle.jsx');
     case '../pages/engineering-reference.jsx': return import('../pages/engineering-reference.jsx');
     case '../pages/engineering-substitute.jsx': return import('../pages/engineering-substitute.jsx');
     case '../pages/engineering-change.jsx': return import('../pages/engineering-change.jsx');
@@ -246,7 +248,7 @@ const SCREEN_DEFINITIONS = Object.freeze({
   'service-fulfillments': named('../pages/wave8-sales.jsx','ServiceFulfillments'),
   'consignment-commercial': named('../pages/wave8-sales.jsx','ConsignmentCommercial'),
   'production-instructions': defaultScreen('../pages/planning-documents.jsx'), 'purchase-instructions': defaultScreen('../pages/planning-documents.jsx'),
-  'purchase-requisitions': defaultScreen('../pages/planning-documents.jsx'), 'data-cleanup': defaultScreen('../pages/data-cleanup.jsx'),
+  'purchase-requisitions': defaultScreen('../pages/planning-documents.jsx'), 'lifecycle': defaultScreen('../pages/platform-lifecycle.jsx'),
   'engineering-reference': defaultScreen('../pages/engineering-reference.jsx'),
   'engineering-substitute': defaultScreen('../pages/engineering-substitute.jsx'),
   'engineering-change': defaultScreen('../pages/engineering-change.jsx'),

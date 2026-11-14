@@ -11,7 +11,7 @@ import { BUSINESS_DOMAIN_KEYS, CANONICAL_DOMAIN_KEYS, PLATFORM_DOMAIN } from '..
 const repoRoot = resolve(import.meta.dirname, '..');
 const read = (path) => readFileSync(resolve(repoRoot, path), 'utf8');
 
-test('Domain Alignment keeps 92 active and 3 disabled routes after the Platform domain closure', () => {
+test('Domain Alignment keeps 93 active and 2 disabled routes after the Platform domain closure', () => {
   // Finance Operations adds two canonical hub routes while retaining the
   // existing invoice and settlement deep links as contextual surfaces.
   // inventory routes are merged into the canonical inventory hub per
@@ -26,13 +26,13 @@ test('Domain Alignment keeps 92 active and 3 disabled routes after the Platform 
   // sales-group-memberships, sellable-scope-rules, product-classifications and
   // sales-price-override-authorizations (the SC01 / SC06 / SC07 / SC19 operator
   // work faces). 79 + 6 = 85.
-  // The Platform domain closure adds seven Platform work surfaces and no
+  // The Platform domain closure adds eight Platform work surfaces and no
   // tile (the launcher contract excludes Platform): workflow-designer,
   // workflow-bindings, workflow-tasks, workflow-monitor, organizations,
-  // numbering and sod-rules. 85 + 7 = 92. The retired legacy 'workflows'
-  // route leaves the disabled set: 4 − 1 = 3.
-  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 92);
-  assert.equal(DISABLED_APPLICATION_ROUTES.length, 3);
+  // numbering, sod-rules and lifecycle. 85 + 8 = 93. The retired legacy
+  // 'workflows' and 'data-cleanup' routes leave the disabled set: 4 − 2 = 2.
+  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 93);
+  assert.equal(DISABLED_APPLICATION_ROUTES.length, 2);
   const canonical = new Set(CANONICAL_DOMAIN_KEYS);
   for (const route of APPLICATION_ROUTES) assert.ok(canonical.has(route.domain), `${route.key}: ${route.domain}`);
   const activeDomains = new Set(ACTIVE_APPLICATION_ROUTES.map((route) => route.domain));

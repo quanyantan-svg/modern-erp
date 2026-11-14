@@ -75,6 +75,7 @@
 | `src/pages/platform-organizations.jsx` | 组织注册表 + 层级 + 作用域分配 |
 | `src/pages/platform-numbering.jsx` | 编号规则维护 + 待迁移单据清单 |
 | `src/pages/platform-sod-rules.jsx` | SOD 规则维护 + 求值记录 |
+| `src/pages/platform-lifecycle.jsx` | 文档生命周期工作面（生命周期记录 / 归档 / 恢复 / 清理） |
 | `src/components/AttachmentPanel.jsx` | 附件挂载组件（嵌入业务单据详情页） |
 | `src/pages/platform-notifications.jsx` | **既有页面扩展**：分类 / 优先级 / 跳转 + 未读徽标 |
 
@@ -93,6 +94,7 @@
 | `organizations` | 组织与作用域 | `ORGANIZATIONS_VIEW` / `ORGANIZATIONS_MANAGE` | `system-settings` |
 | `numbering` | 编号规则 | `NUMBERING_VIEW` / `NUMBERING_MANAGE` | `advanced-config` |
 | `sod-rules` | 职责分离规则 | `SOD_RULES_VIEW` / `SOD_RULES_MANAGE` | `advanced-config` |
+| `lifecycle` | 生命周期与归档 | `LIFECYCLE_VIEW` / `LIFECYCLE_MANAGE` | `system-settings` |
 
 `workflow-tasks` 的徽标**独立于**审批中心徽标（`src/App.jsx:186` 的 `tabBadges` 增加 `workflowTasks` 键），**不得**并入 `pendingApprovalCount`（Requirement §36.3.9）。
 
@@ -882,6 +884,23 @@ transaction(db):
 | PL-06 | 新增 operator 工作面（生命周期记录 / 归档 / 恢复 / 清理）；`PL-DEF-04` 的权限专化 → 新增 `LIFECYCLE_VIEW` / `LIFECYCLE_MANAGE`，`USERS_MANAGE` 保留为兼容别名 | `server/modules/lifecycle-engine.js`、`src/pages/platform-lifecycle.jsx` |
 | PL-12 | §32.2.7 的 ALTER + `audit()` 可选参数 | `server/lib/audit.js`、`server/migrations/platform-domain-schema.js` |
 | PL-13 | 无代码改动；`PL-DEF-08` / `PL-DEF-09` 登记为显式残余 | — |
+
+#### 32.10.1 PL-06 的实施结果（2026-11-14，域级 Acceptance 前补齐）
+
+本节登记 PL-06 的落地事实 —— 它是本 Design §32.10 明确要求、但在本轮验收前
+尚未实施的一项（域级审计把它判为 `PARTIAL`）。
+
+| 项 | 内容 |
+|---|---|
+| 权限专化 | 新增 `LIFECYCLE_VIEW` / `LIFECYCLE_MANAGE`（权限目录 264 → **266**）。`server/modules/lifecycle-engine.js` 的 **7 处**权限判定全部改为 `allowAny(actor, ['LIFECYCLE_VIEW', 'USERS_MANAGE'])` / `allowAny(actor, ['LIFECYCLE_MANAGE', 'USERS_MANAGE'])`；`USERS_MANAGE` 保留为**兼容别名**，既有管理员不受影响 |
+| operator 工作面 | `src/pages/platform-lifecycle.jsx`（由原停用路由的 `src/pages/data-cleanup.jsx` 迁移而来）：生命周期记录 / 清理审计 / 依赖分析 / 归档 / 恢复 / 清理，屏根 `platform-lifecycle-page`；读写动作按 `canView` / `canManage` 分权 |
+| 路由 | `lifecycle`（启用，权限 `LIFECYCLE_VIEW` / `LIFECYCLE_MANAGE`，`mobileExposure: system-settings`）；停用路由 `data-cleanup` 退役（其页面已迁移） |
+| 合同测试 | `server/platform-lifecycle.test.js`（8 例，已登记 FAST / FULL）：权限目录登记、引擎不再裸用 `USERS_MANAGE`、只读主体可读不可写、管理主体可写、无权主体 403、别名仍然有效、工作面可达 |
+| 跨域影响 | 停用路由集合由 3 条变为 2 条，**13 个既有冻结域前端合同测试文件**的路由清单事实（85 → **93** 条启用路由、4 → **2** 条停用路由）随之同步；断言强度未降低，只更新事实数字与名单。`server/v12-lifecycle-product.test.js` 的「data-cleanup 路由以 USERS_MANAGE 挂载且不进启动器」一条改写为「lifecycle 路由以专用权限码挂载且不进启动器」 |
+
+**PL-06 的残余（封顶，不阻塞本域冻结）**：关系图仍是 30+ 处硬编码分支、25 个实体中
+只有 `PURCHASE_RECEIPT` 可归档 —— 通用关系注册表与全实体可归档已由 Requirement §36.13
+判为 `OUT_OF_SCOPE`（延期理由与重启条件已登记）。
 
 ### 32.11 兼容性与回归约束
 

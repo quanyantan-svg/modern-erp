@@ -11,7 +11,7 @@ test('D9 closes every active route on the shared 680px application rail', () => 
 // operator work faces (sales-parameters, sales-group-memberships,
 // sellable-scope-rules, product-classifications,
 // sales-price-override-authorizations). 79 + 6 = 85, plus 7 Platform work surfaces = 92.
-  assert.equal(ROUTE_PRESENTATIONS.length, 92);
+  assert.equal(ROUTE_PRESENTATIONS.length, 93);
   const styles = read('src/styles.css');
   assert.match(styles, /\.mobile-shell \{[\s\S]*--app-max-width: 680px;[\s\S]*--page-max-width: 680px;/);
   assert.match(styles, /\.mobile-application-view \{[\s\S]*max-width: 680px;/);
