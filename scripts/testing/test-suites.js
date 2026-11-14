@@ -129,6 +129,9 @@ const FULL = [
   // replay / 未知 DDL / 复制中断 / 校验失败 / 重启重试 / 不进入 ready）。
   // 纯本地 SQLite，不接触 MySQL。
   'server/db-migration-fail-closed.test.js',
+  // W10-INV-RISK-01 —— 生产库存正确性闭合回归（AC-RISK-01..08）。
+  // 纯本地 SQLite，不接触 MySQL；真实 MySQL 并发证明仍需受保护 campaign。
+  'server/w10-inv-risk-01-inventory-identity.test.js',
   'server/sales-customer-wave7-functional.test.js',
   'server/sales-customer-wave7-acceptance.test.js',
   // SC32 / SC68 — Reservation Intent reaction suite (document.md §34.3.5

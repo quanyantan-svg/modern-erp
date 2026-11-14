@@ -50,6 +50,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import { createApp } from './app.js';
+import { adjustInventory } from './lib/stock.js';
 import { createDatabase, hashPassword, PERMISSIONS } from './db.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -98,7 +99,9 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
     customerId = 'cus'; supplierId = 'sup'; warehouseId = 'wh'; productId = 'prod';
 
     // Initial inventory so Sales Delivery creation can satisfy the inventory check.
-    db.prepare("INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES('inv-src',?,?,1000,?)").run(warehouseId, productId, now);
+    // The stock must live on the **canonical** position: a legacy NULL-key row is not
+    // the default position and must not satisfy an availability read (W10-INV-RISK-01).
+    adjustInventory(db, warehouseId, productId, 1000, now);
 
     // Users first (FK creator_id REFERENCES users(id) on orders)
     for (const [name, role] of [['admin', 'role-admin'], ['sales', 'role-sales'], ['reviewer', 'role-reviewer'], ['warehouse', 'role-warehouse'], ['accounting', 'role-accounting']]) {

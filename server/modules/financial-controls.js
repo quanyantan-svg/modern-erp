@@ -4,6 +4,9 @@ import { audit } from '../lib/audit.js';
 import { allow, allowAny, HttpError, readJson, send } from '../lib/http.js';
 import { openItemSnapshot, refreshOpenItem, unappliedBalanceSnapshot } from './settlement-core.js';
 import { setInventoryQuantity } from '../lib/stock.js';
+import {
+  applyOperationalInventoryLegs, assertOperationalAvailability, resolveSalesReturnReversalLegs,
+} from '../lib/operational-inventory-legs.js';
 import { applyTreasuryMovement } from './finance-treasury-movement.js';
 import { acquireParentBalanceLock } from './sales-prepayment-finance-adapter.js';
 import { guardPeriodAction } from './period-control.js';
@@ -366,8 +369,11 @@ export async function reverseOperationalReturn(db, req, res, actor, side, return
     const reversed = Number(db.prepare(`SELECT COALESCE(SUM(rri.quantity),0) n FROM return_reversal_items rri JOIN return_reversals rr ON rr.id=rri.reversal_id WHERE rr.side=? AND rr.return_id=? AND rri.original_return_item_id=?`).get(side, returnId, original.id).n);
     if (quantity > Number(original.quantity) - reversed + 1e-9) throw new HttpError(409, '累计冲销数量超过原退货数量');
     const amountCents = Math.round(quantity * Number(original.unit_price_cents));
-    if (sales) { const inv = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(header.warehouse_id, original.product_id); if (!inv || Number(inv.quantity) + 1e-9 < quantity) throw new HttpError(409, '库存不足，无法冲销销售退货'); }
-    return { original, quantity, amountCents };
+    /*
+     * W10-INV-RISK-01：销售退货冲销的库存判定必须落在**原退货实际恢复的身份**上，
+     * 不得按 (warehouse_id, product_id) 取任意一行。判定与写入都在事务内完成。
+     */
+    return { original, quantity, amountCents, alreadyReversed: reversed };
   });
   const amount = items.reduce((sum, x) => sum + x.amountCents, 0);
   const prior = db.prepare('SELECT COALESCE(SUM(applied_cents),0) a,COALESCE(SUM(unapplied_cents),0) u FROM credit_reversal_components WHERE credit_id=?').get(credit.id);
@@ -385,8 +391,35 @@ export async function reverseOperationalReturn(db, req, res, actor, side, return
     // `solution.md §29.16.3.5`. This path does not reduce PREPAYMENT-eligible
     // balance directly, so no PREPAYMENT parent lock is required here.
     for (const item of items) {
+      if (sales) {
+        /*
+         * W10-INV-RISK-01：只冲销原退货实际恢复的库存身份与未冲销数量，
+         * 不得先跨 position 求和再把总量覆盖写入默认位置。
+         */
+        const legs = resolveSalesReturnReversalLegs(db, {
+          warehouseId: header.warehouse_id,
+          productId: item.original.product_id,
+          returnId,
+          returnItemId: item.original.id,
+          quantity: item.quantity,
+          alreadyReversed: item.alreadyReversed,
+        });
+        assertOperationalAvailability(db, { legs, message: '库存不足，无法冲销销售退货', status: 409 });
+        applyOperationalInventoryLegs(db, {
+          sourceType: 'SALES_RETURN_REVERSAL',
+          sourceId: id,
+          sourceItemId: item.original.id,
+          businessDate,
+          legs,
+          actor,
+          idempotencyKeyPrefix: `SALES_RETURN_REVERSAL:${id}:${item.original.id}`,
+          sourceNo: reversalNo,
+          remark: reason,
+        });
+        continue;
+      }
       const current = db.prepare('SELECT COALESCE(SUM(quantity),0) q FROM inventory WHERE warehouse_id=? AND product_id=? AND active=1').get(header.warehouse_id, item.original.product_id);
-      const delta = sales ? -item.quantity : item.quantity; const after = Number(current?.q || 0) + delta;
+      const after = Number(current?.q || 0) + item.quantity;
       // V21 — write at the canonical default position (ENTERPRISE / AVAILABLE
       // / NULL-bin / NULL-lot / NULL-serial). setInventoryQuantity refuses
       // bin-enabled warehouses and LOT/SERIAL-tracked products so legacy
@@ -394,7 +427,7 @@ export async function reverseOperationalReturn(db, req, res, actor, side, return
       // collision.
       setInventoryQuantity(db, header.warehouse_id, item.original.product_id, after, at);
       db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(randomUUID(), header.warehouse_id, item.original.product_id, item.quantity, sales ? 'OUT' : 'IN', after, sales ? 'SALES_RETURN_REVERSAL' : 'PURCHASE_RETURN_REVERSAL', id, reversalNo, reason, actor.id, at);
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(randomUUID(), header.warehouse_id, item.original.product_id, item.quantity, 'IN', after, 'PURCHASE_RETURN_REVERSAL', id, reversalNo, reason, actor.id, at);
     }
     const originalVoucher = db.prepare('SELECT id FROM accounting_vouchers WHERE source_type=? AND source_id=?').get(sales ? 'SALES_RETURN' : 'PURCHASE_RETURN', returnId);
     const entries = db.prepare('SELECT subject_id subjectId,direction FROM accounting_entries WHERE voucher_id=?').all(originalVoucher.id).map((e) => ({ ...e, amountCents: amount, direction: e.direction === 'DEBIT' ? 'CREDIT' : 'DEBIT' }));

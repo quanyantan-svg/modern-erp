@@ -4,6 +4,9 @@ import { randomUUID } from 'node:crypto';
 import { audit } from './lib/audit.js';
 import { adjustInventory, adjustInventoryAtPosition, resolveCanonicalPosition, setInventoryQuantity } from './lib/stock.js';
 import {
+  applyOperationalInventoryLegs, assertOperationalAvailability, readOperationalAvailability, resolveOperationalLegs,
+} from './lib/operational-inventory-legs.js';
+import {
   listNotificationOverview, listNotifications, listNotificationSubscriptions, manageNotificationSubscription,
   markNotificationRead,
 } from './modules/platform-notifications.js';
@@ -7032,7 +7035,7 @@ async function createSalesDelivery(db, req, res, actor) {
   const sourceContract = validateSalesDeliverySource(db, body, salesOrderId);
   requireActiveReference(db, 'warehouses', warehouseId, '仓库');
   const input = normalizeSourcedLogisticsItems(db, items, { sourceTable: 'sales_order_items', sourceHeaderColumn: 'order_id', sourceHeaderId: salesOrderId, sourceIdCamel: 'salesOrderItemId', sourceIdSnake: 'sales_order_item_id', useSourceAmountRatio: true });
-  for (const item of input.items) {
+  for (const [itemIndex, item] of input.items.entries()) {
     const sourceLine = db.prepare('SELECT quantity,upper_delivery_tolerance_bps FROM sales_order_items WHERE id=?').get(item.sourceItemId);
     const delivered = confirmedQuantity(db, { itemTable: 'sales_delivery_items', sourceColumn: 'sales_order_item_id', headerTable: 'sales_deliveries', headerForeignKey: 'delivery_id' }, item.sourceItemId);
     const upperCapacity = toleranceBoundsMicros(sourceLine.quantity, sourceLine.upper_delivery_tolerance_bps).upper;
@@ -7042,8 +7045,23 @@ async function createSalesDelivery(db, req, res, actor) {
     // under its own lock. Demanding inventory here would block every service delivery.
     const classification = db.prepare('SELECT service_classification,active FROM product_commercial_classification WHERE product_id=?').get(item.productId);
     if (Number(classification?.service_classification) === 1 && Number(classification?.active) === 1) continue;
-    const inv = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id = ? AND product_id = ?').get(warehouseId, item.productId);
-    if (!inv || inv.quantity < Number(item.quantity)) { const product = db.prepare('SELECT code FROM products WHERE id = ?').get(item.productId); throw new HttpError(400, (product?.code || item.productId) + ' 库存不足'); }
+    /*
+     * W10-INV-RISK-01：草稿创建只做**早期反馈**，不产生库存副作用。
+     * 判定必须读取随后真正扣减的同一个 canonical position：
+     * NONE 产品读默认位置；LOT / SERIAL 产品读分配证据解析出的身份位置。
+     * 权威判定仍在确认期（事务内重读 + 锁定）。
+     */
+    const draftLegs = resolveOperationalLegs(db, {
+      warehouseId,
+      productId: item.productId,
+      quantity: Number(item.quantity),
+      allocationRows: items[itemIndex]?.trackingAllocations || items[itemIndex]?.tracking_allocations || null,
+    });
+    const draftAvailability = readOperationalAvailability(db, { legs: draftLegs });
+    if (draftAvailability.legs.some((leg) => leg.available + 1e-9 < leg.required)) {
+      const product = db.prepare('SELECT code FROM products WHERE id = ?').get(item.productId);
+      throw new HttpError(400, (product?.code || item.productId) + ' 库存不足');
+    }
   }
   const deliveryId = id();
   const now = new Date().toISOString();
@@ -7273,12 +7291,33 @@ export async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
         }
         assertStrongReservationAvailability(db, { productId: item.product_id, warehouseId: locked.warehouse_id,
           quantity: baseQuantity, demandSourceType: 'SALES_ORDER', demandSourceId: so.id });
-        const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(locked.warehouse_id, item.product_id);
-        if (!current || current.quantity < baseQuantity) throw new HttpError(400, '库存不足');
         postTrackedMovement(db, { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, sourceItemId: item.id, productId: item.product_id, warehouseId: locked.warehouse_id, quantity: baseQuantity, direction: 'OUT', businessDate: locked.delivery_date });
-        const balance = adjustInventory(db, locked.warehouse_id, item.product_id, -baseQuantity, now);
-        const transactionId=id();
-        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,\'OUT\',?,\'SALES_DELIVERY\',?,?,?,?,?,?)').run(transactionId, locked.warehouse_id, item.product_id, baseQuantity, balance, deliveryId, locked.delivery_no, '销售出库', actor.id, now, locked.delivery_date);
+        /*
+         * W10-INV-RISK-01：可用量判断与实际扣减必须落在**同一 canonical 位置**上。
+         * 旧的 pair-level 读取按 (warehouse_id, product_id) 取任意一行，会造成
+         * 「别的身份有货 → 错误放行」与「canonical 有货 → 错误拒绝」。
+         * 腿在 postTrackedMovement 之后解析：只有那时批次 / 序列号身份才已确定。
+         */
+        const deliveryLegs = resolveOperationalLegs(db, {
+          warehouseId: locked.warehouse_id,
+          productId: item.product_id,
+          quantity: baseQuantity,
+          allocationRows: db.prepare('SELECT * FROM tracked_source_allocations WHERE source_type=? AND source_id=? AND source_item_id=?').all('SALES_DELIVERY', deliveryId, item.id),
+        });
+        assertOperationalAvailability(db, { legs: deliveryLegs });
+        const applied = applyOperationalInventoryLegs(db, {
+          sourceType: 'SALES_DELIVERY',
+          sourceId: deliveryId,
+          sourceItemId: item.id,
+          businessDate: locked.delivery_date,
+          legs: deliveryLegs,
+          actor,
+          idempotencyKeyPrefix: `SALES_DELIVERY:${deliveryId}:${item.id}`,
+          sourceNo: locked.delivery_no,
+          remark: '销售出库',
+        });
+        const transactionId = applied.transactionIds[0];
+        if (!transactionId) throw new HttpError(409, '销售出库库存事务缺失');
         // SC68 — Delivery reacts to the reservation: the delivered portion of
         // the line's live GRANTED reservation is consumed here
         // (solution.md §29.17.2 "Delivery → consume or release delivered
@@ -7608,12 +7647,31 @@ async function confirmPurchaseReturn(db, req, res, actor, returnId) {
         if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '采购退货明细与来源入库明细不一致');
         const already = confirmedQuantity(db, { itemTable: 'purchase_return_items', sourceColumn: 'receipt_item_id', headerTable: 'purchase_returns', headerForeignKey: 'return_id' }, sourceItem.id, returnId);
         if (already + Number(item.quantity) > Number(sourceItem.quantity)) throw new HttpError(409, '退货数量超过来源入库数量');
-        const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(ret.warehouse_id, item.product_id);
-        if (!current || current.quantity < item.quantity) throw new HttpError(400, '库存不足');
         postTrackedMovement(db, { sourceType: 'PURCHASE_RETURN', sourceId: returnId, sourceItemId: item.id, productId: item.product_id, warehouseId: ret.warehouse_id, quantity: item.quantity, direction: 'OUT', businessDate: locked.return_date });
-        const balance = adjustInventory(db, ret.warehouse_id, item.product_id, -item.quantity, now);
-        const transactionId=id();
-        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,\'OUT\',?,\'PURCHASE_RETURN\',?,?,?,?,?,?)').run(transactionId, ret.warehouse_id, item.product_id, item.quantity, balance, returnId, ret.return_no, '采购退货', actor.id, now, locked.return_date);
+        /*
+         * W10-INV-RISK-01：以实际退货扣减的 canonical / tracking position 判定可用量。
+         * 腿在 postTrackedMovement 之后解析 —— 只有那时身份才已确定。
+         */
+        const returnLegs = resolveOperationalLegs(db, {
+          warehouseId: ret.warehouse_id,
+          productId: item.product_id,
+          quantity: item.quantity,
+          allocationRows: db.prepare('SELECT * FROM tracked_source_allocations WHERE source_type=? AND source_id=? AND source_item_id=?').all('PURCHASE_RETURN', returnId, item.id),
+        });
+        assertOperationalAvailability(db, { legs: returnLegs });
+        const applied = applyOperationalInventoryLegs(db, {
+          sourceType: 'PURCHASE_RETURN',
+          sourceId: returnId,
+          sourceItemId: item.id,
+          businessDate: locked.return_date,
+          legs: returnLegs,
+          actor,
+          idempotencyKeyPrefix: `PURCHASE_RETURN:${returnId}:${item.id}`,
+          sourceNo: ret.return_no,
+          remark: '采购退货',
+        });
+        const transactionId = applied.transactionIds[0];
+        if (!transactionId) throw new HttpError(409, '采购退货库存事务缺失');
         const carrying=issueSourceValue(db,{ businessDate:locked.return_date,productId:item.product_id,warehouseId:ret.warehouse_id,quantity:Number(item.quantity),movementType:'PURCHASE_RETURN',sourceType:'PURCHASE_RETURN',sourceId:returnId,sourceItemId:item.id,inventoryTransactionId:transactionId }).reduce((s,x)=>s-x.valueDeltaCents,0); carryingValueCents+=carrying; carryingEntries.push({role:inventoryAccountRole(db,item.product_id),direction:'CREDIT',amountCents:carrying,summary:'移除存货账面价值 '+ret.return_no});
       }
       db.prepare('UPDATE purchase_returns SET total_cents=?,status=\'CONFIRMED\',confirmed_at=?,confirmed_by=?,updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, returnId);

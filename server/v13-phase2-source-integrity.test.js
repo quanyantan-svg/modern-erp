@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import { createApp } from './app.js';
+import { adjustInventory } from './lib/stock.js';
 import { hashPassword } from './db.js';
 import { createTempDb } from './test-utils/temp-db.js';
 import { insertPurchasePrice } from './test-support/procurement-http-fixture.js';
@@ -44,7 +45,9 @@ describe('V1.3 Phase 2 authoritative source integrity', () => {
     db.prepare("INSERT INTO suppliers(id,code,name,contact,phone,address,active,created_at,updated_at,qualification_status) VALUES('sup','SUP','Supplier','Bob','131','Address',1,?,?,'QUALIFIED'),('sup2','SUP2','Other','','','',1,?,?,'QUALIFIED')").run(now, now, now, now);
     db.prepare("INSERT INTO warehouses(id,code,name,address,manager,active,created_at,updated_at) VALUES('wh','WH','Warehouse','','',1,?,?)").run(now, now);
     db.prepare("INSERT INTO products(id,code,name,category,unit,price_cents,stock_quantity,active,created_at,updated_at) VALUES('p1','P1','Product','','EA',20000,0,1,?,?),('p2','P2','Other','','EA',100,0,1,?,?)").run(now, now, now, now);
-    db.prepare("INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES('inv','wh','p1',1000,?)").run(now);
+    // The stock must live on the **canonical** position: a legacy NULL-key row is not
+    // the default position and must not satisfy an availability read (W10-INV-RISK-01).
+    adjustInventory(db, 'wh', 'p1', 1000, now);
     for (const [name, role] of [['sales','role-sales'],['reviewer','role-reviewer'],['warehouse','role-warehouse'],['admin','role-admin']]) {
       const hash = hashPassword(`${name}-phase2-1234`);
       db.prepare('INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at) VALUES(?,?,?,?,?,?,1,?)').run(`user-${name}`, name, name, hash.hash, hash.salt, role, now);
