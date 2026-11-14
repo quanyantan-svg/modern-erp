@@ -18,9 +18,9 @@
 | [`procurement-outsourcing-m1-core.md`](./procurement-outsourcing-m1-core.md) | Procurement & Outsourcing（M1-Core 首期） | §31.13 对应有界后继设计 | `ACTIVE` / `M1_CORE_DESIGN_PASS`；首期 Implementation 已实施，七 Gate 7/7 `PASS` 且包级 Acceptance 已签发（`M1_CORE_ACCEPTANCE_PASS`，2026-11-07）—— **域级 Capability Freeze 与 Domain Acceptance 已于 2026-11-11 签发** |
 | [`inventory-warehouse.md`](./inventory-warehouse.md) | Inventory & Warehouse | `solution.md` §27 | 已实施；域级 Acceptance 与 Capability Freeze 已签发（2026-11-13） |
 | [`finance-operations.md`](./finance-operations.md) | Finance Operations | `solution.md` §28.0–§28.29 | 已实施；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12） |
-| [`sales-customer/`](./sales-customer/) | Sales & Customer | `solution.md` §29 / §30 / Wave 8/9/11 基线 | 已实施；整域已冻结（2026-11-13） |
+| [`sales-customer/`](./sales-customer/) | Sales & Customer | `solution.md` §29 / §30 / Wave 8/9/11 基线 | 既有整域基线已冻结（2026-11-13）；§29.52 `W10-INV-RISK-01` 有界增补 Design `APPROVED`（2026-11-14），Implementation 已授权（仅仓库内代码与测试） |
 | [`accounting-analytics.md`](./accounting-analytics.md) | Accounting & Analytics | `solution.md` §31 | Design 已完成（2026-11-10），覆盖 AA-W1..AA-W7 七个实施包；Implementation 已完成；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12） |
-| [`platform.md`](./platform.md) | Platform | `solution.md` §32 | Design 已完成（2026-11-13），覆盖五个子系统 + 通用 SOD 引擎 + Audit schema 升级；**Implementation `NOT_AUTHORIZED`**，需业务所有者批准后方可开工 |
+| [`platform.md`](./platform.md) | Platform | `solution.md` §32 | 既有 Design 基线与期间控制修订保持；§32.16 Release Infrastructure 有界增补 Design `APPROVED`（2026-11-14），Implementation 已授权（仅仓库内代码、测试、脚本与模板） |
 
 > 状态列依据见 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §35.3；
 > M1-Core 首期包级 Acceptance 的当前状态见同表 §37.55，B3101 / B3121 静态代码审计基线见同表 §38

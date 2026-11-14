@@ -5143,5 +5143,195 @@ User Freeze approval: CONFIRMED.
 | Acceptance Architecture | §29.49 |
 | Final Design State | §29.50 |
 | Cross-References | §29.51 |
+| W10-INV-RISK-01 Production Inventory Correctness Closure | §29.52 |
+
+### 29.52 W10-INV-RISK-01 Production Inventory Correctness Closure Design（`APPROVED`，2026-11-14）
+
+#### 29.52.1 设计身份与严格边界
+
+| 项 | 内容 |
+|---|---|
+| 用途 | 实现已批准 Requirement `W10-INV-RISK-01`，闭合销售出货创建/确认、采购退货确认、销售退货冲销的库存身份错读与非原子扣减 |
+| Owner | Sales & Customer（销售路径编排）+ Procurement & Outsourcing（采购退货编排）+ Finance Operations（销售退货冲销编排）+ Inventory & Warehouse（canonical mutation owner） |
+| 状态 | `APPROVED`；Requirement 已于 2026-11-14 批准，本节 Design 由业务所有者于 2026-11-14 以「根据 design 完成 W10-INV-RISK-01」明确批准并授权进入 Implementation；MySQL campaign 执行与 Acceptance / Freeze 未授权 |
+| 权威来源 | Requirement `W10-INV-RISK-01`；Inventory & Warehouse 已冻结 canonical position / mutation 合同；本节不改写既有 Sales Freeze 历史 |
+
+本设计只改变四条已点名路径的库存读取与 mutation 编排，不改变 API、单据状态机、tracking、估值、AR/AP、
+voucher、期间控制或 reservation 语义；不新增 schema、migration、历史 backfill 或负库存自动修复。实施中发现
+无法从现有 source allocation / movement evidence 确定真实 position 时必须 fail closed；不得猜测或扩域。
+
+#### 29.52.2 现状根因与 canonical owner 决策
+
+现状四处分别使用 pair-level first row / `SUM(quantity)`、`adjustInventory()` 或 `setInventoryQuantity()`：读取的是
+`(warehouse_id, product_id)`，写入却由 legacy shim 隐含选择 default position；并发检查与写入也不是同一个原子
+原语。`server/lib/stock.js` 已明确拒绝 bin 与 LOT/SERIAL，却仍可能让上述调用方在多 position 数据上错误拒绝、
+错误放行或覆盖 default position。
+
+单一写 owner 固定为 `server/lib/inventory-mutation.js::applyInventoryMutation()`：它按 `position_key` 排序锁行、
+读取 ACTIVE lock、执行原子非负检查、写 `inventory_transactions` 与 mutation log，并兼容 SQLite transaction 与
+MySQL `FOR UPDATE`。本轮不复制其锁、hash、upsert 或非负逻辑。
+
+`server/lib/stock.js::adjustInventory()` / `setInventoryQuantity()` 保留给未迁移 legacy caller，但四条路径完成后必须
+有 zero-caller proof，证明它们不再从这些 handler 可达；本轮不顺手迁移其他 caller，也不删除 shim。
+
+#### 29.52.3 新的薄编排边界
+
+新增 `server/lib/operational-inventory-legs.js`，它不是第二个 mutation owner，只负责把业务单据 evidence 解析为
+`applyInventoryMutation()` 的显式 legs：
+
+| 函数 | 责任 |
+|---|---|
+| `resolveDefaultOperationalPosition(db,{warehouseId,productId})` | 委托 production `resolveCanonicalPosition()` / `computePositionKey()` 返回 ENTERPRISE + AVAILABLE + null bin/lot/serial；不读数量 |
+| `resolveSourceInventoryLegs(db,{sourceType,sourceId,sourceItemId,...})` | NONE 返回一个 default leg；LOT/SERIAL 从既有 `tracked_source_allocations` 与 source movement evidence 返回精确 lot/serial legs；数量总和必须等于 base quantity |
+| `readOperationalAvailability(db,{legs})` | 逐 leg 精确读取同一 `position_key` 的 active quantity 与 ACTIVE locks；缺行视零；只提供草稿早期反馈，不产生副作用 |
+| `applyOperationalInventoryLegs(db,{document,...})` | 在调用方 outer transaction 内按 position key 稳定排序，逐 leg 调用 `applyInventoryMutation()`；强制 stable idempotency key、`trackingMode='EXTERNAL'`、`valuationMode='EXTERNAL'` |
+| `resolveSalesReturnReversalLegs(db,{returnId,returnItemId,quantity})` | 从原销售退货的 tracked movement / source allocation 还原本次可冲销的真实 position 与剩余数量；不得从当前 pair aggregate 推断 |
+
+helper 输出 identity 必须包含 warehouse/product/owner/status/bin/lot/serial 全维度，并由 inventory-position 模块
+计算 `position_key`。它不得写 `inventory`、`inventory_transactions`、tracking、valuation 或 audit；实际数量变化
+始终只由 `applyInventoryMutation()` 完成。
+
+`applyInventoryMutation()` 的 `SOURCE_TYPES` 仅做加法补入 `PURCHASE_RETURN`；既有 `SALES_DELIVERY`、
+`SALES_RETURN`、`SALES_RETURN_REVERSAL` 继续使用。四条路径传 `valuationMode='EXTERNAL'`，因为现有 handler
+在同一 outer transaction 内执行严格的 `issueSourceValue()` / `restoreSourceValue()`；这样不会进入 mutation 模块
+的 legacy best-effort valuation catch。传 `trackingMode='EXTERNAL'`，因为现有 `postTrackedMovement()` 保留
+source allocation、genealogy 与 return-to-hold 语义；canonical mutation 不再重复写第二条 tracked movement。
+
+#### 29.52.4 Position 与 tracking 映射
+
+1. **NONE 产品**：唯一 leg 是 Requirement R02 的 default position。读取、锁、扣减/增加与 transaction 的
+   `position_key` 完全一致。
+2. **LOT 产品**：每个已选 lot allocation 是一个 leg，lotId 必填、serialId 为空；不得以 default leg 代替。
+3. **SERIAL 产品**：每个 serial allocation 是数量 1 的 leg，serialId 必填且 lotId 按既有主数据事实携带；重复
+   serial、数量不为 1 或 allocation 总量不等于业务数量全部拒绝。
+4. **bin-enabled warehouse**：本轮四条 legacy 业务面没有获批新增 bin 选择合同。若既有 source evidence 没有
+   唯一 bin，handler 必须返回现有用户安全的 tracking/position 拒绝，不能退回 null-bin；若 evidence 已携带 bin，
+   leg 原样继承。该情况若需要新的用户输入/API 字段，立即返回 Requirement/Design，不在 Implementation 扩展。
+5. **销售退货冲销**：可冲销 identity 以原退货实际 IN movement 为准。NONE 为原 default position；LOT/SERIAL
+   为原 tracked legs。分次冲销按原 leg 的未冲销数量稳定分配，不能跨 identity 借量。
+
+草稿创建的早期检查与确认期 mutation 共用上述 leg resolver；前者是提示，后者才是权威。resolver 不能用
+`ORDER BY` 挑任意行，也不能将不同 owner/status/bin/lot/serial 求和。
+
+#### 29.52.5 四条调用流
+
+**A. 销售出货创建（无库存副作用）**
+
+`createSalesDelivery()` 在现有 source/tolerance/service classification 校验后：按 raw tracking allocation 解析 legs →
+精确读取各 leg available → 任一不足返回库存不足 → 原 transaction 只写 DRAFT、items、allocation 与 create audit。
+为避免草稿写入前 allocation 尚未持久化，resolver 接受经现有 tracking normalizer 验证后的内存 allocation；其
+identity 规则仍委托 canonical helper。不同 identity 的库存不参与通过判定。
+
+**B. 销售出货确认**
+
+现有 outer transaction、Delivery→Order→Items 锁序、OQC、reservation、期间 guard 保持。每个 physical item：
+
+`authoritative base quantity → resolve legs from persisted allocation → applyOperationalInventoryLegs(OUT,
+SALES_DELIVERY) → postTrackedMovement(EXTERNAL owner) → consume reservation → issueSourceValue(using returned
+inventory transaction id) → vouchers/AR/status/audit`。
+
+删除该路径的 pair-level `SELECT quantity`、`adjustInventory()` 与手工 `inventory_transactions INSERT`。每个 leg 的
+idempotency key 固定为 `SALES_DELIVERY:{deliveryId}:{itemId}:{positionKey}:OUT:v1`；document-level idempotency 与
+state lock 仍是第一道重放保护。任何 leg、tracking、valuation、reservation、voucher 或 AR 失败均回滚整单。
+
+**C. 采购退货确认**
+
+保留 receipt/source quantity、期间、billing/AP/GRNI 与 voucher 语义。替换 pair-level availability、
+`adjustInventory()` 和手工 transaction：
+
+`authoritative quantity → receipt-derived return allocations → applyOperationalInventoryLegs(OUT,PURCHASE_RETURN)
+→ postTrackedMovement → issueSourceValue(returned transaction id) → AP/GRNI/voucher/status/audit`。
+
+stable key 为 `PURCHASE_RETURN:{returnId}:{itemId}:{positionKey}:OUT:v1`。任一 position 不足时整个 return 保持
+DRAFT，所有库存、valuation、AP/GRNI、voucher、tracking 与成功 audit 均为零新增。
+
+**D. 销售退货冲销**
+
+`reverseOperationalReturn(...,'SALES',...)` 保留 credit/settlement 检查、数量上限、document idempotency、voucher
+与 AR refresh。事务内重新锁定原 return、return item、既有 reversal items 与精确 source movement evidence，
+解析未冲销 legs 后调用 `applyOperationalInventoryLegs(OUT,SALES_RETURN_REVERSAL)`。删除 sales 分支的 pair-level
+`SUM(quantity)`、`setInventoryQuantity()` 与手工 transaction。stable key 为
+`SALES_RETURN_REVERSAL:{reversalId}:{originalReturnItemId}:{positionKey}:OUT:v1`。
+
+purchase-return reversal 不在批准范围，保持现状；共享函数必须以明确 `side === 'SALES'` 分支接入，不能顺带
+改变 PURCHASE 语义。
+
+#### 29.52.6 事务、锁序与并发
+
+所有确认/冲销继续使用现有 outer transaction。锁序固定为：
+
+1. 现有 document/header/source/state locks；
+2. source allocation / original movement / prior reversal evidence；
+3. 所有待处理 position key 去重后字典序锁定；
+4. `inventory_locks` 可用量复读；
+5. inventory mutation 与 transaction evidence；
+6. tracking → valuation → reservation/finance → document state/audit。
+
+为了避免一个 document 多次调用时锁序交错，`applyOperationalInventoryLegs()` 必须先收集整单所有 OUT legs，
+按 position key 排序后再调用 canonical mutation，而不是按用户提交 item 顺序逐行锁。相同 position 的多 legs
+可以顺序 mutation，但每次都在持锁 transaction 内复读；总扣减超过 available 时后一个拒绝并回滚整单。
+
+SQLite 依赖其 outer write transaction 串行语义；MySQL 使用 canonical `SELECT ... FOR UPDATE`。并发结果只能是
+一个先提交、另一个锁后复读拒绝，或两者在总量允许时均成功；任何结果都不得出现负 position。
+
+#### 29.52.7 权限、SOD、状态与错误
+
+- 权限保持 `SALES_DELIVERIES_MANAGE`、`RETURNS_MANAGE` 等现有后端检查；不新增绕过权限。前端隐藏不构成授权。
+- 销售出货现有建单/审批或 gate SOD、OQC、期间控制、退货/冲销权限保持；库存 helper 不读取 actor permission，
+  只接受已由 handler 授权的 actor 用于 canonical audit。
+- 状态转换仍为 DRAFT→CONFIRMED 或 CONFIRMED return→独立 reversal evidence；inventory mutation 成功前不更新
+  最终状态。库存拒绝时 HTTP 409，使用调用域自己的稳定业务码/安全 message；消费方不得依赖 Inventory 内部码。
+- 错误不得包含 position hash、SQL 或内部 identity JSON。日志可以记录 source type/id、item id 与安全错误类别，
+  不记录请求 secret。
+- 成功保留 document audit + canonical inventory mutation audit；业务拒绝按各 handler 既有 rejection audit 机制
+  记录。若 rejection audit 当前不能脱离回滚 transaction 保留，本轮只在既有合同允许的边界修复，不新造第二套 audit。
+
+#### 29.52.8 数据、兼容与回滚
+
+不新增表、列、索引或 migration。legacy `position_key IS NULL`、非 canonical suffix、错误 owner/status/bin/lot/serial、
+历史负余额全部原样保留；resolver 只读且不修复。缺 canonical row 等价零，不用 upsert 创建零行。
+
+API path/body/response、base-UOM、金额分、tracking/genealogy、return-to-hold、valuation、COGS、AP/AR、voucher、
+reservation、quality 与期间合同保持。成功 response 不暴露内部 legs；已有调用方无需适配。
+
+应用回滚必须整体回退四条 handler + helper + tests，不能只回退 canonical mutation 接入而保留删除后的 pair check。
+已经提交的正确 inventory transaction、valuation、finance 与 audit 事实不回写。若发现历史负数或 identity 冲突，
+登记独立数据治理，不允许本单元自动修正。
+
+#### 29.52.9 测试与证据
+
+focused tests 至少分三层：
+
+1. `operational-inventory-legs` unit/contract：NONE/LOT/SERIAL、缺行、wrong owner/status/bin/lot/serial、ACTIVE lock、
+   allocation 总量/重复 serial、reversal remaining legs、bin evidence 缺失 fail closed。
+2. 四个真实 handler integration：Requirement AC-RISK-01..03、05..08，逐项证明 document state、wrong-position、
+   transaction、tracking、valuation、voucher、AR/AP、reservation 与 audit 的成功或零副作用。
+3. concurrency：SQLite 双请求 + 经单独批准的 disposable MySQL campaign，调用真实 handler，使用 barrier 让两个
+   请求在权威 mutation 前竞争；验证最终非负、最多允许量内成功、失败方无副作用、document idempotency 不重复。
+
+现有 Wave 10 fixture 中 `quantity=-1` 风险复现断言保留，并改为证明修复后的拒绝/非负结果，不能删除或 skip。
+静态 zero-caller 测试证明四个 handler 不再调用 `adjustInventory()` / `setInventoryQuantity()` 或手工插入对应
+`inventory_transactions`。完整门禁为 focused、`pnpm test`、`pnpm test:heavy`、`pnpm build`、`git diff --check`、
+error-code / period / acceptance-record 校验，以及受保护 MySQL campaign。MySQL manifest、目标库与执行入口必须
+另经业务所有者批准；Design 批准不等于执行批准。
+
+#### 29.52.10 实施顺序与 HARD STOP
+
+实施顺序固定为：
+
+1. 新增只读 leg resolver 与 focused tests，不切生产 caller；
+2. 为 `PURCHASE_RETURN` 加 canonical source type，并完成 mutation contract tests；
+3. 迁移销售出货创建/确认；
+4. 迁移采购退货确认；
+5. 仅迁移 SALES 退货冲销分支；
+6. zero-caller proof、FULL/HEAVY/build 与本地并发；
+7. 另行申请并执行 disposable MySQL campaign；
+8. Acceptance 复核 Requirement AC-RISK-01..09。
+
+Requirement：`APPROVED`；本节 Design：`APPROVED`（业务所有者 2026-11-14 批准）；Implementation：`AUTHORIZED`
+（仅限仓库内代码与测试变更）。
+
+**边界**：本次 Implementation 授权只覆盖仓库内代码与测试变更。它**不**授权 MySQL campaign 执行、
+Acceptance / Freeze、发布或部署；这些操作仍须逐次单独批准。
 
 ---

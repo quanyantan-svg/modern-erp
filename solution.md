@@ -25,9 +25,9 @@
 | Procurement & Outsourcing（M1-Core 首期） | [`docs/design/procurement-outsourcing-m1-core.md`](docs/design/procurement-outsourcing-m1-core.md) | §31.13 对应有界后继设计；`M1_CORE_DESIGN_PASS` |
 | Inventory & Warehouse | [`docs/design/inventory-warehouse.md`](docs/design/inventory-warehouse.md) | §27；§27.56 = 统一期间控制接入（`PENDING_APPROVAL`，Implementation `NOT_AUTHORIZED`） |
 | Finance Operations | [`docs/design/finance-operations.md`](docs/design/finance-operations.md) | §28.0–§28.30；§28.30 = Finance 期间控制与折扣/结算接入（`PENDING_APPROVAL`，Implementation `NOT_AUTHORIZED`） |
-| Sales & Customer | [`docs/design/sales-customer/README.md`](docs/design/sales-customer/README.md) | §29 + §30 + Wave 8/9/11 基线 |
+| Sales & Customer | [`docs/design/sales-customer/README.md`](docs/design/sales-customer/README.md) | §29 + §30 + Wave 8/9/11 基线；§29.52 = `W10-INV-RISK-01` Production Inventory Correctness Closure Design（`APPROVED`，2026-11-14；Implementation 已授权，仅仓库内代码与测试） |
 | Accounting & Analytics | [`docs/design/accounting-analytics.md`](docs/design/accounting-analytics.md) | §31；§31.16 = 法定/经营期间控制接入（`PENDING_APPROVAL`，Implementation `NOT_AUTHORIZED`） |
-| Platform | [`docs/design/platform.md`](docs/design/platform.md) | §32；§32.15 = canonical 期间闸门与跨域协调（`PENDING_APPROVAL`，Implementation `NOT_AUTHORIZED`） |
+| Platform | [`docs/design/platform.md`](docs/design/platform.md) | §32；§32.15 = canonical 期间闸门与跨域协调（`APPROVED`，已实施并冻结）；§32.16 = Release Infrastructure 有界增补设计（`APPROVED`，2026-11-14；Implementation 已授权，仅仓库内代码、测试、脚本与模板） |
 
 ### 0.2 章节编号迁移规则
 

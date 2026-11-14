@@ -392,3 +392,96 @@ Platform 是九域架构（8 Business Domains + Platform）中的**平台层**�
   归集／分摊的并发；测试必须调用真实 canonical handler，不得用直接插入关闭行替代关闭命令。
 - 若关闭与 mutation 均成功，证据必须证明 mutation 先提交且被关闭检查／快照纳入；仅断言“两者均可成功”
   不构成并发正确性证据。
+
+### 36.16 Release Infrastructure 有界增补（`APPROVED`，2026-11-14）
+
+#### 36.16.1 身份、授权与生效边界
+
+| 项 | 内容 |
+|---|---|
+| 用途 | 闭合 2026-11-14 Release Readiness Audit 中除 Manual Capability Closure / 九域 Release Readiness 签发以外的 P0 / P1 基础设施缺口 |
+| Owner | Platform；MySQL DR 运行证据由 Operations 共同维护；库存业务语义不在本节，另见 Sales & Customer 的 `W10-INV-RISK-01` 独立候审 Requirement |
+| 状态 | `APPROVED`；业务所有者于 2026-11-14 批准本正文并授权进入 Design；Implementation / 数据库操作 / 发布仍未授权 |
+| 权威来源 | `document.md` §17、§22.22；本文件 §36；`docs/status/PROJECT_STATUS.md` §62、§64；`docs/operations/deployment.md` |
+| Supersession | 获批后仅对 Platform Freeze 做有界增补，不改写既有 21 项能力及其 Freeze 历史；用户明确排除 Manual Capability Closure 与九域 Release Readiness 签发，不得借本节恢复该项 |
+
+本增补包含六个独立但共同服务于发布基础设施的合同项：
+
+1. `PL-RI-01` MySQL 生产备份、异机副本与恢复演练；
+2. `PL-RI-02` SQLite migration fail-closed；
+3. `PL-RI-03` 生产依赖安全与构建依赖分层；
+4. `PL-RI-04` 当前 canonical 浏览器验收门禁；
+5. `PL-RI-05` 目标环境 TLS / Nginx / systemd / 防火墙 / 回滚证据；
+6. `PL-RI-06` append-only 历史文档的可审计纠错与 current 门禁真实性。
+
+#### 36.16.2 `PL-RI-01` MySQL 生产备份与恢复
+
+业务所有者已在 `PROJECT_STATUS.md` §62 裁定 `DR-01..DR-05`，本候审 Requirement 将其转为合同：
+
+- **RPO = 24 小时**：至少每日一次完整逻辑数据备份；本轮不引入 binlog / PITR。
+- **RTO = 4 小时**：从宣布恢复到应用 `ready` 恢复为成功的总时间不得超过 4 小时。
+- **异机副本 = S3 兼容对象存储**：endpoint、bucket、region 与凭据仅由环境变量或受保护凭据载体注入；不得写入仓库、日志或验收附件。
+- **演练频率**：每季度至少一次，且每次发布前必须在隔离目标执行一次恢复演练；证据进入 `docs/acceptance/`，但不得包含密码、连接串或对象存储密钥。
+- **备份内容**：逻辑备份必须覆盖全部业务数据、视图与 trigger 所需定义证据；恢复链路可以由应用 bootstrap 重建 schema，但必须验证恢复后的表、行数、关键约束、视图、trigger 与应用健康状态。不得仅以 `mysqldump` 退出码作为成功证明。
+- **一致性**：备份必须取得一致快照；备份文件必须非空，具有 SHA-256，上传后必须回读并复核哈希。
+- **保留与清理**：至少保留最近 30 个每日副本和满足季度/发布前演练追溯所需的演练源副本；清理只能删除已超过保留期且存在已验证异机副本的对象。
+- **恢复安全**：恢复默认 fail closed，必须显式确认目标为 disposable 演练库或已批准的生产恢复窗口；不得提供模糊目标、默认库名、通配清理或自动覆盖生产库的入口。
+- **迁移回滚**：发布前备份是 migration 的前置条件；migration 失败时停止启动，通过恢复链路回到发布前快照，不实施未经批准的反向破坏性 DDL。
+- **双端工具边界**：现有 SQLite backup / restore 保持原语义；MySQL 使用独立入口与独立 systemd timer/service，二者不得根据环境变量静默互相替代。
+
+验收必须至少证明：备份、S3 上传与回读、空/损坏备份拒绝、错误目标拒绝、全新隔离 MySQL 恢复、完整性校验、应用 live/ready、RPO/RTO 计时、清理保留策略及秘密零泄漏。真实 MySQL 与对象存储演练属于独立高风险操作，仍须逐次明确授权。
+
+#### 36.16.3 `PL-RI-02` SQLite migration fail-closed
+
+- SQLite 是受支持的本地 / 测试兼容后端，初始化与升级不得吞掉未知 DDL / DML 错误后继续启动。
+- “列已存在”等预期幂等情况必须通过 schema inspection 或对明确、窄化的错误类别判断处理；禁止 `catch {}`、空 catch 或仅 `console.error` 后继续。
+- 每个 migration 单元必须具备明确的开始、成功、失败边界；失败时后续 migration、seed 与服务监听均不得发生。
+- 表重建必须处于可回滚事务或等价原子边界；失败不得留下 `_new` 表、半复制数据或已删除旧表。
+- 错误输出必须包含 migration 标识与安全诊断，不得包含数据库密码或敏感连接信息。
+- 兼容验收覆盖 fresh、upgrade、replay、非重复列故障注入、写入失败、表重建中断与重启重试；必须证明未知错误向上传播且应用拒绝进入 ready。
+
+#### 36.16.4 `PL-RI-03` 生产依赖安全与构建依赖分层
+
+- 发布候选必须使用 npm 官方 advisory 数据源或组织批准且实现兼容 audit API 的镜像执行依赖审计；镜像不支持 audit 时必须明确失败，不得记录为 PASS。
+- production dependency graph 不得存在未处置的 `high` / `critical` 公告。`moderate` / `low` 必须记录可达性、生产暴露面与处置决定；不得仅因“通常是开发工具”而静默忽略。
+- Vite、React build plugin 等只在构建 / 测试执行且不被 `node server/index.js` 运行时加载的包，应归入 `devDependencies`；运行时依赖必须保持最小集合。
+- 本轮已知最低处置基线：Vite 必须升级到不受 `<=7.3.6` 公告影响的版本；`source-map-js` 必须解析到 `>=1.2.2`。实际 Implementation 仍须以执行时官方 advisory 为准，不得把版本号写死为永久豁免。
+- 依赖升级不得降低测试、删断言或改变业务合同；必须重跑 FULL、HEAVY、build、依赖审计与生产启动 smoke。
+- `packageManager` 必须固定受支持的 pnpm 版本，部署仍使用 `--frozen-lockfile`。
+
+#### 36.16.5 `PL-RI-04` canonical 浏览器门禁
+
+- 通用发布门禁必须从 `src/navigation/applicationRegistry.js` 取得 route key、权限 exposure 与当前移动端 tab，不得在脚本内维护已退役 route / 文案的第二份清单。
+- 基线尺寸为 390 CSS px，并覆盖 320 / 430 / 680；桌面补充宽度可以保留，但不得替代 mobile-first 四档。
+- 至少覆盖 admin、sales、reviewer、warehouse、accounting 五类 canonical 角色；每类必须验证 launcher 可见性、direct URL / refresh、权限拒绝、无整页横向滚动、关键控件触控高度与浏览器错误。
+- 测试 fixture 必须符合当前 SOD：建单人与审批人分离。因正确的 SOD 409 导致 fixture 无法造数属于门禁漂移，必须修 fixture，不得放宽生产 SOD。
+- 通知与流程任务徽标请求必须遵守 route permission exposure；无 `NOTIFICATION_VIEW` / `WORKFLOW_TASK_VIEW` 的用户不得产生预期外 403。后端继续 fail closed，前端隐藏不得替代授权。
+- 门禁必须区分产品失败、fixture 失败和合同漂移；任何一类失败均返回非零，报告不得把被终止或只跑部分尺寸写成 PASS。
+- Finance、Sales、Accounting、Manufacturing 等域级脚本可作为 focused 证据，但不能替代统一 canonical 门禁。
+
+#### 36.16.6 `PL-RI-05` 目标环境发布证据
+
+- 仓库只提供模板，不得仅凭模板存在宣称目标环境就绪。每个目标环境必须记录不可伪造的 preflight：目标 commit/tag、Node/pnpm/MySQL/Nginx/systemd 版本、环境变量名称集合、持久化目录、备份点和回滚入口。
+- 公网生产必须启用 HTTPS；HTTP 仅允许重定向到 HTTPS。证书链、域名匹配、续期机制与到期监控必须实测。
+- 只开放批准的 HTTP/HTTPS 与运维入口；应用端口 3001、MySQL 端口和对象存储凭据不得直接暴露公网。防火墙与云安全组均须留证。
+- 必须在目标机执行 `nginx -t`、`systemd-analyze verify`、服务启动/重启、live/ready、静态资源、API、上传上限与真实客户端 IP 传递 smoke。
+- 必须执行一次可恢复的 rollback rehearsal：回到上一 release artifact 与发布前数据库快照，并证明服务恢复；不得移动或重建既有 Git release tag。
+- 目标环境证据缺失时，仓库本地门禁通过也只能标记 `PARTIAL`，不得宣称 production deploy ready。
+
+#### 36.16.7 `PL-RI-06` append-only 文档纠错与 current 门禁
+
+- `log/YYYY-MM-DD.md` 保持 append-only；发现历史断链时不得改写、删除或伪造原行。
+- 必须提供显式纠错登记：原文件、原行内容或稳定锚点、错误目标、正确目标、登记时间与 Owner。解析器只可对已登记的精确错误应用纠错，不得建立通配忽略。
+- N1 的报告必须同时显示原始断链与纠错登记命中；未登记断链继续 fail closed。纠错登记本身的目标也必须可达。
+- `PROJECT_STATUS.md` 中“门禁已通过 / 已具备部署条件”等当前陈述必须以现场重跑结果为准；当前门禁失败时，较早的 PASS 只能作为历史证据，不得继续充当 HEAD 状态。
+- 本轮已知断链 `log/2026-11-14.md:1387 → ../../docs/status/PROJECT_STATUS.md` 必须按上述机制纠正，不得回写该日志行。
+
+#### 36.16.8 验收、兼容与禁止事项
+
+验收门禁至少包括：focused tests、`pnpm test`、`pnpm test:heavy`、`pnpm build`、`git diff --check`、两种文档一致性模式、依赖 audit、canonical 浏览器四档、MySQL DR 隔离演练与目标环境 preflight。Acceptance 必须逐项声明哪些是本地证据、哪些是真实 MySQL / S3 / 目标主机证据。
+
+兼容要求：不改变九域业务语义、API 业务合同、schema 业务事实、权限结果或既有 tag；SQLite 工具继续只处理 SQLite；生产服务仍由 Node HTTP + Nginx + systemd 承载。
+
+禁止事项：不得把 Manual Capability Closure 或九域 Release Readiness 签发重新纳入本轮；不得记录或提交 secret；不得在普通测试中连接 MySQL；不得为通过 audit 使用 `skip`、删断言、忽略 high/critical、把 build dependency 伪装成运行依赖，或把历史日志改写为“从未出错”。
+
+**Requirement status：`APPROVED`（2026-11-14）。Design 已授权；Implementation、数据库操作、发布与部署均未授权。**

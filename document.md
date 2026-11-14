@@ -26,9 +26,9 @@
 | Procurement & Outsourcing | [`docs/requirements/procurement-outsourcing.md`](docs/requirements/procurement-outsourcing.md) | §31（§31.12 = M1 全范围历史批准合同；§31.13 = M1-Core 首期已批准；§31.14 = Package A1 产品范围 Requirement，待业务所有者验收；§31.15 = 委外核心执行工作面有界 Requirement，已验收冻结；§31.16 = 完整 Active Contract 域级交付整改 Requirement，已批准并实施（`IMPLEMENTED`，待域级 Acceptance）；§31.17 = 受托裁定与补充合同（`IMPLEMENTED`）；§31.18 = 参数接线、商业快照与 PRC-26 范围裁定（`IMPLEMENTED`）） |
 | Inventory & Warehouse | [`docs/requirements/inventory-warehouse.md`](docs/requirements/inventory-warehouse.md) | §32（§32.12 = 期间控制一致性修订，`APPROVED`，2026-11-14；Design 已授权） |
 | Finance Operations | [`docs/requirements/finance-operations.md`](docs/requirements/finance-operations.md) | §33（§33.51 = FO51–FO53 与跨域期间守卫修订，`APPROVED`，2026-11-14；Design 已授权） |
-| Sales & Customer | [`docs/requirements/sales-customer/README.md`](docs/requirements/sales-customer/README.md) | §34 + Wave 8/9/10/11 修订 |
+| Sales & Customer | [`docs/requirements/sales-customer/README.md`](docs/requirements/sales-customer/README.md) | §34 + Wave 8/9/10/11 修订；`W10-INV-RISK-01` 生产库存正确性闭合 Requirement 见 `04-wave-10-amendments.md` 末节（`APPROVED`，Design `APPROVED`，Implementation 已授权） |
 | Accounting & Analytics | [`docs/requirements/accounting-analytics.md`](docs/requirements/accounting-analytics.md) | §35（Accounting & Analytics Domain Closure Requirement；§35.11 = 法定／经营期间一致性修订，`APPROVED`，2026-11-14（含同日增补：经营关账职责分离与归属字段）；Design 已授权） |
-| Platform | [`docs/requirements/platform.md`](docs/requirements/platform.md) | §36（Platform 平台层域 Domain Closure Requirement；§36.15 = PL-13 期间控制收敛修订，`APPROVED`，2026-11-14；取代 PL-13 收敛增量继续延期口径，Design 已授权） |
+| Platform | [`docs/requirements/platform.md`](docs/requirements/platform.md) | §36（Platform 平台层域 Domain Closure Requirement；§36.15 = PL-13 期间控制收敛修订，`APPROVED`；§36.16 = Release Infrastructure 有界增补，`APPROVED`、Design `APPROVED`、Implementation 已授权） |
 
 ### 0.2 章节编号迁移规则
 

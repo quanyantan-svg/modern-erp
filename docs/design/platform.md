@@ -1197,3 +1197,189 @@ mutation 先于 close 且已被 close 纳入；仅以 direct INSERT worker 制�
 
 **HARD STOP**：专属 ACK-4 campaign（manifest、目标库、执行入口）仍须业务所有者单独批准；在批准前
 不得运行，也不得以 SQLite 结果或历史 MySQL campaign 替代其并发证据。
+
+### 32.16 Release Infrastructure 有界增补设计（`APPROVED`，2026-11-14）
+
+#### 32.16.1 设计身份、授权与边界
+
+| 项 | 内容 |
+|---|---|
+| 用途 | 实现 Requirement §36.16 的 `PL-RI-01..06`，闭合除 Manual Capability Closure / 九域 Release Readiness 签发之外的发布基础设施 P0 / P1 |
+| Owner | Platform；Operations 负责 MySQL DR 与目标主机证据；各业务 Domain 不因本设计改变 owner |
+| 状态 | `APPROVED`；Requirement §36.16 于 2026-11-14 批准，本节 Design 由业务所有者于 2026-11-14 以「根据 design 完成 Platform §36.16」明确批准并授权进入 Implementation；真实 MySQL / S3 / 目标主机写操作、发布与部署仍须逐次单独授权 |
+| 权威来源 | `solution.md` §20、§32；Requirement §36.16；`docs/operations/deployment.md`；本节仅增补既有 Platform Design，不改写既有 Freeze 历史 |
+
+设计坚持四个边界：仓库自动化与真实环境证据分开；SQLite 与 MySQL 运维入口分开；检查与修复分开；
+本地 PASS 与生产可发布结论分开。任何真实 MySQL、对象存储、目标主机或防火墙操作仍须单独授权。
+
+#### 32.16.2 模块与责任
+
+| 责任 | 设计 owner / 目标文件 | 单一职责 |
+|---|---|---|
+| MySQL DR 公共原语 | `scripts/admin/lib/mysql-dr.mjs` | 配置校验、无 shell 子进程、流式 SHA-256、manifest、S3 读写、目标身份与保留策略；不决定生产恢复授权 |
+| MySQL 备份 | `scripts/admin/mysql-backup.mjs` | 一致逻辑备份、非空校验、上传、回读校验、保留清理与机器可读结果 |
+| MySQL 恢复 | `scripts/admin/mysql-restore.mjs` | 显式目标校验、下载/哈希、隔离恢复、完整性与应用健康验证；默认拒绝生产覆盖 |
+| 定时运行 | `deploy/systemd/modern-erp-mysql-backup.service`、`.timer` | 以独立 service account 定时调用 MySQL 备份，不复用应用服务生命周期 |
+| SQLite migration | `server/db.js` 内窄化 migration runner / schema inspection helper | 把预期幂等与未知错误分开，未知失败向上传播并阻止 ready |
+| 依赖门禁 | `package.json`、`pnpm-lock.yaml`、`scripts/qa/verify-production-dependencies.mjs` | 固定 pnpm、区分 build/runtime graph、调用受支持 advisory 数据源并输出可复核摘要 |
+| 浏览器门禁 | `scripts/acceptance/release-browser-readiness.mjs` | 从 `applicationRegistry.js` 生成角色/route 断言，统一验证四档 mobile-first 与五类角色 |
+| 目标环境 preflight | `scripts/admin/release-preflight.mjs`、`scripts/admin/verify-release-target.mjs` | 前者只读采集本机配置；后者从客户端验证 HTTPS、health、静态资源和代理事实 |
+| TLS / 服务模板 | `deploy/nginx/modern-erp-tls.conf.example`、既有 systemd 模板 | 给出显式替换项与 fail-closed TLS 形态；模板存在不构成环境 PASS |
+| 历史引用纠错 | `docs/acceptance/document-reference-corrections.md` + current checker | 精确登记 append-only 历史断链，禁止 wildcard ignore |
+
+`@aws-sdk/client-s3` 是备份运行时运维依赖；Vite 与 React build plugin 是 build-only 依赖。不得以调用外部
+`aws` shell 或自行拼接 SigV4 形成第二套、不可测试的对象存储实现。
+
+#### 32.16.3 `PL-RI-01` MySQL backup / restore 流程
+
+备份状态机固定为：
+
+`CONFIG_VALIDATED → SNAPSHOT_RUNNING → LOCAL_VERIFIED → UPLOADED → REMOTE_VERIFIED → RETENTION_APPLIED → COMPLETE`
+
+任一步失败进入 `FAILED`，非零退出；未到 `REMOTE_VERIFIED` 不得执行清理，也不得报告可恢复。实现细则：
+
+1. `mysql-dr.mjs` 只接受分别命名的环境变量，验证 backend 为 MySQL、数据库名为单一合法标识、S3 endpoint
+   为 HTTPS（本地测试对象存储可由显式 test sentinel 例外）；日志只打印变量名与脱敏 endpoint。
+2. 以 `spawn()` 参数数组直接调用固定路径的 `mysqldump`，禁止 `shell: true`；使用 consistent snapshot，
+   包含 tables、views、triggers、routines 与 events，密码仅进入子进程环境，不进入 argv、manifest 或日志。
+3. dump 先写入权限受限的临时文件；流式计算 SHA-256 与字节数。零字节、子进程非零、stderr 命中致命错误
+   或 manifest 缺项立即删除临时文件并失败。
+4. S3 object key 只由 UTC 时间、不可变 commit/tag 与随机 run id 构成；上传 dump 与 JSON manifest，并启用
+   配置的 server-side encryption。随后必须 `GetObject` 流式回读并重算哈希，不能只信 ETag / HeadObject。
+5. 仅当远端回读一致后，按“30 个 daily + 标记为 quarterly/release-preflight 的演练源保留”计算候选；删除前
+   再验证候选 manifest 与对象身份，不跨 prefix，不接受 glob。
+6. service 使用独立 `modern-erp-backup` 账号、只读数据库凭据与最小 S3 prefix 权限；systemd hardening、
+   `UMask=0077`、非重叠锁和失败告警写入模板。应用 service 不取得对象删除权限。
+
+恢复状态机为：
+
+`SOURCE_VERIFIED → TARGET_AUTHORIZED → EMPTY_TARGET_VERIFIED → RESTORE_RUNNING → DATA_VERIFIED → APP_VERIFIED → COMPLETE`
+
+- 默认只允许 `ERP_MYSQL_RESTORE_TARGET_CLASS=DISPOSABLE`，并复用现有 disposable target identity / destructive
+  approval 机制；`APPROVED_PRODUCTION` 必须同时存在独立恢复窗口标识、审批标识与精确目标 identity，缺一拒绝。
+- 恢复前对 endpoint/host/port/database 与 manifest 目标做逐项显示但不打印 secret；目标非空时默认拒绝。
+  生产恢复不得自动 DROP 数据库，操作员必须在已批准窗口准备空目标。
+- 下载后先复核 manifest、大小、SHA-256，再以无 shell `mysql` 客户端流式导入；失败停止，不继续 bootstrap、
+  migration 或启动服务。
+- 成功后校验 schema objects、按表行数摘要、关键约束/视图/trigger、`/api/health/live` 与 `/ready`，并记录
+  从声明恢复到 ready 的单调时钟耗时。RTO/RPO 不达标即演练失败。
+- 证据由独立 Acceptance 文档记录 run id、不可变 commit、脱敏目标、对象版本、哈希、开始/结束与检查摘要；
+  不提交 dump、凭据、完整连接串或原始环境。
+
+本设计不新增业务 schema。备份/恢复的 transaction 语义来自 `mysqldump --single-transaction` 与空目标导入；
+若目标表不支持一致快照，备份必须拒绝而非降级。发布 migration 前置检查要求最新 `REMOTE_VERIFIED` 快照；
+migration 失败停止启动，回滚走本恢复链，不设计反向破坏性 DDL。
+
+#### 32.16.4 `PL-RI-02` SQLite migration fail-closed
+
+`server/db.js` 建立内部 `runMigrationStep({ id, inspect, apply, verify })`：
+
+1. `inspect` 通过 `sqlite_master` / `PRAGMA table_info|index_list|foreign_key_list` 判断已应用状态；只有验证为
+   已满足目标形态才可记为 replay success。
+2. `apply` 在一个 SQLite transaction/savepoint 中执行完整 migration；表重建以唯一临时表名完成 create →
+   copy → verify → swap。任一步失败回滚并向上传播带 migration id 的安全错误。
+3. `verify` 在提交前证明列、约束、索引与行数不变量；验证失败与 DDL 失败等价。
+4. 现有 `production_orders` CHECK、voucher workflow 及其他用宽泛 catch 继续启动的升级段逐项迁入 runner；
+   rollback cleanup 的 best-effort catch 只允许附加到原始失败，不得吞掉原始异常。
+5. `createDatabase()` 只有在全部 migration + seed 成功后返回；`server/index.js` 只有取得已初始化连接后才
+   listen，因此 migration 失败时 live/ready 均不会出现。
+
+不改业务 schema 目标、不新增 migration。本单元只改变失败控制流与幂等识别。测试用故障注入覆盖 fresh、
+upgrade、replay、未知 DDL、copy 中断、verify 失败与重启；每例验证后续 migration/seed/listen 未执行，且无
+`_new` 残留或半复制数据。
+
+#### 32.16.5 `PL-RI-03` 依赖与供应链门禁
+
+- `package.json.packageManager` 固定执行时受支持的 pnpm 精确版本；部署仍用 Corepack +
+  `pnpm install --frozen-lockfile`，lockfile 漂移直接失败。
+- `vite`、`@vitejs/plugin-react` 移入 `devDependencies` 并升级 Vite 至执行时首个不受已知公告影响的兼容版本；
+  `react`、`react-dom`、`mysql2`、图标库及 MySQL DR 的 S3 client 保持实际 runtime/operations dependency。
+- `verify-production-dependencies.mjs` 同时检查 manifest 分类、`pnpm list --prod`、lockfile 中 Vite 与
+  `source-map-js` 实际解析版本，并执行 `pnpm audit --prod`。audit 数据源不支持兼容 API、网络失败或返回不可
+  解析结果均为 `INCONCLUSIVE` 且非零，不能记 PASS。
+- high/critical 一律阻断；moderate/low 输出 package、advisory、production reachability 与处置登记。脚本不得
+  自动写 override、ignore 或更新 lockfile。
+- 升级后的门禁为 FULL + HEAVY + build + production install/start smoke；审计输出只归档摘要和 advisory id，
+  不把大体量原始输出写进合同文档。
+
+#### 32.16.6 `PL-RI-04` canonical browser gate
+
+`release-browser-readiness.mjs` 直接导入 `applicationRegistry.js` 暴露的 route/access/presentation 投影；角色 fixture
+只声明权限集合，不声明 must/deny route 第二清单。期望可见 route 由 registry access predicate 计算，direct URL
+也由 `applicationRouteFor()` 生成。若 Node 导入边界需要轻量化，只允许从该文件导出纯数据投影，不得复制 registry。
+
+每次运行创建隔离 SQLite、启动当前 `createApp()` 与当前构建产物，然后对 admin、sales、reviewer、warehouse、
+accounting 五类角色逐一执行 320 / 390 / 430 / 680 CSS px：launcher 可见性、每个可见 route 的 direct URL、refresh、
+Back/Forward、一个无权限 route 的 fail-closed、整页 overflow、44px 关键触控目标、未捕获异常/console error 与
+意外 4xx/5xx。role 不具备 `NOTIFICATION_VIEW` / `WORKFLOW_TASK_VIEW` 时，App 在发起 badge fetch 前用同一权限
+predicate 拦截；门禁不把这类 403 加入 allowlist。
+
+Manufacturing fixture 使用两个账号：creator 仅创建/提交，reviewer 执行审批；不得为造数授予同人冲突权限或放宽
+生产 SOD。报告把 `PRODUCT_FAILURE`、`FIXTURE_FAILURE`、`CONTRACT_DRIFT` 分开，但三者均非零。被中止、缺角色、
+缺尺寸或未验证 direct URL 的运行一律 `INCOMPLETE`，不能生成 PASS 结论。
+
+#### 32.16.7 `PL-RI-05` 目标环境、RBAC/SOD 与审计
+
+`release-preflight.mjs` 是只读采集器，输出带 SHA-256 的 JSON：目标 commit/tag、Node/pnpm/MySQL/Nginx/systemd
+版本、环境变量**名称**、持久目录、最新已验证备份 run id、service/nginx 文件哈希与 rollback artifact。它不修改
+系统、不重启服务、不开放端口。`verify-release-target.mjs` 从独立客户端验证 HTTP→HTTPS、证书链/域名/有效期、
+HSTS（启用后）、静态资源、live/ready、API、上传限制和代理后的客户端 IP 证据。
+
+TLS 示例模板使用显式 `__SERVER_NAME__` / `__CERTIFICATE_PATH__` 占位；占位未替换时 `nginx -t` 必须失败。
+80 端口仅 redirect，443 反向代理 `127.0.0.1:3001`；应用与 MySQL 不监听公网。目标环境 Acceptance 由具备
+部署权限的 Operator 执行，应用管理员不能凭应用 RBAC 取得主机、DB 或 S3 权限；备份账号无恢复/删除权限，
+恢复账号无日常定时执行权限，形成运维 SOD。
+
+rollback rehearsal 的顺序固定为：确认发布前远端备份 → 切换上一不可变 release artifact → 在隔离恢复目标验证
+数据库快照 → 维护窗口内切换服务 → live/ready 与关键 smoke → 记录恢复时间。既有 release tag 不移动、不重建。
+主机命令及外部写入均需另行授权；仓库模板、本地脚本或 dry-run 不能替代 `nginx -t`、`systemd-analyze verify`、
+防火墙/安全组与真实 restart 证据。
+
+#### 32.16.8 `PL-RI-06` append-only 引用纠错
+
+新增 `docs/acceptance/document-reference-corrections.md` 前必须按文档治理声明：用途为 append-only 历史断链的精确
+纠错证据；Owner 为 Platform；状态为 `ACTIVE`；权威关系是 current checker 的输入证据，不是第二份项目状态表。
+每行包括 correction id、source file、稳定行/内容哈希、原目标、正确目标、登记日期、Owner 与批准依据。
+
+current checker 先按原文本报告 N1 断链，再仅对 source + content hash + old target 三元组完全相等的登记尝试
+正确目标；目标可达才将该项记为 `CORRECTED_REFERENCE`。登记不匹配、目标仍断、重复登记或通配符全部失败。
+本轮为 `log/2026-11-14.md:1387` 登记从 `../../docs/status/PROJECT_STATUS.md` 到
+`../docs/status/PROJECT_STATUS.md` 的精确纠错，绝不改写原日志行。checker 测试同时覆盖命中、漂移、悬空和
+wildcard 拒绝。
+
+`PROJECT_STATUS.md` 的当前门禁结论只在现场结果与证据路径齐备时更新；历史 PASS 保留为历史，不覆盖当前失败。
+
+#### 32.16.9 错误、审计、兼容与回滚
+
+- 所有 CLI 采用稳定 error category + 安全人类信息 + 非零退出；不得输出 password、token、连接串、dump 内容或
+  position/业务数据。外部服务失败不降级成本地成功。
+- DR、preflight、browser/audit gate 输出 run id 与不可变 commit；关键状态转换进入独立证据文件，不能伪装成
+  应用业务 audit。失败证据保留到足以定位类别，但 secret 必须在写盘前脱敏。
+- API、权限、业务 schema、业务状态机和既有 tag 不变。新增 S3 SDK 或 Vite 升级若改变 Node 生产启动 graph，
+  production smoke 必须失败并阻断合并。
+- 回滚按逻辑单元：依赖/门禁脚本可整体回退；SQLite fail-closed 不得单独回退成吞错；DR 对象与 manifest 不删除；
+  TLS 模板回退不等于目标主机回退。任何已经产生的正确备份/证据保持不可变。
+
+#### 32.16.10 验证矩阵与实施顺序
+
+| Requirement | focused evidence | release evidence |
+|---|---|---|
+| PL-RI-01 | config/secret redaction、dump failure、hash/readback、retention、target refusal 单测 | 经逐次批准的 disposable MySQL + S3 restore，RPO/RTO、app ready |
+| PL-RI-02 | migration fresh/upgrade/replay/fault injection | FULL/HEAVY、production start refusal smoke、SQLite/MySQL 路径不串线 |
+| PL-RI-03 | manifest/lock classification、audit parser 正负例 | 官方 advisory audit、frozen install、FULL/HEAVY/build/start |
+| PL-RI-04 | registry projection、permission predicate、SOD fixture | Edge 五角色 × 四尺寸、direct/refresh/back/forward、HTTP/console clean |
+| PL-RI-05 | preflight schema、TLS placeholder、脱敏单测 | 经授权目标主机 TLS/Nginx/systemd/firewall/rollback rehearsal |
+| PL-RI-06 | correction exact-match 正负例 | current + migration docs checker，现场结果同步状态表 |
+
+实施顺序：先 SQLite fail-closed 与纠错门禁，随后依赖分层/审计，再 canonical browser gate，再 MySQL DR 自动化，
+最后目标环境模板与 preflight。每个逻辑单元 focused 测试通过后才进入下一单元；全部本地 gate 通过也只取得
+`LOCAL_READY`，真实 MySQL/S3/目标主机证据齐备后才可进入 Acceptance。
+
+#### 32.16.11 Design 状态与 HARD STOP
+
+Requirement §36.16：`APPROVED`；本节 Design：`APPROVED`（业务所有者 2026-11-14 批准）；Implementation：`AUTHORIZED`
+（仅限仓库内代码、测试、脚本与模板变更）。
+
+**边界**：本次 Implementation 授权只覆盖仓库内代码、测试、脚本与模板变更。它**不**授权真实 MySQL 连接、
+对象存储写入、目标主机写操作、发布、部署、push、tag 或 Git 历史重写；这些操作仍须逐次单独批准。
+Acceptance / Freeze 仍须业务所有者最终签发。

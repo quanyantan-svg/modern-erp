@@ -3114,3 +3114,64 @@ of `ERP_DB_BACKEND`, or by introducing an opt-in that lets the ordinary launcher
   blocker on its own.
 
 **Requirement status: `PACKAGE_B_TEST_ISOLATION_REQUIREMENT_APPROVED`.**
+
+## `W10-INV-RISK-01` Production Inventory Correctness Closure Requirement（2026-11-14，`APPROVED`）
+
+### 1. 身份、授权与边界
+
+| 项 | 内容 |
+|---|---|
+| 用途 | 闭合本文件 §8 已登记的生产库存正确性发布阻断，消除错误拒绝、错误放行与 canonical position 负余额 |
+| Owner | Sales & Customer（销售出货）+ Procurement & Outsourcing（采购退货）+ Finance Operations（销售退货冲销）+ Inventory & Warehouse（canonical position 与 mutation 不变量） |
+| 状态 | `APPROVED`；业务所有者于 2026-11-14 批准本正文并授权进入独立 Design；Implementation 未授权 |
+| 权威来源 | 本文件 `Wave 10 Inventory Fixture Requirement` §8 与 `W10-INV-RISK-01`；Inventory canonical position / mutation 已冻结合同 |
+| Supersession | 获批后取代 §8“只能登记、不得修改生产读取”的阶段边界，并把风险处置固定为“必须关闭”；不改写历史 Fixture Requirement 与 Wave 10 Freeze 事实 |
+
+本 Requirement 只处理已确认的四条生产路径：销售出货创建、销售出货确认、采购退货确认、销售退货冲销。实施中如发现新的业务路径、身份维度、库存政策或 migration 需求，必须停止新增部分并返回 Requirement / Design，不得顺手扩域。
+
+### 2. Canonical availability 与写入身份
+
+- **INV-RISK-R01 — 同一身份读写。** 任何库存充足性判断必须读取随后实际扣减的同一个 canonical position。禁止按 `(warehouse_id, product_id)` 取任意第一行，也禁止以跨 owner / stock status / bin / lot / serial 的聚合量为 default-position 扣减提供许可。
+- **INV-RISK-R02 — Canonical identity。** 本轮四条路径使用的默认位置固定为：指定 warehouse + product、`owner_type='ENTERPRISE'`、`owner_id=NULL`、`stock_status='AVAILABLE'`、`bin_id/lot_id/serial_id=NULL`，其 `position_key` 必须由 production `computePositionKey()` / `resolveCanonicalPosition()` 生成，不得复制第二套 hash 或维度默认规则。
+- **INV-RISK-R03 — 事务内权威复读。** 创建阶段的可用量只能用于早期反馈；真正 mutation 必须在同一 transaction 内、写入前重读并锁定 canonical position。请求体、创建时快照或事务外查询均不构成确认授权。
+- **INV-RISK-R04 — 缺行即零。** canonical position 不存在时，其可用量为零；其他不同身份的正库存不得让本位置通过。
+- **INV-RISK-R05 — 不可为负。** 四条路径的 canonical position 在扣减后不得低于零。负数检查必须与写入构成一个原子 mutation；不能只在调用方先查再写，也不能依赖期间关闭时才发现。
+- **INV-RISK-R06 — 锁库与可用量。** 适用时必须扣除同一 `position_key` 上的 ACTIVE inventory locks；不得扣除其他 position 的锁，也不得把其他 position 的库存纳入可用量。
+- **INV-RISK-R07 — 追踪身份。** 本轮默认位置合同不得绕过 LOT / SERIAL 的既有 source allocation、genealogy 或 tracking gate。若产品要求 LOT / SERIAL，本轮四条路径仍须遵循已冻结的 tracking allocation 语义；不能因 default position 修复而退化为 pair-level 聚合扣减。
+
+### 3. 四条路径的业务结果
+
+1. **销售出货创建**：canonical position 不足时返回明确库存不足；足够时只允许创建草稿，不产生库存副作用。不同身份行不得改变判定。
+2. **销售出货确认**：事务内 canonical position 足够时扣减一次；不足时整单失败，状态、库存、tracking、估值、凭证、AR 与 audit 成功记录的副作用均为零。
+3. **采购退货确认**：必须以实际退货扣减的 canonical / tracking position 判定；不足时整单失败，采购、库存、估值、应付与 audit 成功记录副作用为零。
+4. **销售退货冲销**：只能冲销原退货实际恢复的库存身份和未冲销数量；不得先跨 position 求和，再把总量覆盖写入 default position。库存、退货事实、估值、AR / 凭证与冲销证据必须保持原子。
+
+### 4. 并发、幂等与历史数据
+
+- 两个并发扣减均读取“足够”时，最多一个可以使剩余量不足；另一方必须在锁后权威复读时失败，不得形成负余额。
+- 既有 idempotency key / document state CAS 必须保持；重放不得重复扣减。
+- legacy `position_key IS NULL`、非 canonical suffix key、不同 owner/status 或其他位置行不得被自动合并、删除、改写或当作 default position。GET/CHECK 不得静默修复历史。
+- 本轮不授权历史数据 backfill、schema 变更或 migration。若实现无法在不迁移的前提下正确区分位置，必须 HARD STOP 并返回 Requirement / Design。
+- 失败必须返回业务拒绝，不得泄露 SQL、position hash 内部构造或敏感数据库信息；关键成功 mutation 与业务拒绝证据按既有 audit 合同保留。
+
+### 5. Acceptance 条件
+
+- **AC-RISK-01 false refusal**：wrong-position 数量低、canonical 数量足够时，四条适用路径按 canonical 数量正确通过。
+- **AC-RISK-02 false allowance**：wrong-position 数量足够、canonical 数量不足时，四条适用路径全部拒绝，canonical 余额不变且不产生下游副作用。
+- **AC-RISK-03 missing canonical**：只有 legacy / wrong-position 行时视为 canonical 零库存并拒绝。
+- **AC-RISK-04 atomic no-negative**：SQLite 与真实 MySQL 各自证明并发扣减无法把 canonical position 写成负数；MySQL 必须调用真实 handler，不得用直接 SQL 模拟业务成功路径。
+- **AC-RISK-05 identity preservation**：wrong-position 行数量、身份和 active 状态在成功或失败后均不被本轮路径修改。
+- **AC-RISK-06 tracking**：NONE / LOT / SERIAL 分别有正例与不足反例，LOT / SERIAL source allocation 与 genealogy 不回归。
+- **AC-RISK-07 rollback**：库存拒绝同时证明单据状态、inventory transaction、valuation、voucher、AR/AP、tracking、audit 成功记录无新增。
+- **AC-RISK-08 idempotency**：相同确认/冲销重放只扣减一次；不同 key 的真实并发仍受 canonical lock 保护。
+- **AC-RISK-09 gates**：focused、FULL、HEAVY、build、route / error-code / period guards、SQLite 回归和受保护 disposable MySQL campaign 全部通过；既有 W10 Fixture 正负例继续保留，不能删掉 `quantity=-1` 的风险复现断言来制造绿色。
+
+### 6. 兼容、回滚与禁止事项
+
+兼容要求：API path、请求/响应业务字段、权限、单据状态机、金额/数量单位、tracking、估值和会计语义保持不变；修复只收敛库存读取与 mutation 到同一 canonical identity 和原子非负不变量。
+
+回滚只能回退应用代码，不得反向改写业务数据；任何在修复后产生的正确库存与审计事实必须保留。若发现修复前已有负 canonical 余额或 legacy 冲突行，转入独立数据治理，不在本轮自动修复。
+
+禁止事项：不得 pair-level `SUM(quantity)` 后写回 default position；不得用 `ORDER BY` 选择“看起来正确”的第一行；不得把不同 owner/status/bin/lot/serial 合并；不得关闭负库存检查；不得弱化测试、跳过 MySQL 并发证据或把历史风险显式接受改写成“已消失”。
+
+**Requirement status：`APPROVED`（2026-11-14）。独立 Design 已授权；Implementation、MySQL 执行、Acceptance / Freeze、发布与部署均未授权。**
