@@ -4,6 +4,8 @@
 > Owner：Finance Operations
 > 权威来源：`solution.md` §28
 > 来源：`solution.md` §28.0–§28.29（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+> 2026-11-14：业务所有者批准 Requirement §33.51 并授权 Design；新增 §28.30 状态
+> `PENDING_APPROVAL`，Implementation `NOT_AUTHORIZED`，不改变 §28.0–§28.29 的历史验收身份。
 
 ## 28.0 Scope of This Section
 
@@ -2778,5 +2780,74 @@ Final verdict（本 Design）：`READY FOR USER REVIEW`。
 | Audit / Error | §28.26 |
 | Rollback | §28.27 |
 | Final Acceptance | §28.28 |
+| Unified Period Control | §28.30 |
 
 ---
+
+## 28.30 Finance Operations 期间控制接入设计（R-02）
+
+> 状态：`PENDING_APPROVAL`；上游合同：Requirement §33.51；公共 guard 合同：Platform Design §32.15；
+> Implementation：`NOT_AUTHORIZED`。
+
+### 28.30.1 Owner、action 与调用迁移
+
+`server/modules/finance-business-close.js` 继续是 AR / AP / TREASURY 三类业务关账的 canonical owner；
+`finance_business_close_state` 的截止日语义不改。Finance mutation 不再自行选择检查函数，而以具名 action
+调用 Platform registry：
+
+| mutation family | action | 必需 axes |
+|---|---|---|
+| AR 确认、冲销、收款分配、销售折扣确认/冲销 | `FINANCE_AR_MUTATION` 或更具体具名 action | `FINANCE_AR + LEGAL_ACCOUNTING` |
+| AP 确认、冲销、付款分配、采购折扣确认/冲销 | `FINANCE_AP_MUTATION` 或更具体具名 action | `FINANCE_AP + LEGAL_ACCOUNTING` |
+| 收付款、退款、资金划转、银行匹配/反匹配产生的资金事实 | `FINANCE_TREASURY_MUTATION` | `FINANCE_TREASURY + LEGAL_ACCOUNTING` |
+| 同时改变多类事实的复合动作 | 具名复合 action | 所有相关 Finance axes 与 `LEGAL_ACCOUNTING` 的并集 |
+
+折扣 handler 必须在事务内重读源单状态与业务日期后直接调用 canonical guard，删除以
+`checkPeriodNotClosedForVoucher` 注入法定期间检查的耦合。`assertFinanceBusinessDateOpen` 仅可在迁移窗口作为
+委托 wrapper，zero-caller 后删除。
+
+### 28.30.2 关账 / 重开状态机与事务
+
+关闭某一 Finance axis：`OPEN → CLOSED_THROUGH(date)`；后续 close 只允许截止日单调增加，等于当前截止日的
+幂等请求返回现态，不倒退。重开必须填写 reason，并把该 axis 恢复到受支持的前一截止状态；与已关闭法定期间
+重叠时拒绝，确保先重开 Operating、再 Legal、再 Finance 的逆序规则。
+
+close/reopen 与 mutation 使用相同 `finance_business_close_state` 稳定行锁。mutation 的顺序固定为：handler
+鉴权 → transaction → 重读业务事实/日期 → 按 Platform §32.15 rank 锁 Finance 行与 Legal anchor → 重读两轴
+状态 → domain invariants → economic write + success audit → commit。任何拒绝都回滚 AR/AP open item、allocation、
+treasury movement、voucher link 与幂等证据，随后在事务外记录一次 rejection audit。
+
+Legal close 必须在同一锁快照下确认 AR、AP、TREASURY 均已关闭到法定期间末日；任一缺失或较早即报
+`PERIOD_DEPENDENCY_NOT_CLOSED`，不允许以 checklist 文本或前端状态替代权威行。
+
+### 28.30.3 API、RBAC / SOD 与 UI
+
+沿用 `FINANCE_CLOSE_VIEW` / `FINANCE_CLOSE_MANAGE`；查看、预检、关闭、重开均由后端校验权限。关闭人与重开人
+受既有 Finance SOD 约束，ADMIN 也不得绕过期间状态。重开 reason 必填并审计。
+
+既有 Finance close 页面由只读升级为受权限控制的 close/reopen 工作面：显示 AR/AP/TREASURY 各自 cutoff、
+Legal 依赖状态、预检阻塞项，提交前收集业务日期与 reason。无 MANAGE 权限者保持只读。页面不新增第二 route，
+并验证 320 / 390 / 430 / 680 宽度；UI 禁用状态不替代后端拒绝。
+
+### 28.30.4 Schema、错误、审计与兼容
+
+本域不新增第二张 close state 表；继续使用既有 state/history，由 Platform migration 只提供跨域协调 anchor。
+错误采用 Platform §32.15 的结构：Finance 关闭返回 `FINANCE_PERIOD_CLOSED`（含具体 axis/cutoff）；Legal 关闭
+保持兼容 `FINANCIAL_PERIOD_CLOSED`；依赖、顺序和状态异常返回统一 409。成功 close/reopen audit 记录 axis、
+before/after cutoff、reason；拒绝记录 action、单据、业务日期和命中轴。
+
+现有 API 路径和请求字段保持；新 reason 校验是已有合同的补强。折扣与结算过去只查 Legal 或未查 Finance 的
+路径将按批准 Requirement 收紧，这不是兼容 bypass。不得从错误码判断另一 Domain 的业务状态。
+
+### 28.30.5 测试、回滚与状态
+
+focused tests 覆盖三个 axis 的边界日、close 单调性、重开逆序、折扣 confirm/reverse、settlement/allocation、
+复合 action axes 并集、零副作用与审计 exactly once；更新现有 Finance close/discount suites 并登记分类。
+真实 MySQL 增加 Finance mutation vs Legal close 和 Finance close vs mutation 的 handler 竞态，按 Platform
+§32.15.6 提供提交顺序与 snapshot 证明。最终执行 FULL、HEAVY、build、diff check 及经批准的 MySQL campaign。
+
+回滚必须与 Platform guard 和其他三域作为一个逻辑单元；保留 state/history/anchor 数据，不做 destructive
+down migration。若整体回退，R-02 恢复为生产发布 blocker。
+
+本节 Design：`PENDING_APPROVAL`；Implementation：`NOT_AUTHORIZED`。
+**HARD STOP**：等待业务所有者批准 Design。

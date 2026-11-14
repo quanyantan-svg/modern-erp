@@ -10,6 +10,8 @@
 > 裁定记录 [`docs/decisions/platform-domain-closure-decisions-20261113.md`](../decisions/platform-domain-closure-decisions-20261113.md)。
 > 平台目标形态来自 [`solution.md` §20.6、§20.7](../../solution.md)。
 > **Implementation 状态：`NOT_AUTHORIZED`** —— 按 AGENTS.md §4.3，Design 完成后 HARD STOP，须业务所有者明确批准方可开工。
+> **2026-11-14 有界解冻**：业务所有者已批准 Requirement §36.15，并授权进入 Design；新增 §32.15
+> 状态为 `PENDING_APPROVAL`，只覆盖 R-02 期间控制一致性，既有 §32.0–§32.14 结论不变。
 
 ## 32. Platform 平台层域 Domain Technical Design
 
@@ -1031,3 +1033,146 @@ MySQL 上返回同一单号（PL-DEF-12）；通知去重在真实 MySQL 上只�
 | `PL-D-OPEN-05` | 本域专属 ACK-4 campaign 的清单需要业务所有者批准（受保护入口限制） | 待批准 |
 
 **HARD STOP**：本 Design 完成后**不得自动进入 Implementation**（AGENTS.md §4.3 / §4.0）。Implementation 须业务所有者明确批准。
+
+### 32.15 Canonical Period Guard 与跨域协调设计（R-02）
+
+> 状态：`PENDING_APPROVAL`；上游合同：Requirement §36.15；Implementation：`NOT_AUTHORIZED`。
+> 本节只统一「某动作在某业务日期必须通过哪些期间轴」的执行机制，不接管各 Domain 的关账业务语义，
+> 不把四类期间表合并成一张业务表。
+
+#### 32.15.1 单一责任与模块边界
+
+| 组件 | 责任 | 禁止事项 |
+|---|---|---|
+| `server/modules/period-action-registry.js`（新增） | 冻结 `actionCode → requiredAxes` 注册表；声明显式例外动作 | 不读数据库，不接受调用方传入任意布尔绕过 |
+| `server/modules/period-control.js`（新增） | 校验日期/作用域、按固定顺序取锁、读取各轴权威状态并统一拒绝 | 不实现 close/reopen，不复制 Domain 状态机 |
+| Inventory / Finance / Accounting / Management canonical owner | 继续拥有各自 close/reopen、业务前置条件和状态迁移 | 不再维护第二套通用「期间是否开放」判定 |
+| HTTP handler | 鉴权、开启事务、重读业务单据、调用具名 action、写业务与审计 | 不从前端参数决定 axes，不自行直读期间表绕行 |
+
+注册表必须至少包含：库存数量/身份/价值 mutation、系统/手工凭证、AR/AP 确认与冲销、收付款与
+结算分配、销售/采购折扣确认与冲销、经营归集/分摊/内部结算，以及纯 GL 期末转账/损益结转。
+混合动作的 axes 是并集；纯 GL 期末动作只登记 `LEGAL_ACCOUNTING`，不得保留
+`allowClosedInventoryPeriod` 一类通用布尔开关。未登记 action 一律 fail closed。
+
+现有 `assertFinancialPeriodsOpen`、`assertInventoryPeriodOpen`、
+`assertFinanceBusinessDateOpen` 在迁移窗口内只能作为**无业务逻辑的委托 wrapper**；调用方完成迁移并取得
+zero-caller proof 后删除。`server/app.js::checkPeriodNotClosedForVoucher` 删除，手工凭证改走 canonical guard。
+
+#### 32.15.2 调用与数据流
+
+```text
+permission check
+  → transaction(db)
+  → reread authoritative document/date/status
+  → guardPeriodAction(db, { actionCode, businessDate, managementBookId? })
+      → resolve immutable axes from registry
+      → acquire stable locks in canonical order
+      → reread authoritative period state under locks
+      → allow or throw structured PeriodControlError
+  → idempotency / domain invariants
+  → economic writes + success audit
+  → commit
+catch period rejection
+  → rollback all economic writes
+  → auditBusinessRejection outside the failed transaction
+  → return structured 409
+```
+
+guard 只能在写事务内运行；事务缺失、业务日期无效、scope 缺失、action 未登记或状态行异常均显式失败。
+GET/CHECK 不创建或修复期间状态。关闭/重开 handler 采用相同锁协议，因而「检查后关闭」与「检查后写入」
+不能穿越彼此的提交边界。
+
+#### 32.15.3 Schema / migration 与权威状态
+
+新增幂等、additive migration `server/migrations/period-control-schema.js`，在 SQLite 与 MySQL 创建：
+
+```text
+period_guard_anchors(
+  axis, scope_key, version, updated_at,
+  PRIMARY KEY(axis, scope_key)
+)
+```
+
+只预置 `INVENTORY/GLOBAL` 与 `LEGAL_ACCOUNTING/GLOBAL` 两个稳定协调行。该表仅用于锁协调，**不是**
+期间开放/关闭的事实来源。业务权威仍为：
+
+| Axis | 权威状态 | 稳定锁对象 |
+|---|---|---|
+| `INVENTORY` | `inventory_period_closures` | `period_guard_anchors(INVENTORY, GLOBAL)` |
+| `FINANCE_AR/AP/TREASURY` | `finance_business_close_state` + 历史 `finance_business_closures` | 各 axis 的 `finance_business_close_state` 行 |
+| `LEGAL_ACCOUNTING` | `period_closures` | `period_guard_anchors(LEGAL_ACCOUNTING, GLOBAL)` |
+| `OPERATING(bookId)` | `operating_period_closures` | 对应 `management_books` 行 |
+
+既有表不合并、不 DROP、不改写历史。不存在/重复/断裂的必需状态由 guard 报
+`PERIOD_STATE_INVALID`，不得在读路径静默补造。Operating 首次状态初始化只能由显式 migration/setup 或
+受控写事务完成，不能由 GET/CHECK 触发。
+
+#### 32.15.4 事务与全局锁顺序
+
+所有多轴动作先解析完整 axes，再严格按下列 rank 一次取锁：
+
+```text
+10 INVENTORY
+20 FINANCE_AR
+30 FINANCE_AP
+40 FINANCE_TREASURY
+50 LEGAL_ACCOUNTING
+60 OPERATING (managementBookId 按字典序)
+```
+
+MySQL 对上述稳定行 `SELECT ... FOR UPDATE`；SQLite 沿用 `transaction()` 的串行写事务语义。任何 Domain
+不得逆序补锁。Legal close 依次锁 Inventory、三类 Finance、Legal 后重读前置状态；Legal reopen 锁 Legal，
+再锁全部相关 management book（排序）并确认没有已关闭经营期间。Inventory / Finance reopen 先锁本轴及
+Legal，法定期间已关闭时拒绝，从机制上落实「关账顺序正向、重开顺序反向」。
+
+#### 32.15.5 错误、审计、权限与兼容
+
+| 条件 | HTTP / code | 处理 |
+|---|---|---|
+| 日期或必要 scope 无效 | `400 BUSINESS_DATE_INVALID / PERIOD_SCOPE_REQUIRED` | 零业务写入；普通输入校验不记业务拒绝审计 |
+| action 未登记或事务缺失 | `500 PERIOD_ACTION_UNREGISTERED / PERIOD_GUARD_TRANSACTION_REQUIRED` | fail closed，记录服务错误 |
+| 权威状态缺失、重复或断裂 | `409 PERIOD_STATE_INVALID` | 零业务写入；事务外拒绝审计 |
+| 轴已关闭 | 兼容 `INVENTORY_PERIOD_CLOSED` / `FINANCIAL_PERIOD_CLOSED`；新增 `FINANCE_PERIOD_CLOSED` / `OPERATING_PERIOD_CLOSED` | 返回 axis、businessDate、cutoff/period；事务外拒绝审计 |
+| 顺序/依赖/最新期不满足 | `409 PERIOD_DEPENDENCY_NOT_CLOSED / PERIOD_SEQUENCE_INVALID / PERIOD_NOT_LATEST` | 状态不变；事务外拒绝审计 |
+
+错误码只用于本 API 的结果表达，跨域消费者不得据生产方内部错误码推导自身业务。拒绝审计保持 exactly
+once，至少含 action、entity、businessDate、axis、命中期间/截止日；成功 close/reopen 在同事务记录
+before/after、reason、actor。权限继续使用各 Domain 已有 VIEW/MANAGE 权限，后端 fail closed；不新增隐式
+ADMIN 绕过。所有 reopen 必须填写 reason。
+
+兼容策略是保留路由、请求主体、业务表和既有库存/法定关闭错误码；有界 wrapper 只委托新 guard，不形成
+第二实现。预期的兼容性变化只有：过去能穿越错误闸门的 mutation 现在被 409 拒绝。
+
+#### 32.15.6 机器校验、测试与 MySQL 证据
+
+新增 `scripts/qa/verify-period-guard-coverage.mjs`，验证：所有生产 mutation action 已登记；mutation owner
+不直接读取期间表；旧 gate 无活跃调用；显式例外只有注册表中批准的纯 GL 动作。脚本纳入 canonical QA gate。
+
+新增 `server/period-control-contract.test.js` 并登记测试分类；覆盖 action 矩阵、日期边界、缺失/断裂状态、
+锁排序、零副作用、拒绝审计 exactly once、wrapper 等价和 SQLite/MySQL schema parity。真实 MySQL 必须使用
+handler-vs-handler 独立连接覆盖：Inventory close vs inventory mutation、Legal close vs voucher/AR/AP mutation、
+Operating close vs collect/allocation。两方都成功时，必须以锁顺序、提交时间和 close precheck snapshot 证明
+mutation 先于 close 且已被 close 纳入；仅以 direct INSERT worker 制造的 RACE-12 不再可引用为充分证据。
+
+本能力需要新的受保护 ACK-4 campaign；manifest、目标库和执行入口须另经业务所有者批准。在批准前不得运行，
+也不得拿 SQLite 或历史 MySQL campaign 替代。
+
+#### 32.15.7 实施顺序与回滚
+
+1. additive migration + registry + guard + focused contract tests，暂不切调用方；
+2. 四个 Domain close/reopen 接入稳定锁协议，旧 helper 改为纯委托；
+3. 依次迁移 Inventory、voucher、Finance、Operating mutation；
+4. zero-caller proof 后删除旧逻辑并启用覆盖校验；
+5. 完成跨域 UI、回归、Heavy 与经批准的真实 MySQL 竞态证据。
+
+回滚不 DROP 新协调表、不改写期间历史。上线前失败可回到上一应用版本，但 R-02 继续阻塞生产发布；切换后
+禁止只回退某一 Domain 形成混合闸门，必须按同一逻辑单元整体回退并重新封闭生产发布。不设可在生产打开的
+「跳过期间控制」feature flag。
+
+#### 32.15.8 Design 状态与 HARD STOP
+
+本节 Design：`PENDING_APPROVAL`；Requirement §36.15：`APPROVED`；Implementation：
+`NOT_AUTHORIZED`。未解决前置项只有：Implementation 批准，以及 Acceptance 前对专属 ACK-4 campaign 的
+独立批准。
+
+**HARD STOP**：业务所有者明确批准本 Design 前，不得修改 schema、代码、测试或执行 MySQL campaign。

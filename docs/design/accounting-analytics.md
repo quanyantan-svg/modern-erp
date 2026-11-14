@@ -6,6 +6,8 @@
 > 来源：新增正文（2026-11-10 建立 Accounting & Analytics Domain Technical Design）。
 > 上游合同：`docs/requirements/accounting-analytics.md` `§35`（`APPROVED`，2026-11-10）。
 > 审计基线：`docs/audits/accounting-analytics-capability-audit-20261110.md`（`v0.1`，SHA `eee92c2`）。
+> 2026-11-14：业务所有者批准 Requirement §35.11 并授权 Design；新增 §31.16 状态
+> `PENDING_APPROVAL`，Implementation `NOT_AUTHORIZED`，既有域级 Acceptance / Freeze 仅作有界解冻。
 
 ## 31. Accounting & Analytics Domain Technical Design
 
@@ -1088,3 +1090,81 @@ AA-W1 → AA-W2 → AA-W5 → AA-W3 → AA-W6 → AA-W4 → AA-W7 → 整域 Acc
 ---
 
 **ACCOUNTING & ANALYTICS DOMAIN TECHNICAL DESIGN IMPLEMENTED — AWAITING OWNER ACCEPTANCE**
+
+### 31.16 法定与经营期间控制接入设计（R-02）
+
+> 状态：`PENDING_APPROVAL`；上游合同：Requirement §35.11；公共 guard 合同：Platform Design §32.15；
+> Implementation：`NOT_AUTHORIZED`。本节是既有域级 Freeze 的有界解冻，不重开 AA-W1..AA-W7 其他能力。
+
+#### 31.16.1 Canonical owner 与迁移边界
+
+新增 `server/modules/accounting-period-control.js`，从 `server/modules/extended.js` 有界迁移法定期间 list/create/
+close/reopen/checklist handler 及状态机；完成 caller proof、切换 `ownedRouteTable` dispatch 与 focused tests 后，
+删除旧 active implementation，`extended.js` 不保留第二套逻辑。`period_closures` 仍是 Legal 权威表。
+
+`server/modules/management-accounting.js` 继续拥有 `OPERATING(managementBookId)` close/reopen 和归集、分摊、
+内部结算；`operating_period_closures` 仍是经营状态权威。`server/app.js` 的手工凭证与所有系统凭证统一调用具名
+voucher action，删除本地 `checkPeriodNotClosedForVoucher`。`createSystemVoucher` 不接受通用 bypass boolean；
+期末转账/损益结转以注册表中的纯 GL action 明确只要求 `LEGAL_ACCOUNTING`。
+
+#### 31.16.2 Legal 状态机、依赖与顺序
+
+Legal close 必须按会计期间自然顺序执行：只允许最早 OPEN 且前序均 CLOSED 的期间关闭；缺期、重复、重叠或
+断裂报 `PERIOD_STATE_INVALID / PERIOD_SEQUENCE_INVALID`。Legal reopen 只允许最新 CLOSED 期间，reason 必填。
+
+close 在一个事务内按 Platform §32.15 rank 锁 Inventory anchor、AR/AP/TREASURY state、Legal anchor，随后重读：
+
+1. Inventory 已关至会计期末；
+2. AR、AP、TREASURY 各自已关至会计期末；
+3. 目标是最早可关闭 Legal 期间；
+4. checklist 的其他会计前置条件仍满足。
+
+任一不满足即零状态变化。Legal reopen 先锁 Legal，再按 bookId 排序锁相关 management book，若该 Legal 期间
+覆盖的任一 Operating period 仍为 CLOSED，则报 `PERIOD_DEPENDENCY_NOT_CLOSED`。这形成
+Inventory/Finance → Legal → Operating 的关闭顺序和反向重开顺序。
+
+#### 31.16.3 Operating 状态机与危险路径封闭
+
+Operating 状态以 management book + period 唯一，`OPEN → CLOSED → OPEN`；关闭前必须证明对应 Legal period
+已 CLOSED。关闭后，下列动作均在同一事务内锁 `management_books` 行并调用 Operating action：成本归集、
+分摊执行/重跑、内部结算、经营结果重算及任何改写该期结果的 mutation。查询与报表不被误阻断。
+
+现有「close 后仍可 collect/allocation」路径必须迁移到 guard；不得用页面隐藏代替。重开只允许最新已关闭经营
+期间，reason 必填，并在重开后才允许重算；已发布的财务报表/凭证若有独立不可逆状态，仍由其自身合同额外阻断。
+
+#### 31.16.4 事务、RBAC / SOD、错误与审计
+
+voucher/GL mutation 的标准流为：权限 → transaction → 重读凭证/来源日期及状态 → Legal guard → 幂等与借贷
+平衡 → 写凭证/分录/余额/审计 → commit。Operating mutation 类似，但只检查具名 Operating axis；跨轴动作使用
+registry 并集，不由调用方拼装。
+
+沿用 `PERIOD_CLOSE_VIEW/MANAGE`（Legal）与 `MANAGEMENT_ACCOUNTING_VIEW/MANAGE`（Operating）；Legal reopen
+继续要求既有 ADMIN 限制，所有后端 fail closed。Operating closer 不得是目标期间所用 allocation rule/result 的
+创建人或执行人，复用已批准 SOD 判定；权限与 SOD 都通过后才可迁移状态。
+
+错误及 rejection audit 使用 Platform §32.15 合同。成功 close/reopen 同事务记录 period、book、before/after、
+reason、actor；409 在回滚后事务外 exactly-once 记录。前端 Accounting Period 与 Management Accounting 的
+reopen 操作必须提交 reason（现有空对象调用不再允许），并显示依赖/顺序阻塞；无 MANAGE 权限只读。
+
+#### 31.16.5 Schema / migration、兼容与测试
+
+本域不合并、不 DROP `period_closures`、`operating_period_closures`、`period_end_runs` 等表；后者只作为执行证据，
+不能代替期间状态。Platform additive migration 提供 Legal anchor；Operating 复用稳定 `management_books` 行。
+历史关闭事实不回填、不重写，GET/CHECK 不修复。
+
+保持现有路由和 period JSON 结构；库存/Finance 依赖通过 preflight 新增只读字段表达。Legal 已关闭错误继续使用
+`FINANCIAL_PERIOD_CLOSED`；Operating 使用 `OPERATING_PERIOD_CLOSED`。更严格的顺序和 mutation 阻断是合同修复。
+
+focused tests 覆盖 Legal 顺序/最新期、三类 Finance 与 Inventory 前置、voucher 与 close 竞态、Operating close
+后 collect/allocation/internal settlement 全拒绝、reopen 逆序、SOD、reason、零副作用与审计 exactly once。
+更新 `period.test.js`、period UI、AA-W7/management accounting suites；真实 MySQL 使用独立 handler/连接验证
+Legal close vs voucher/AR/AP，以及 Operating close vs collect/allocation，并提供 snapshot 证据。
+
+#### 31.16.6 回滚与 HARD STOP
+
+ownership migration 必须逐步完成 caller proof；未切换前旧 owner 可存在，切换后不得保留双 active handler。
+回滚按整个 R-02 逻辑单元执行，保留 additive anchor 与全部历史；禁止只恢复 `extended.js` 的旧 gate 或空 reason
+调用。整体回退后 R-02 必须重新标记为生产发布 blocker。
+
+本节 Design：`PENDING_APPROVAL`；Implementation：`NOT_AUTHORIZED`。
+**HARD STOP**：等待业务所有者批准 Design。

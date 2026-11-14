@@ -4,6 +4,8 @@
 > Owner：Inventory & Warehouse
 > 权威来源：`solution.md` §27
 > 来源：`solution.md` §27（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
+> 2026-11-14：业务所有者批准 Requirement §32.12 并授权 Design；新增 §27.56 状态
+> `PENDING_APPROVAL`，Implementation `NOT_AUTHORIZED`，既有域级 Acceptance / Freeze 仅作有界解冻。
 
 ## 27. Inventory & Warehouse Domain Technical Design
 
@@ -1991,6 +1993,69 @@ Final verdict（本节 Design）：`READY FOR USER REVIEW`。后续 Implementati
 - canonical test fixtures 使用 `UNIQUE(position_key)` 对应的 canonical helper；不恢复 `UNIQUE(warehouse_id, product_id)`，不削弱 owner/bin/status/lot/serial identity。
 
 Final verification evidence：`pnpm test:mysql`、`pnpm test:mysql:concurrency`（Inventory 14 / 14 on MySQL）、`pnpm test:mysql:performance`（all writer levels errors=0）、`pnpm test:fast`、`pnpm test`（2309 / 2309；fail/cancelled/skipped/todo=0）、`pnpm test:heavy`、`pnpm build` 与 `git diff --check` 全部作为最终 acceptance gate 保存于当日开发日志；`.tmp/*.log` 仅为未提交诊断证据。
+
+### 27.56 Inventory 统一期间控制接入设计（R-02）
+
+> 状态：`PENDING_APPROVAL`；上游合同：Requirement §32.12；公共 guard 合同：Platform Design §32.15；
+> Implementation：`NOT_AUTHORIZED`。本节只解冻期间控制接入，不改变 44 项能力、canonical position identity、
+> valuation 或既有域级 Freeze 的其他结论。
+
+#### 27.56.1 Owner、action 与调用流
+
+`server/modules/inventory-period-close.js` 继续拥有 Inventory close/reopen 与连续 closed-through 语义；
+`inventory_period_closures` 继续是业务状态权威。所有改变库存数量、位置身份、批序列状态、价值或估值结果的
+mutation 以具名 `INVENTORY_MUTATION / INVENTORY_VALUATION` action 调用 Platform guard，固定要求
+`INVENTORY + LEGAL_ACCOUNTING`。
+
+`applyInventoryMutation` 在调用方事务中只调用一次组合 action；不得先后调用两个可漂移的旧 gate。
+`assertInventoryPeriodOpen` 与 `financial-inventory.js::assertFinancialPeriodsOpen` 在迁移期只能委托 canonical
+guard，zero-caller 后删除。系统凭证由 Accounting action 另行保护；Inventory mutation 的 axes 并集确保库存写
+与其法定会计日期处在同一锁快照。
+
+标准流：权限 → transaction → 重读 source document、businessDate、canonical position 与 idempotency evidence →
+按 rank 锁 Inventory/Legal anchors → 重读两轴状态 → 库存/LOT-SERIAL/valuation invariants → inventory movement、
+balance/value、下游证据与 success audit 原子写入 → commit。期间拒绝必须使以上副作用全部为零，并在 rollback
+后写一次 rejection audit。
+
+#### 27.56.2 Close / reopen 状态机与并发
+
+Inventory close 只允许连续推进 closed-through，目标期间前不得有未关闭缺口；重复 close 幂等，倒序 close 或
+断裂状态报 `PERIOD_SEQUENCE_INVALID / PERIOD_STATE_INVALID`。close 与 mutation 都先锁
+`period_guard_anchors(INVENTORY, GLOBAL)`，故 close 的权威 snapshot 要么包含已提交 mutation，要么 mutation
+观察到 closed 并被拒绝。
+
+Inventory reopen 只允许最新 CLOSED 期间且 reason 必填；它先锁 Inventory、再锁 Legal，若对应 Legal period
+仍关闭则拒绝。Legal close 则锁 Inventory 后重读其 closed-through，必须已覆盖会计期末才能继续。该协议落实
+Inventory → Legal 的关闭顺序与 Legal → Inventory 的重开顺序，且不依赖前端操作次序。
+
+#### 27.56.3 Schema、RBAC / SOD、错误与 UI
+
+本域不新增第二业务期间表；Platform migration 只增加 Inventory stable anchor。既有历史关闭行不重写，缺失、
+重复或断裂不由 GET/CHECK 修复。沿用 `INVENTORY_PERIOD_CLOSE_VIEW/MANAGE`，后端 fail closed；close/reopen 的
+既有职责分离继续生效，ADMIN 无期间 bypass，reopen reason 必填。
+
+保留 route、request schema 和 `INVENTORY_PERIOD_CLOSED`；依赖/顺序/状态错误使用 Platform §32.15 统一 409。
+成功审计记录 period、before/after closed-through、reason、actor；拒绝审计记录 action、业务单据、日期和命中轴。
+既有 Inventory period UI 已有 reason 输入，补充 Legal 依赖与 preflight 状态展示即可，不新建第二 screen，并复核
+320 / 390 / 430 / 680。
+
+#### 27.56.4 测试、兼容与回滚
+
+focused tests 覆盖边界日、连续 close、latest-only reopen、Legal 依赖、所有 canonical mutation family、
+LOT/SERIAL/valuation 零副作用、幂等与 rejection audit exactly once；更新 inventory period、financial inventory
+与 mutation suites，并把新测试登记到 `scripts/testing/test-suites.js`。
+
+真实 MySQL 必须以两个 HTTP handler/独立连接制造 close vs mutation 竞态，正向断言 dialect 为 MySQL。若两方均
+成功，证据必须证明 mutation 先提交且 close 的 precheck snapshot 已纳入它；现有由 direct INSERT worker 构造、
+允许双成功却无 snapshot 证明的 RACE-12 不再作为 R-02 验收证据。最终还需 FULL、HEAVY、build、diff check 与
+经批准的专属 MySQL campaign。
+
+兼容性保持现有 inventory tables、position identity、API 与 closed error code；行为仅收紧旧绕行路径。回滚必须
+与 Platform/Finance/Accounting 作为单一逻辑单元，不 DROP anchor、不改历史、不单独恢复旧双 gate；整体回退后
+R-02 重新阻塞发布。
+
+本节 Design：`PENDING_APPROVAL`；Implementation：`NOT_AUTHORIZED`。
+**HARD STOP**：等待业务所有者批准 Design。
 
 ---
 

@@ -23,11 +23,11 @@
 | Planning | [`docs/design/planning.md`](docs/design/planning.md) | §25 |
 | Procurement & Outsourcing | [`docs/design/procurement-outsourcing.md`](docs/design/procurement-outsourcing.md) | §26；§26.34 = Package A1 有界 Design（待业务所有者审阅）；§26.35 = 委外核心执行工作面有界 Design（已验收冻结）；§26.36 = 完整 Active Contract 域级交付整改 Design，已批准并实施（`IMPLEMENTED`，待域级 Acceptance）；§26.37 = 域级交付整改的补充设计（`IMPLEMENTED`）；§26.38 = 采购参数接线、商业快照与 PRC-26 范围裁定（`IMPLEMENTED`） |
 | Procurement & Outsourcing（M1-Core 首期） | [`docs/design/procurement-outsourcing-m1-core.md`](docs/design/procurement-outsourcing-m1-core.md) | §31.13 对应有界后继设计；`M1_CORE_DESIGN_PASS` |
-| Inventory & Warehouse | [`docs/design/inventory-warehouse.md`](docs/design/inventory-warehouse.md) | §27 |
-| Finance Operations | [`docs/design/finance-operations.md`](docs/design/finance-operations.md) | §28.0–§28.29 |
+| Inventory & Warehouse | [`docs/design/inventory-warehouse.md`](docs/design/inventory-warehouse.md) | §27；§27.56 = 统一期间控制接入（`PENDING_APPROVAL`，Implementation `NOT_AUTHORIZED`） |
+| Finance Operations | [`docs/design/finance-operations.md`](docs/design/finance-operations.md) | §28.0–§28.30；§28.30 = Finance 期间控制与折扣/结算接入（`PENDING_APPROVAL`，Implementation `NOT_AUTHORIZED`） |
 | Sales & Customer | [`docs/design/sales-customer/README.md`](docs/design/sales-customer/README.md) | §29 + §30 + Wave 8/9/11 基线 |
-| Accounting & Analytics | [`docs/design/accounting-analytics.md`](docs/design/accounting-analytics.md) | §31（Accounting & Analytics Domain Technical Design，2026-11-10 建立；AA-W1..AA-W7 七个实施包；Implementation `NOT_AUTHORIZED`，等待业务所有者批准） |
-| Platform | [`docs/design/platform.md`](docs/design/platform.md) | §32（Platform 平台层域 Domain Technical Design，2026-11-13 建立；覆盖 Generic Workflow 引擎 / Attachment / Org Scope / Notification 生产者 / Numbering 服务 / 通用 SOD 引擎 / Audit schema 升级；Implementation `NOT_AUTHORIZED`） |
+| Accounting & Analytics | [`docs/design/accounting-analytics.md`](docs/design/accounting-analytics.md) | §31；§31.16 = 法定/经营期间控制接入（`PENDING_APPROVAL`，Implementation `NOT_AUTHORIZED`） |
+| Platform | [`docs/design/platform.md`](docs/design/platform.md) | §32；§32.15 = canonical 期间闸门与跨域协调（`PENDING_APPROVAL`，Implementation `NOT_AUTHORIZED`） |
 
 ### 0.2 章节编号迁移规则
 
