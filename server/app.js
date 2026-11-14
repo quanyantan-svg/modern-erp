@@ -10,7 +10,6 @@ import {
 import {
   createNumberSeries, listNumberSeries, updateNumberSeries,
 } from './modules/platform-numbering.js';
-import { createWorkflow, listWorkflows } from './modules/platform-workflows.js';
 import {
   assertApprovalSod, createSodRule, getSodRule, listSodCoverage, listSodEscalations,
   listSodEvaluations, listSodRules, recordSodRejectionEvidence, setSodRuleStatus, updateSodRule,
@@ -2733,19 +2732,6 @@ ownedRouteTable.register({
   handler: ({ db, req, res, actor, params }) => updateNumberSeries(db, req, res, actor, params[0]),
   owner: 'server/modules/platform-numbering.js',
 });
-ownedRouteTable.register({
-  method: 'GET',
-  path: '/api/workflows',
-  handler: ({ db, res, actor }) => listWorkflows(db, res, actor),
-  owner: 'server/modules/platform-workflows.js',
-});
-ownedRouteTable.register({
-  method: 'POST',
-  path: '/api/workflows',
-  handler: ({ db, req, res, actor }) => createWorkflow(db, req, res, actor),
-  owner: 'server/modules/platform-workflows.js',
-});
-
 // Platform 平台层域 —— 通用工作流引擎（docs/design/platform.md §32.3）。
 //
 // 路径前缀统一为 /api/platform/workflow-*：既有 /api/approvals/** 与 /api/workflows/**
@@ -4422,6 +4408,13 @@ async function handleApi(db, req, res, url) {
   // The duplicate transfer write path registered by the V24 round is retired:
   // the canonical module owns /api/inventory-transfers.
   if (pathname === '/api/inventory-transfer-commands' && req.method === 'POST') return send(res, 410, { error: '重复的调拨写入口已停用，请使用 /api/inventory-transfers' });
+  // 旧版审批流 CRUD 已退役（Design §32.1.3）：该入口读取 approval_workflows 表中
+  // 不存在的 active 列，且没有 update 路由。流程定义与版本的唯一入口是通用工作流引擎
+  // /api/platform/workflow-templates。approval_workflows 表保留不删（历史表不得在普通
+  // cleanup 中直接 DROP，AGENTS.md §15），登记为非权威。
+  if (pathname === '/api/workflows' && (req.method === 'GET' || req.method === 'POST')) {
+    return send(res, 410, { error: '旧版审批流已停用，请使用 /api/platform/workflow-templates' });
+  }
   const inventoryTransferReverseMatch = pathname.match(/^\/api\/inventory-transfers\/([^/]+)\/reverse$/);
   if (inventoryTransferReverseMatch && req.method === 'POST') return reverseInventoryControl(db, req, res, actor, 'INVENTORY_TRANSFER', inventoryTransferReverseMatch[1]);
 

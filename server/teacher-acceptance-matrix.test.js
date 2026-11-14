@@ -282,7 +282,7 @@ describe('Teacher Acceptance Matrix — test_admin surface (smoke)', () => {
       '/api/production-orders', '/api/work-centers', '/api/routing-operations',
       '/api/labor-records', '/api/planning/mrp/runs', '/api/product-costs', '/api/cost-rates',
       '/api/iqc', '/api/oqc', '/api/supplier-evaluations',
-      '/api/notifications', '/api/workflows', '/api/users', '/api/roles',
+      '/api/notifications', '/api/platform/workflow-templates', '/api/users', '/api/roles',
       '/api/departments', '/api/aux-projects', '/api/currencies',
       '/api/voucher-words', '/api/voucher-templates',
       '/api/bank-statements', '/api/bank-reconciliations',
@@ -769,7 +769,6 @@ describe('Teacher Acceptance Matrix — Frontend crash sweep on currently reacha
   const treasuryCostSource = readFileSync(resolve(repoRoot, 'src', 'pages', 'treasury-cost.jsx'), 'utf8');
   const masterDataSource = readFileSync(resolve(repoRoot, 'src', 'pages', 'master-data.jsx'), 'utf8');
   const platformNotificationsSource = readFileSync(resolve(repoRoot, 'src', 'pages', 'platform-notifications.jsx'), 'utf8');
-  const platformWorkflowsSource = readFileSync(resolve(repoRoot, 'src', 'pages', 'platform-workflows.jsx'), 'utf8');
 
   before(async () => {
     vite = await createViteServer({ root: repoRoot, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom' });
@@ -780,7 +779,7 @@ describe('Teacher Acceptance Matrix — Frontend crash sweep on currently reacha
   });
 
   test('No current page module references the dead QC_MANAGE / BOM_MANAGE / PRODUCTION_CREATE codes', () => {
-    const sources = [qualitySource, manufacturingSource, accountingSource, logisticsFinanceSource, treasuryCostSource, masterDataSource, platformNotificationsSource, platformWorkflowsSource];
+    const sources = [qualitySource, manufacturingSource, accountingSource, logisticsFinanceSource, treasuryCostSource, masterDataSource, platformNotificationsSource];
     for (const src of sources) {
       assert.doesNotMatch(src, /['"]QC_MANAGE['"]/);
       assert.doesNotMatch(src, /['"]QC_VIEW['"]/);
@@ -870,7 +869,7 @@ describe('Teacher Acceptance Matrix — API 500 sweep on visible workflows', () 
       '/api/bills', '/api/fixed-assets', '/api/boms', '/api/production-orders', '/api/work-centers',
       '/api/routing-operations', '/api/labor-records', '/api/planning/mrp/runs', '/api/product-costs',
       '/api/cost-rates', '/api/iqc', '/api/oqc', '/api/supplier-evaluations',
-      '/api/workflows',
+      '/api/platform/workflow-templates',
       '/api/users', '/api/roles', '/api/departments', '/api/aux-projects', '/api/currencies',
       '/api/period-closures',
     ];

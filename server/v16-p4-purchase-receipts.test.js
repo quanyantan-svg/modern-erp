@@ -234,8 +234,8 @@ describe('V1.6 P4 purchase receipt presentation contract', () => {
 // operator work faces (sales-parameters, sales-group-memberships,
 // sellable-scope-rules, product-classifications,
 // sales-price-override-authorizations). 79 + 6 = 85.
-    assert.equal(ROUTE_PRESENTATIONS.length, 85, 'canonical routes plus W11-A U3 and the AA domain closure must remain enabled');
-    assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 4, 'frozen four disabled routes must remain disabled');
+    assert.equal(ROUTE_PRESENTATIONS.length, 92, 'canonical routes plus W11-A U3, the AA domain closure and the 7 Platform work surfaces must remain enabled');
+    assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 3, 'frozen disabled routes must remain disabled (the legacy workflows route was retired)');
 
     const receiptRoute = enabledByRoute.get('purchase-receipts');
     assert.ok(receiptRoute, 'purchase-receipts route must remain enabled');

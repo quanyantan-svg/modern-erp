@@ -17,7 +17,6 @@ const inventoryWork = read('src', 'pages', 'inventory-work.jsx');
 const settlement = read('src', 'pages', 'settlement.jsx');
 const ordinaryFilterPages = [
   read('src', 'pages', 'platform-notifications.jsx'),
-  read('src', 'pages', 'platform-workflows.jsx'),
   read('src', 'pages', 'quality.jsx'),
   read('src', 'pages', 'treasury-cost.jsx'),
 ].join('\n');

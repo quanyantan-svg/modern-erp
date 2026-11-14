@@ -51,7 +51,7 @@ function assertRouteScreen(routeKey, modulePath, exportName) {
 
 // ----- 1. Route inventory assertions (derived from authoritative source) -----
 
-test('P8 route inventory: 74 enabled + 4 disabled = 78 entries', () => {
+test('P8 route inventory: 81 enabled + 3 disabled = 84 entries', () => {
   // Core Scope Cleanup removed the 6 extension routes
   // (projects, tasks, timesheets, contacts, followups, activities).
   // Planning Closure added 2 contextual routes (planning-reservations,
@@ -64,9 +64,9 @@ test('P8 route inventory: 74 enabled + 4 disabled = 78 entries', () => {
 // operator work faces (sales-parameters, sales-group-memberships,
 // sellable-scope-rules, product-classifications,
 // sales-price-override-authorizations). 79 + 6 = 85.
-  assert.equal(ROUTE_PRESENTATIONS.length, 85, 'ROUTE_PRESENTATIONS must include the W11-A U3 route and the 5 AA domain closure routes');
-  assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 4, 'DISABLED_ROUTE_PRESENTATIONS must hold 4 removed/disabled routes');
-  assert.equal(ROUTE_PRESENTATIONS.length + DISABLED_ROUTE_PRESENTATIONS.length, 89);
+  assert.equal(ROUTE_PRESENTATIONS.length, 92, 'ROUTE_PRESENTATIONS must include the W11-A U3 route, the 5 AA domain closure routes and the 7 Platform work surfaces');
+  assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 3, 'DISABLED_ROUTE_PRESENTATIONS must hold 3 removed/disabled routes');
+  assert.equal(ROUTE_PRESENTATIONS.length + DISABLED_ROUTE_PRESENTATIONS.length, 95);
 });
 
 test('P8 route inventory: enabled route keys are unique and no collision with disabled keys', () => {
@@ -90,7 +90,7 @@ test('P8 route inventory: every enabled route has a concrete Registry screen reg
 
 test('P8 route inventory: every disabled route is one of the frozen four', () => {
   // AA-W5 enabled fixed-assets, so the frozen disabled set is now 4.
-  const expected = ['cash-journals', 'bills', 'workflows', 'data-cleanup'].sort();
+  const expected = ['cash-journals', 'bills', 'data-cleanup'].sort();
   const actual = DISABLED_ROUTE_PRESENTATIONS.map((r) => r.route).sort();
   assert.deepEqual(actual, expected);
 });

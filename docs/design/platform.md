@@ -96,6 +96,62 @@
 
 `workflow-tasks` 的徽标**独立于**审批中心徽标（`src/App.jsx:186` 的 `tabBadges` 增加 `workflowTasks` 键），**不得**并入 `pendingApprovalCount`（Requirement §36.3.9）。
 
+#### 32.1.4 七个 operator 工作面的实施结果（2026-11-14）
+
+七个工作面已落地，路由与权限按 §32.1.3 的表登记，屏根带 canonical `data-testid`
+（浏览器 UAT 据此判定「屏真的渲染出来了」而不是「脚本跑完了」）。
+
+| route key | 页面 | 屏根 data-testid | 工作面结构 |
+|---|---|---|---|
+| `workflow-designer` | `src/pages/platform-workflow-designer.jsx` | `platform-workflow-designer-page` | LIST 模板 → DETAIL 版本 → EDITOR 定义 JSON + 试运行 |
+| `workflow-bindings` | `src/pages/platform-workflow-bindings.jsx` | `platform-workflow-bindings-page` | LIST 绑定 + EDITOR（模板 × 版本 × 组织 × 条件） |
+| `workflow-tasks` | `src/pages/platform-workflow-tasks.jsx` | `platform-workflow-tasks-page` | LIST 我的任务 + Sheet 动作（同意 / 驳回 / 退回 / 转办 / 加签 / 跳过） |
+| `workflow-monitor` | `src/pages/platform-workflow-monitor.jsx` | `platform-workflow-monitor-page` | LIST 实例 → DETAIL 节点 / 任务 / 事件轨迹 + 暂停 / 恢复 / 终止 |
+| `organizations` | `src/pages/platform-organizations.jsx` | `platform-organizations-page` | LIST 组织树 + EDITOR + 作用域分配 |
+| `numbering` | `src/pages/platform-numbering.jsx` | `platform-numbering-page` | LIST 编号规则 + 待迁移单据清单 |
+| `sod-rules` | `src/pages/platform-sod-rules.jsx` | `platform-sod-rules-page` | 族覆盖登记 / 规则 / 升级待办 / 判定记录 四个分区 |
+
+共用样式 `src/styles/platform-operations.css`（mobile-first：390 基线 + 320 / 430 / 680 断点）。
+通知中心页（`src/pages/platform-notifications.jsx`）按 §32.1.2 扩展为分类 / 优先级 / 跳转 /
+未读 / 订阅管理，屏根 `platform-notifications-page`。
+
+**旧版审批流退役已落地**：`workflows` 路由从注册表移除（`applicationRouteFor('workflows')` 归 null），
+`src/pages/platform-workflows.jsx` 与 `server/modules/platform-workflows.js` 删除，
+`GET / POST /api/workflows` 按既有退役惯例返回 **410** 并指向 `/api/platform/workflow-templates`；
+`approval_workflows` 表保留不删，登记为非权威。
+
+**实施期合同修正（两处与既有冻结合同的冲突，按既有合同收敛）**：
+
+1. **启动器合同排除 Platform**（`server/v17-domain-alignment.test.js` 的
+   「Business Launcher is exactly eight non-empty canonical groups and excludes Platform」）。
+   因此七个 Platform 工作面**不进**移动端启动器分组，只进桌面导航的「系统设置」分组；
+   与既有 `users`（用户与权限）等 Platform 面一致。移动端可达性沿用既有先例。
+2. **移动端 5 tab 合同冻结**（`server/mobile-shell.test.js` 断言恰好 5 个启用 tab）。
+   §32.1.3 写的 `workflow-tasks` 徽标挂载点 `workflow-tasks-tab` 因此**没有**对应的移动端
+   tab 可挂载。徽标改为两处承载，二者互不合并：
+   - `src/App.jsx` 的 `tabBadges` 增加 `workflowTasks` 键（键位按 §32.1.3 保留，值由
+     `GET /api/platform/workflow-tasks` 的 PENDING 计数得出）；
+   - 通知中心（移动端「消息」tab 的内容）以**独立条目**呈现该计数并可跳转到
+     「我的流程任务」工作面 —— 独立于 `pendingApprovalCount`，满足 Requirement §36.3.9。
+
+**浏览器 UAT（非空洞证据）**：`scripts/acceptance/platform-workfaces-responsive-uat.mjs`
+—— 8 屏 × 4 档宽度（320 / 390 / 430 / 680）共 32 次判定，全部 PASS：屏根 testid 已绘制、
+画出真实数据行（或指名原因的显式空态）、无权限拒绝态 / 错误态、无横向溢出、
+无低于 44 CSS px 的可点击目标、无控制台错误。夹具经**真实 API**建立
+（组织 → 作用域 → 模板 → 版本 → 发布 → 绑定 → 启动实例），因此「我的流程任务」与
+「流程监控」有真实数据行而不是空壳。
+
+**残余**：
+
+- `src/components/AttachmentPanel.jsx`（Design §32.1.2）**尚未落地**：附件的 7 个挂载点
+  全部位于已冻结域的单据详情页（会计凭证 / 采购订单 / 销售订单 / 生产订单 / 生产检验单 /
+  采购申请 / 销售报价），嵌入它们意味着触碰 6 个已冻结域的前端详情面，须在域级 Acceptance
+  轮按 AGENTS.md §4.6 复核登记。本轮先交付后端附件能力（PL-10）与挂载点合同，
+  前端挂载作为显式残余随下一轮立项。
+- 通用工作流引擎**没有**对外的实例启动入口（§32.11 约束 #7：平台能力不得成为第二写入口），
+  因此「流程监控」与「我的流程任务」在业务域接线之前恒为空态；浏览器 UAT 的夹具因此
+  直接调用引擎的 canonical 启动函数 `startWorkflowInstance`。
+
 ### 32.2 Schema 与 Migration 计划
 
 迁移文件：`server/migrations/platform-domain-schema.js`（新文件）。注册方式 = `server/db.js` 顶部 `import` + `createSqliteDatabase`（`server/db.js:353-607`）中**按序调用**。迁移必须**可重复执行**（`CREATE TABLE IF NOT EXISTS` / `addColumn` 存在性检查），且**不重写任何历史行**。

@@ -11,7 +11,7 @@ import { BUSINESS_DOMAIN_KEYS, CANONICAL_DOMAIN_KEYS, PLATFORM_DOMAIN } from '..
 const repoRoot = resolve(import.meta.dirname, '..');
 const read = (path) => readFileSync(resolve(repoRoot, path), 'utf8');
 
-test('Domain Alignment keeps 85 active and 4 disabled routes after the Sales domain closure', () => {
+test('Domain Alignment keeps 92 active and 3 disabled routes after the Platform domain closure', () => {
   // Finance Operations adds two canonical hub routes while retaining the
   // existing invoice and settlement deep links as contextual surfaces.
   // inventory routes are merged into the canonical inventory hub per
@@ -26,8 +26,13 @@ test('Domain Alignment keeps 85 active and 4 disabled routes after the Sales dom
   // sales-group-memberships, sellable-scope-rules, product-classifications and
   // sales-price-override-authorizations (the SC01 / SC06 / SC07 / SC19 operator
   // work faces). 79 + 6 = 85.
-  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 85);
-  assert.equal(DISABLED_APPLICATION_ROUTES.length, 4);
+  // The Platform domain closure adds seven Platform work surfaces and no
+  // tile (the launcher contract excludes Platform): workflow-designer,
+  // workflow-bindings, workflow-tasks, workflow-monitor, organizations,
+  // numbering and sod-rules. 85 + 7 = 92. The retired legacy 'workflows'
+  // route leaves the disabled set: 4 − 1 = 3.
+  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 92);
+  assert.equal(DISABLED_APPLICATION_ROUTES.length, 3);
   const canonical = new Set(CANONICAL_DOMAIN_KEYS);
   for (const route of APPLICATION_ROUTES) assert.ok(canonical.has(route.domain), `${route.key}: ${route.domain}`);
   const activeDomains = new Set(ACTIVE_APPLICATION_ROUTES.map((route) => route.domain));
@@ -61,10 +66,12 @@ test('representative routes have one target owner across domain boundaries', () 
     products: 'master-engineering', boms: 'master-engineering', 'product-routings': 'master-engineering',
     forecasts: 'planning', 'mrp-runs': 'planning', 'production-instructions': 'planning',
     'production-orders': 'manufacturing-quality', iqc: 'manufacturing-quality', oqc: 'manufacturing-quality',
-    approvals: 'platform', notifications: 'platform', users: 'platform', workflows: 'platform',
+    approvals: 'platform', notifications: 'platform', users: 'platform',
+    'workflow-designer': 'platform', 'workflow-bindings': 'platform', 'workflow-tasks': 'platform',
+    'workflow-monitor': 'platform', organizations: 'platform', numbering: 'platform', 'sod-rules': 'platform',
   };
   for (const [routeKey, domain] of Object.entries(expected)) assert.equal(applicationRouteFor(routeKey)?.domain, domain, routeKey);
-  assert.equal(applicationRouteFor('workflows').enabled, false);
+  assert.equal(applicationRouteFor('workflows'), null, '旧版审批流路由已退役');
 });
 
 test('cleanup removals and shared route targets remain compatible', () => {
@@ -76,15 +83,23 @@ test('cleanup removals and shared route targets remain compatible', () => {
 });
 
 test('misleading Project and Business owners are replaced by coherent Platform modules', () => {
-  for (const path of ['src/pages/platform-notifications.jsx','src/pages/platform-workflows.jsx','server/modules/platform-notifications.js','server/modules/platform-workflows.js']) {
+  for (const path of ['src/pages/platform-notifications.jsx','server/modules/platform-notifications.js']) {
     assert.equal(existsSync(resolve(repoRoot, path)), true, path);
   }
   assert.equal(existsSync(resolve(repoRoot, 'src/pages/projects-workflow.jsx')), false);
   assert.equal(existsSync(resolve(repoRoot, 'server/modules/business.js')), false);
   assert.equal(applicationRouteFor('notifications').screen.modulePath, '../pages/platform-notifications.jsx');
-  assert.equal(applicationRouteFor('workflows').screen.modulePath, '../pages/platform-workflows.jsx');
   const app = read('server/app.js');
   assert.doesNotMatch(app, /modules\/business\.js|pages\/projects-workflow\.jsx/);
   assert.match(app, /owner: 'server\/modules\/platform-notifications\.js'/);
-  assert.match(app, /owner: 'server\/modules\/platform-workflows\.js'/);
+});
+
+test('旧版审批流 CRUD 已退役，流程定义的唯一入口是通用工作流引擎（Design §32.1.3）', () => {
+  assert.equal(existsSync(resolve(repoRoot, 'src/pages/platform-workflows.jsx')), false);
+  assert.equal(existsSync(resolve(repoRoot, 'server/modules/platform-workflows.js')), false);
+  assert.equal(applicationRouteFor('workflows'), null, '旧版审批流路由必须从注册表退役');
+  const app = read('server/app.js');
+  assert.match(app, /pathname === '\/api\/workflows'/);
+  assert.match(app, /send\(res, 410/);
+  assert.doesNotMatch(app, /owner: 'server\/modules\/platform-workflows\.js'/);
 });

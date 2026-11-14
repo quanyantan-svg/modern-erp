@@ -232,14 +232,14 @@ describe('V1.6.2 Phase 1 sales-delivery presentation contract', () => {
 // operator work faces (sales-parameters, sales-group-memberships,
 // sellable-scope-rules, product-classifications,
 // sales-price-override-authorizations). 79 + 6 = 85.
-  test('34. canonical 85 enabled / 4 disabled routes remain and sales-deliveries parentRoute stays a primary', () => {
+  test('34. canonical 92 enabled / 3 disabled routes remain and sales-deliveries parentRoute stays a primary', () => {
     // Finance Operations Domain Closure added finance-invoices + finance-treasury,
     // raising the canonical active count from 59 to 61. Wave 7 added
     // sales-prepayment-gates + sales-reservation-intents, raising it to 67.
     // The Accounting & Analytics Domain Closure (AA-W4 / AA-W6 / AA-W7) added
     // 5 more domain routes, and AA-W5 enabled fixed-assets, leaving 4 disabled.
-    assert.equal(ROUTE_PRESENTATIONS.length, 85, 'canonical routes plus W11-A U3 and the AA domain closure must remain enabled');
-    assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 4, 'frozen four disabled routes must remain disabled');
+    assert.equal(ROUTE_PRESENTATIONS.length, 92, 'canonical routes plus W11-A U3, the AA domain closure and the 7 Platform work surfaces must remain enabled');
+    assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 3, 'frozen disabled routes must remain disabled (the legacy workflows route was retired)');
 
     const salesDeliveryRoute = enabledByRoute.get('sales-deliveries');
     assert.ok(salesDeliveryRoute, 'sales-deliveries route must remain enabled');

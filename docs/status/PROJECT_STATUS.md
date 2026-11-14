@@ -4921,3 +4921,57 @@ Notification（PL-11，§61.13）、Numbering（PL-09，§61.14）—— **全�
 
 **剩余**：SOD 规则维护面 → 7 个前端工作面（含 messages tab 徽标）→ 真实 MySQL campaign 与浏览器
 UAT → Manual Closure / Release Readiness。
+
+### 61.15 SOD 规则维护面（PL-02 的「可配置」能力，Design §32.4.7）
+
+**授权来源**：业务所有者 2026-11-14 三项裁定（升级至上级在平台层落地 / 不可求值的约束
+类型创建时 fail closed / 补齐事务外留证），并批准本轮按「SOD 规则维护面 → 7 个前端工作面
+→ 真实 MySQL campaign」推进。
+
+| 项 | 内容 |
+|---|---|
+| 模块 | `server/modules/platform-sod.js`（SOD 规则与求值的唯一 canonical 实现） |
+| 路由 | 8 条：`/api/platform/sod/rules`（GET/POST）、`/api/platform/sod/rules/:id`（GET/PATCH）、`/api/platform/sod/rules/:id/status`、`/api/platform/sod/coverage`、`/api/platform/sod/evaluations`、`/api/platform/sod/escalations` |
+| 权限 | `SOD_RULES_VIEW` / `SOD_RULES_MANAGE`（后端 fail closed） |
+| 族覆盖登记 | `SOD_FAMILY_REGISTRY` 是「哪些审批族受 SOD 管辖」的唯一权威声明；覆盖结论只有 `RULE_COVERED` / `NATIVE_GUARD`（显式登记为「该族无平台 SOD 约束，由既有自审批防护负责」）/ `UNCOVERED`（缺口，不允许出现） |
+| 可创建集合 | 只允许 `SAME_PERSON_FORBIDDEN` / `SAME_ROLE_FORBIDDEN` + `REJECT` / `ESCALATE` + `APPROVE` + 已登记族；`SAME_DEPARTMENT_FORBIDDEN`（会拒绝该族全部审批）与 `MIN_APPROVERS`（永不触发）在创建时被拒 |
+| 升级处置 | 违规 actor 的决策被拒（409 `PLATFORM_SOD_ESCALATED`），升级记录在事务外落库，升级角色成员对 `SAME_ROLE_FORBIDDEN` 豁免（避免升级死锁），随后走该族原有审批入口完成决策 |
+| 拒绝留证 | 此前 `REJECT` 在事务内抛错，回滚使判定记录与审计行一并消失；现由 HTTP 生命周期的中央 catch 在回滚之后补写 `sod_evaluations` 与 `audit_logs` |
+| 既有行为 | 既有 6 族 + 信用特批的拒绝状态码与文案**逐字不变**（既有 SOD 接线合同测试保持为绿） |
+| 测试 | `server/platform-sod-rules.test.js`（20 例，已登记 FAST/FULL） |
+
+**跨域影响（§4.6 登记）**：平台层唯一闸门（生产工单族）被拒时新增判定记录与审计行 ——
+M&Q 域既有验收证据的当前有效性须在 Platform 域级 Acceptance 轮复核登记。
+
+**门禁**：`node --test server/platform-sod-rules.test.js` **20/20 PASS**；
+既有接线 + 引擎合同 **52/52 PASS**；`pnpm test`（FULL）**4011/4011 PASS**。
+
+### 61.16 七个前端工作面、旧版审批流退役与浏览器 UAT（Design §32.1.4）
+
+| 项 | 内容 |
+|---|---|
+| 七个工作面 | 流程设计 / 流程绑定 / 我的流程任务 / 流程监控 / 组织与作用域 / 编号规则 / 职责分离规则；路由与权限按 Design §32.1.3 登记，屏根带 canonical `data-testid` |
+| 共用样式 | `src/styles/platform-operations.css`（mobile-first：390 基线 + 320 / 430 / 680 断点） |
+| 通知中心扩展 | 分类 / 优先级 / 跳转 / 未读 / 订阅管理；并修复既有页面的字段口径错误（此前读 `is_read` / `created_at`，API 返回 `isRead` / `createdAt`，导致已读列与时间列恒为空） |
+| 徽标 | `tabBadges` 增加 `messages`（通知未读数）与 `workflowTasks`（流程待办数），二者与 `pendingApprovalCount` 互不合并 |
+| 旧版审批流退役 | `workflows` 路由从注册表移除，`src/pages/platform-workflows.jsx` 与 `server/modules/platform-workflows.js` 删除，`GET / POST /api/workflows` 返回 **410**；`approval_workflows` 表保留不删，登记为非权威 |
+| 浏览器 UAT | `scripts/acceptance/platform-workfaces-responsive-uat.mjs`：**8 屏 × 4 档宽度 = 32/32 PASS**（屏根已绘制、真实数据行或显式空态、无权限拒绝态 / 错误态、无横向溢出、无低于 44px 的目标、无控制台错误） |
+
+**实施期遇到的两处冻结合同冲突（按既有合同收敛）**：
+
+1. **启动器合同排除 Platform**（`server/v17-domain-alignment.test.js`）→ 七个 Platform 工作面
+   不进移动端启动器分组，只进桌面「系统设置」分组，与既有 `users` 面一致。
+2. **移动端 5 tab 合同冻结**（`server/mobile-shell.test.js`）→ Design §32.1.3 的
+   `workflow-tasks` 徽标挂载点 `workflow-tasks-tab` 没有对应 tab；徽标改由通知中心的
+   **独立条目**承载（可跳转「我的流程任务」），键位 `workflowTasks` 按 Design 保留。
+
+**跨域测试合同的连带更新（§4.6 登记）**：新增 7 条路由、退役 1 条路由，使既有冻结域的前端
+路由清单合同必须同步 —— 涉及 19 个既有测试文件（路由条数 85 → 92、停用路由 4 → 3、
+退役路由清单、冻结矩阵的后续路由名单）。**断言强度未降低**，只更新事实数字与名单。
+
+**门禁**：`pnpm test`（FULL）**4012/4012 PASS**；`pnpm build` 通过。
+
+**剩余**：真实 MySQL campaign（Platform 域专属 ACK-4 manifest 与夹具）→ 域级 Acceptance 与
+Capability Freeze → Manual Closure / Release Readiness（22 本手册逐本决定）。
+**显式残余**：`src/components/AttachmentPanel.jsx`（Design §32.1.2）尚未落地 —— 附件的 7 个
+挂载点全部位于已冻结域的单据详情页，随下一轮立项。

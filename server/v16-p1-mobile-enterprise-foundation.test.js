@@ -221,7 +221,7 @@ describe('P1B — application launcher contract', () => {
 
   test('Platform routes stay outside business launcher groups', () => {
     const launcherPages = new Set(applicationMetadata.MOBILE_APPLICATION_GROUPS.flatMap((group) => group.items.map((item) => item.page)));
-    for (const page of ['notifications','approvals','users','workflows','data-cleanup']) assert.equal(launcherPages.has(page), false, page);
+    for (const page of ['notifications','approvals','users','data-cleanup']) assert.equal(launcherPages.has(page), false, page);
   });
 
   test('disabled routes (cash-journals/bills/workflows/data-cleanup) are not launcher tiles', () => {
@@ -230,7 +230,7 @@ describe('P1B — application launcher contract', () => {
     const tilePages = new Set(allTiles.map((i) => i.page));
     // AA-W5 enabled fixed-assets, so it left the frozen disabled set and is
     // now a launcher tile for the Accounting & Analytics domain.
-    for (const disabled of ['cash-journals', 'bills', 'workflows', 'data-cleanup']) {
+    for (const disabled of ['cash-journals', 'bills', 'data-cleanup']) {
       assert.ok(!tilePages.has(disabled), `${disabled} must not be a launcher tile`);
     }
     assert.ok(tilePages.has('fixed-assets'), 'fixed-assets must be a launcher tile after AA-W5 enabled it');

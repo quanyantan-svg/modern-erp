@@ -10,8 +10,8 @@ test('D9 closes every active route on the shared 680px application rail', () => 
 // tile: credit-evaluation (Wave 11-B/C) plus the SC01 / SC06 / SC07 / SC19
 // operator work faces (sales-parameters, sales-group-memberships,
 // sellable-scope-rules, product-classifications,
-// sales-price-override-authorizations). 79 + 6 = 85.
-  assert.equal(ROUTE_PRESENTATIONS.length, 85);
+// sales-price-override-authorizations). 79 + 6 = 85, plus 7 Platform work surfaces = 92.
+  assert.equal(ROUTE_PRESENTATIONS.length, 92);
   const styles = read('src/styles.css');
   assert.match(styles, /\.mobile-shell \{[\s\S]*--app-max-width: 680px;[\s\S]*--page-max-width: 680px;/);
   assert.match(styles, /\.mobile-application-view \{[\s\S]*max-width: 680px;/);
@@ -22,7 +22,7 @@ test('D9 uses the real notification center for the mobile messages tab', () => {
   assert.match(app, /mobileTab === 'messages'.*<RouteScreen route=\{applicationRouteFor\('notifications'\)\}/);
   assert.doesNotMatch(app, /emptyText="暂无新消息"/);
   const notifications = read('src/pages/platform-notifications.jsx');
-  assert.match(notifications, /className="notifications-v15" width="rail"/);
+  assert.match(notifications, /className="notifications-v15[^"]*" width="rail"/);
   assert.match(notifications, /移动端“消息”共享同一数据源和已读状态/);
 });
 
@@ -38,7 +38,7 @@ test('D9 unifies desktop approvals across exactly six approved families', () => 
 
 test('D9 gives Platform system routes explicit canonical shells', () => {
   const project = read('src/pages/platform-notifications.jsx');
-  assert.match(project, /className="notifications-v15" width="rail"/);
+  assert.match(project, /className="notifications-v15[^"]*" width="rail"/);
   const master = read('src/pages/master-data.jsx');
   assert.match(master, /className="dashboard-v15" width="rail"/);
   assert.match(master, /className="users-roles-v15" width="rail"/);

@@ -384,7 +384,7 @@ describe('Canonical shell — preserved', () => {
       'purchase-orders', 'products', 'warehouses', 'inventory',
       'cash-journals', 'bank-accounts', 'bills', 'fixed-assets',
       'product-costs', 'cost-rates', 'iqc', 'oqc',
-      'notifications', 'workflows', 'accounting', 'purchase-receipts',
+      'notifications', 'accounting', 'purchase-receipts',
       'sales-deliveries', 'returns', 'inventory-transactions', 'boms',
       'production-orders', 'users',
     ];

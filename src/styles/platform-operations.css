@@ -1,0 +1,343 @@
+/* Platform 平台层域 —— 七个 operator 工作面共用样式。
+ *
+ * 移动优先：基础规则针对 390 CSS px 基线，随后用 min-width 断点放宽。
+ * 断点覆盖 320 / 390 / 430 / 680（AGENTS.md §7）。
+ * 核心任务不依赖永久横向页面滚动。
+ */
+
+.platform-ops {
+  --platform-ink: #101828;
+  --platform-muted: #667085;
+  --platform-line: #e4e7ec;
+  --platform-soft: #f8fafc;
+  --platform-accent: #175cd3;
+  --platform-danger: #b42318;
+  --platform-warn: #b54708;
+  --platform-ok: #067647;
+  color: var(--platform-ink);
+}
+
+.platform-ops__hero {
+  display: grid;
+  gap: 0.5rem;
+  padding: 1rem 0 1.25rem;
+  border-bottom: 1px solid var(--platform-line);
+}
+
+.platform-ops__hero span {
+  font: 700 0.7rem/1.2 ui-monospace, monospace;
+  letter-spacing: 0.16em;
+  color: var(--platform-accent);
+}
+
+.platform-ops__hero h2 {
+  margin: 0;
+  font-size: clamp(1.5rem, 5vw, 2rem);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.platform-ops__hero p {
+  margin: 0;
+  color: var(--platform-muted);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.platform-ops__tabs {
+  margin: 1rem 0;
+}
+
+.platform-ops__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.platform-ops__toolbar input[type='search'],
+.platform-ops__toolbar select {
+  min-height: 44px;
+  flex: 1 1 10rem;
+  min-width: 0;
+  padding: 0 0.7rem;
+  border: 1px solid var(--platform-line);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 0.9rem;
+}
+
+.platform-ops__toolbar button {
+  min-height: 44px;
+}
+
+.platform-ops__list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.platform-ops__card {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--platform-line);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.platform-ops__card header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.platform-ops__card h3 {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.3;
+}
+
+.platform-ops__card p {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--platform-muted);
+}
+
+.platform-ops__facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem 0.75rem;
+  margin: 0;
+}
+
+.platform-ops__facts div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.platform-ops__facts dt {
+  font-size: 0.72rem;
+  color: var(--platform-muted);
+}
+
+.platform-ops__facts dd {
+  margin: 0;
+  font-weight: 700;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.platform-ops__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.platform-ops__actions button {
+  min-height: 44px;
+  flex: 1 1 8rem;
+}
+
+.platform-ops__coverage {
+  border-left: 3px solid var(--platform-line);
+}
+
+.platform-ops__coverage.is-covered {
+  border-left-color: var(--platform-ok);
+}
+
+.platform-ops__coverage.is-native {
+  border-left-color: var(--platform-accent);
+}
+
+.platform-ops__coverage.is-uncovered {
+  border-left-color: var(--platform-danger);
+}
+
+.platform-ops__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border: 1px solid var(--platform-line);
+  background: var(--platform-soft);
+  color: var(--platform-muted);
+}
+
+.platform-ops__badge.is-covered {
+  border-color: transparent;
+  background: #ecfdf3;
+  color: var(--platform-ok);
+}
+
+.platform-ops__badge.is-native {
+  border-color: transparent;
+  background: #eff8ff;
+  color: var(--platform-accent);
+}
+
+.platform-ops__badge.is-uncovered {
+  border-color: transparent;
+  background: #fef3f2;
+  color: var(--platform-danger);
+}
+
+.platform-ops__badge.is-pending {
+  border-color: transparent;
+  background: #fffaeb;
+  color: var(--platform-warn);
+}
+
+.platform-ops__note {
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: var(--platform-muted);
+  padding: 0.55rem 0.7rem;
+  border-radius: 8px;
+  background: var(--platform-soft);
+  border: 1px dashed var(--platform-line);
+}
+
+.platform-ops__form {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem 0;
+}
+
+.platform-ops__form .form-row {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.platform-ops__form input,
+.platform-ops__form select,
+.platform-ops__form textarea {
+  min-height: 44px;
+  width: 100%;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--platform-line);
+  border-radius: 8px;
+  font-size: 0.95rem;
+  background: #fff;
+}
+
+.platform-ops__code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  color: var(--platform-muted);
+  overflow-wrap: anywhere;
+}
+
+.platform-ops__hint {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: var(--platform-muted);
+}
+
+.platform-ops__empty {
+  padding: 1.5rem 0;
+  text-align: center;
+  color: var(--platform-muted);
+  font-size: 0.9rem;
+}
+
+.platform-ops__member-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.platform-ops__member-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--platform-line);
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.platform-ops__scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.platform-ops__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.platform-ops__table th,
+.platform-ops__table td {
+  padding: 0.55rem 0.5rem;
+  border-bottom: 1px solid var(--platform-line);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.platform-ops__table th {
+  font-size: 0.72rem;
+  color: var(--platform-muted);
+  letter-spacing: 0.04em;
+}
+
+.platform-ops__table td.wrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 680px) {
+  .platform-ops__hero {
+    grid-template-columns: minmax(0, 1fr) minmax(16rem, 26rem);
+    align-items: end;
+    gap: 2rem;
+  }
+
+  .platform-ops__facts {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .platform-ops__list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 900px) {
+  .platform-ops__list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 430px) {
+  .platform-ops__facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .platform-ops__actions button {
+    flex: 1 1 100%;
+  }
+}
+
+@media (max-width: 320px) {
+  .platform-ops__card {
+    padding: 0.75rem 0.8rem;
+  }
+
+  .platform-ops__facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -36,7 +36,12 @@ describe('V1.6 site-wide rollout source contract', () => {
     // rewrite the frozen V1.6 matrix either. AA-W5 also re-enabled
     // `fixed-assets`, which the frozen V1.6 matrix still records as REMOVED.
     const laterDomainClosureRoutes = ['accounting-events', 'accounting-reconciliation', 'accounting-reports', 'accounting-costing', 'management-accounting', 'fixed-assets'];
-    const laterRoutes = [...laterSalesRoutes, ...laterDomainClosureRoutes];
+    // The Platform domain closure added 7 Platform operator work surfaces and
+    // retired the legacy 'workflows' route; they carry their own acceptance
+    // evidence (Platform work-surface browser UAT) and must not rewrite the
+    // frozen V1.6 matrix either.
+    const laterPlatformRoutes = ['workflow-designer', 'workflow-bindings', 'workflow-tasks', 'workflow-monitor', 'organizations', 'numbering', 'sod-rules'];
+    const laterRoutes = [...laterSalesRoutes, ...laterDomainClosureRoutes, ...laterPlatformRoutes];
     assert.equal(rows.length, ROUTE_PRESENTATIONS.length - laterRoutes.length);
     assert.equal(new Set(rows.map((row) => row.route)).size, rows.length);
     assert.deepEqual([...rows.map((row) => row.route), ...laterRoutes].sort(), ROUTE_PRESENTATIONS.map((route) => route.route).sort());
@@ -48,14 +53,14 @@ describe('V1.6 site-wide rollout source contract', () => {
 // tile: credit-evaluation (Wave 11-B/C) plus the SC01 / SC06 / SC07 / SC19
 // operator work faces (sales-parameters, sales-group-memberships,
 // sellable-scope-rules, product-classifications,
-// sales-price-override-authorizations). 79 + 6 = 85.
-    assert.equal(keys.length, 85);
+// sales-price-override-authorizations). 79 + 6 = 85, plus 7 Platform work surfaces = 92.
+    assert.equal(keys.length, 92);
     assert.equal(new Set(keys).size, keys.length);
   });
 
-  test('the frozen four disabled routes remain disabled and documented', () => {
+  test('the frozen disabled routes remain disabled and documented', () => {
     // AA-W5 enabled fixed-assets, so it left the frozen disabled set.
-    assert.deepEqual(DISABLED_ROUTE_PRESENTATIONS.map((route) => route.route).sort(), ['bills', 'cash-journals', 'data-cleanup', 'workflows']);
+    assert.deepEqual(DISABLED_ROUTE_PRESENTATIONS.map((route) => route.route).sort(), ['bills', 'cash-journals', 'data-cleanup']);
     for (const route of DISABLED_ROUTE_PRESENTATIONS) {
       assert.match(matrix, new RegExp(`\\| ${route.route} \\| REMOVED \\| false \\| absent \\|`));
     }

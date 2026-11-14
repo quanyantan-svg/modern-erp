@@ -98,12 +98,20 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('quality-control-points','质量规则','manufacturing-quality','ADVANCED_CONFIGURATION','CONFIG','contextual','制造与质量','iqc',{any:['USERS_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
   route('notifications','通知中心','platform','SYSTEM_SUPPORT','LIST','contextual','系统设置','notifications',{any:['NOTIFICATION_VIEW']},{desktopExposure:'global',mobileExposure:'messages-tab'}),
   route('users','用户与权限','platform','SYSTEM_SUPPORT','CONFIG','contextual','系统设置','users',{any:['USERS_MANAGE','ROLES_MANAGE']},{desktopExposure:'system-settings',mobileExposure:'system-settings'}),
+  // Platform 平台层域 —— 七个 operator 工作面（Design §32.1.3）。
+  // 通用工作流引擎的变更入口使用 /api/platform/workflow-* 前缀（PL-DEF-03）。
+  route('workflow-designer','流程设计','platform','ADVANCED_CONFIGURATION','CONFIG','contextual','系统设置','configuration',{any:['WORKFLOW_VIEW','WORKFLOW_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
+  route('workflow-bindings','流程绑定','platform','ADVANCED_CONFIGURATION','CONFIG','contextual','系统设置','reservation',{any:['WORKFLOW_VIEW','WORKFLOW_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
+  route('workflow-tasks','我的流程任务','platform','FLOW_SUPPORTING','WORKFLOW','primary','系统设置','approvals',{any:['WORKFLOW_TASK_VIEW','WORKFLOW_TASK_ACT']},{mobileExposure:'workflow-tasks-tab'}),
+  route('workflow-monitor','流程监控','platform','ADVANCED_CONFIGURATION','CONFIG','contextual','系统设置','cloud',{any:['WORKFLOW_INSTANCE_VIEW','WORKFLOW_CONTROL','WORKFLOW_REDEPLOY']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
+  route('organizations','组织与作用域','platform','ADVANCED_CONFIGURATION','CONFIG','contextual','系统设置','users',{any:['ORGANIZATIONS_VIEW','ORGANIZATIONS_MANAGE']},{desktopExposure:'system-settings',mobileExposure:'system-settings'}),
+  route('numbering','编号规则','platform','ADVANCED_CONFIGURATION','CONFIG','contextual','系统设置','inventory',{any:['NUMBERING_VIEW','NUMBERING_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
+  route('sod-rules','职责分离规则','platform','ADVANCED_CONFIGURATION','CONFIG','contextual','系统设置','reservation',{any:['SOD_RULES_VIEW','SOD_RULES_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
 ]);
 
 const DISABLED_ROUTE_DEFINITIONS = Object.freeze([
   route('cash-journals','现金日记账','finance-operations','SYSTEM_SUPPORT','LIST','contextual','财务运营','cashJournals',{any:['CASH_JOURNALS_VIEW','CASH_JOURNALS_MANAGE']},{enabled:false}),
   route('bills','票据管理','finance-operations','SYSTEM_SUPPORT','LIST','contextual','财务运营','bills',{any:['BILLS_VIEW','BILLS_MANAGE']},{enabled:false}),
-  route('workflows','审批流','platform','SYSTEM_SUPPORT','CONFIG','contextual','系统设置','approvals',{any:['WORKFLOW_VIEW','WORKFLOW_MANAGE']},{enabled:false}),
   route('data-cleanup','数据整理','platform','SYSTEM_SUPPORT','CONFIG','contextual','系统设置','cleanup',{permission:'USERS_MANAGE'},{enabled:false}),
 ]);
 
@@ -120,7 +128,13 @@ const loadScreenModule = (path) => {
     case '../pages/treasury-cost.jsx': return import('../pages/treasury-cost.jsx');
     case '../pages/quality.jsx': return import('../pages/quality.jsx');
     case '../pages/platform-notifications.jsx': return import('../pages/platform-notifications.jsx');
-    case '../pages/platform-workflows.jsx': return import('../pages/platform-workflows.jsx');
+    case '../pages/platform-sod-rules.jsx': return import('../pages/platform-sod-rules.jsx');
+    case '../pages/platform-organizations.jsx': return import('../pages/platform-organizations.jsx');
+    case '../pages/platform-numbering.jsx': return import('../pages/platform-numbering.jsx');
+    case '../pages/platform-workflow-designer.jsx': return import('../pages/platform-workflow-designer.jsx');
+    case '../pages/platform-workflow-bindings.jsx': return import('../pages/platform-workflow-bindings.jsx');
+    case '../pages/platform-workflow-tasks.jsx': return import('../pages/platform-workflow-tasks.jsx');
+    case '../pages/platform-workflow-monitor.jsx': return import('../pages/platform-workflow-monitor.jsx');
     case '../pages/accounting.jsx': return import('../pages/accounting.jsx');
     case '../pages/commercial-go-live.jsx': return import('../pages/commercial-go-live.jsx');
     case '../pages/sales-wave7.jsx': return import('../pages/sales-wave7.jsx');
@@ -201,7 +215,14 @@ const SCREEN_DEFINITIONS = Object.freeze({
   'management-accounting': named('../pages/accounting-analytics.jsx','ManagementAccounting'),
   'cost-rates': named('../pages/treasury-cost.jsx','CostRates'), iqc: named('../pages/quality.jsx','IQCInspections'),
   oqc: named('../pages/quality.jsx','OQCInspections'), 'quality-control-points': named('../pages/quality.jsx','QualityControlPoints'),
-  notifications: named('../pages/platform-notifications.jsx','Notifications'), workflows: named('../pages/platform-workflows.jsx','Workflows'),
+  notifications: named('../pages/platform-notifications.jsx','Notifications'),
+  'workflow-designer': defaultScreen('../pages/platform-workflow-designer.jsx'),
+  'workflow-bindings': defaultScreen('../pages/platform-workflow-bindings.jsx'),
+  'workflow-tasks': defaultScreen('../pages/platform-workflow-tasks.jsx'),
+  'workflow-monitor': defaultScreen('../pages/platform-workflow-monitor.jsx'),
+  organizations: defaultScreen('../pages/platform-organizations.jsx'),
+  numbering: defaultScreen('../pages/platform-numbering.jsx'),
+  'sod-rules': defaultScreen('../pages/platform-sod-rules.jsx'),
   accounting: named('../pages/accounting.jsx','Accounting'), 'sales-invoices': named('../pages/commercial-go-live.jsx','SalesInvoices'),
   'finance-invoices': named('../pages/finance-operations.jsx','FinanceInvoices'),
   'finance-treasury': named('../pages/finance-operations.jsx','FinanceTreasury'),

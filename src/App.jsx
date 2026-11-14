@@ -48,6 +48,8 @@ export default function App() {
   const [mobileTab, setMobileTab] = useState('apps');
   const [mobileApplication, setMobileApplication] = useState(null);
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+  const [pendingWorkflowTaskCount, setPendingWorkflowTaskCount] = useState(0);
   const [documentBackAction, setDocumentBackAction] = useState(null);
   const modalBackActions = useRef(new Map());
   const [, setModalBackVersion] = useState(0);
@@ -126,6 +128,20 @@ export default function App() {
       .catch(() => { if (current) setPendingApprovalCount(0); });
     return () => { current = false; };
   }, [user]);
+  // 通知未读数与流程待办数是**两个独立**的徽标来源：消息 tab 显示未读通知，
+  // 流程待办显示在「我的流程任务」入口上。二者都不得并入业务审批中心的待办计数
+  // （Requirement §36.3.9、§36.7）。
+  useEffect(() => {
+    if (!user) { setUnreadNotificationCount(0); setPendingWorkflowTaskCount(0); return undefined; }
+    let current = true;
+    api('/api/notifications?limit=1').then((data) => { if (current) setUnreadNotificationCount(data.unreadCount || 0); })
+      .catch(() => { if (current) setUnreadNotificationCount(0); });
+    api('/api/platform/workflow-tasks').then((data) => {
+      if (!current) return;
+      setPendingWorkflowTaskCount((data.tasks || []).filter((task) => task.status === 'PENDING').length);
+    }).catch(() => { if (current) setPendingWorkflowTaskCount(0); });
+    return () => { current = false; };
+  }, [user]);
 
   const notify = (message, type = 'success') => setToast({ message, type });
   const mobileApplicationGroups = buildMobileApplicationGroups(visibleNav, {
@@ -149,11 +165,11 @@ export default function App() {
     if (!route) return <SafeRouteState kind="UNKNOWN" />;
     if (!route.enabled) return <SafeRouteState kind="DISABLED" />;
     if (!userCanAccessRoute(user, route)) return <SafeRouteState kind="PERMISSION_DENIED" />;
-    return <V16RouteSurface route={route.key}><RouteScreen route={route} locationKey={serializeRouteLocation(currentLocation)} user={user} notify={notify} onPendingCountChange={setPendingApprovalCount} mobileWorkspace={route.key === 'dashboard'} /></V16RouteSurface>;
+    return <V16RouteSurface route={route.key}><RouteScreen route={route} locationKey={serializeRouteLocation(currentLocation)} user={user} notify={notify} onPendingCountChange={setPendingApprovalCount} workflowTaskCount={pendingWorkflowTaskCount} mobileWorkspace={route.key === 'dashboard'} /></V16RouteSurface>;
   }
 
   function renderMobileContent() {
-    if (mobileTab === 'messages') return <RouteScreen route={applicationRouteFor('notifications')} user={user} notify={notify} />;
+    if (mobileTab === 'messages') return <RouteScreen route={applicationRouteFor('notifications')} user={user} notify={notify} workflowTaskCount={pendingWorkflowTaskCount} />;
     if (mobileTab === 'approvals') return <RouteScreen route={applicationRouteFor('approvals')} notify={notify} onPendingCountChange={setPendingApprovalCount} />;
     if (mobileTab === 'workspace') return <RouteScreen route={applicationRouteFor('dashboard')} user={user} notify={notify} mobileWorkspace />;
     if (mobileTab === 'profile') return (
@@ -183,7 +199,7 @@ export default function App() {
     }}>
       <MobileShell brand="Modern ERP" pageTitle={workspaceTitle} activeTab={mobileTab} onTabChange={handleMobileTabChange}
         backAction={registeredBackAction || documentBackAction || (mobileApplication ? returnToMobileApplications : null)}
-        tabBadges={{ approvals: pendingApprovalCount }}>
+        tabBadges={{ approvals: pendingApprovalCount, messages: unreadNotificationCount, workflowTasks: pendingWorkflowTaskCount }}>
         {renderMobileContent()}
         {toast && <div className={`toast ${toast.type}`} role="status" data-testid="mobile-toast"><ProductIcon name={toast.type === 'success' ? 'check' : 'error'} size={18}/><span>{toast.message}</span></div>}
       </MobileShell>
