@@ -142,6 +142,13 @@
    本身**不产生** Capability Verified、Formal Acceptance、Capability Freeze 或 Domain Acceptance；
    其当前 Coverage 依据已由 2026-11-10 的**域级逐项复核**（54 项：50 `COVERED` / 0 `PARTIAL` /
    0 `MISSING` / 3 项已批准延期或移出范围）取代，历史事实保留不改写。
+6. **MySQL 生产备份 / 恢复能力** —— 目标生产路径 MySQL 8 目前**没有仓库提供的备份 / 恢复自动化**：
+   `docs/operations/deployment.md` §4.1 明确声明这一点，且 `scripts/admin/backup-db.mjs` /
+   `scripts/admin/restore-db.mjs` 与 `deploy/systemd/modern-erp-backup.*` **仅适用 SQLite**。
+   本项属于**运维就绪（Release Readiness）**，**不属于**任何手册的 Capability Coverage，
+   因此**不改变本表任何行的 `状态` 取值**（各行 `FROZEN` 的依据是手册能力覆盖，与 Release Readiness 无关）；
+   此处仅登记为**全部 22 行共用的 Release Readiness 未关闭项**。
+   当前状态、证据与待决业务输入见 [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) §62。
 
 ## 追溯规则
 

@@ -5125,3 +5125,71 @@ D-05 Manual Closure 与 Release Readiness 的边界。
 6 项残余**随冻结接受**（书面理由已登记）· 接受本轮 §4.6 复核结论。
 
 **剩余**：Manual Closure 与 Release Readiness（22 本手册逐本决定）。
+
+---
+
+## 62. MySQL 生产备份 / 恢复能力缺口登记（2026-11-14）
+
+**状态**：`REGISTERED` —— **已登记、未授权、未实施**。
+
+> **本节不是任何 Capability 的 Coverage 判定。** 它不改变能力矩阵任何一行的 `状态`，
+> 不改变任何已签发的 Domain Acceptance / Capability Freeze 结论，
+> 也不构成对仓库是否具备 MySQL DR 能力的任何主张。
+
+### 62.1 缺口事实与证据
+
+| 项 | 值 |
+|---|---|
+| 缺口 | 目标生产路径 **MySQL 8 没有任何仓库提供的备份 / 恢复自动化** |
+| 仓库自述 | [`docs/operations/deployment.md`](../../docs/operations/deployment.md) §4.1 —— 「当前仓库提供 MySQL schema bootstrap、兼容 gate 和并发 gate，但**没有可直接宣称为生产方案的 MySQL 备份 / 恢复自动化**；上线前必须由运维独立定义、演练并记录备份、恢复、升级和回滚方案」 |
+| 既有工具的实际范围 | `scripts/admin/backup-db.mjs` / `scripts/admin/restore-db.mjs`（`VACUUM INTO` + `integrity_check`）、`deploy/systemd/modern-erp-backup.{service,timer}`（每日 02:30）、`server/backup-restore.test.js`（HEAVY 集合）—— **全部仅适用 SQLite**；`deployment.md` §4.2、§5、§9 三处明确排除 MySQL |
+| MySQL 备份工具链 | 全仓库 `mysqldump` / `mysqlbinlog` / `xtrabackup` / `mysqlpump` **零命中** |
+| RPO / RTO / 演练 / 异机 | `RTO`、`恢复演练`、`异机`、`offsite` 在 `docs/` 与 `README.md` **零命中**；唯一的 `RPO` 命中是 `PURPOSES` 的子串（`docs/reviews/m1/procurement-outsourcing-critical-chain-design.md:726`），**不是恢复点承诺** |
+| 目标后端 | MySQL 8 为目标生产路径（`deployment.md` §1、`AGENTS.md` §1）；SQLite 仅为本地 / 测试与兼容运行路径 |
+| 登记前的状态 | 本缺口此前**未**出现在本登记表、**未**出现在能力矩阵的任一行、**未**作为任何域的 Capability |
+
+### 62.2 影响面
+
+1. **全部 22 本手册的 Release Readiness 层**。能力矩阵每一行都标注「Manual Closure 与 Release Readiness 仍未签发」；本缺口是其中**一个具体的未关闭项**，但它属于**运维就绪**而非**手册能力覆盖**，因此**不改变**任何行的 `FROZEN` 取值。
+2. **不撤销任何已签发结论**。本登记与任何域的 Acceptance / Freeze 无冲突。
+3. **迁移失败回滚当前没有仓库内手段**：`deployment.md` §9 要求「迁移失败应阻止启动」，但未规定生产 MySQL 上如何回到迁移前状态。
+
+### 62.3 已核实的有利事实（供后续 Requirement / Design 使用，**尚不是合同**）
+
+| 事实 | 证据 |
+|---|---|
+| **Schema 由应用完全拥有且可重建** | `bootstrapMySql`（`server/database/mysql-schema.js:459`）从活的 SQLite snapshot 派生整个 MySQL schema；`planMySqlAdditiveReconciliation`（同文件 `:374`）**严格只增**：仅 `CREATE TABLE` + `ALTER TABLE ADD COLUMN` |
+| **MySQL 侧迁移链无破坏性 DDL** | `server/migrations/v14-e2-business-date.js:39` 与 `server/migrations/sales-customer-wave11-a-selector-search-key.js:128` 仅 `ADD COLUMN`（`:145` 的 `MODIFY COLUMN` 只在校准时发生，且带物理定义 fail-closed 校验）；`server/database/mysql-schema.js:303`、`:308`–`:323` 仅 `ADD CONSTRAINT` 与 `CREATE TRIGGER`。**无** `DROP TABLE` / `DROP COLUMN` / `RENAME` / `TRUNCATE` |
+| **备份体量适中** | 约 **373** 张表（`server/migrations/` + `server/database/` 去重统计；线上 ACK-4 preflight 报 389）、**9** 处 `CREATE TRIGGER`、**1** 个 `VIEW`（`finance_open_item_effects`，由 `server/modules/finance-open-item-effect-view.js` 定义）、若干 `GENERATED ALWAYS AS (...) STORED` 生成列。`mysqldump` 默认处理 trigger / view，且不把生成列写入 INSERT 列清单 |
+
+由前两条可得两条**推论**（**须经 Requirement 层确认后才成为合同**）：
+
+- 备份只需覆盖**数据**，不需要覆盖 DDL —— 恢复时可复用 / 重建 schema；
+- 迁移失败回滚可依赖**备份恢复**，而非反向 DDL。
+
+### 62.4 尚未决定的业务输入（**阻塞 Requirement 起草**）
+
+| 编号 | 待决 | 候选 | 状态 |
+|---|---|---|---|
+| DR-01 | RPO 目标 | 24h / 1h / 更短（更短则需 binlog 而非纯逻辑备份） | 待所有者裁定 |
+| DR-02 | RTO 目标 | 4h / 1h / 更短 | 待所有者裁定 |
+| DR-03 | 异机保存目标 | 对象存储 / 远端主机 / 磁带 —— **仓库不得自行假设** | 待所有者指定 |
+| DR-04 | 恢复演练频率与证据留存 | — | 待所有者裁定 |
+| DR-05 | 能力归属域 | Platform（平台层；但该域 21 项能力已于 2026-11-14 冻结，新增能力需解冻或新裁定） / 独立运维责任线 / `OUT_OF_SCOPE`（继续由运维承担并以 runbook 交付） | 待所有者裁定 |
+
+### 62.5 本轮边界
+
+- 本节**只**做缺口登记。**未**起草 Requirement、**未**起草 Design、**未**授权 Implementation、
+  **未**连接 MySQL、**未**执行任何 Gate、**未**改动部署脚本与运维文档、**未**产生任何 Git 远端写入。
+- 按 `AGENTS.md` §4，后续须依次经 Requirement → Design（**HARD STOP**）→ Implementation → Acceptance / Freeze。
+- `docs/operations/deployment.md` 的现有表述**保持不变**：该文档要求演练但不提供自动化并把责任转给运维；
+  本登记**不**改变其效力，也**不**宣称仓库已具备 MySQL DR 能力。
+
+### 62.6 Owner
+
+| 角色 | 承担者 | 说明 |
+|---|---|---|
+| 登记责任 Owner | **业务所有者** | 作为 Release Readiness 闸门项，由业务所有者持有推进决定权 |
+| 能力归属 Owner | **待裁定**（见 DR-05） | 本轮**不**擅自指派给任何域 |
+
+**剩余**：DR-01～DR-05 全部待裁定；Requirement 起草、Design、Implementation、Acceptance / Freeze 均未开始。
