@@ -871,6 +871,10 @@ const FULL = [
   // `server/ + src/lib/` discovery does not pick up scripts/).
   'scripts/gate-tap-parser.test.js',
   'scripts/docs/check-doc-consistency.test.js',
+  // PL-RI-06 (DOC-REF-CORR-01): the append-only reference correction
+  // registry and the N1 exact-match coverage rules. Pure-function unit
+  // coverage plus a six-scenario N1 matrix driven in a temporary clone.
+  'scripts/docs/reference-corrections.test.js',
   'scripts/git/check-commit-traceability.test.js',
   'scripts/gates/ack4-runtime.test.js',
   'scripts/gates/m1-core-g07-child-lifecycle.test.js',

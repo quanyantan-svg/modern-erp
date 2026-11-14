@@ -11,6 +11,10 @@ export const GOVERNED_FILES = Object.freeze([
   // N7-LEDGER-01 的变更追溯台账自身也必须可追溯：
   // 否则台账可以被无声地扩成「预授权未来提交」的后门。
   'docs/acceptance/n7-traceability-ledger.md',
+  // DOC-REF-CORR-01 的历史引用纠错登记同样是**豁免机制**：
+  // 它能让已登记的断链被判为 CORRECTED_REFERENCE，因此自身的变更必须可追溯，
+  // 否则登记可以被无声地扩成「预授权任意修复」的后门。
+  'docs/acceptance/document-reference-corrections.md',
 ]);
 
 export const GOVERNED_DIRS = Object.freeze([

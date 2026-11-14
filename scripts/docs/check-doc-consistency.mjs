@@ -20,7 +20,9 @@
  * ── current 模式（Current Documentation Integrity）────────────────────────
  *   验证持续开发后的**当前**文档是否自洽。合法修改已迁移合同**不得**被误报为迁移丢失。
  *
- *   N1 链接与锚点可达        —— 相对 G0 验收锚点不得新增失效链接
+ *   N1 链接与锚点可达        —— 相对 G0 验收锚点不得新增失效链接；已登记的
+ *                               append-only 历史断链按 DOC-REF-CORR-01 判为
+ *                               CORRECTED_REFERENCE，未登记断链继续 fail closed
  *   N2 合同 ID 唯一          —— 【已 RETIRED】经项目负责人决定主动退役，不再产生
  *                               PASS / FAIL 判定；章节权威关系改由人工 Review 确认
  *                               （N2 编号保留为历史标识，N1、N3–N9 与 C1–C6 不受影响）
@@ -41,6 +43,7 @@
  *   node scripts/docs/check-doc-consistency.mjs --mode migration --target <commit>
  *   node scripts/docs/check-doc-consistency.mjs --mode current --target HEAD
  *   node scripts/docs/check-doc-consistency.mjs --mode current --target WORKTREE --only N7
+ *   node scripts/docs/check-doc-consistency.mjs --mode current --target WORKTREE --only N1
  *
  * 约束：
  *   - 只读：只执行 git show / ls-tree / ls-files，不写任何文件、不碰数据库；
@@ -63,6 +66,9 @@ import { GOVERNED_DIRS, GOVERNED_FILES } from './lib/governed-paths.mjs';
 import {
   LEDGER_PATH, parseLedger, ledgerEntryFor, ledgerEntryKey,
 } from './lib/n7-traceability-ledger.mjs';
+import {
+  CORRECTIONS_PATH, parseCorrections, correctionFor, hashLine,
+} from './lib/reference-corrections.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -145,36 +151,75 @@ function slugify(s) {
   return s.trim().toLowerCase().replace(/[^\w一-鿿\- ]+/g, '').replace(/\s+/g, '-');
 }
 
-function scanLinks(ref, files, knownFiles = null) {
+function buildContent(ref, files) {
   const content = new Map();
   for (const f of files) content.set(f, showFile(REPO_ROOT, ref, f));
+  return content;
+}
+
+/**
+ * 读取并解析历史引用纠错登记（DOC-REF-CORR-01）。
+ *
+ * 登记文件缺失等价于「当前没有任何已登记纠错」：断链继续按未登记 fail closed。
+ * 登记文件存在但格式非法时，`errors` 非空，N1 判定为失败。
+ */
+function loadCorrections(target) {
+  let text = '';
+  try {
+    text = showFile(REPO_ROOT, target, CORRECTIONS_PATH);
+  } catch {
+    return { entries: [], errors: [] };
+  }
+  if (!text) return { entries: [], errors: [] };
+  return parseCorrections(text);
+}
+
+/**
+ * 解析一个相对链接是否可达。
+ *
+ * @returns {{ok: boolean, why: string}}
+ */
+function resolveLinkTarget(from, target, knownSet, content, ref) {
+  const [pathPart, anchor] = target.split('#');
+  if (pathPart) {
+    const base = path.posix.dirname(from);
+    const abs = path.posix.normalize(path.posix.join(base, pathPart));
+    const isDir = pathPart.endsWith('/');
+    const hasFile = knownSet.has(abs);
+    const hasDir = isDir && [...knownSet].some(x => x.startsWith(abs));
+    if (!hasFile && !hasDir) return { ok: false, why: `目标不存在: ${abs}` };
+  }
+  if (anchor) {
+    const tfile = pathPart ? path.posix.normalize(path.posix.join(path.posix.dirname(from), pathPart)) : from;
+    const ttext = content.get(tfile) ?? (knownSet.has(tfile) ? showFile(REPO_ROOT, ref, tfile) : undefined);
+    if (ttext === undefined) return { ok: false, why: '锚点目标文件不存在' };
+    if (!headingSlugs(ttext).has(slugify(anchor))) return { ok: false, why: `锚点 #${anchor} 在 ${tfile} 中不存在` };
+  }
+  return { ok: true, why: '' };
+}
+
+function scanLinks(ref, files, knownFiles = null) {
+  const content = buildContent(ref, files);
   const known = knownFiles || files;
   const allFiles = new Set(known);
   const broken = [];
   const linkRe = /\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
   for (const f of files) {
     const text = content.get(f);
+    const lines = text.split('\n');
     let m; linkRe.lastIndex = 0;
+    let scannedTo = 0; let lineNo = 1;
     while ((m = linkRe.exec(text))) {
+      // 增量统计换行，避免对每个链接重新切分全文。
+      for (let i = scannedTo; i < m.index; i++) if (text[i] === '\n') lineNo++;
+      scannedTo = m.index;
       const target = m[1];
       if (/^(https?:|mailto:|data:)/i.test(target)) continue;
-      const [pathPart, anchor] = target.split('#');
-      let ok = true, why = '';
-      if (pathPart) {
-        const base = path.posix.dirname(f);
-        const abs = path.posix.normalize(path.posix.join(base, pathPart));
-        const isDir = pathPart.endsWith('/');
-        const hasFile = allFiles.has(abs);
-        const hasDir = isDir && known.some(x => x.startsWith(abs));
-        if (!hasFile && !hasDir) { ok = false; why = `目标不存在: ${abs}`; }
+      const line = lines[lineNo - 1] ?? '';
+      const res = resolveLinkTarget(f, target, allFiles, content, ref);
+      if (!res.ok) {
+        broken.push({ from: f, target, why: res.why, line: line.trim(), lineHash: hashLine(line) });
       }
-      if (ok && anchor) {
-        const tfile = pathPart ? path.posix.normalize(path.posix.join(path.posix.dirname(f), pathPart)) : f;
-        const ttext = content.get(tfile) ?? (known.includes(tfile) ? showFile(REPO_ROOT, ref, tfile) : undefined);
-        if (ttext === undefined) { ok = false; why = '锚点目标文件不存在'; }
-        else if (!headingSlugs(ttext).has(slugify(anchor))) { ok = false; why = `锚点 #${anchor} 在 ${tfile} 中不存在`; }
-      }
-      if (!ok) broken.push({ from: f, target, why });
     }
   }
   return broken;
@@ -282,15 +327,89 @@ const RETIRED_CHECKS = [{
   reason: '经项目负责人决定主动退役；章节权威关系改由人工 Review 确认',
 }];
 
+/**
+ * N1：链接与锚点可达 + DOC-REF-CORR-01 纠错登记覆盖。
+ *
+ * 断链按**原文本**如实报告；只有被精确登记的断链才被判为 CORRECTED_REFERENCE。
+ */
+function runN1Checks(target, anchor, cur) {
+  const curBroken = scanLinks(target, cur.files);
+  const anchorBroken = scanLinks(anchor, listMarkdown(REPO_ROOT, anchor));
+  const anchorKeys = new Set(anchorBroken.map(b => `${b.from} -> ${b.target}`));
+  const newBroken = curBroken.filter(b => !anchorKeys.has(`${b.from} -> ${b.target}`));
+
+  /*
+   * PL-RI-06（DOC-REF-CORR-01）：append-only 历史文档中的失效链接不得改写，
+   * 只能**精确登记**后由 N1 判为 CORRECTED_REFERENCE。
+   * 覆盖要求是三元精确匹配（原文件 + 错误目标 + 原行内容哈希）；
+   * 未登记断链、登记漂移、正确目标仍断、通配与重复登记一律 fail closed。
+   */
+  const corrections = loadCorrections(target);
+  const knownSet = new Set(cur.files);
+  const content = buildContent(target, cur.files);
+  const unregistered = [];
+  const correctionHits = [];
+  const correctionProblems = [...corrections.errors];
+  const appliedCorrections = new Set();
+  for (const b of newBroken) {
+    const match = correctionFor(corrections, b);
+    if (!match) {
+      unregistered.push(b);
+      continue;
+    }
+    const res = resolveLinkTarget(b.from, match.entry.newTarget, knownSet, content, target);
+    if (!res.ok) {
+      correctionProblems.push(`  CORRECTION_TARGET_UNREACHABLE ${match.entry.id} ${b.from} -> ${match.entry.newTarget}  (${res.why})`);
+      continue;
+    }
+    appliedCorrections.add(match.entry.id);
+    correctionHits.push(`  CORRECTED_REFERENCE ${match.entry.id} ${b.from} -> ${b.target} => ${match.entry.newTarget}`);
+  }
+  for (const entry of corrections.entries) {
+    if (appliedCorrections.has(entry.id)) continue;
+    const stillMatches = curBroken.some(b => (
+      b.from === entry.sourceFile && b.target === entry.oldTarget && b.lineHash === entry.lineHash
+    ));
+    if (!stillMatches) {
+      correctionProblems.push(`  STALE_CORRECTION ${entry.id} 未匹配任何当前断链（登记与实际内容漂移）: ${entry.sourceFile} -> ${entry.oldTarget}`);
+    }
+  }
+  for (const b of unregistered) {
+    correctionProblems.push(`  UNREGISTERED_BROKEN ${b.from} -> ${b.target}  (${b.why})`);
+  }
+
+  const n1Detail = [];
+  n1Detail.push(`当前断链 ${curBroken.length} 条（按原文本如实报告）：`);
+  for (const b of curBroken) n1Detail.push(`  BROKEN ${b.from} -> ${b.target}  (${b.why})`);
+  n1Detail.push(`其中 G0 验收锚点已存在的历史遗留 ${curBroken.length - newBroken.length} 条，新增 ${newBroken.length} 条`);
+  if (correctionHits.length) {
+    n1Detail.push(`纠错登记命中 ${correctionHits.length} 条（DOC-REF-CORR-01）：`);
+    n1Detail.push(...correctionHits);
+  } else {
+    n1Detail.push('纠错登记命中 0 条（DOC-REF-CORR-01）');
+  }
+  if (correctionProblems.length) {
+    n1Detail.push(`纠错登记问题 ${correctionProblems.length} 条：`);
+    n1Detail.push(...correctionProblems);
+  }
+  record('N1', '当前文档无新增失效链接与锚点', correctionProblems.length === 0, n1Detail);
+}
+
 function runCurrentChecks(target, anchor, only = null) {
   if (only !== null) {
-    if (only !== 'N7') throw new Error(`current 模式仅支持聚焦检查 N7，收到: ${only}`);
+    if (only !== 'N7' && only !== 'N1') {
+      throw new Error(`current 模式仅支持聚焦检查 N1 / N7，收到: ${only}`);
+    }
     let cur;
     try {
       cur = buildCurrentIndex(REPO_ROOT, target);
     } catch (error) {
-      record('N7', '已批准合同的修改可经变更记录与 Git Diff 追溯', false,
+      record(only, '聚焦检查目标版本不可读取', false,
         `目标版本不可读取: ${target} (${error.message})`);
+      return;
+    }
+    if (only === 'N1') {
+      runN1Checks(target, anchor, cur);
       return;
     }
     const trace = traceabilityProblems(anchor, target, cur);
@@ -302,14 +421,7 @@ function runCurrentChecks(target, anchor, only = null) {
   const cur = buildCurrentIndex(REPO_ROOT, target);
 
   /* N1 链接与锚点 */
-  const curBroken = scanLinks(target, cur.files);
-  const anchorBroken = scanLinks(anchor, listMarkdown(REPO_ROOT, anchor));
-  const anchorKeys = new Set(anchorBroken.map(b => `${b.from} -> ${b.target}`));
-  const newBroken = curBroken.filter(b => !anchorKeys.has(`${b.from} -> ${b.target}`));
-  record('N1', '当前文档无新增失效链接与锚点', newBroken.length === 0,
-    newBroken.length
-      ? newBroken.map(b => `  NEW_BROKEN ${b.from} -> ${b.target}  (${b.why})`)
-      : [`当前失效链接 ${curBroken.length} 条，全部为 G0 验收锚点已存在的历史遗留；新增 ${newBroken.length} 条`]);
+  runN1Checks(target, anchor, cur);
 
   /* N2 —— 已退役，只登记历史标识，不再产生 PASS / FAIL 判定 */
   for (const retired of RETIRED_CHECKS) {
