@@ -925,6 +925,23 @@ Windows PowerShell 5.1 会按 ANSI 读取它（`MissingEndParenthesisInFunctionP
 **8/8 PASS** —— 只证明夹具与断言自洽，**不是**真实 MySQL 证据；真实证据以 campaign 运行
 结果为准。
 
+**真实 MySQL 运行结果（2026-11-14）**：**PASS**。
+
+| 项 | 值 |
+|---|---|
+| runId | `74b20bd2-b357-43cf-a62f-55ef721896f8` |
+| commitSha | `a7def68b110a1c517c1270152417d8c79cdf5e47` |
+| 目标 | `modern_erp_domain_test` @ `127.0.0.1:3306`（MySQL **8.0.37**，serverUuid `256c7a4e-d275-11f1-885b-b025aa71d167`，grants sha256 `bef61617…807e`） |
+| 启动器结论 | `RESULT = PASS`；`ACK-4 STATE = FINISHED (cleanup independently post-flighted by the root)` |
+| 已消费操作 | `RESET_SCHEMA_PRE_RUN` → `BOOTSTRAP_CURRENT_SCHEMA` → `RUN_PLATFORM_RACES` → `CLEANUP_SCHEMA_POST_RUN`（四项均在 manifest `PLATFORM_MYSQL_V1` 下原子消费） |
+| 运行前目标状态 | 只读 preflight：`tables=0 views=0 triggers=0 routines=0 events=0`，身份与基线**无漂移** |
+| 运行后目标状态 | 只读 preflight 复核：`tables=0 views=0 triggers=0 routines=0 events=0` —— 清理被独立 post-flight 证明 |
+| 套件 | `server/mysql-platform-domain-races.integration.js`：4 个场景 + 4 个负控，全部在真实 MySQL 8 上通过 |
+
+该运行证明：平台层 17 张新表与 `notifications` / `audit_logs` 的加列被真实 MySQL 8 接受；
+职责分离拒绝的**事务外证据**在真实 MySQL 的事务回滚后仍然留痕；编号服务的幂等并发在真实
+MySQL 上返回同一单号（PL-DEF-12）；通知去重在真实 MySQL 上只落一条。
+
 ### 32.13 回滚策略
 
 | 变更 | 回滚 |

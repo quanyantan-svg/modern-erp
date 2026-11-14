@@ -4975,3 +4975,37 @@ M&Q 域既有验收证据的当前有效性须在 Platform 域级 Acceptance 轮
 Capability Freeze → Manual Closure / Release Readiness（22 本手册逐本决定）。
 **显式残余**：`src/components/AttachmentPanel.jsx`（Design §32.1.2）尚未落地 —— 附件的 7 个
 挂载点全部位于已冻结域的单据详情页，随下一轮立项。
+
+### 61.17 Platform 域专属真实 MySQL campaign：PASS（2026-11-14）
+
+**授权来源**：业务所有者 2026-11-14 会话指令「最后跑真实 MySQL campaign」；
+ACK-4 capability 按 `docs/decisions/mysql-evidence-policy-20261112.md` 由所有者批准、
+由 `scripts/gates/issue-mysql-ack4.ps1` 机械签发（签发器本身不构成批准）。
+
+| 项 | 值 |
+|---|---|
+| campaign | `PLATFORM_MYSQL_V1`（独立 manifest，夹具操作名 `RUN_PLATFORM_RACES`） |
+| runId | `74b20bd2-b357-43cf-a62f-55ef721896f8` |
+| commitSha | `a7def68b110a1c517c1270152417d8c79cdf5e47` |
+| 目标 | `modern_erp_domain_test` @ `127.0.0.1:3306`，MySQL **8.0.37** |
+| 启动器结论 | **`RESULT = PASS`**；**`ACK-4 STATE = FINISHED`**（cleanup independently post-flighted by the root） |
+| 已消费操作 | `RESET_SCHEMA_PRE_RUN` → `BOOTSTRAP_CURRENT_SCHEMA` → `RUN_PLATFORM_RACES` → `CLEANUP_SCHEMA_POST_RUN`（四项均在 `PLATFORM_MYSQL_V1` 下原子消费，root + 4 个子进程各有消费标记） |
+| 运行前目标状态 | 只读 preflight：`tables=0 views=0 triggers=0 routines=0 events=0`，身份与基线无漂移 |
+| 运行后目标状态 | 只读 preflight 复核：`tables=0 views=0 triggers=0 routines=0 events=0` |
+
+**四个场景 + 四个负控**（`server/mysql-platform-domain-races.integration.js`，全部在真实 MySQL 8 上通过）：
+
+| # | 场景 | 负控 |
+|---|---|---|
+| S1 | 职责分离拒绝的**事务外证据**：发起人审批自己的生产工单被拒后，`sod_evaluations` 判定记录与 `audit_logs` 审计行在事务回滚后**仍在** | 另一个主体审批同一张工单成功 —— 守卫不是无差别拒绝 |
+| S2 | 编号服务幂等并发：同一幂等键并发取号返回**同一单号**，只落一条分配记录（PL-DEF-12） | 不同幂等键拿到不同单号 |
+| S3 | 通知去重：同一去重键并发产生只落一条 | 不同去重键各落一条 |
+| S4 | 平台 schema 形态：17 张平台新表 + `notifications` 6 个新列 + `audit_logs` 4 个新列在真实 MySQL 上存在 | （目录形态即断言） |
+
+**该证据证明**：平台层 17 张新表与既有表的加列被真实 MySQL 8 接受；职责分离拒绝的
+事务外留证在真实 MySQL 的事务回滚后仍然成立；编号服务的幂等并发在真实 MySQL 上返回
+同一单号；通知去重在真实 MySQL 上只落一条。
+
+**剩余**：域级 Acceptance 与 Capability Freeze → Manual Closure / Release Readiness
+（22 本手册逐本决定）。**显式残余**：`src/components/AttachmentPanel.jsx` 未落地，
+以及 §32.4.2 的 `MIN_APPROVERS` 判定方向矛盾（待 Requirement 层裁定）。
