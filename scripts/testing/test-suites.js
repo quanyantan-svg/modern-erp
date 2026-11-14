@@ -93,6 +93,9 @@ const FULL = [
   'server/platform-notifications.test.js',
   // Platform 文档生命周期合同（PL-06）：权限专化、fail closed、operator 工作面可达。
   'server/platform-lifecycle.test.js',
+  // Platform 审计能力升级合同（PL-12）：auditBusinessRejection 覆盖（PL-DEF-06）、
+  // 可选结构化参数、schema 升级与历史行不被改写。
+  'server/platform-audit-upgrade.test.js',
   // Platform 编号服务合同（PL-09）：既有单号逐字符不变、幂等原子性、规则表。
   'server/platform-numbering.test.js',
   // ----- Sales & Customer Domain — Wave 0 migration infrastructure -----
@@ -919,6 +922,9 @@ const FAST = [
   'server/platform-notifications.test.js',
   // Platform 文档生命周期合同（PL-06）：权限专化、fail closed、operator 工作面可达。
   'server/platform-lifecycle.test.js',
+  // Platform 审计能力升级合同（PL-12）：auditBusinessRejection 覆盖（PL-DEF-06）、
+  // 可选结构化参数、schema 升级与历史行不被改写。
+  'server/platform-audit-upgrade.test.js',
   // Platform 编号服务合同（PL-09）：既有单号逐字符不变、幂等原子性、规则表。
   'server/platform-numbering.test.js',
   // M1-Core WP-0 static infrastructure contract; no DB, MySQL or migration execution.
