@@ -11,7 +11,10 @@ import {
   createNumberSeries, listNumberSeries, updateNumberSeries,
 } from './modules/platform-numbering.js';
 import { createWorkflow, listWorkflows } from './modules/platform-workflows.js';
-import { assertApprovalSod } from './modules/platform-sod.js';
+import {
+  assertApprovalSod, createSodRule, getSodRule, listSodCoverage, listSodEscalations,
+  listSodEvaluations, listSodRules, recordSodRejectionEvidence, setSodRuleStatus, updateSodRule,
+} from './modules/platform-sod.js';
 import {
   deleteAttachment, downloadAttachment, listAttachments, uploadAttachment,
 } from './modules/platform-attachments.js';
@@ -2851,6 +2854,57 @@ ownedRouteTable.register({
   owner: 'server/modules/platform-workflow-engine.js',
 });
 
+// Platform 平台层域 —— 职责分离规则维护面（docs/design/platform.md §32.4）。
+// 纯 Platform 内部：规则、族覆盖登记、求值记录与升级待办都不触任何业务域。
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/platform/sod/rules',
+  handler: ({ db, res, actor, url }) => listSodRules(db, res, actor, url),
+  owner: 'server/modules/platform-sod.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/platform/sod/rules',
+  handler: ({ db, req, res, actor }) => createSodRule(db, req, res, actor),
+  owner: 'server/modules/platform-sod.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/platform\/sod\/rules\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getSodRule(db, res, actor, params[0]),
+  owner: 'server/modules/platform-sod.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/platform\/sod\/rules\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateSodRule(db, req, res, actor, params[0]),
+  owner: 'server/modules/platform-sod.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/platform\/sod\/rules\/([^/]+)\/status$/,
+  handler: ({ db, req, res, actor, params }) => setSodRuleStatus(db, req, res, actor, params[0]),
+  owner: 'server/modules/platform-sod.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/platform/sod/coverage',
+  handler: ({ db, res, actor }) => listSodCoverage(db, res, actor),
+  owner: 'server/modules/platform-sod.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/platform/sod/evaluations',
+  handler: ({ db, res, actor, url }) => listSodEvaluations(db, res, actor, url),
+  owner: 'server/modules/platform-sod.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/platform/sod/escalations',
+  handler: ({ db, res, actor }) => listSodEscalations(db, res, actor),
+  owner: 'server/modules/platform-sod.js',
+});
+
 // Platform 平台层域 —— 组织主数据与作用域登记（docs/design/platform.md §32.5）。
 // PL-DEC-02：Organization 主数据所有权归 Platform；本模块是它的唯一 owner。
 ownedRouteTable.register({
@@ -4149,6 +4203,19 @@ export function createApp(db, options = {}) {
       return serveStatic(res, url.pathname, distDir);
     } catch (error) {
       if (error instanceof HttpError) {
+        // Platform SOD 的拒绝 / 升级证据必须补写在**事务之外**：
+        // 业务事务已回滚，判定记录与审计行会随之消失。留证失败不得掩盖原始错误。
+        if (error.sodEvidenceRequired) {
+          try {
+            recordSodRejectionEvidence(db, req.actor, error);
+          } catch (evidenceError) {
+            (logger || createStructuredLogger()).error('sod_evidence_write_failed', {
+              requestId, method: req.method, route: url.pathname, userId: req.actor?.id ?? null,
+              category: evidenceError?.code || evidenceError?.name || 'Error',
+              stack: evidenceError?.stack || String(evidenceError),
+            });
+          }
+        }
         if (error.status === 403 && req.actor && !error.authorizationAuditWritten) {
           const permissions = Array.isArray(error.deniedPermissions) && error.deniedPermissions.length
             ? error.deniedPermissions.join('|') : 'UNSPECIFIED_PERMISSION';

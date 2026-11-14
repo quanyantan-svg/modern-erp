@@ -471,6 +471,63 @@ M&Q 域既有验收记录的当前有效性须在 Platform 域级 Acceptance 轮
 **这改变了 M&Q 域的角色合同** —— 其既有验收记录所依据的证据（`server/manufacturing-stabilization.test.js`
 的"只有管理员拿到生产控制项"断言）须在 Platform 域级 Acceptance 轮按 §4.6 复核登记。
 
+#### 32.4.7 SOD 规则维护面实施结果（2026-11-14）
+
+规则维护面（CRUD + 族覆盖登记 + 求值记录 + 升级待办）已落地在
+`server/modules/platform-sod.js`，路由前缀 `/api/platform/sod/*`，**纯 Platform 内部**，
+不触任何业务域文件。
+
+| 路由 | 权限 | 责任 |
+|---|---|---|
+| `GET /api/platform/sod/rules` | `SOD_RULES_VIEW` | 规则列表（按族 / 状态 / 动作过滤） |
+| `POST /api/platform/sod/rules` | `SOD_RULES_MANAGE` | 创建规则 |
+| `GET /api/platform/sod/rules/{id}` | `SOD_RULES_VIEW` | 规则详情 + 最近 50 条判定记录 |
+| `PATCH /api/platform/sod/rules/{id}` | `SOD_RULES_MANAGE` | 更新约束 / 处置 / 升级角色 |
+| `POST /api/platform/sod/rules/{id}/status` | `SOD_RULES_MANAGE` | 启用 / 停用 |
+| `GET /api/platform/sod/coverage` | `SOD_RULES_VIEW` | 7 族覆盖登记 + 可创建集合声明 |
+| `GET /api/platform/sod/evaluations` | `SOD_RULES_VIEW` | 判定记录 |
+| `GET /api/platform/sod/escalations` | `SOD_RULES_VIEW` | 升级待办 |
+
+**族覆盖登记不留空白**（Requirement §36.4）：`SOD_FAMILY_REGISTRY` 是 Platform 域对
+「哪些审批族受 SOD 管辖」的唯一权威声明，与 §32.4.1 的 initiator resolver 一一对应。
+每族的覆盖结论只有三种：`RULE_COVERED` / `NATIVE_GUARD`（显式登记为"该族无平台 SOD
+约束，由既有自审批防护负责"）/ `UNCOVERED`（缺口，不允许出现）。
+
+**可创建集合是收敛的**（业务所有者 2026-11-14 裁定）：维护面**只允许**创建
+`SAME_PERSON_FORBIDDEN` / `SAME_ROLE_FORBIDDEN` + `REJECT` / `ESCALATE` + `APPROVE`
++ 已登记族。两种不可求值的约束在创建时 fail closed 被拒：
+
+- `SAME_DEPARTMENT_FORBIDDEN` —— 用户与单据都没有部门维度，引擎按「求值失败即拒绝」
+  处理，会把该族全部审批都拒掉；
+- `MIN_APPROVERS` —— 7 个审批决策点都是单步审批，接线点不提供「已通过人数」，
+  该约束永远不触发。
+
+未接入的动作（`REJECT` / `RETURN`）与未登记的业务类型（如 `WORKFLOW_TASK`）同样被拒 ——
+后者若放行，发起人解析不出来会按 fail-closed 拒绝该族全部审批。
+
+**升级至上级在平台层落地**（业务所有者 2026-11-14 裁定）：6 个既有族的待办是实时计算的
+（`server/modules/approvals.js:150`），没有任务行可改派；因此升级的载体是平台侧的
+「升级待办」视图 —— 违规 actor 的决策被拒（409 `PLATFORM_SOD_ESCALATED`），升级记录在
+**事务外**落库，`escalate_to_role` 角色的成员随后走该族**原有**审批入口完成决策。
+升级角色成员对 `SAME_ROLE_FORBIDDEN` 豁免（否则升级角色与发起人同角色时死锁）。
+默认无 `ESCALATE` 规则，既有族行为逐字不变。
+
+**拒绝证据补齐**：此前 `REJECT` 在事务内抛错，回滚使 `sod_evaluations` 记录与审计行
+一并消失，"为什么被拒"永远查不到。现由 HTTP 生命周期的中央 catch（`server/app.js`）
+在回滚之后调用 `recordSodRejectionEvidence` 补写。通用工作流引擎有**自己**的事务外
+留证路径（`recordTaskFailureEvidence`），其拒绝错误不置 `sodEvidenceRequired`，
+因此不会被重复补写。
+
+**残余**：
+
+- 通用工作流任务的 SOD 归因未登记：引擎已按 `businessType='WORKFLOW_TASK'` 接线，
+  但 initiator resolver 只覆盖 7 个族 → 该业务类型不可配置规则（fail closed）。
+  随通用工作流引擎的工作面轮次立项。
+- §32.4.2 的 `MIN_APPROVERS` 判定式（"已通过人数 < N → 不违规"）与
+  `server/modules/platform-sod.js` 的实现（`approvedCount < required` → 违规）方向相反；
+  该分支在当前接线点不可达（无人传 `approvedCount`），本轮以"创建时拒绝"回避，
+  方向待后续轮次在 Requirement 层裁定。
+
 ### 32.5 Organization Scope 设计
 
 - **唯一 owner**：`server/modules/platform-organizations.js`。**不得**在 Master & Engineering 建立第二个组织模型（PL-DEC-02）。

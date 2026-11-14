@@ -82,6 +82,9 @@ const FULL = [
   'server/platform-workflow-engine.test.js',
   // SOD 接线合同（FAST 已含，此处随 FULL 一并登记）。
   'server/platform-sod-wiring.test.js',
+  // SOD 规则维护面合同（PL-02）：可创建集合 fail closed、族覆盖登记不留空白、
+  // 规则生命周期与审计、升级至上级的事务外留证。
+  'server/platform-sod-rules.test.js',
   // Platform 组织主数据与作用域登记合同（PL-03）。
   'server/platform-organizations.test.js',
   // Platform 附件能力合同（PL-10）：内容寻址存储、双重类型白名单、下载鉴权、派生计数。
@@ -904,6 +907,8 @@ const FAST = [
   'server/platform-workflow-engine.test.js',
   // Platform SOD 接线：既有 6 族的行为逐字不变 + 生产工单族自审批缺口闭合（PL-DEF-01）。
   'server/platform-sod-wiring.test.js',
+  // Platform SOD 规则维护面合同（PL-02）：规则 CRUD、族覆盖登记、求值记录与升级待办。
+  'server/platform-sod-rules.test.js',
   // Platform 组织主数据与作用域登记合同（PL-03）。
   'server/platform-organizations.test.js',
   // Platform 附件能力合同（PL-10）：内容寻址存储、双重类型白名单、下载鉴权、派生计数。
