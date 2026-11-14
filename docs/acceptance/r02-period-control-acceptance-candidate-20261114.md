@@ -6,8 +6,10 @@
 >
 > **Owner**：业务所有者（Acceptance 与 Freeze 的**唯一**签字人）；Platform / 各域（证据维护）。
 >
-> **状态**：`PENDING_APPROVAL` —— **尚未签发**。本材料由实施方整理，**不代表** R-02 已通过验收、
-> 能力已冻结。签发记录（若所有者裁定通过）将另立文件。
+> **状态**：`SUPERSEDED` —— **已由签发记录取代**（2026-11-14）：
+> [`r02-period-control-acceptance-20261114.md`](./r02-period-control-acceptance-20261114.md)
+> （`R02_PERIOD_CONTROL_ACCEPTANCE_PASS` / `R02_PERIOD_CONTROL_CAPABILITY_FREEZE`）。
+> 本文件作为**候签证据**保留不删；其中的「尚未签发」表述以签发记录为准。
 >
 > **权威来源**：Requirement [`docs/requirements/platform.md`](../requirements/platform.md) §36.15、
 > [`docs/requirements/accounting-analytics.md`](../requirements/accounting-analytics.md) §35.11、

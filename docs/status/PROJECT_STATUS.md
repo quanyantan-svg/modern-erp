@@ -5211,3 +5211,37 @@ D-05 Manual Closure 与 Release Readiness 的边界。
 
 **剩余**：DR-01～DR-05 **已全部裁定**；Requirement 起草（Platform §36 有界解冻 + 新章节）、
 Design、Implementation、Acceptance / Freeze **均未开始**。
+
+## 63. R-02 期间控制一致性：Acceptance 与 Capability Freeze 签发（2026-11-14）
+
+**状态**：`FROZEN` —— R-02 的域级 Acceptance 已签发（`R02_PERIOD_CONTROL_ACCEPTANCE_PASS`），
+8 条合同项与承载它们的四份跨域合同已冻结（`R02_PERIOD_CONTROL_CAPABILITY_FREEZE`）。
+
+> **本节不是任何 Capability 的 Coverage 判定。** R-02 是**跨域有界解冻**的一致性工作项，
+> 不是九域整域能力矩阵的重签；本节不改变能力矩阵任何一行的 `状态`。
+
+**验收单元**：R-02 的 8 条合同项（R2-C01..R2-C08）—— 单一 canonical 守卫入口 / 动作→轴映射与
+fail closed / 四域 close-reopen 顺序与依赖 / 折让受 AR·AP 业务关闭保护 / 经营关账职责分离 /
+失败零副作用与事务外拒绝证据 / 真实 MySQL handler 级并发证据 / 跨域 operator 面。
+判定：**8 `COVERED` / 0 `PARTIAL` / 0 `MISSING` / 0 `OUT_OF_SCOPE`**。
+
+**Owner 逐项裁定（2026-11-14）**：
+
+| 项 | 裁定 |
+|---|---|
+| 域级 Acceptance | **通过** |
+| Capability Freeze | **冻结 8 条合同项**（含四份跨域合同：Platform §36.15、AA §35.11 增补、Finance §28.30.2 消歧、Inventory §32.12） |
+| 2 项有界残余 | **随冻结接受**（书面理由见签发记录 §6） |
+| 3 项未解决矛盾 | **随冻结接受（不阻塞）**（冻结时的状态见签发记录 §7） |
+| 35 份受影响历史记录的复核结论 | **接受本轮复核**（11 `STILL_VALID` / 24 `NEEDS_REVIEW`，引用须标注具体失效点） |
+
+**关键证据**：真实 MySQL 8.0.37 专属 campaign `R02_PERIOD_CONTROL_MYSQL_V1` →
+`RESULT = PASS` / `ACK-4 STATE = FINISHED`（三个 handler 级竞态 + 负控；schema 前后均为空）；
+浏览器 UAT 6/6（经营会计）+ 24/24（资金管理）+ 3/3（会计期间）；FULL **4044/4044**、
+FAST **774/774**、HEAVY **67/67**、build 通过、三个 QA 守卫 PASS。
+
+**签发记录**：[`docs/acceptance/r02-period-control-acceptance-20261114.md`](../acceptance/r02-period-control-acceptance-20261114.md)；
+**候签材料**（`SUPERSEDED`，保留）：`docs/acceptance/r02-period-control-acceptance-candidate-20261114.md`。
+
+**剩余**：九域整域能力矩阵的重签、Manual Closure（B3101–B3122 手册级关闭）与 Release Readiness
+**均未签发**；§62 的 MySQL 备份 / 恢复缺口仍为 Release Readiness 的未关闭闸门项。
