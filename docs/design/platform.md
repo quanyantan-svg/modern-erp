@@ -1169,7 +1169,27 @@ mutation 先于 close 且已被 close 纳入；仅以 direct INSERT worker 制�
 禁止只回退某一 Domain 形成混合闸门，必须按同一逻辑单元整体回退并重新封闭生产发布。不设可在生产打开的
 「跳过期间控制」feature flag。
 
-#### 32.15.8 Design 状态与 HARD STOP
+#### 32.15.8 R-02 专属真实 MySQL campaign 的运行结果（2026-11-14）
+
+| 项 | 值 |
+|---|---|
+| Manifest | `R02_PERIOD_CONTROL_MYSQL_V1`（夹具操作 `RUN_R02_PERIOD_RACES`） |
+| 目标 | `modern_erp_domain_test` @ `127.0.0.1:3306`（MySQL 8.0.37，一次性可弃置） |
+| 批准 | 业务所有者 2026-11-14 会话批准；ACK-4 capability 由 `scripts/gates/issue-mysql-ack4.ps1` 机械签发（签发器不构成批准） |
+| 结论 | **`RESULT = PASS` / `ACK-4 STATE = FINISHED`**（清理由 root 独立 post-flight 复核） |
+| 已消费操作 | `RESET_SCHEMA_PRE_RUN` → `BOOTSTRAP_CURRENT_SCHEMA` → `RUN_R02_PERIOD_RACES` → `CLEANUP_SCHEMA_POST_RUN` |
+| 证据 | 四个子进程 lease 均已消费（manifest / commitSha `600bb39` / 目标身份逐项相符）；运行前与运行后 schema 均为 `tables=0 views=0 triggers=0 routines=0 events=0` |
+| 场景 | S1 库存关账 vs 库存 mutation、S2 法定关账 vs 记账型 mutation（含系统凭证）、S3 经营关账 vs 经营归集、S4 canonical 协调锚点的 schema 形态与行锁可用性；每个场景带负控 |
+
+首次运行在 `BOOTSTRAP_CURRENT_SCHEMA` 失败并**已消耗**当次 capability：SOD 迁移用了
+`CREATE INDEX IF NOT EXISTS`，MySQL 不接受该语法。迁移改为「重复即忽略」的可移植建索引后重跑通过
+（提交 `600bb39`）。
+
+该证据证明的是：真实 MySQL 8 上，关账与同轴 mutation 由**同一批稳定锁**串行化，结果只能是「mutation
+先完成并被关账快照纳入」或「关账先完成、mutation 被 409 拒绝」，**不存在** mutation 晚于关账提交的结果。
+它**不**证明：R-02 的域级 Acceptance（Capability Freeze、Manual Closure）已签发。
+
+#### 32.15.9 Design 状态与 HARD STOP
 
 本节 Design：`APPROVED`（2026-11-14）；Requirement §36.15：`APPROVED`；Implementation：
 已授权，并于 2026-11-14 起实施。未解决前置项只剩一项：Acceptance 前对专属 ACK-4 campaign 的
