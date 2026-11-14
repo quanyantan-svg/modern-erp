@@ -8,6 +8,7 @@ import {
   TextField,
 } from '../components/design-system.jsx';
 import { useAppNavigation } from '../navigation/AppNavigationContext.jsx';
+import AttachmentPanel from '../components/AttachmentPanel.jsx';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const key = (prefix) => `${prefix}-${crypto.randomUUID()}`;
@@ -98,6 +99,7 @@ function QuotationDetail({ id, notify, onBack, onEdit, onChanged, user }) {
   return <BusinessPageShell className="sales-batch-detail" width="rail"><BusinessPageHeader title={value.quotation_no} context={`${value.customer_id} · ${value.valid_from} — ${value.valid_to}`} status={value.status} back={<button type="button" className="ghost" onClick={onBack}>返回报价列表</button>} primaryAction={value.status === 'EFFECTIVE' && hasRemaining ? <PrimaryButton type="button" disabled={converting} onClick={convert}>转换所选数量为订单</PrimaryButton> : null}/>
     <DetailSection title="商业概要"><div className="detail-grid"><div><span>总额</span><strong>{money(value.total_cents)}</strong></div><div><span>已转换</span><strong>{money(value.converted_total_cents)}</strong></div><div><span>销售组</span><strong>{value.sales_group_id}</strong></div></div></DetailSection>
     <DetailSection title="报价明细"><RecordList>{value.lines.map((line) => <div key={line.id}><RecordCard title={`第 ${line.line_no} 行`} subtitle={line.material_id} facts={[{ label: '数量', value: decimal(line.quantity_micros) }, { label: '剩余', value: decimal(line.remaining_qty_micros) }, { label: '单价', value: money(line.unit_price_cents) }, { label: '金额', value: money(line.amount_cents) }]}/>{value.status === 'EFFECTIVE' && Number(line.remaining_qty_micros) > 0 && <FormRow label="本次转换数量"><QuantityField min="0" max={decimal(line.remaining_qty_micros)} step="0.000001" value={conversionQuantities[line.id] || ''} onChange={(event) => setConversionQuantities((current) => ({ ...current, [line.id]: event.target.value }))}/></FormRow>}</div>)}</RecordList></DetailSection>
+    <AttachmentPanel ownerType="SALES_QUOTATION" ownerId={id} user={user} notify={notify} />
     <BottomActionBar>{value.status === 'DRAFT' && can(user, 'SALES_QUOTATION_MANAGE') && <><SecondaryButton type="button" onClick={() => onEdit(value)}>编辑</SecondaryButton><PrimaryButton type="button" onClick={() => action('effective-publish')}>生效发布</PrimaryButton></>}{['DRAFT','EFFECTIVE'].includes(value.status) && <SecondaryButton type="button" onClick={() => action('cancel', { reason: '用户关闭' })}>关闭报价</SecondaryButton>}</BottomActionBar>
   </BusinessPageShell>;
 }

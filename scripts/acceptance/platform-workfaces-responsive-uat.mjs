@@ -61,6 +61,21 @@ const surfaces = [
   emptySelector: ['.platform-ops__empty', '.canonical-empty-state'],
 }));
 
+// 附件挂载点（PL-10）：面板挂在**业务单据详情页**里，因此它的屏根 testid 是附件面板
+// 自己的 testid。销售订单详情用演示种子单据 `order-demo-001`。
+const attachmentSurfaces = [
+  {
+    key: 'orders/order-demo-001',
+    label: '销售订单详情 · 附件挂载',
+    testid: 'attachment-panel-SALES_ORDER',
+    rowSelector: ['.attachment-panel__item'],
+    emptySelector: ['.attachment-panel__empty'],
+    // 触控目标下限按**面板子树**测量：销售订单详情页属 Sales & Customer 域，
+    // 页面级目标下限由该域自己的 UAT 负责；本页的页面级观察另行打印，不静默。
+    scopeTargetsToTestid: true,
+  },
+];
+
 const results = [];
 let failures = 0;
 
@@ -149,7 +164,8 @@ async function measure(page, surface) {
       emptyStates += Array.from(document.querySelectorAll(selector)).filter(painted).length;
     }
 
-    const targets = Array.from(document.querySelectorAll('button, a[href], [role="button"]'))
+    const scope = config.scopeTargetsToTestid && testidNode ? testidNode : document;
+    const targets = Array.from(scope.querySelectorAll('button, a[href], [role="button"]'))
       .filter((node) => {
         const rect = node.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0 && getComputedStyle(node).visibility !== 'hidden';
@@ -258,6 +274,115 @@ async function main() {
         page.off('pageerror', onPageError);
       }
     }
+
+    // 附件挂载点的浏览器实证（PL-10）：面板挂在**业务单据详情页**里，
+    // 因此这里跑一遍完整链路 —— 上传 → 列出 → 下载 → 删除 ——
+    // 证明挂载点不是「渲染了一个空壳」。
+    for (const viewport of viewports) {
+      for (const surface of attachmentSurfaces) {
+        const errors = [];
+        const onConsole = (message) => { if (message.type() === 'error') errors.push(message.text()); };
+        const onPageError = (error) => errors.push(error.message);
+        page.on('console', onConsole);
+        page.on('pageerror', onPageError);
+        const attachmentResponses = [];
+        const onResponse = (response) => {
+          if (response.url().includes('/api/platform/attachments')) {
+            attachmentResponses.push(`${response.request().method()} ${response.url().split('/api')[1]} → ${response.status()}`);
+          }
+        };
+        page.on('response', onResponse);
+        await page.setViewportSize(viewport);
+        await page.goto(`${baseUrl}#${surface.key}`, { waitUntil: 'networkidle', timeout: 20000 });
+        await page.waitForSelector(`[data-testid="${surface.testid}"]`, { timeout: 12000 }).catch(() => {});
+        await page.waitForTimeout(400);
+        const reasons = [];
+        // 上传：text/plain + .txt 在服务端的类型 / 扩展名双重白名单内。
+        await page.setInputFiles(`[data-testid="attachment-upload-SALES_ORDER"]`, {
+          name: 'platform-uat.txt', mimeType: 'text/plain', buffer: Buffer.from('platform uat attachment\n', 'utf8'),
+        }).catch((error) => reasons.push(`上传失败: ${error.message}`));
+        await page.waitForSelector('.attachment-panel__item', { timeout: 12000 }).catch(() => {
+          reasons.push('上传后面板没有画出附件行');
+        });
+        const rows = await page.locator('.attachment-panel__item').count();
+        if (rows < 1) reasons.push('附件行数为 0');
+        // 删除：证明删除路径也走通了（删除后附件行必须消失）。
+        if (rows >= 1) {
+          // 删除按钮可能被销售订单详情页的**固定**操作栏遮住 —— 先滚动并用
+          // elementFromPoint 确认命中的是按钮本身，再发真实鼠标事件。
+          const hit = await page.evaluate(() => {
+            const button = document.querySelector('.attachment-panel__item .danger-button');
+            if (!button) return null;
+            for (let attempt = 0; attempt < 8; attempt += 1) {
+              button.scrollIntoView({ block: 'center' });
+              const rect = button.getBoundingClientRect();
+              const x = rect.left + rect.width / 2;
+              const y = rect.top + rect.height / 2;
+              const top = document.elementFromPoint(x, y);
+              if (top === button || button.contains(top)) return { x, y };
+              const scroller = (() => {
+                let node = button.parentElement;
+                while (node) {
+                  const style = getComputedStyle(node);
+                  if (/(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight) return node;
+                  node = node.parentElement;
+                }
+                return document.scrollingElement;
+              })();
+              const before = scroller === document.scrollingElement ? window.scrollY : scroller.scrollTop;
+              if (scroller === document.scrollingElement) window.scrollBy(0, -140);
+              else scroller.scrollTop = before - 140;
+              if (attempt === 7) {
+                return { blocked: true, rect: { x: Math.round(x), y: Math.round(y), top: Math.round(rect.top), bottom: Math.round(rect.bottom) }, blocking: top ? `${top.tagName}.${String(top.className || '').slice(0, 60)}` : 'null', viewport: window.innerHeight, scroller: scroller === document.scrollingElement ? 'window' : String(scroller.className || '').slice(0, 40) };
+              }
+            }
+            return null;
+          });
+          if (!hit) {
+            reasons.push('删除按钮被页面固定元素遮挡，无法真实点击');
+          } else if (hit.blocked) {
+            reasons.push(`删除按钮被遮挡: ${JSON.stringify(hit)}`);
+          } else {
+            await page.mouse.click(hit.x, hit.y).catch((error) => {
+              reasons.push(`删除失败: ${error.message}`);
+            });
+          }
+          await page.waitForTimeout(900);
+          const remaining = await page.locator('.attachment-panel__item').count();
+          if (remaining >= 1) reasons.push('删除后附件行仍在');
+        }
+        console.log(`  attachment api :: ${JSON.stringify(attachmentResponses)}`);
+        const evidence = await measure(page, surface);
+        const judged = judge(surface, evidence, errors);
+        if (evidence.undersized.length) {
+          console.log(`  undersized targets :: ${JSON.stringify(evidence.undersized)}`);
+        }
+        if (surface.scopeTargetsToTestid) {
+          const pageTargets = await page.evaluate(() => Array.from(document.querySelectorAll('button, a[href], [role="button"]'))
+            .filter((node) => {
+              const rect = node.getBoundingClientRect();
+              return rect.width > 0 && rect.height > 0 && getComputedStyle(node).visibility !== 'hidden';
+            })
+            .map((node) => {
+              const rect = node.getBoundingClientRect();
+              return {
+                text: (node.innerText || node.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().slice(0, 28),
+                width: Math.round(rect.width), height: Math.round(rect.height),
+              };
+            })
+            .filter((target) => target.height < 44 || target.width < 44));
+          if (pageTargets.length) {
+            console.log(`  页面级观察（不判定，属该业务域自己的 UAT）：${JSON.stringify(pageTargets)}`);
+          }
+        }
+        const passed = reasons.length === 0 && judged.length === 0;
+        if (!passed) failures += 1;
+        results.push({ surface: surface.key, width: viewport.width, passed, evidence, errors, reasons: [...reasons, ...judged] });
+        console.log(`${passed ? 'PASS' : 'FAIL'} ${viewport.width}px ${surface.key} :: rows=${evidence.renderedRows} empty=${evidence.emptyStates} overflow=${evidence.overflow} undersized=${evidence.undersized.length} errors=${errors.length}${reasons.length || judged.length ? ` :: ${[...reasons, ...judged].join('; ')}` : ''}`);
+        page.off('console', onConsole);
+        page.off('pageerror', onPageError);
+      }
+    }
   } finally {
     await browser?.close();
     server.closeAllConnections?.();
@@ -267,7 +392,7 @@ async function main() {
   }
 
   const surfacesCovered = new Set(results.map((entry) => entry.surface));
-  console.log(`\n屏覆盖：${surfacesCovered.size}/${surfaces.length}，视口 ${viewports.length} 档，共 ${results.length} 次判定`);
+  console.log(`\n屏覆盖：${surfacesCovered.size}/${surfaces.length + attachmentSurfaces.length}，视口 ${viewports.length} 档，共 ${results.length} 次判定`);
   console.log(`结论：${failures === 0 ? 'PASS' : `FAIL（${failures} 项不通过）`}`);
   process.exit(failures === 0 ? 0 : 1);
 }

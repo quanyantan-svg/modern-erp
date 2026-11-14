@@ -13,6 +13,7 @@ import { Badge, can, ConfirmDelete, Empty, FormActions, Loading, Modal, money, P
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { planningDocumentTabForPage } from '../navigation/planningDocumentNavigation.js';
 import { BusinessPageHeader, BusinessPageShell, HelpDisclosure, SegmentedControl } from '../components/design-system.jsx';
+import AttachmentPanel from '../components/AttachmentPanel.jsx';
 
 const PI_STATUS_LABELS = { DRAFT: '草稿', RELEASED: '已下达', CANCELLED: '已取消' };
 const PUI_STATUS_LABELS = { DRAFT: '草稿', RELEASED: '已下达', CANCELLED: '已取消' };
@@ -479,7 +480,7 @@ export function PurchaseRequisitionsPage({ user, notify }) {
   if (selection) {
     return <Panel title="请购单" subtitle={`单号 ${selection.requisitionNo}`}
       action={<button className="secondary" onClick={() => setSelection(null)}>← 返回</button>}>
-      <PurchaseRequisitionDetail requisitionId={selection.id} notify={notify} onChanged={() => { void load(); }} onDeleted={() => { setSelection(null); void load(); }} canManage={canManage} canApprove={canApprove}/>
+      <PurchaseRequisitionDetail user={user} requisitionId={selection.id} notify={notify} onChanged={() => { void load(); }} onDeleted={() => { setSelection(null); void load(); }} canManage={canManage} canApprove={canApprove}/>
     </Panel>;
   }
   return <Panel title="请购单"
@@ -783,7 +784,7 @@ function PurchaseRequisitionCreate({ value, onClose, onSaved, notify }) {
   </Modal>;
 }
 
-function PurchaseRequisitionDetail({ requisitionId, notify, onChanged, onDeleted, canManage, canApprove }) {
+function PurchaseRequisitionDetail({ user, requisitionId, notify, onChanged, onDeleted, canManage, canApprove }) {
   const [data, setData] = useState(null);
   const [editDraft, setEditDraft] = useState(null);
   const [suppliers, setSuppliers] = useState([]);
@@ -834,6 +835,7 @@ function PurchaseRequisitionDetail({ requisitionId, notify, onChanged, onDeleted
       {data.rejection_reason && <label className="full">驳回原因<span className="danger-text">{data.rejection_reason}</span></label>}
       <label className="full">备注<span>{data.notes || '—'}</span></label>
     </div>
+    <AttachmentPanel ownerType="PURCHASE_REQUISITION" ownerId={requisitionId} user={user} notify={notify} />
     <h3>请购明细</h3>
     <div className="table-wrap"><table><thead><tr>
       <th>产品</th><th className="number">请购</th><th className="number">已订 / 剩余</th><th className="number">参考单价（元）</th><th className="number">参考金额（元）</th><th>参考供应商</th>

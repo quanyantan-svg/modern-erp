@@ -3,6 +3,7 @@ import { api } from '../api.js';
 import { Active, Badge, ConfirmAction, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
 import { centsToYuanInput, yuanToCents } from '../lib/money.js';
 import { BusinessPageHeader, BusinessPageShell, HelpDisclosure } from '../components/design-system.jsx';
+import AttachmentPanel from '../components/AttachmentPanel.jsx';
 
 function currentPeriod() {
   const d = new Date();
@@ -918,6 +919,7 @@ function VoucherDetail({ user, value, onClose, onChanged, onEdit, formatMoney, n
     <div className="table-wrap"><table><thead><tr><th>方向</th><th>科目</th><th>金额</th><th>摘要</th></tr></thead><tbody>
       {value.entries?.map((e) => <tr key={e.id}><td className={e.direction === 'DEBIT' ? 'positive' : 'negative'}>{e.direction === 'DEBIT' ? '借' : '贷'}</td><td>{e.subjectCode} {e.subjectName}</td><td className="number"><strong>{money(e.amount_cents)}</strong></td><td>{e.summary}</td></tr>)}
     </tbody><tfoot><tr><td colspan="2"/><td className="number"><strong>借方合计：{money(value.debitTotal)}</strong></td><td className="number"><strong>贷方合计：{money(value.creditTotal)}</strong></td></tr></tfoot></table></div>
+    <AttachmentPanel ownerType="ACCOUNTING_VOUCHER" ownerId={value.id} user={user} notify={notify} />
     {rejecting && <div className="form-grid" style={{ marginTop: 12 }}>
       <label className="full">驳回原因<textarea value={rejectionReason} onChange={(e) => setRejectionReason(e.target.value)} rows={2} required/></label>
       <div className="form-actions full">

@@ -143,11 +143,7 @@
 
 **残余**：
 
-- `src/components/AttachmentPanel.jsx`（Design §32.1.2）**尚未落地**：附件的 7 个挂载点
-  全部位于已冻结域的单据详情页（会计凭证 / 采购订单 / 销售订单 / 生产订单 / 生产检验单 /
-  采购申请 / 销售报价），嵌入它们意味着触碰 6 个已冻结域的前端详情面，须在域级 Acceptance
-  轮按 AGENTS.md §4.6 复核登记。本轮先交付后端附件能力（PL-10）与挂载点合同，
-  前端挂载作为显式残余随下一轮立项。
+- （无 —— `src/components/AttachmentPanel.jsx` 已落地，见 §32.6.6）
 - 通用工作流引擎**没有**对外的实例启动入口（§32.11 约束 #7：平台能力不得成为第二写入口），
   因此「流程监控」与「我的流程任务」在业务域接线之前恒为空态；浏览器 UAT 的夹具因此
   直接调用引擎的 canonical 启动函数 `startWorkflowInstance`。
@@ -432,7 +428,9 @@ assertSodCompliance(db, { businessType, businessId, action, actorId })
   │    SAME_PERSON_FORBIDDEN : initiator === actorId → 违规
   │    SAME_ROLE_FORBIDDEN   : initiator 的角色 ∩ actor 的角色 ≠ ∅ → 违规
   │    SAME_DEPARTMENT_FORBIDDEN: 两者部门相同 → 违规
-  │    MIN_APPROVERS         : 已通过人数 < N → 不违规（要求第二人复核 → OUT_OF_SCOPE）
+  │    MIN_APPROVERS         : 已通过人数 < N → 违规（约束语义，Requirement §36.4）
+  │                           但本轮 7 个决策点均为单步、不提供「已通过人数」→ 不可求值
+  │                           → 维护面在创建时 fail closed 拒绝（§32.4.7）
   │
   ├─ resolution='REJECT'   → 409 PLATFORM_SOD_RULE_VIOLATION（写 sod_evaluations + audit）
   └─ resolution='ESCALATE' → 任务改派 escalate_to_role 的成员（写 sod_evaluations + audit）
@@ -579,10 +577,14 @@ M&Q 域既有验收记录的当前有效性须在 Platform 域级 Acceptance 轮
 - 通用工作流任务的 SOD 归因未登记：引擎已按 `businessType='WORKFLOW_TASK'` 接线，
   但 initiator resolver 只覆盖 7 个族 → 该业务类型不可配置规则（fail closed）。
   随通用工作流引擎的工作面轮次立项。
-- §32.4.2 的 `MIN_APPROVERS` 判定式（"已通过人数 < N → 不违规"）与
-  `server/modules/platform-sod.js` 的实现（`approvedCount < required` → 违规）方向相反；
-  该分支在当前接线点不可达（无人传 `approvedCount`），本轮以"创建时拒绝"回避，
-  方向待后续轮次在 Requirement 层裁定。
+
+**已消解的合同矛盾（业务所有者 2026-11-14 裁定）**：§32.4.2 的 `MIN_APPROVERS` 判定式
+原文写作「已通过人数 < N → **不违规**」，与 `server/modules/platform-sod.js` 的实现
+（`approvedCount < required` → 违规）方向相反。裁定：**以实现方向为 canonical** ——
+「最小通过人数」的约束语义是「已通过人数 < N 即违规」（不达最小人数的决策必须被挡住）；
+本轮不可创建的原因是**求值点不存在**（7 个决策点均为单步、不提供「已通过人数」），
+而不是约束本身无效。§32.4.2 的判定式与 Requirement §36.4 已按该口径修订，
+代码不变；一旦出现多审批决策点（如通用工作流引擎的会签节点），该约束即按该语义生效。
 
 ### 32.5 Organization Scope 设计
 
@@ -663,6 +665,48 @@ M&Q 域既有验收记录的当前有效性须在 Platform 域级 Acceptance 轮
    `filename*=UTF-8''` 百分号编码两种形式。
 3. **类型白名单只判定一次**：content type 与扩展名的**双重**校验由附件模块统一执行，
    `readMultipart` 不重复判定 —— 否则拒绝码会来自两个地方、失去唯一性。
+
+#### 32.6.6 附件前端挂载的实施结果（2026-11-14）
+
+`src/components/AttachmentPanel.jsx` 已落地并挂载到**全部 7 个**登记挂载点
+（业务所有者 2026-11-14 裁定「现在就做」）。面板是**平台自有**组件，不改动任何业务域的
+数据模型、状态机或权限判定；服务端仍按 `ATTACHMENT_OWNER_PERMISSIONS` 做归属可见性判定。
+
+| 归属类型 | 挂载位置 | 宿主页面 |
+|---|---|---|
+| `SALES_ORDER` | 销售订单详情（身份区之后、章节区之前） | `src/pages/master-data.jsx`（`SalesOrderDetailV16`） |
+| `PURCHASE_ORDER` | 采购订单详情（操作记录之前） | `src/pages/master-data.jsx`（`OrderDocumentDetail`，`kind="purchase"`） |
+| `ACCOUNTING_VOUCHER` | 凭证详情（分录表之后） | `src/pages/accounting.jsx`（`VoucherDetail`） |
+| `PRODUCTION_ORDER` | 制令单详情（基本信息之后） | `src/pages/manufacturing.jsx`（`ProductionOrderModal`） |
+| `PRODUCTION_INSPECTION` | 检验单详情（检验项之后） | `src/pages/manufacturing-quality.jsx`（`ProductionQuality`） |
+| `PURCHASE_REQUISITION` | 请购单详情（明细之前） | `src/pages/planning-documents.jsx`（`PurchaseRequisitionDetail`） |
+| `SALES_QUOTATION` | 销售报价详情（明细之后） | `src/pages/sales-batch-a.jsx`（`QuotationDetail`） |
+
+**下载走鉴权后的 API**：面板用 `src/api.js` 的 `download()` 取 blob 后以 object URL 触发浏览器
+下载 —— 附件目录不在静态服务范围内，不存在可直接访问的直链。
+
+**上传走 multipart**：`src/api.js` 的 `api()` 新增 FormData 直通分支（此前所有 body 都被
+JSON 序列化，multipart 会被破坏）。浏览器自行写 multipart 边界，客户端**不得**设置
+`Content-Type`。
+
+**浏览器实证（`scripts/acceptance/platform-workfaces-responsive-uat.mjs`）**：销售订单详情页
+在 320 / 390 / 430 / 680 四档宽度下各跑一遍**完整链路** —— 上传（`text/plain` + `.txt`，
+在服务端类型 / 扩展名双重白名单内）→ 面板列出附件行 → 删除 → 面板回到指名原因的显式空态；
+API 轨迹为 `POST 201 → GET 200 → POST delete 200 → GET 200`。
+
+**实施期修正**：销售订单详情的附件面板最初挂在**文档末尾**（操作记录之前）。该页的操作栏是
+`position: fixed`（贴底），文档最后一段内容会被它盖住 —— 移动端因此点不到附件的删除按钮
+（浏览器实证抓到：按钮被固定操作栏拦截）。面板改挂在身份区之后，删除按钮即可滚动到视口正中。
+
+**跨域影响（AGENTS.md §4.6 登记）**：本单元在 **6 个已冻结域前端文件**中各插入一个面板
+（Sales & Customer ×2、Manufacturing & Quality、Accounting & Analytics、Planning、
+Manufacturing & Quality、Procurement & Outsourcing）。插入是**纯附加**的渲染节点，
+不改动任何既有结构、状态机、权限或 API —— 但这些域的验收证据当前有效性须在 Platform 域级
+Acceptance 轮复核登记。
+
+**页面级观察（不判定，属该业务域自己的 UAT）**：销售订单详情页的「查看业务流程 ›」可点击
+目标高度为 36 CSS px，低于 44 px 的触控下限。这是该页**既有**的问题（不是本单元引入），
+已在本 UAT 中打印留痕，由 Sales & Customer 域自己的 UAT 负责。
 
 ### 32.7 Notification 设计
 

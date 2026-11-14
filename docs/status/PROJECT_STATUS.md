@@ -5009,3 +5009,53 @@ ACK-4 capability 按 `docs/decisions/mysql-evidence-policy-20261112.md` 由所�
 **剩余**：域级 Acceptance 与 Capability Freeze → Manual Closure / Release Readiness
 （22 本手册逐本决定）。**显式残余**：`src/components/AttachmentPanel.jsx` 未落地，
 以及 §32.4.2 的 `MIN_APPROVERS` 判定方向矛盾（待 Requirement 层裁定）。
+
+### 61.18 消解两项残余：AttachmentPanel 前端挂载落地 + MIN_APPROVERS 合同矛盾修订（2026-11-14）
+
+**授权来源**：业务所有者 2026-11-14 就「未解决矛盾能否解决」给出两项裁定 ——
+① `MIN_APPROVERS` 判定方向**以实现方向为 canonical**（修订 Design / Requirement，代码不动）；
+② AttachmentPanel**现在就做**：实现并挂载 7 个挂载点。
+
+#### 一、AttachmentPanel 前端挂载（PL-10 达到 `COVERED`）
+
+| 归属类型 | 挂载位置 | 宿主页面 |
+|---|---|---|
+| `SALES_ORDER` | 销售订单详情（身份区之后） | `src/pages/master-data.jsx` |
+| `PURCHASE_ORDER` | 采购订单详情（操作记录之前） | `src/pages/master-data.jsx` |
+| `ACCOUNTING_VOUCHER` | 凭证详情（分录表之后） | `src/pages/accounting.jsx` |
+| `PRODUCTION_ORDER` | 制令单详情（基本信息之后） | `src/pages/manufacturing.jsx` |
+| `PRODUCTION_INSPECTION` | 检验单详情（检验项之后） | `src/pages/manufacturing-quality.jsx` |
+| `PURCHASE_REQUISITION` | 请购单详情（明细之前） | `src/pages/planning-documents.jsx` |
+| `SALES_QUOTATION` | 销售报价详情（明细之后） | `src/pages/sales-batch-a.jsx` |
+
+- 组件：`src/components/AttachmentPanel.jsx` + 独立样式 `src/styles/platform-attachments.css`。
+- 下载走**鉴权后的 API**（`api.js` 的 `download()` + object URL）；上传走 multipart ——
+  `src/api.js` 新增 FormData 直通分支（此前所有 body 都被 JSON 序列化）。
+- 浏览器实证：销售订单详情页在 320 / 390 / 430 / 680 四档宽度各跑一遍
+  **上传 → 列出 → 删除 → 回到显式空态**（API 轨迹 `POST 201 → GET 200 → POST delete 200 → GET 200`）。
+- 实施期修正：面板最初挂在文档末尾，而该页操作栏是 `position: fixed` 贴底，会盖住文档最后
+  一段内容 —— 移动端点不到删除按钮（浏览器实证抓到）。改挂身份区之后。
+- **跨域影响（§4.6 登记）**：在 **6 个已冻结域前端文件**中各插入一个**纯附加**的渲染节点，
+  不改动任何既有结构、状态机、权限或 API；这些域的验收证据当前有效性须在本域 Acceptance
+  轮复核登记。
+
+#### 二、MIN_APPROVERS 合同矛盾已消解
+
+Design §32.4.2 原写「已通过人数 < N → **不违规**」，与实现（`approvedCount < required` → 违规）
+方向相反。裁定：**以实现方向为 canonical** —— 「最小通过人数」的语义是「已通过人数 < N 即违规」；
+本轮不可创建的原因是**求值点不存在**（7 个决策点均为单步、不提供已通过人数），而不是约束本身
+无效。`docs/design/platform.md` §32.4.2 与 `docs/requirements/platform.md` §36.4 已按该口径
+修订（并区分「最小通过人数」**约束**与「要求第二人复核」**处置**两个维度），代码不变；
+一旦出现多审批决策点（如通用工作流引擎的会签节点），该约束即按该语义生效。
+
+#### 三、门禁与剩余
+
+| 门禁 | 结果 |
+|---|---|
+| `pnpm test`（FULL） | **4012/4012 PASS** |
+| `pnpm build` | 通过 |
+| 浏览器 UAT（8 工作面 + 1 挂载点 × 4 档宽度） | **36/36 PASS** |
+
+**剩余**：域级 Acceptance 与 Capability Freeze → Manual Closure / Release Readiness。
+**页面级观察（不判定）**：销售订单详情页的「查看业务流程 ›」触控目标高 36 px（低于 44 px）——
+该页**既有**问题，非本域引入，由 Sales & Customer 域自己的 UAT 负责。

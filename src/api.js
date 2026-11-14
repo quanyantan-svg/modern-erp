@@ -20,7 +20,9 @@ export function setToken(token) { token ? localStorage.setItem(TOKEN_KEY, token)
 
 export async function api(path, options = {}) {
   const headers = { ...options.headers };
-  if (options.body && typeof options.body !== 'string') {
+  // FormData 必须原样发送：浏览器自己写 multipart 边界，Content-Type 不能由本层设置。
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  if (options.body && typeof options.body !== 'string' && !isFormData) {
     headers['Content-Type'] = 'application/json';
     options = { ...options, body: JSON.stringify(options.body) };
   }

@@ -7,6 +7,7 @@ import { copySourceAllocations } from '../lib/tracking.js';
 import { presentBusinessValue } from '../lib/presentation.js';
 import { BusinessAction, BusinessPageHeader, BusinessPageShell, BusinessActionBar, CompactRecordList, RecordCard, HelpDisclosure } from '../components/design-system.jsx';
 import { BomApprovalBadge, BomAnalysisActions, BomBatchMaintenance, BomLifecycleActions, BomTree } from '../components/BomGovernancePanel.jsx';
+import AttachmentPanel from '../components/AttachmentPanel.jsx';
 
 const ISSUE_STATUS_LABELS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 const RECEIPT_STATUS_LABELS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
@@ -818,6 +819,7 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
         <label>工序快照<span>{detail.routing_version_snapshot ? <>v{detail.routing_version_snapshot} · {detail.routingSnapshot?.length || 0} 道工序 {detail.activeRoutingId && <AppLink page="product-routings" documentId={detail.activeRoutingId} documentType="productRouting" className="link-button">查看主数据</AppLink>}</> : '无工序快照'}</span></label>
         <label>创建人<span>{detail.creatorName}</span></label>
       </div>
+      <AttachmentPanel ownerType="PRODUCTION_ORDER" ownerId={value.id} user={user} notify={notify} />
       <div className="form-section-head" style={{marginTop:'1rem'}}>生产流程</div>
       <ProductionWorkflowTrace detail={detail} materialIssues={materialIssues} productionReceipts={productionReceipts} />
       <LinkedDocuments materialIssues={materialIssues} productionReceipts={productionReceipts} />

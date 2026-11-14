@@ -7,6 +7,7 @@ import { roleDisplayName } from '../lib/copy.js';
 import { yuanToNonNegativeCents } from '../lib/money.js';
 import { Icon } from '../components/icons.jsx';
 import TrackingAllocationEditor from '../components/TrackingAllocationEditor.jsx';
+import AttachmentPanel from '../components/AttachmentPanel.jsx';
 import { trackingPresentation, withProductTracking } from '../lib/tracking.js';
 import {
   ActionMenu,
@@ -1506,6 +1507,13 @@ function OrderDocumentDetail({
           />
         )}
 
+        <AttachmentPanel
+          ownerType={isSales ? 'SALES_ORDER' : 'PURCHASE_ORDER'}
+          ownerId={id}
+          user={user}
+          notify={notify}
+        />
+
         <BusinessAuditSection title="操作记录">
           <div className="order-audit-list">
             {(order.history || []).map((item, index) => (
@@ -1714,6 +1722,8 @@ function SalesOrderDetailV16({ id, user, notify, onBack, onEdit }) {
           <span>{order.rejectionReason}</span>
         </section>
       )}
+
+      <AttachmentPanel ownerType="SALES_ORDER" ownerId={id} user={user} notify={notify} />
 
       <section className="v16-sales-order-detail__sections" aria-label="销售订单章节">
         <details className="v16-sales-order-document__disclosure" open>

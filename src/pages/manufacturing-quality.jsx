@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Empty, FormActions, Modal, Status, can, quantity } from '../components/ui.jsx';
 import { BusinessAction, BusinessPageHeader, BusinessPageShell, CompactRecordList, RecordCard } from '../components/design-system.jsx';
+import AttachmentPanel from '../components/AttachmentPanel.jsx';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -101,6 +102,7 @@ export function ProductionQuality({ user, notify }) {
     </form></Modal>}
     {selected && <Modal title={selected.code} onClose={() => setSelected(null)} wide><div className="mq-detail-head"><Status status={(selected.result || selected.status || 'DRAFT').toLowerCase()} label={selected.result ? RESULT_LABELS[selected.result] || selected.result : INSPECTION_STATUS_LABELS[selected.status] || selected.status}/><strong>{selected.productionOrderNo}</strong><span>{SOURCE_TYPE_LABELS[selected.source_type] || selected.source_type} · {INSPECTION_TYPE_LABELS[selected.inspection_type] || selected.inspection_type || 'NORMAL'}</span></div>
       <div className="mq-criteria">{(selected.items || []).map((item) => <div key={item.id}><strong>{item.criterion_name}</strong><span>{item.specification || '无额外规格'}</span><small>{item.result_type}</small></div>)}</div>
+      <AttachmentPanel ownerType="PRODUCTION_INSPECTION" ownerId={selected.id} user={user} notify={notify} />
       {selected.status === 'DRAFT' && <div className="form-actions">
         {canManage && <button className="danger-button" onClick={() => finish('FAIL')}>判定不合格</button>}
         {canManage && <button className="primary" onClick={() => finish('PASS')}>检验通过</button>}

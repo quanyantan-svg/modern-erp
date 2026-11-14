@@ -1,0 +1,95 @@
+/* Platform 附件挂载面板（PL-10）的样式。
+ *
+ * 由 src/components/AttachmentPanel.jsx 直接引入 —— 任何嵌入该面板的单据详情页
+ * 都会带上这份样式，不依赖业务域页面各自引入。
+ */
+/* 附件挂载面板（PL-10）。嵌在业务单据详情页里，随单据一起被看见。 */
+.attachment-panel {
+  margin: 1.25rem 0 0;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--platform-line);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.attachment-panel__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.attachment-panel__head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.attachment-panel__file {
+  min-height: 44px;
+  max-width: 100%;
+  font-size: 0.85rem;
+}
+
+.attachment-panel__hint,
+.attachment-panel__empty {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--platform-muted);
+}
+
+.attachment-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.attachment-panel__item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--platform-line);
+  border-radius: 10px;
+}
+
+.attachment-panel__identity {
+  min-width: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.attachment-panel__identity strong {
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.attachment-panel__meta {
+  font-size: 0.75rem;
+  color: var(--platform-muted);
+  overflow-wrap: anywhere;
+}
+
+.attachment-panel__actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.attachment-panel__actions button {
+  min-height: 44px;
+}
+
+@media (max-width: 430px) {
+  .attachment-panel__item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .attachment-panel__actions button {
+    flex: 1 1 6rem;
+  }
+}
