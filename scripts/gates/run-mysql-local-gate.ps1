@@ -1,4 +1,4 @@
-# One-command launcher for the real MySQL gates.
+﻿# One-command launcher for the real MySQL gates.
 #
 # The launcher makes the unified local MySQL test target reproducible for
 # anyone who can run the repository. It never asks for a password:
@@ -47,6 +47,7 @@ $ApprovedCampaigns = @{
   'test:mysql:manufacturing-quality' = 'MANUFACTURING_QUALITY_MYSQL_V1'
   'test:mysql:inventory-warehouse'  = 'INVENTORY_WAREHOUSE_MYSQL_V1'
   'test:mysql:sales-customer'       = 'SALES_CUSTOMER_MYSQL_V1'
+  'test:mysql:platform'             = 'PLATFORM_MYSQL_V1'
 }
 if (-not $ApprovedCampaigns.ContainsKey($Script)) {
   Write-Host "[mysql-gate] BLOCKED: $Script has no independently approved ACK-4 manifest." -ForegroundColor Red

@@ -886,6 +886,45 @@ transaction(db):
 
 `pnpm test:fast` → `pnpm test`（FULL）→ `pnpm test:heavy` → `pnpm build` → `git diff --check` → 真实 MySQL campaign → 浏览器 UAT。全部为绿方可进入 Acceptance。
 
+#### 32.12.4 真实 MySQL campaign 的实施结果（2026-11-14）
+
+Platform 域的专属 ACK-4 campaign 已建成。**Manifest 独立**（`PLATFORM_MYSQL_V1`，夹具操作名
+`RUN_PLATFORM_RACES`），与既有七个域 campaign 互相独立、互不复用，运行期证据可唯一归属本域。
+
+| 文件 | 责任 |
+|---|---|
+| `scripts/gates/ack4/ack4-runtime.mjs` | `PLATFORM_MYSQL_MANIFEST` 与 `PLATFORM_MYSQL_MANIFEST_NAME` |
+| `scripts/gates/mysql-platform-gate.mjs` | root orchestrator：静态 preflight → 消费一次性 capability → 四个子进程 → 报告 |
+| `scripts/gates/mysql-platform-child.mjs` | 子进程：`RESET_SCHEMA_PRE_RUN` / `BOOTSTRAP_CURRENT_SCHEMA` / `RUN_PLATFORM_RACES` / `CLEANUP_SCHEMA_POST_RUN` / 只读 postflight |
+| `scripts/gates/mysql-platform-root-lifecycle.mjs` | root 生命周期（消费 → 重置 → 引导 → 夹具 → 清理 → 清理核验） |
+| `scripts/gates/platform-domain-races-worker.mjs` | 竞态 worker：一个进程 = 一个独立 MySQL 会话 |
+| `server/mysql-platform-domain-races.integration.js` | 四个场景 + 四个负控的实证套件 |
+
+**四个场景（每个都带负控）**：
+
+| # | 场景 | 负控 |
+|---|---|---|
+| S1 | 职责分离拒绝的**事务外证据**：发起人审批自己的生产工单被拒后，`sod_evaluations` 判定记录与 `audit_logs` 审计行**仍在**（事务回滚不得抹掉拒绝证据） | 另一个主体审批同一张工单**成功** —— 守卫不是无差别拒绝 |
+| S2 | 编号服务幂等并发：同一幂等键并发取号返回**同一单号**，且只落一条分配记录（PL-DEF-12） | 不同幂等键拿到**不同**单号 —— 守卫不是永远返回同一个号 |
+| S3 | 通知去重：同一去重键并发产生只落一条通知 | 不同去重键各落一条 —— 去重不是全部丢弃 |
+| S4 | 平台 schema 形态：17 张平台新表 + `notifications` 6 个新列 + `audit_logs` 4 个新列在真实 MySQL 8 上存在 | （目录形态本身即断言） |
+
+并发场景用**独立 worker 子进程** + **文件闸门**同时释放，两个竞争者在同一瞬间进入被争用的
+代码路径 —— 竞态发生在真实 MySQL 8 服务器上，而不是同一事件循环里的同步调用交错。
+
+**登记点**：`scripts/gates/run-mysql-local-gate.ps1` 的 `$ApprovedCampaigns` 增加
+`'test:mysql:platform' = 'PLATFORM_MYSQL_V1'`；`package.json` 增加 `test:mysql:platform`；
+`server/test-utils/temp-db.js` 的 `assertActivePortableChildOperation` 增加
+`RUN_PLATFORM_RACES`（该名单按 campaign 绑定，不扩宽任何其它 campaign 的作用域）。
+
+**实施期修正**：`run-mysql-local-gate.ps1` 原本**没有 UTF-8 BOM**，而文件含中文与 `§` ——
+Windows PowerShell 5.1 会按 ANSI 读取它（`MissingEndParenthesisInFunctionParameterList` 一类
+解析错误）。本次补上 BOM。
+
+**离线校验**：`node --test server/mysql-platform-domain-races.integration.js` 在 SQLite 上
+**8/8 PASS** —— 只证明夹具与断言自洽，**不是**真实 MySQL 证据；真实证据以 campaign 运行
+结果为准。
+
 ### 32.13 回滚策略
 
 | 变更 | 回滚 |

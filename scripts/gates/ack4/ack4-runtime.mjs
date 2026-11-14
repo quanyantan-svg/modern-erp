@@ -92,6 +92,16 @@ export const ACK4_RECOVERY_MANIFEST = Object.freeze([
   'INSPECT_QUARANTINE',
   'CLEANUP_SCHEMA_RECOVERY',
 ]);
+// Platform 域（平台层能力）的 ACK-4 Manifest。本 Manifest 与前面各域的 Manifest 互相
+// 独立：夹具操作名带 PLATFORM 前缀，使运行期证据可以唯一地归属本域 campaign，不会与
+// 其它域 campaign 的证据混淆。
+export const PLATFORM_MYSQL_MANIFEST_NAME = 'PLATFORM_MYSQL_V1';
+export const PLATFORM_MYSQL_MANIFEST = Object.freeze([
+  'RESET_SCHEMA_PRE_RUN',
+  'BOOTSTRAP_CURRENT_SCHEMA',
+  'RUN_PLATFORM_RACES',
+  'CLEANUP_SCHEMA_POST_RUN',
+]);
 let activePortableChildLease = null;
 
 export class Ack4BlockedError extends Error {
