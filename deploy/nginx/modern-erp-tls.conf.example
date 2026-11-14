@@ -1,0 +1,82 @@
+# Modern ERP —— 公网生产 Nginx TLS 模板（PL-RI-05）。
+#
+# 这是一份**模板**，不是已部署的配置。仓库里存在模板**不等于**目标环境就绪；
+# 目标环境必须用 `scripts/admin/release-preflight.mjs` 采集不可伪造的 preflight 事实，
+# 并用 `scripts/admin/verify-release-target.mjs` 从客户端验证。
+#
+# ── 替换规则（两处都必须替换）────────────────────────────────────────
+#   __SERVER_NAME__        目标域名，例如 erp.example.com
+#   __CERTIFICATE_PATH__   证书与私钥所在目录
+#
+# **未替换时 `nginx -t` 必须失败**：证书路径内嵌了域名占位符，
+# 未替换的路径指向不存在的文件，nginx 在解析配置时就会报错退出。
+# 不得靠 `server_name` 的合法性来兜底 —— 裸 token 在 nginx 语法上是合法的域名。
+#
+# ── 边界 ─────────────────────────────────────────────────────────────
+#   * 80 端口只做跳转，不提供任何业务内容；
+#   * 443 反向代理到 127.0.0.1:3001；应用端口不直接暴露公网；
+#   * MySQL 端口与对象存储凭据不出现在本文件，也不由 Nginx 暴露；
+#   * 防火墙 / 云安全组属于目标主机证据，必须单独留证。
+
+server {
+    listen 80;
+    listen [::]:80;
+
+    server_name __SERVER_NAME__;
+
+    # HTTP 只允许跳转到 HTTPS。
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+
+    server_name __SERVER_NAME__;
+
+    # 未替换占位符时这两个路径不存在，`nginx -t` 直接失败。
+    ssl_certificate     __CERTIFICATE_PATH__/fullchain.pem;
+    ssl_certificate_key __CERTIFICATE_PATH__/privkey.pem;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # HSTS：只有确认证书链与续期机制可用后才启用。
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    # Must not be smaller than the application's HTTP_ATTACHMENT_LIMIT_BYTES
+    # (10 MiB by default); a smaller limit rejects larger uploads with 413
+    # before they ever reach the application.
+    client_max_body_size 12m;
+
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types application/json application/javascript text/javascript text/css text/plain image/svg+xml;
+
+    # 安全响应头。
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        # Forward only the peer address: a client may send its own
+        # X-Forwarded-For head, which is attacker controlled and would pollute
+        # the source IP in login lockout counters and audit records.
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+}
