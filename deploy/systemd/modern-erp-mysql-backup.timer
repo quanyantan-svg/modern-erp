@@ -1,0 +1,17 @@
+# Modern ERP —— MySQL 生产备份定时器（PL-RI-01）。
+#
+# RPO = 24 小时：每日一次逻辑备份。上线前还必须额外执行一次演练型备份
+# （--kind drill），其对象按季度 / 发布前追溯需要保留。
+
+[Unit]
+Description=Daily Modern ERP MySQL backup timer
+Documentation=file:/opt/modern-erp/docs/operations/deployment.md
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+RandomizedDelaySec=600
+Unit=modern-erp-mysql-backup.service
+
+[Install]
+WantedBy=timers.target

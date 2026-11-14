@@ -888,6 +888,9 @@ const FULL = [
   // PL-RI-04 —— canonical 浏览器门禁的结构合同（registry 驱动、四档宽度、
   // 五类 canonical 角色、三类失败分类与 INCOMPLETE 语义）。
   'scripts/acceptance/release-browser-readiness.contract.test.js',
+  // PL-RI-01 —— MySQL 灾备原语的离线合同回归（配置 fail closed、凭据零泄漏、
+  // 恢复目标授权、保留策略、RPO/RTO 计时、状态机顺序、systemd 单元分离）。
+  'scripts/admin/mysql-dr.test.js',
   'scripts/git/check-commit-traceability.test.js',
   'scripts/gates/ack4-runtime.test.js',
   'scripts/gates/m1-core-g07-child-lifecycle.test.js',

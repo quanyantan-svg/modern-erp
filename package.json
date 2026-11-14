@@ -49,6 +49,8 @@
     "verify:dependencies": "node scripts/qa/verify-production-dependencies.mjs",
     "verify:migration-fail-closed": "node scripts/qa/verify-migration-fail-closed.mjs",
     "test:release:browser": "node scripts/acceptance/release-browser-readiness.mjs",
+    "backup-db:mysql": "node scripts/admin/mysql-backup.mjs",
+    "restore-db:mysql": "node scripts/admin/mysql-restore.mjs",
     "backup-db": "node scripts/admin/backup-db.mjs",
     "restore-db": "node scripts/admin/restore-db.mjs",
     "setup-admin": "node scripts/admin/setup-admin.mjs"
@@ -58,6 +60,7 @@
   },
   "packageManager": "pnpm@11.24.0",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1168.0",
     "lucide-react": "^1.47.0",
     "mysql2": "^3.24.4",
     "react": "^19.1.0",

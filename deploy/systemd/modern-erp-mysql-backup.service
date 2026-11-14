@@ -1,0 +1,40 @@
+# Modern ERP —— MySQL 生产备份定时单元（PL-RI-01）。
+#
+# 与既有 SQLite 备份单元（modern-erp-backup.service）**完全分离**：
+#   - 独立 service account（modern-erp-backup），不复用应用服务身份；
+#   - 独立生命周期：应用服务重启不影响备份定时器；
+#   - 凭据只读数据库账号 + 对象存储的最小 prefix 权限；
+#   - 不具备恢复权限，也不具备删除生产对象以外的任何对象权限。
+
+[Unit]
+Description=Modern ERP MySQL logical backup with offsite copy
+Documentation=file:/opt/modern-erp/docs/operations/deployment.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=modern-erp-backup
+Group=modern-erp-backup
+WorkingDirectory=/opt/modern-erp
+EnvironmentFile=/etc/modern-erp/env
+Environment=NODE_ENV=production
+Environment=ERP_DB_BACKEND=mysql
+ExecStart=/usr/bin/node scripts/admin/mysql-backup.mjs --kind daily --out-dir /var/backups/modern-erp/mysql --manifest-dir /var/backups/modern-erp/mysql/manifests
+TimeoutStartSec=3600
+UMask=0077
+
+# systemd hardening —— 备份进程不需要写入系统目录，也不需要提权。
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target
