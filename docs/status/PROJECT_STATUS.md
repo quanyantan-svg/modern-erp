@@ -5081,3 +5081,24 @@ Design §32.4.2 原写「已通过人数 < N → **不违规**」，与实现（
 `OUT_OF_SCOPE`（延期理由与重启条件已登记）。
 
 **门禁**：`pnpm test`（FULL）**4020/4020 PASS**；`pnpm build` 通过；浏览器 UAT 40/40 PASS。
+
+### 61.20 Platform 域级 Acceptance 与 Capability Freeze：**候签材料已备**（2026-11-14）
+
+**状态**：`PENDING_APPROVAL` —— 候签材料
+[`docs/acceptance/platform-domain-acceptance-candidate-20261114.md`](../acceptance/platform-domain-acceptance-candidate-20261114.md)
+（`PLATFORM_DOMAIN_ACCEPTANCE_CANDIDATE_READY_FOR_OWNER_DECISION`）。
+**域级 Acceptance 与 Capability Freeze 尚未签发**；Manual Closure 与 Release Readiness 亦未签发。
+
+| 项 | 值 |
+|---|---|
+| 能力判定 | 21 项能力 **19 `COVERED` / 0 `PARTIAL` / 2 `OUT_OF_SCOPE`**（能力口径）；或 **17 / 0 / 4**（Requirement §36.12.1 口径，**待所有者裁定**）。整改前 3 / 7 / 11 |
+| 真实 MySQL 8.0.37 | **PASS**（`PLATFORM_MYSQL_V1`，run `6a541150-6634-4005-adb2-22e694fb1e02`、commit `6658e06`，`RESULT = PASS`、`ACK-4 STATE = FINISHED`、清理独立 post-flight 证明；4 场景 + 4 负控；三次运行全 PASS） |
+| 门禁 | FULL **4020/4020**、FAST **774/774**、HEAVY **67/67**、Build PASS、`git diff --check` PASS、文档一致性 ALL PASS（含 N7）、跨域错误码守卫 PASS、历史验收记录指针守卫 PASS（`BROKEN` 0） |
+| 域级合同套件 | **144 例**（全部 class A：新合同通过，无 class B 缺陷复现用例） |
+| 浏览器 | **40/40**（10 屏 × 4 档宽度 320 / 390 / 430 / 680，含附件挂载点的上传 → 列出 → 删除全链路） |
+| 整改轮修复 | **8 项真实缺陷**（生产工单自审批缺口、拒绝证据随事务回滚消失、管理员权限被当作生命周期能力、生命周期 operator 工作面不可达、`auditBusinessRejection` 零覆盖、编号三项缺陷、旧版审批流页面读取不存在的列、合同「五审批族」表述漂移） |
+| 历史验收结论复核（§4.6） | 27 份受本域改动影响的记录：**21 份 `STILL_VALID`**、**6 份 `NEEDS_REVIEW`**（制造与质量、销售与客户 ×2、会计与分析 ×2、2026-11-12 复核记录），具体失效点已在候签材料 §4.3 逐条写明；**未撤销、未改写任何已签发结论** |
+
+**待所有者逐项裁定**（候签材料 §1.3）：D-01 能力计数口径 · D-02 六项有界残余的处置
+（**均未预判为不阻塞**）· D-03 三项未解决矛盾 · D-04 六份 `NEEDS_REVIEW` 记录的复核结论 ·
+D-05 Manual Closure 与 Release Readiness 的边界。
