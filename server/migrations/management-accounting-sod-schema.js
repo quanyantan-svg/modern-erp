@@ -18,10 +18,10 @@ export function migrateManagementAccountingSodSchema(db) {
   addNullableTextColumn(db, 'allocation_rules', 'created_by');
   addNullableTextColumn(db, 'allocation_results', 'created_by');
 
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_allocation_rules_created_by ON allocation_rules(created_by);
-    CREATE INDEX IF NOT EXISTS idx_allocation_results_created_by ON allocation_results(created_by);
-  `);
+  // 索引：MySQL 不接受 `CREATE INDEX IF NOT EXISTS`，而由快照派生的 schema 已经
+  // 建过同名索引，因此这里用「重复即忽略」的可移植写法。
+  ensureIndex(db, 'idx_allocation_rules_created_by', 'allocation_rules(created_by)');
+  ensureIndex(db, 'idx_allocation_results_created_by', 'allocation_results(created_by)');
 
   // 分摊规则创建人：审计动作 CREATE / 实体类型 ALLOCATION_RULE。
   db.prepare(`UPDATE allocation_rules SET created_by = (
@@ -36,6 +36,15 @@ export function migrateManagementAccountingSodSchema(db) {
        WHERE a.entity_type = 'MANAGEMENT_ALLOCATION' AND a.entity_id = allocation_results.plan_id AND a.action = 'ALLOCATE'
        ORDER BY a.created_at DESC, a.id DESC LIMIT 1)
     WHERE created_by IS NULL`).run();
+}
+
+function ensureIndex(db, name, definition) {
+  try {
+    db.exec(`CREATE INDEX ${name} ON ${definition}`);
+  } catch (error) {
+    const message = String(error?.message || error);
+    if (!/duplicate key name|already exists/i.test(message)) throw error;
+  }
 }
 
 function addNullableTextColumn(db, table, column) {
