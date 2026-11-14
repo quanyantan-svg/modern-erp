@@ -78,7 +78,8 @@ Platform 是九域架构（8 Business Domains + Platform）中的**平台层**�
 | WF-07 | 监控 | `MISSING` | `COVERED` | 随 PL-04 引擎建立实例 / 节点 / 路径 / 状态查询与筛选 |
 | WF-08 | 暂停 / 终止 / 恢复 | `MISSING` | `COVERED` | 随 PL-04 引擎建立实例级控制与重新部署 |
 
-**目标 Coverage 合计**：`COVERED` **17** / `OUT_OF_SCOPE` **4**（PL-06 通用化增量、PL-07、PL-08、PL-13 收敛增量）/ `PARTIAL` **0** / `MISSING` **0**。
+**目标 Coverage 合计（能力口径，业务所有者 2026-11-14 裁定）**：`COVERED` **19** / `OUT_OF_SCOPE` **2**（PL-07、PL-08）/ `PARTIAL` **0** / `MISSING` **0**。
+另有 **4 项 `OUT_OF_SCOPE` 范围项**（PL-06 通用化增量、PL-07、PL-08、PL-13 收敛增量）：其中 PL-06 通用化增量与 PL-13 收敛增量是这两项能力**内部**的范围边界，能力本身为 `COVERED`（封顶），不构成「未覆盖的能力」。
 
 ### 36.3 Generic Workflow 引擎需求（PL-04 / WF-01～WF-08）
 
@@ -251,7 +252,12 @@ Platform 是九域架构（8 Business Domains + Platform）中的**平台层**�
 
 #### 36.12.1 能力覆盖
 
-- 21 项能力中 **17 项达到 `COVERED`**、**4 项经业务所有者批准为 `OUT_OF_SCOPE`**（PL-06 通用化增量、PL-07、PL-08、PL-13 收敛增量）。每项 `OUT_OF_SCOPE` 必须登记延期理由与重启条件。
+- 21 项能力中 **19 项达到 `COVERED`**、**2 项经业务所有者批准为 `OUT_OF_SCOPE`**（PL-07、PL-08）。
+  每项 `OUT_OF_SCOPE` 必须登记延期理由与重启条件。
+  **计数口径（业务所有者 2026-11-14 裁定）**：以**能力逐项判定**为准 —— PL-06 与 PL-13 的
+  「通用化增量 / 收敛增量」是这两项能力**内部**的范围边界（已批准延期），能力本身判定为
+  `COVERED`（封顶）；它们连同 PL-07、PL-08 一并构成 **4 项 `OUT_OF_SCOPE` 范围项**，
+  但不构成 4 项「未覆盖的能力」。
 - 目标 `PARTIAL` **0** 项、目标 `MISSING` **0** 项。
 
 #### 36.12.2 门禁

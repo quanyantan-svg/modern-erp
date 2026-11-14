@@ -5102,3 +5102,26 @@ Design §32.4.2 原写「已通过人数 < N → **不违规**」，与实现（
 **待所有者逐项裁定**（候签材料 §1.3）：D-01 能力计数口径 · D-02 六项有界残余的处置
 （**均未预判为不阻塞**）· D-03 三项未解决矛盾 · D-04 六份 `NEEDS_REVIEW` 记录的复核结论 ·
 D-05 Manual Closure 与 Release Readiness 的边界。
+
+### 61.21 Platform 域级 Acceptance 与 Capability Freeze：**已签发**（2026-11-14）
+
+**状态**：`FROZEN` —— 业务所有者逐项裁定后签发
+[`docs/acceptance/platform-domain-acceptance-20261114.md`](../acceptance/platform-domain-acceptance-20261114.md)
+（`PLATFORM_DOMAIN_ACCEPTANCE_PASS` / `PLATFORM_CAPABILITY_FREEZE`）。
+**19 项 `COVERED` 能力已冻结**；Manual Closure 与 Release Readiness 仍未签发。
+
+| 项 | 值 |
+|---|---|
+| 能力判定 | PL-01..PL-13 + WF-01..WF-08 共 21 项：**19 `COVERED`** / 0 `PARTIAL` / **2 `OUT_OF_SCOPE`**（PL-07、PL-08）/ 0 `MISSING`。另有 **4 项 `OUT_OF_SCOPE` 范围项**（PL-06 通用化增量、PL-07、PL-08、PL-13 收敛增量）—— 能力口径按所有者裁定采用，Requirement §36.2 与 §36.12.1 的算术表述已同步更正 |
+| 真实 MySQL 8.0.37 | **PASS / FINISHED**（`PLATFORM_MYSQL_V1`，run `6a541150-6634-4005-adb2-22e694fb1e02` @ `6658e06`；4 场景 + 4 负控；三次运行全 PASS，无失败运行） |
+| 门禁 | FULL **4020/4020**、FAST **774/774**、HEAVY **67/67**、Build PASS、文档一致性 ALL PASS（含 N7）、两个 QA 守卫 PASS |
+| 域级合同套件 | **144 例**（全 class A） |
+| 浏览器 | **40/40**（10 屏 × 4 档宽度） |
+| 残余 | **6 项随冻结接受**（PL-06 关系图硬编码与单实体可归档、PL-13 期间闸门并存、通用工作流任务 SOD 归因未登记、引擎无对外实例启动入口、逐列 schema parity 未取证、销售订单页既有 36px 触控目标）—— 不得在后续文档中被描述为已证明或已消除 |
+| §4.6 复核 | 27 份受影响记录：21 `STILL_VALID` + 6 `NEEDS_REVIEW`（逐条失效点已登记）；已签发结论**未被撤销** |
+| 能力矩阵 | B3122 行状态 `NOT_STARTED` → `FROZEN` |
+
+**Owner 裁定**：域级 Acceptance **通过（ACCEPT）** · 计数口径采用**能力口径 19 / 2** ·
+6 项残余**随冻结接受**（书面理由已登记）· 接受本轮 §4.6 复核结论。
+
+**剩余**：Manual Closure 与 Release Readiness（22 本手册逐本决定）。
