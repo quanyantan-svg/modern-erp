@@ -1142,6 +1142,20 @@ registry 并集，不由调用方拼装。
 继续要求既有 ADMIN 限制，所有后端 fail closed。Operating closer 不得是目标期间所用 allocation rule/result 的
 创建人或执行人，复用已批准 SOD 判定；权限与 SOD 都通过后才可迁移状态。
 
+**经营关账 SOD 的落地设计（2026-11-14 增补，业务所有者裁定「加 `created_by` 列后按原文实现」）**
+
+| 项 | 内容 |
+|---|---|
+| 归因来源 | 业务行上的权威归属字段：`allocation_rules.created_by`（规则创建人）、`allocation_results.created_by`（分摊执行人）。**不得**用 `audit_logs` 等可变证据作为判定输入 |
+| Schema | `server/migrations/management-accounting-schema.js` 对两张表**加列** `created_by TEXT`（可空）+ 索引；既有行按审计证据一次性回填（规则：审计动作 `CREATE` / 实体类型 `ALLOCATION_RULE`；分摊执行人：审计动作 `ALLOCATE` / 实体类型 `MANAGEMENT_ALLOCATION` / 实体 id = 该结果的 `plan_id`）；回填不到的行留空 |
+| 新写入 | 建规则写 `actor.id`；跑分摊写 `actor.id`（`allocation_results.created_by`） |
+| 判定点 | `closeOperatingPeriod` 的写事务内：法定期间前置通过后、状态写入前，读取目标期 `allocation_results` 及其引用的 `allocation_rules` 的归属 |
+| 规则 | 关账人 ∈ 该期分摊结果的执行人，或 ∈ 该期所用规则的创建人 → 拒绝；**归属缺失（NULL）→ 同样拒绝**（fail closed，不得默认放行） |
+| 错误 | `409 MANAGEMENT_PERIOD_SOD_VIOLATION`（附 period / book / 冲突角色与归属 id）；`409 MANAGEMENT_PERIOD_SOD_ATTRIBUTION_MISSING`（附缺失归属的行数与 id） |
+| 与平台 SOD 引擎的关系 | 经营关账**不是**审批决策点（无 initiator resolver），因此**不复用** `platform-sod.js` 的规则引擎；它只复用 Platform §32.15.5 的错误与审计合同（拒绝证据 exactly-once、结构化阻断字段） |
+| 审计 | 拒绝在回滚后由中央 catch 写一次 `PERIOD_CONTROL` 拒绝审计（含 actor / 动作 / 期间 / 阻断原因）；成功关账在同事务记录 period、book、before/after、actor |
+| 兼容 | 加列不改既有行语义；关账人若正是该期分摊的参与者则从「可关账」变为「被拒」（收紧）。既有测试夹具须改用**未参与该期分摊**的角色关账 |
+
 错误及 rejection audit 使用 Platform §32.15 合同。成功 close/reopen 同事务记录 period、book、before/after、
 reason、actor；409 在回滚后事务外 exactly-once 记录。前端 Accounting Period 与 Management Accounting 的
 reopen 操作必须提交 reason（现有空对象调用不再允许），并显示依赖/顺序阻塞；无 MANAGE 权限只读。
@@ -1160,6 +1174,11 @@ focused tests 覆盖 Legal 顺序/最新期、三类 Finance 与 Inventory 前�
 更新 `period.test.js`、period UI、AA-W7/management accounting suites；真实 MySQL 使用独立 handler/连接验证
 Legal close vs voucher/AR/AP，以及 Operating close vs collect/allocation，并提供 snapshot 证据。
 
+**经营关账 SOD 的测试增量（2026-11-14 增补）**：关账人即该期分摊规则创建人 → 409 且期间状态不变；
+关账人即该期分摊结果执行人 → 409 且期间状态不变；归属缺失（NULL）→ 409
+`MANAGEMENT_PERIOD_SOD_ATTRIBUTION_MISSING`；换用未参与该期分摊的角色 → 关账成功且审计完整；
+回填后的历史行归属可核验（规则创建人与分摊执行人均可查到）。
+
 #### 31.16.6 回滚与 HARD STOP
 
 ownership migration 必须逐步完成 caller proof；未切换前旧 owner 可存在，切换后不得保留双 active handler。
@@ -1167,4 +1186,7 @@ ownership migration 必须逐步完成 caller proof；未切换前旧 owner 可�
 调用。整体回退后 R-02 必须重新标记为生产发布 blocker。
 
 本节 Design：`APPROVED`（2026-11-14）；Implementation：已授权并于 2026-11-14 实施。
+**2026-11-14 增补**（业务所有者裁定「加 `created_by` 列后按原文实现」）：§31.16.4 / §31.16.5 的经营关账
+SOD 归因设计状态为 `APPROVED`，其 **Implementation 尚未授权** —— 按 AGENTS.md §4.3，Design 完成后
+HARD STOP，须业务所有者明确批准后方可实施（加列 migration + 归属回填 + 关账判定 + 测试）。
 **HARD STOP**：专属 ACK-4 campaign 仍须业务所有者单独批准后方可运行。

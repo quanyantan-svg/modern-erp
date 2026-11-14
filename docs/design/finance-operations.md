@@ -2809,8 +2809,15 @@ Final verdict（本 Design）：`READY FOR USER REVIEW`。
 ### 28.30.2 关账 / 重开状态机与事务
 
 关闭某一 Finance axis：`OPEN → CLOSED_THROUGH(date)`；后续 close 只允许截止日单调增加，等于当前截止日的
-幂等请求返回现态，不倒退。重开必须填写 reason，并把该 axis 恢复到受支持的前一截止状态；与已关闭法定期间
-重叠时拒绝，确保先重开 Operating、再 Legal、再 Finance 的逆序规则。
+幂等请求返回现态，不倒退。重开必须填写 reason，并把该 axis 恢复到**完全打开**（截止日清空）的受支持
+状态；与已关闭法定期间重叠时拒绝，确保先重开 Operating、再 Legal、再 Finance 的逆序规则。
+
+> **2026-11-14 业务所有者裁定（消解 Design 措辞歧义）**：本节原表述「恢复到受支持的前一截止状态」
+> 有两种读法 —— ① 恢复为**完全打开**（`closed_through_date` 清空）；② 从
+> `finance_business_closures` 历史恢复**更早的那一截止日**。裁定取 ①：重开后该轴不再保留任何已关账
+> 边界，运营方须重新执行关账；既有实现、既有测试与既有验收证据逐字不变。② 不采用，因为一次重开若
+> 悄悄退回更早的关账边界，会让“重开后这段时间可以重新写入”的范围小于运营方预期。该裁定只澄清
+> 语义，**不改变**任何已实现行为。
 
 close/reopen 与 mutation 使用相同 `finance_business_close_state` 稳定行锁。mutation 的顺序固定为：handler
 鉴权 → transaction → 重读业务事实/日期 → 按 Platform §32.15 rank 锁 Finance 行与 Legal anchor → 重读两轴
@@ -2851,4 +2858,6 @@ focused tests 覆盖三个 axis 的边界日、close 单调性、重开逆序、
 down migration。若整体回退，R-02 恢复为生产发布 blocker。
 
 本节 Design：`APPROVED`（2026-11-14）；Implementation：已授权，并于 2026-11-14 起实施。
+**2026-11-14 消歧**：§28.30.2 的「重开落点」经业务所有者裁定为**完全打开**（截止日清空），既有实现与
+证据不变；该澄清不产生新的 Implementation 范围。
 **HARD STOP**：专属 ACK-4 campaign 仍须业务所有者单独批准后方可运行。

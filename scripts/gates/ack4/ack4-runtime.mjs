@@ -102,6 +102,17 @@ export const PLATFORM_MYSQL_MANIFEST = Object.freeze([
   'RUN_PLATFORM_RACES',
   'CLEANUP_SCHEMA_POST_RUN',
 ]);
+// R-02 期间控制（canonical 期间守卫）的独立 ACK-4 Manifest。本 Manifest 与前面各域的
+// Manifest 互相独立：夹具操作名带 R02_PERIOD 前缀，使运行期证据可以唯一地归属本 campaign，
+// 不会与其它域 campaign 的证据混淆。场景是 handler-vs-handler 的关账 / mutation 竞态：
+// 库存关账 vs 库存 mutation、法定关账 vs 凭证 mutation、经营关账 vs 归集。
+export const R02_PERIOD_CONTROL_MYSQL_MANIFEST_NAME = 'R02_PERIOD_CONTROL_MYSQL_V1';
+export const R02_PERIOD_CONTROL_MYSQL_MANIFEST = Object.freeze([
+  'RESET_SCHEMA_PRE_RUN',
+  'BOOTSTRAP_CURRENT_SCHEMA',
+  'RUN_R02_PERIOD_RACES',
+  'CLEANUP_SCHEMA_POST_RUN',
+]);
 let activePortableChildLease = null;
 
 export class Ack4BlockedError extends Error {
