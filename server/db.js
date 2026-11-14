@@ -57,6 +57,9 @@ import { migrateSalesCustomerDomain } from './migrations/sales-customer-domain.j
 import { migrateW11ASelectorSearchKey } from './migrations/sales-customer-wave11-a-selector-search-key.js';
 import { migratePlatformDomainSchema } from './migrations/platform-domain-schema.js';
 import { migratePeriodControlSchema } from './migrations/period-control-schema.js';
+import {
+  addColumnIfMissing, columnExists, foreignKeyViolationsFor, runMigrationStep, tableColumns, tableExists, tableSql,
+} from './migrations/migration-runner.js';
 import { foldSearchText } from './lib/search-fold.js';
 import { computePositionKey } from './lib/inventory-position.js';
 
@@ -379,8 +382,23 @@ export function verifyPassword(password, salt, expectedHex) {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
+/**
+ * 打开 SQLite 连接并执行完整初始化。
+ *
+ * 初始化失败时**必须释放句柄**：否则数据库文件被锁住，
+ * 「修复根因后重启重试」这条路径就不可能成立。
+ */
 function createSqliteDatabase(filename) {
   const db = new DatabaseSync(filename);
+  try {
+    return initializeSqliteDatabase(db, filename);
+  } catch (error) {
+    try { db.close(); } catch { /* 原始异常优先 */ }
+    throw error;
+  }
+}
+
+function initializeSqliteDatabase(db, filename) {
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec('PRAGMA journal_mode = WAL;');
   // 记录库文件路径：附件子系统据此把附件目录放在库文件旁边（单机 SQLite 部署的默认）。
@@ -407,54 +425,98 @@ function createSqliteDatabase(filename) {
   migrateProcurementPrepaymentSchema(db);
   normalizeCostRates(db);
   seed(db);
-  // Add missing columns to existing tables
-  const addColumn = (sql) => { try { db.exec(sql); } catch (e) { } };
-  addColumn('ALTER TABLE return_orders ADD COLUMN confirmed_by TEXT');
-  addColumn('ALTER TABLE return_orders ADD COLUMN confirmed_at TEXT');
-  addColumn('ALTER TABLE inventory_checks ADD COLUMN product_id TEXT');
-  addColumn('ALTER TABLE inventory_checks ADD COLUMN system_quantity REAL');
-  addColumn('ALTER TABLE inventory_checks ADD COLUMN actual_quantity REAL');
-  addColumn('ALTER TABLE inventory_checks ADD COLUMN difference REAL');
-  addColumn('ALTER TABLE inventory_checks ADD COLUMN reason TEXT');
-  addColumn('ALTER TABLE inventory_checks ADD COLUMN reviewer_id TEXT');
-  addColumn('ALTER TABLE inventory_checks ADD COLUMN reviewed_at TEXT');
-  addColumn('ALTER TABLE inventory_checks ADD COLUMN remark TEXT');
-  addColumn('ALTER TABLE inventory_checks ADD COLUMN check_no TEXT');
-  addColumn('ALTER TABLE inventory_checks ADD COLUMN checked_at TEXT');
-  db.exec("UPDATE inventory_checks SET check_no='IC-LEGACY-' || substr(replace(id,'-',''),1,12) WHERE check_no IS NULL OR check_no=''; UPDATE inventory_checks SET status='SUBMITTED' WHERE status='PENDING'; CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_checks_check_no ON inventory_checks(check_no)");
-    addColumn('ALTER TABLE production_orders ADD COLUMN bom_id TEXT');
-  addColumn('ALTER TABLE products ADD COLUMN reorder_point REAL DEFAULT 0');
-  addColumn('ALTER TABLE cash_journals ADD COLUMN bank_id TEXT');
-  addColumn('ALTER TABLE products ADD COLUMN min_stock REAL DEFAULT 0');
-  addColumn('ALTER TABLE products ADD COLUMN max_stock REAL DEFAULT 0');
-  addColumn('ALTER TABLE products ADD COLUMN lead_time_days INTEGER DEFAULT 7');
-  addColumn('ALTER TABLE users ADD COLUMN name TEXT');
-  addColumn('ALTER TABLE accounting_vouchers ADD COLUMN voucher_word_id TEXT');
-  addColumn('ALTER TABLE accounting_vouchers ADD COLUMN period TEXT');
-  addColumn("ALTER TABLE accounting_vouchers ADD COLUMN status TEXT DEFAULT 'POSTED'");
-  addColumn('ALTER TABLE accounting_vouchers ADD COLUMN attachment_count INTEGER DEFAULT 0');
-  addColumn('ALTER TABLE accounting_vouchers ADD COLUMN approver_id TEXT');
-  addColumn('ALTER TABLE accounting_vouchers ADD COLUMN approved_at TEXT');
-  addColumn('ALTER TABLE accounting_vouchers ADD COLUMN updated_at TEXT');
-  addColumn('ALTER TABLE accounting_entries ADD COLUMN department_id TEXT');
-  addColumn('ALTER TABLE accounting_entries ADD COLUMN project_id TEXT');
-  addColumn('ALTER TABLE accounting_entries ADD COLUMN customer_id TEXT');
-  addColumn('ALTER TABLE accounting_entries ADD COLUMN supplier_id TEXT');
-  addColumn("ALTER TABLE suppliers ADD COLUMN email TEXT NOT NULL DEFAULT ''");
-  addColumn("ALTER TABLE accounting_entries ADD COLUMN currency_code TEXT DEFAULT 'CNY'");
-  addColumn('ALTER TABLE accounting_entries ADD COLUMN exchange_rate REAL DEFAULT 1');
-  addColumn('ALTER TABLE accounting_entries ADD COLUMN amount_foreign REAL DEFAULT 0');
-  addColumn('ALTER TABLE accounting_entries ADD COLUMN line_no INTEGER DEFAULT 1');
-  db.exec("UPDATE accounting_vouchers SET period=substr(voucher_date,1,7) WHERE period IS NULL; UPDATE accounting_vouchers SET updated_at=created_at WHERE updated_at IS NULL");
-  db.exec('UPDATE users SET name=display_name WHERE name IS NULL');
+  /*
+   * PL-RI-02 —— SQLite migration fail-closed。
+   *
+   * 合同（缺一不可）：
+   *  - 目标形态由 **schema inspection** 判定；只有确认已满足才记为 replay 成功；
+   *  - 整段在一个事务内执行，失败整体回滚；
+   *  - 提交前校验列、约束、索引与行数不变量；校验失败与 DDL 失败等价；
+   *  - 未知 DDL / DML 错误向上传播，后续 migration、seed 与服务监听都不得发生。
+   *
+   * 下列各段此前都用 `catch {}` 或「打印后继续」吞掉错误，导致生产库可能在
+   * 半迁移状态下继续启动。今天它们由 `runMigrationStep` 统一承载。
+   */
+  const additiveColumns = [
+    ['return_orders', 'confirmed_by', 'confirmed_by TEXT'],
+    ['return_orders', 'confirmed_at', 'confirmed_at TEXT'],
+    ['inventory_checks', 'product_id', 'product_id TEXT'],
+    ['inventory_checks', 'system_quantity', 'system_quantity REAL'],
+    ['inventory_checks', 'actual_quantity', 'actual_quantity REAL'],
+    ['inventory_checks', 'difference', 'difference REAL'],
+    ['inventory_checks', 'reason', 'reason TEXT'],
+    ['inventory_checks', 'reviewer_id', 'reviewer_id TEXT'],
+    ['inventory_checks', 'reviewed_at', 'reviewed_at TEXT'],
+    ['inventory_checks', 'remark', 'remark TEXT'],
+    ['inventory_checks', 'check_no', 'check_no TEXT'],
+    ['inventory_checks', 'checked_at', 'checked_at TEXT'],
+    ['production_orders', 'bom_id', 'bom_id TEXT'],
+    ['products', 'reorder_point', 'reorder_point REAL DEFAULT 0'],
+    ['cash_journals', 'bank_id', 'bank_id TEXT'],
+    ['products', 'min_stock', 'min_stock REAL DEFAULT 0'],
+    ['products', 'max_stock', 'max_stock REAL DEFAULT 0'],
+    ['products', 'lead_time_days', 'lead_time_days INTEGER DEFAULT 7'],
+    ['users', 'name', 'name TEXT'],
+    ['accounting_vouchers', 'voucher_word_id', 'voucher_word_id TEXT'],
+    ['accounting_vouchers', 'period', 'period TEXT'],
+    ['accounting_vouchers', 'status', "status TEXT DEFAULT 'POSTED'"],
+    ['accounting_vouchers', 'attachment_count', 'attachment_count INTEGER DEFAULT 0'],
+    ['accounting_vouchers', 'approver_id', 'approver_id TEXT'],
+    ['accounting_vouchers', 'approved_at', 'approved_at TEXT'],
+    ['accounting_vouchers', 'updated_at', 'updated_at TEXT'],
+    ['accounting_entries', 'department_id', 'department_id TEXT'],
+    ['accounting_entries', 'project_id', 'project_id TEXT'],
+    ['accounting_entries', 'customer_id', 'customer_id TEXT'],
+    ['accounting_entries', 'supplier_id', 'supplier_id TEXT'],
+    ['suppliers', 'email', "email TEXT NOT NULL DEFAULT ''"],
+    ['accounting_entries', 'currency_code', "currency_code TEXT DEFAULT 'CNY'"],
+    ['accounting_entries', 'exchange_rate', 'exchange_rate REAL DEFAULT 1'],
+    ['accounting_entries', 'amount_foreign', 'amount_foreign REAL DEFAULT 0'],
+    ['accounting_entries', 'line_no', 'line_no INTEGER DEFAULT 1'],
+  ];
+  const additiveColumnsPresent = (database) => additiveColumns
+    .every(([table, column]) => columnExists(database, table, column));
+  // 回填不变量：目标形态包含「已回填」，而不只是「列已存在」。
+  // 旧实现把加列与回填拆开且都不在事务里，崩溃后可能留下「列存在但未回填」的库。
+  const additiveBackfillComplete = (database) => (
+    Number(database.prepare("SELECT COUNT(*) AS n FROM inventory_checks WHERE check_no IS NULL OR check_no=''").get()?.n || 0) === 0
+    && Number(database.prepare('SELECT COUNT(*) AS n FROM accounting_vouchers WHERE period IS NULL').get()?.n || 0) === 0
+    && Number(database.prepare('SELECT COUNT(*) AS n FROM users WHERE name IS NULL').get()?.n || 0) === 0
+  );
+  runMigrationStep(db, {
+    id: 'v1.3-additive-columns',
+    inspect: (database) => additiveColumnsPresent(database) && additiveBackfillComplete(database),
+    apply: (database) => {
+      for (const [table, column, ddl] of additiveColumns) {
+        addColumnIfMissing(database, table, column, ddl);
+      }
+      database.exec("UPDATE inventory_checks SET check_no='IC-LEGACY-' || substr(replace(id,'-',''),1,12) WHERE check_no IS NULL OR check_no=''; UPDATE inventory_checks SET status='SUBMITTED' WHERE status='PENDING'; CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_checks_check_no ON inventory_checks(check_no)");
+      database.exec("UPDATE accounting_vouchers SET period=substr(voucher_date,1,7) WHERE period IS NULL; UPDATE accounting_vouchers SET updated_at=created_at WHERE updated_at IS NULL");
+      database.exec('UPDATE users SET name=display_name WHERE name IS NULL');
+    },
+    verify: (database) => additiveColumnsPresent(database) && additiveBackfillComplete(database),
+  });
+
+  /*
+   * 表重建（create → copy → verify → swap）。
+   *
+   * 临时表名**每次唯一**：上一次失败遗留的同名临时表不会被复用，
+   * 也不会在半复制数据上继续。旧实现的固定 `_new` 表名正是残留的来源。
+   */
+  const uniqueTempTable = (table) => `${table}_new_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
 
   // Migration: Fix production_orders CHECK constraint to include PENDING status
-  const migrateProductionOrdersCheck = () => {
-    try {
-      const currentSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='production_orders'").get()?.sql || '';
-      if (currentSql.includes('PENDING')) return;
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS production_orders_new (
+  let productionOrdersTemp = null;
+  let productionOrdersViolationsBefore = 0;
+  runMigrationStep(db, {
+    id: 'v1.3-production-orders-check',
+    inspect: (database) => tableSql(database, 'production_orders').includes("'PENDING'")
+      && columnExists(database, 'production_orders', 'bom_id'),
+    apply: (database) => {
+      productionOrdersViolationsBefore = foreignKeyViolationsFor(database, 'production_orders').length;
+      productionOrdersTemp = uniqueTempTable('production_orders');
+      database.exec(`
+        CREATE TABLE ${productionOrdersTemp} (
           id TEXT PRIMARY KEY,
           order_no TEXT NOT NULL UNIQUE,
           product_id TEXT NOT NULL,
@@ -471,59 +533,72 @@ function createSqliteDatabase(filename) {
           bom_id TEXT
         );
       `);
-      db.exec('INSERT INTO production_orders_new SELECT * FROM production_orders');
-      db.exec('DROP TABLE production_orders');
-      db.exec('ALTER TABLE production_orders_new RENAME TO production_orders');
-      db.exec('CREATE INDEX IF NOT EXISTS idx_production_orders_status ON production_orders(status)');
-      db.exec('CREATE INDEX IF NOT EXISTS idx_production_orders_product ON production_orders(product_id)');
-    } catch (e) { console.error('Migration production_orders CHECK failed:', e.message); }
-  };
-  migrateProductionOrdersCheck();
+      database.exec(`INSERT INTO ${productionOrdersTemp} SELECT * FROM production_orders`);
+      database.exec('DROP TABLE production_orders');
+      database.exec(`ALTER TABLE ${productionOrdersTemp} RENAME TO production_orders`);
+      database.exec('CREATE INDEX IF NOT EXISTS idx_production_orders_status ON production_orders(status)');
+      database.exec('CREATE INDEX IF NOT EXISTS idx_production_orders_product ON production_orders(product_id)');
+    },
+    verify: (database) => (
+      tableSql(database, 'production_orders').includes("'PENDING'")
+      && !tableExists(database, productionOrdersTemp)
+      && foreignKeyViolationsFor(database, 'production_orders').length <= productionOrdersViolationsBefore
+    ),
+    suspendForeignKeys: true,
+  });
+
   // Migration: Voucher workflow - add new columns and update CHECK constraint
-  const migrateVoucherWorkflow = () => {
-    try {
-      // Add new columns if they do not exist
-      try { db.exec("ALTER TABLE accounting_vouchers ADD COLUMN rejection_reason TEXT"); } catch (e) { }
-      try { db.exec("ALTER TABLE accounting_vouchers ADD COLUMN submitted_at TEXT"); } catch (e) { }
-      try { db.exec("ALTER TABLE accounting_vouchers ADD COLUMN submitted_by TEXT"); } catch (e) { }
-      
-      // Check if CHECK constraint needs updating
-      const currentSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='accounting_vouchers'").get()?.sql || '';
-      if (!currentSql.includes("'ENTERED'")) {
-        // Need to rebuild table with new CHECK constraint
-        db.exec(`
-          CREATE TABLE IF NOT EXISTS accounting_vouchers_new (
-            id TEXT PRIMARY KEY,
-            voucher_no TEXT NOT NULL UNIQUE,
-            source_type TEXT NOT NULL,
-            source_id TEXT NOT NULL,
-            voucher_date TEXT NOT NULL,
-            remark TEXT NOT NULL DEFAULT '',
-            creator_id TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            voucher_word_id TEXT,
-            period TEXT,
-            status TEXT NOT NULL DEFAULT 'ENTERED' CHECK(status IN ('ENTERED','SUBMITTED','POSTED','REJECTED')),
-            attachment_count INTEGER DEFAULT 0,
-            approver_id TEXT,
-            approved_at TEXT,
-            updated_at TEXT,
-            rejection_reason TEXT,
-            submitted_at TEXT,
-            submitted_by TEXT,
-            FOREIGN KEY (creator_id) REFERENCES users(id)
-          );
-        `);
-        // Copy data preserving existing status values
-        db.exec("INSERT INTO accounting_vouchers_new (id, voucher_no, source_type, source_id, voucher_date, remark, creator_id, created_at, voucher_word_id, period, status, attachment_count, approver_id, approved_at, updated_at, rejection_reason, submitted_at, submitted_by) SELECT id, voucher_no, source_type, source_id, voucher_date, remark, creator_id, created_at, voucher_word_id, period, COALESCE(status, 'POSTED'), attachment_count, approver_id, approved_at, updated_at, rejection_reason, submitted_at, submitted_by FROM accounting_vouchers");
-        db.exec('DROP TABLE accounting_vouchers');
-        db.exec('ALTER TABLE accounting_vouchers_new RENAME TO accounting_vouchers');
-        db.exec('CREATE INDEX IF NOT EXISTS idx_vouchers_status ON accounting_vouchers(status)');
-        db.exec('CREATE INDEX IF NOT EXISTS idx_vouchers_source ON accounting_vouchers(source_type, source_id)');
-      }
-    } catch (e) { console.error('Migration voucher workflow failed:', e.message); }
-  };
-  migrateVoucherWorkflow();
+  let voucherWorkflowTemp = null;
+  let voucherWorkflowViolationsBefore = 0;
+  runMigrationStep(db, {
+    id: 'v1.3-voucher-workflow',
+    inspect: (database) => tableSql(database, 'accounting_vouchers').includes("'ENTERED'")
+      && columnExists(database, 'accounting_vouchers', 'rejection_reason')
+      && columnExists(database, 'accounting_vouchers', 'submitted_at')
+      && columnExists(database, 'accounting_vouchers', 'submitted_by'),
+    apply: (database) => {
+      voucherWorkflowViolationsBefore = foreignKeyViolationsFor(database, 'accounting_vouchers').length;
+      addColumnIfMissing(database, 'accounting_vouchers', 'rejection_reason', 'rejection_reason TEXT');
+      addColumnIfMissing(database, 'accounting_vouchers', 'submitted_at', 'submitted_at TEXT');
+      addColumnIfMissing(database, 'accounting_vouchers', 'submitted_by', 'submitted_by TEXT');
+      voucherWorkflowTemp = uniqueTempTable('accounting_vouchers');
+      database.exec(`
+        CREATE TABLE ${voucherWorkflowTemp} (
+          id TEXT PRIMARY KEY,
+          voucher_no TEXT NOT NULL UNIQUE,
+          source_type TEXT NOT NULL,
+          source_id TEXT NOT NULL,
+          voucher_date TEXT NOT NULL,
+          remark TEXT NOT NULL DEFAULT '',
+          creator_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          voucher_word_id TEXT,
+          period TEXT,
+          status TEXT NOT NULL DEFAULT 'ENTERED' CHECK(status IN ('ENTERED','SUBMITTED','POSTED','REJECTED')),
+          attachment_count INTEGER DEFAULT 0,
+          approver_id TEXT,
+          approved_at TEXT,
+          updated_at TEXT,
+          rejection_reason TEXT,
+          submitted_at TEXT,
+          submitted_by TEXT,
+          FOREIGN KEY (creator_id) REFERENCES users(id)
+        );
+      `);
+      // Copy data preserving existing status values
+      database.exec(`INSERT INTO ${voucherWorkflowTemp} (id, voucher_no, source_type, source_id, voucher_date, remark, creator_id, created_at, voucher_word_id, period, status, attachment_count, approver_id, approved_at, updated_at, rejection_reason, submitted_at, submitted_by) SELECT id, voucher_no, source_type, source_id, voucher_date, remark, creator_id, created_at, voucher_word_id, period, COALESCE(status, 'POSTED'), attachment_count, approver_id, approved_at, updated_at, rejection_reason, submitted_at, submitted_by FROM accounting_vouchers`);
+      database.exec('DROP TABLE accounting_vouchers');
+      database.exec(`ALTER TABLE ${voucherWorkflowTemp} RENAME TO accounting_vouchers`);
+      database.exec('CREATE INDEX IF NOT EXISTS idx_vouchers_status ON accounting_vouchers(status)');
+      database.exec('CREATE INDEX IF NOT EXISTS idx_vouchers_source ON accounting_vouchers(source_type, source_id)');
+    },
+    verify: (database) => (
+      tableSql(database, 'accounting_vouchers').includes("'ENTERED'")
+      && !tableExists(database, voucherWorkflowTemp)
+      && foreignKeyViolationsFor(database, 'accounting_vouchers').length <= voucherWorkflowViolationsBefore
+    ),
+    suspendForeignKeys: true,
+  });
 
   // Migration: inventory_transfers runtime requires remark / updated_at / reviewer_id
   // columns that pre-fix production schema does not declare. Production journals
@@ -533,23 +608,33 @@ function createSqliteDatabase(filename) {
   //
   // Add columns idempotently first so the legacy rows are readable when the
   // table-rebuild SELECT runs. Then rebuild the CHECK constraint and copy.
-  const migrateInventoryTransfers = () => {
-    try {
+  let inventoryTransfersTemp = null;
+  let inventoryTransfersViolationsBefore = 0;
+  runMigrationStep(db, {
+    id: 'v1.3-inventory-transfers-check',
+    inspect: (database) => {
+      const sql = tableSql(database, 'inventory_transfers');
+      return sql.includes("'TRANSFERRED'")
+        && sql.includes("'CANCELLED'")
+        && columnExists(database, 'inventory_transfers', 'remark')
+        && columnExists(database, 'inventory_transfers', 'updated_at')
+        && columnExists(database, 'inventory_transfers', 'reviewer_id');
+    },
+    apply: (database) => {
+      inventoryTransfersViolationsBefore = foreignKeyViolationsFor(database, 'inventory_transfers').length;
       // 1. Add missing columns. ALTER TABLE ADD COLUMN throws when the column
-      //    already exists; the existing addColumn pattern swallows that.
-      try { db.exec("ALTER TABLE inventory_transfers ADD COLUMN remark TEXT NOT NULL DEFAULT ''"); } catch (e) {}
-      try { db.exec("ALTER TABLE inventory_transfers ADD COLUMN updated_at TEXT"); } catch (e) {}
-      try { db.exec("ALTER TABLE inventory_transfers ADD COLUMN reviewer_id TEXT"); } catch (e) {}
+      //    already exists; schema inspection decides, not a swallowed error.
+      addColumnIfMissing(database, 'inventory_transfers', 'remark', "remark TEXT NOT NULL DEFAULT ''");
+      addColumnIfMissing(database, 'inventory_transfers', 'updated_at', 'updated_at TEXT');
+      addColumnIfMissing(database, 'inventory_transfers', 'reviewer_id', 'reviewer_id TEXT');
       // 2. Backfill updated_at from created_at for legacy rows so the
       //    runtime contract has a non-NULL value to read back.
-      try { db.exec("UPDATE inventory_transfers SET updated_at = created_at WHERE updated_at IS NULL OR updated_at = ''"); } catch (e) {}
-
+      database.exec("UPDATE inventory_transfers SET updated_at = created_at WHERE updated_at IS NULL OR updated_at = ''");
       // 3. Rebuild the CHECK constraint to include TRANSFERRED / CANCELLED
       //    (runtime writes these statuses on action=transfer / cancel).
-      const currentSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='inventory_transfers'").get()?.sql || '';
-      if (currentSql.includes("'TRANSFERRED'") && currentSql.includes("'CANCELLED'")) return;
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS inventory_transfers_new (
+      inventoryTransfersTemp = uniqueTempTable('inventory_transfers');
+      database.exec(`
+        CREATE TABLE ${inventoryTransfersTemp} (
           id TEXT PRIMARY KEY,
           transfer_no TEXT NOT NULL UNIQUE,
           from_warehouse_id TEXT NOT NULL,
@@ -565,17 +650,22 @@ function createSqliteDatabase(filename) {
           FOREIGN KEY (creator_id) REFERENCES users(id)
         );
       `);
-      db.exec(`INSERT INTO inventory_transfers_new(id,transfer_no,from_warehouse_id,to_warehouse_id,status,remark,creator_id,created_at,updated_at,reviewer_id)
+      database.exec(`INSERT INTO ${inventoryTransfersTemp}(id,transfer_no,from_warehouse_id,to_warehouse_id,status,remark,creator_id,created_at,updated_at,reviewer_id)
         SELECT id,transfer_no,from_warehouse_id,to_warehouse_id,status,COALESCE(remark,''),creator_id,COALESCE(created_at,''),COALESCE(updated_at,created_at,''),reviewer_id
         FROM inventory_transfers`);
-      db.exec('DROP TABLE inventory_transfers');
-      db.exec('ALTER TABLE inventory_transfers_new RENAME TO inventory_transfers');
-      db.exec('CREATE INDEX IF NOT EXISTS idx_inventory_transfers_status ON inventory_transfers(status)');
-    } catch (e) {
-      console.error('Migration inventory_transfers failed:', e.message);
-    }
-  };
-  migrateInventoryTransfers();
+      database.exec('DROP TABLE inventory_transfers');
+      database.exec(`ALTER TABLE ${inventoryTransfersTemp} RENAME TO inventory_transfers`);
+      database.exec('CREATE INDEX IF NOT EXISTS idx_inventory_transfers_status ON inventory_transfers(status)');
+    },
+    verify: (database) => {
+      const sql = tableSql(database, 'inventory_transfers');
+      return sql.includes("'TRANSFERRED'")
+        && sql.includes("'CANCELLED'")
+        && !tableExists(database, inventoryTransfersTemp)
+        && foreignKeyViolationsFor(database, 'inventory_transfers').length <= inventoryTransfersViolationsBefore;
+    },
+    suspendForeignKeys: true,
+  });
   migrateWarehouseLogistics(db);
   migrateV13Phase2SourceIntegrity(db);
   migrateV13Phase3QualityGates(db);
@@ -676,14 +766,27 @@ function createSqliteDatabase(filename) {
 }
 
 function lateProcurementColumns(db) {
-  const safeAddColumn = (table, ddl) => { try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`); } catch (_) { /* already present */ } };
-  safeAddColumn('supplier_bill_items', 'commercial_source_type TEXT');
-  safeAddColumn('supplier_bill_items', 'commercial_source_id TEXT');
-  safeAddColumn('supplier_bill_items', 'commercial_source_item_id TEXT');
-  safeAddColumn('supplier_bill_items', 'source_outsourcing_receipt_item_id TEXT');
-  safeAddColumn('supplier_bill_items', 'source_outsourcing_po_line_id TEXT');
-  safeAddColumn('supplier_bill_items', 'source_outsourcing_receipt_id TEXT');
-  safeAddColumn('supplier_bills', 'source_outsourcing_receipt_id TEXT');
+  /*
+   * PL-RI-02：幂等由 schema inspection 判定，未知 DDL 错误向上传播。
+   * 旧的 `catch (_) {}` 会把「表不存在」「列名非法」等真实缺陷一并吞掉。
+   */
+  const columns = [
+    ['supplier_bill_items', 'commercial_source_type', 'commercial_source_type TEXT'],
+    ['supplier_bill_items', 'commercial_source_id', 'commercial_source_id TEXT'],
+    ['supplier_bill_items', 'commercial_source_item_id', 'commercial_source_item_id TEXT'],
+    ['supplier_bill_items', 'source_outsourcing_receipt_item_id', 'source_outsourcing_receipt_item_id TEXT'],
+    ['supplier_bill_items', 'source_outsourcing_po_line_id', 'source_outsourcing_po_line_id TEXT'],
+    ['supplier_bill_items', 'source_outsourcing_receipt_id', 'source_outsourcing_receipt_id TEXT'],
+    ['supplier_bills', 'source_outsourcing_receipt_id', 'source_outsourcing_receipt_id TEXT'],
+  ];
+  runMigrationStep(db, {
+    id: 'v1.4-e2-late-procurement-columns',
+    inspect: (database) => columns.every(([table, column]) => columnExists(database, table, column)),
+    apply: (database) => {
+      for (const [table, column, ddl] of columns) addColumnIfMissing(database, table, column, ddl);
+    },
+    verify: (database) => columns.every(([table, column]) => columnExists(database, table, column)),
+  });
 }
 
 // V1.4-E2 permission reconciliation helper. Called from seed() after the
@@ -734,192 +837,256 @@ export function createDatabase(target) {
 // This mirrors the production_orders / accounting_vouchers /
 // inventory_transfers reconciliation pattern.
 function migrateWarehouseLogistics(db) {
-  try {
-    // ---- purchase_receipts ----
-    try { db.exec("ALTER TABLE purchase_receipts ADD COLUMN confirmed_by TEXT"); } catch (e) {}
-    try { db.exec("ALTER TABLE purchase_receipts ADD COLUMN confirmed_at TEXT"); } catch (e) {}
-    try { db.exec("ALTER TABLE purchase_receipts ADD COLUMN updated_at TEXT"); } catch (e) {}
-    try { db.exec("UPDATE purchase_receipts SET updated_at = created_at WHERE updated_at IS NULL OR updated_at = ''"); } catch (e) {}
-    try { db.exec("ALTER TABLE purchase_receipts ADD COLUMN receipt_date TEXT NOT NULL DEFAULT ''"); } catch (e) {}
-    {
-      const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='purchase_receipts'").get()?.sql || '';
-      if (!sql.includes("'CONFIRMED'") || !sql.includes("'CANCELLED'")) {
-        db.exec('DROP TABLE IF EXISTS purchase_receipts_new');
-        db.exec(`
-          CREATE TABLE IF NOT EXISTS purchase_receipts_new (
-            id TEXT PRIMARY KEY,
-            receipt_no TEXT NOT NULL UNIQUE,
-            purchase_order_id TEXT,
-            supplier_id TEXT NOT NULL,
-            warehouse_id TEXT NOT NULL,
-            handler_id TEXT NOT NULL,
-            total_cents INTEGER NOT NULL DEFAULT 0,
-            status TEXT NOT NULL CHECK(status IN ('DRAFT','CONFIRMED','CANCELLED')),
-            receipt_date TEXT NOT NULL DEFAULT '',
-            remark TEXT NOT NULL DEFAULT '',
-            creator_id TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL DEFAULT '',
-            confirmed_at TEXT,
-            confirmed_by TEXT,
-            FOREIGN KEY (purchase_order_id) REFERENCES purchase_orders(id),
-            FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
-            FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
-            FOREIGN KEY (handler_id) REFERENCES users(id),
-            FOREIGN KEY (creator_id) REFERENCES users(id)
-          );
-        `);
-        db.exec(`INSERT INTO purchase_receipts_new(id,receipt_no,purchase_order_id,supplier_id,warehouse_id,handler_id,total_cents,status,receipt_date,remark,creator_id,created_at,updated_at,confirmed_at,confirmed_by)
-          SELECT id,receipt_no,purchase_order_id,supplier_id,warehouse_id,COALESCE(handler_id,creator_id),COALESCE(total_cents,0),CASE WHEN status IN ('CONFIRMED','CANCELLED') THEN status ELSE 'DRAFT' END,COALESCE(receipt_date,''),COALESCE(remark,''),creator_id,COALESCE(created_at,''),COALESCE(updated_at,created_at,''),confirmed_at,confirmed_by
-          FROM purchase_receipts`);
-        db.exec('DROP TABLE purchase_receipts');
-        db.exec('ALTER TABLE purchase_receipts_new RENAME TO purchase_receipts');
-      }
-    }
+  /*
+   * PL-RI-02：整段由 `runMigrationStep` 承载。
+   *  - 加列由 schema inspection 判定幂等，未知 DDL 错误向上传播；
+   *  - 表重建使用唯一临时表名，并在事务外临时关闭外键强制（SQLite 官方流程）；
+   *  - 提交前校验目标形态与行数不变量。
+   */
+  const tempTables = {
+    purchase_receipts: null,
+    sales_deliveries: null,
+    return_orders: null,
+    inventory_transactions: null,
+  };
+  const violationsBefore = {
+    purchase_receipts: 0,
+    sales_deliveries: 0,
+    return_orders: 0,
+    inventory_transactions: 0,
+  };
+  const uniqueTempTable = (table) => `${table}_new_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
 
-    // ---- sales_deliveries ----
-    try { db.exec("ALTER TABLE sales_deliveries ADD COLUMN confirmed_by TEXT"); } catch (e) {}
-    try { db.exec("ALTER TABLE sales_deliveries ADD COLUMN confirmed_at TEXT"); } catch (e) {}
-    try { db.exec("ALTER TABLE sales_deliveries ADD COLUMN updated_at TEXT"); } catch (e) {}
-    try { db.exec("UPDATE sales_deliveries SET updated_at = created_at WHERE updated_at IS NULL OR updated_at = ''"); } catch (e) {}
-    try { db.exec("ALTER TABLE sales_deliveries ADD COLUMN delivery_date TEXT NOT NULL DEFAULT ''"); } catch (e) {}
-    {
-      const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='sales_deliveries'").get()?.sql || '';
-      if (!sql.includes("'CONFIRMED'") || !sql.includes("'CANCELLED'")) {
-        db.exec('DROP TABLE IF EXISTS sales_deliveries_new');
-        db.exec(`
-          CREATE TABLE IF NOT EXISTS sales_deliveries_new (
-            id TEXT PRIMARY KEY,
-            delivery_no TEXT NOT NULL UNIQUE,
-            sales_order_id TEXT,
-            customer_id TEXT NOT NULL,
-            warehouse_id TEXT NOT NULL,
-            handler_id TEXT NOT NULL,
-            total_cents INTEGER NOT NULL DEFAULT 0,
-            status TEXT NOT NULL CHECK(status IN ('DRAFT','CONFIRMED','CANCELLED')),
-            delivery_date TEXT NOT NULL DEFAULT '',
-            remark TEXT NOT NULL DEFAULT '',
-            creator_id TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL DEFAULT '',
-            confirmed_at TEXT,
-            confirmed_by TEXT,
-            FOREIGN KEY (sales_order_id) REFERENCES sales_orders(id),
-            FOREIGN KEY (customer_id) REFERENCES customers(id),
-            FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
-            FOREIGN KEY (handler_id) REFERENCES users(id),
-            FOREIGN KEY (creator_id) REFERENCES users(id)
-          );
-        `);
-        db.exec(`INSERT INTO sales_deliveries_new(id,delivery_no,sales_order_id,customer_id,warehouse_id,handler_id,total_cents,status,delivery_date,remark,creator_id,created_at,updated_at,confirmed_at,confirmed_by)
-          SELECT id,delivery_no,sales_order_id,customer_id,warehouse_id,COALESCE(handler_id,creator_id),COALESCE(total_cents,0),CASE WHEN status IN ('CONFIRMED','CANCELLED') THEN status ELSE 'DRAFT' END,COALESCE(delivery_date,''),COALESCE(remark,''),creator_id,COALESCE(created_at,''),COALESCE(updated_at,created_at,''),confirmed_at,confirmed_by
-          FROM sales_deliveries`);
-        db.exec('DROP TABLE sales_deliveries');
-        db.exec('ALTER TABLE sales_deliveries_new RENAME TO sales_deliveries');
-      }
-    }
+  const targetShapeReached = (database) => {
+    const receiptSql = tableSql(database, 'purchase_receipts');
+    const deliverySql = tableSql(database, 'sales_deliveries');
+    const returnSql = tableSql(database, 'return_orders');
+    const transactionColumns = tableColumns(database, 'inventory_transactions');
+    // 目标形态必须覆盖本段**实际写入**的每一列与每一个 CHECK，
+    // 少判一项就会让整段被误判为「已应用」而跳过写入。
+    const requiredColumns = [
+      ['purchase_receipts', 'confirmed_by'], ['purchase_receipts', 'confirmed_at'],
+      ['purchase_receipts', 'updated_at'], ['purchase_receipts', 'receipt_date'],
+      ['sales_deliveries', 'confirmed_by'], ['sales_deliveries', 'confirmed_at'],
+      ['sales_deliveries', 'updated_at'], ['sales_deliveries', 'delivery_date'],
+      ['return_orders', 'delivery_id'], ['return_orders', 'receipt_id'],
+      ['return_orders', 'confirmed_by'], ['return_orders', 'confirmed_at'],
+      ['return_orders', 'updated_at'], ['return_orders', 'return_date'],
+      ['purchase_returns', 'updated_at'], ['purchase_returns', 'return_date'],
+    ];
+    return receiptSql.includes("'CONFIRMED'")
+      && receiptSql.includes("'CANCELLED'")
+      && deliverySql.includes("'CONFIRMED'")
+      && deliverySql.includes("'CANCELLED'")
+      && returnSql.includes("'CONFIRMED'")
+      && returnSql.includes("'CANCELLED'")
+      && transactionColumns.has('quantity_change')
+      && transactionColumns.has('direction')
+      && transactionColumns.has('source_no')
+      && transactionColumns.has('creator_id')
+      && requiredColumns.every(([table, column]) => columnExists(database, table, column));
+  };
 
-    // ---- return_orders (sales + purchase returns share this table per
-    //      polymorphic source_type). Schema has source_type / source_id
-    //      but runtime writes delivery_id / receipt_id. Migrate runtime
-    //      to use source_id (sales → delivery, purchase → receipt) via
-    //      two appended source columns. ----
-    try { db.exec("ALTER TABLE return_orders ADD COLUMN delivery_id TEXT"); } catch (e) {}
-    try { db.exec("ALTER TABLE return_orders ADD COLUMN receipt_id TEXT"); } catch (e) {}
-    try { db.exec("UPDATE return_orders SET delivery_id = source_id WHERE source_type='SALES'"); } catch (e) {}
-    try { db.exec("UPDATE return_orders SET receipt_id = source_id WHERE source_type='PURCHASE'"); } catch (e) {}
-    try { db.exec("ALTER TABLE return_orders ADD COLUMN confirmed_by TEXT"); } catch (e) {}
-    try { db.exec("ALTER TABLE return_orders ADD COLUMN confirmed_at TEXT"); } catch (e) {}
-    try { db.exec("ALTER TABLE return_orders ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''"); } catch (e) {}
-    try { db.exec("UPDATE return_orders SET updated_at = created_at WHERE updated_at IS NULL OR updated_at = ''"); } catch (e) {}
-    try { db.exec("ALTER TABLE return_orders ADD COLUMN return_date TEXT NOT NULL DEFAULT ''"); } catch (e) {}
-    {
-      const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='return_orders'").get()?.sql || '';
-      if (!sql.includes("'CONFIRMED'") || !sql.includes("'CANCELLED'")) {
-        db.exec('DROP TABLE IF EXISTS return_orders_new');
-        db.exec(`
-          CREATE TABLE IF NOT EXISTS return_orders_new (
-            id TEXT PRIMARY KEY,
-            return_no TEXT NOT NULL UNIQUE,
-            source_type TEXT NOT NULL CHECK(source_type IN ('PURCHASE','SALES')),
-            source_id TEXT,
-            customer_id TEXT,
-            supplier_id TEXT,
-            warehouse_id TEXT NOT NULL,
-            total_cents INTEGER NOT NULL DEFAULT 0,
-            status TEXT NOT NULL CHECK(status IN ('DRAFT','CONFIRMED','CANCELLED')),
-            return_date TEXT NOT NULL DEFAULT '',
-            reason TEXT NOT NULL DEFAULT '',
-            remark TEXT NOT NULL DEFAULT '',
-            creator_id TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL DEFAULT '',
-            confirmed_at TEXT,
-            confirmed_by TEXT,
-            delivery_id TEXT,
-            receipt_id TEXT,
-            FOREIGN KEY (customer_id) REFERENCES customers(id),
-            FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
-            FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
-            FOREIGN KEY (creator_id) REFERENCES users(id)
-          );
-        `);
-        db.exec(`INSERT INTO return_orders_new(id,return_no,source_type,source_id,customer_id,supplier_id,warehouse_id,total_cents,status,return_date,reason,remark,creator_id,created_at,updated_at,confirmed_at,confirmed_by,delivery_id,receipt_id)
-          SELECT id,return_no,source_type,source_id,customer_id,supplier_id,warehouse_id,COALESCE(total_cents,0),CASE WHEN status IN ('CONFIRMED','CANCELLED') THEN status ELSE 'DRAFT' END,COALESCE(return_date,''),COALESCE(reason,''),COALESCE(remark,''),creator_id,COALESCE(created_at,''),COALESCE(updated_at,created_at,''),confirmed_at,confirmed_by,delivery_id,receipt_id
-          FROM return_orders`);
-        db.exec('DROP TABLE return_orders');
-        db.exec('ALTER TABLE return_orders_new RENAME TO return_orders');
+  runMigrationStep(db, {
+    id: 'v1.3-warehouse-logistics',
+    inspect: targetShapeReached,
+    apply: (database) => {
+      // ---- purchase_receipts ----
+      violationsBefore.purchase_receipts = foreignKeyViolationsFor(database, 'purchase_receipts').length;
+      addColumnIfMissing(database, 'purchase_receipts', 'confirmed_by', 'confirmed_by TEXT');
+      addColumnIfMissing(database, 'purchase_receipts', 'confirmed_at', 'confirmed_at TEXT');
+      addColumnIfMissing(database, 'purchase_receipts', 'updated_at', 'updated_at TEXT');
+      database.exec("UPDATE purchase_receipts SET updated_at = created_at WHERE updated_at IS NULL OR updated_at = ''");
+      addColumnIfMissing(database, 'purchase_receipts', 'receipt_date', "receipt_date TEXT NOT NULL DEFAULT ''");
+      {
+        const sql = tableSql(database, 'purchase_receipts');
+        if (!sql.includes("'CONFIRMED'") || !sql.includes("'CANCELLED'")) {
+          tempTables.purchase_receipts = uniqueTempTable('purchase_receipts');
+          database.exec(`
+            CREATE TABLE ${tempTables.purchase_receipts} (
+              id TEXT PRIMARY KEY,
+              receipt_no TEXT NOT NULL UNIQUE,
+              purchase_order_id TEXT,
+              supplier_id TEXT NOT NULL,
+              warehouse_id TEXT NOT NULL,
+              handler_id TEXT NOT NULL,
+              total_cents INTEGER NOT NULL DEFAULT 0,
+              status TEXT NOT NULL CHECK(status IN ('DRAFT','CONFIRMED','CANCELLED')),
+              receipt_date TEXT NOT NULL DEFAULT '',
+              remark TEXT NOT NULL DEFAULT '',
+              creator_id TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL DEFAULT '',
+              confirmed_at TEXT,
+              confirmed_by TEXT,
+              FOREIGN KEY (purchase_order_id) REFERENCES purchase_orders(id),
+              FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
+              FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
+              FOREIGN KEY (handler_id) REFERENCES users(id),
+              FOREIGN KEY (creator_id) REFERENCES users(id)
+            );
+          `);
+          database.exec(`INSERT INTO ${tempTables.purchase_receipts}(id,receipt_no,purchase_order_id,supplier_id,warehouse_id,handler_id,total_cents,status,receipt_date,remark,creator_id,created_at,updated_at,confirmed_at,confirmed_by)
+            SELECT id,receipt_no,purchase_order_id,supplier_id,warehouse_id,COALESCE(handler_id,creator_id),COALESCE(total_cents,0),CASE WHEN status IN ('CONFIRMED','CANCELLED') THEN status ELSE 'DRAFT' END,COALESCE(receipt_date,''),COALESCE(remark,''),creator_id,COALESCE(created_at,''),COALESCE(updated_at,created_at,''),confirmed_at,confirmed_by
+            FROM purchase_receipts`);
+          database.exec('DROP TABLE purchase_receipts');
+          database.exec(`ALTER TABLE ${tempTables.purchase_receipts} RENAME TO purchase_receipts`);
+        }
       }
-    }
 
-    // ---- purchase_returns ----
-    // Schema already declares all required columns. CHECK constraint is
-    // implicit because canonical CREATE has no CHECK — but verify the
-    // runtime writes (CONFIRMED, CANCELLED) are still permitted.
-    try { db.exec("ALTER TABLE purchase_returns ADD COLUMN updated_at TEXT"); } catch (e) {}
-    try { db.exec("UPDATE purchase_returns SET updated_at = created_at WHERE updated_at IS NULL OR updated_at = ''"); } catch (e) {}
-    try { db.exec("ALTER TABLE purchase_returns ADD COLUMN return_date TEXT"); } catch (e) {}
-
-    // ---- inventory_transactions ----
-    // Legacy schema used type/quantity/balance_after, while the warehouse
-    // handlers and UI use direction/quantity_change plus source metadata.
-    // Rebuild once and preserve every legacy row.
-    {
-      const columns = db.prepare("PRAGMA table_info(inventory_transactions)").all().map((column) => column.name);
-      if (!columns.includes('quantity_change') || !columns.includes('direction') || !columns.includes('source_no') || !columns.includes('creator_id')) {
-        db.exec('DROP TABLE IF EXISTS inventory_transactions_new');
-        db.exec(`
-          CREATE TABLE inventory_transactions_new (
-            id TEXT PRIMARY KEY,
-            warehouse_id TEXT NOT NULL,
-            product_id TEXT NOT NULL,
-            quantity_change REAL NOT NULL,
-            direction TEXT NOT NULL CHECK(direction IN ('IN','OUT')),
-            balance_after REAL,
-            source_type TEXT NOT NULL,
-            source_id TEXT NOT NULL,
-            source_no TEXT NOT NULL DEFAULT '',
-            remark TEXT NOT NULL DEFAULT '',
-            creator_id TEXT,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
-            FOREIGN KEY (product_id) REFERENCES products(id),
-            FOREIGN KEY (creator_id) REFERENCES users(id)
-          )
-        `);
-        db.exec(`INSERT INTO inventory_transactions_new(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at)
-          SELECT id,warehouse_id,product_id,quantity,
-            CASE WHEN type='OUT' OR quantity < 0 THEN 'OUT' ELSE 'IN' END,
-            balance_after,source_type,source_id,'','',NULL,created_at
-          FROM inventory_transactions`);
-        db.exec('DROP TABLE inventory_transactions');
-        db.exec('ALTER TABLE inventory_transactions_new RENAME TO inventory_transactions');
+      // ---- sales_deliveries ----
+      violationsBefore.sales_deliveries = foreignKeyViolationsFor(database, 'sales_deliveries').length;
+      addColumnIfMissing(database, 'sales_deliveries', 'confirmed_by', 'confirmed_by TEXT');
+      addColumnIfMissing(database, 'sales_deliveries', 'confirmed_at', 'confirmed_at TEXT');
+      addColumnIfMissing(database, 'sales_deliveries', 'updated_at', 'updated_at TEXT');
+      database.exec("UPDATE sales_deliveries SET updated_at = created_at WHERE updated_at IS NULL OR updated_at = ''");
+      addColumnIfMissing(database, 'sales_deliveries', 'delivery_date', "delivery_date TEXT NOT NULL DEFAULT ''");
+      {
+        const sql = tableSql(database, 'sales_deliveries');
+        if (!sql.includes("'CONFIRMED'") || !sql.includes("'CANCELLED'")) {
+          tempTables.sales_deliveries = uniqueTempTable('sales_deliveries');
+          database.exec(`
+            CREATE TABLE ${tempTables.sales_deliveries} (
+              id TEXT PRIMARY KEY,
+              delivery_no TEXT NOT NULL UNIQUE,
+              sales_order_id TEXT,
+              customer_id TEXT NOT NULL,
+              warehouse_id TEXT NOT NULL,
+              handler_id TEXT NOT NULL,
+              total_cents INTEGER NOT NULL DEFAULT 0,
+              status TEXT NOT NULL CHECK(status IN ('DRAFT','CONFIRMED','CANCELLED')),
+              delivery_date TEXT NOT NULL DEFAULT '',
+              remark TEXT NOT NULL DEFAULT '',
+              creator_id TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL DEFAULT '',
+              confirmed_at TEXT,
+              confirmed_by TEXT,
+              FOREIGN KEY (sales_order_id) REFERENCES sales_orders(id),
+              FOREIGN KEY (customer_id) REFERENCES customers(id),
+              FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
+              FOREIGN KEY (handler_id) REFERENCES users(id),
+              FOREIGN KEY (creator_id) REFERENCES users(id)
+            );
+          `);
+          database.exec(`INSERT INTO ${tempTables.sales_deliveries}(id,delivery_no,sales_order_id,customer_id,warehouse_id,handler_id,total_cents,status,delivery_date,remark,creator_id,created_at,updated_at,confirmed_at,confirmed_by)
+            SELECT id,delivery_no,sales_order_id,customer_id,warehouse_id,COALESCE(handler_id,creator_id),COALESCE(total_cents,0),CASE WHEN status IN ('CONFIRMED','CANCELLED') THEN status ELSE 'DRAFT' END,COALESCE(delivery_date,''),COALESCE(remark,''),creator_id,COALESCE(created_at,''),COALESCE(updated_at,created_at,''),confirmed_at,confirmed_by
+            FROM sales_deliveries`);
+          database.exec('DROP TABLE sales_deliveries');
+          database.exec(`ALTER TABLE ${tempTables.sales_deliveries} RENAME TO sales_deliveries`);
+        }
       }
-    }
-  } catch (e) {
-    console.error('Migration warehouse logistics failed:', e.message);
-    throw e;
-  }
+
+      // ---- return_orders (sales + purchase returns share this table per
+      //      polymorphic source_type). Schema has source_type / source_id
+      //      but runtime writes delivery_id / receipt_id. Migrate runtime
+      //      to use source_id (sales → delivery, purchase → receipt) via
+      //      two appended source columns. ----
+      violationsBefore.return_orders = foreignKeyViolationsFor(database, 'return_orders').length;
+      addColumnIfMissing(database, 'return_orders', 'delivery_id', 'delivery_id TEXT');
+      addColumnIfMissing(database, 'return_orders', 'receipt_id', 'receipt_id TEXT');
+      database.exec("UPDATE return_orders SET delivery_id = source_id WHERE source_type='SALES'");
+      database.exec("UPDATE return_orders SET receipt_id = source_id WHERE source_type='PURCHASE'");
+      addColumnIfMissing(database, 'return_orders', 'confirmed_by', 'confirmed_by TEXT');
+      addColumnIfMissing(database, 'return_orders', 'confirmed_at', 'confirmed_at TEXT');
+      addColumnIfMissing(database, 'return_orders', 'updated_at', "updated_at TEXT NOT NULL DEFAULT ''");
+      database.exec("UPDATE return_orders SET updated_at = created_at WHERE updated_at IS NULL OR updated_at = ''");
+      addColumnIfMissing(database, 'return_orders', 'return_date', "return_date TEXT NOT NULL DEFAULT ''");
+      {
+        const sql = tableSql(database, 'return_orders');
+        if (!sql.includes("'CONFIRMED'") || !sql.includes("'CANCELLED'")) {
+          tempTables.return_orders = uniqueTempTable('return_orders');
+          database.exec(`
+            CREATE TABLE ${tempTables.return_orders} (
+              id TEXT PRIMARY KEY,
+              return_no TEXT NOT NULL UNIQUE,
+              source_type TEXT NOT NULL CHECK(source_type IN ('PURCHASE','SALES')),
+              source_id TEXT,
+              customer_id TEXT,
+              supplier_id TEXT,
+              warehouse_id TEXT NOT NULL,
+              total_cents INTEGER NOT NULL DEFAULT 0,
+              status TEXT NOT NULL CHECK(status IN ('DRAFT','CONFIRMED','CANCELLED')),
+              return_date TEXT NOT NULL DEFAULT '',
+              reason TEXT NOT NULL DEFAULT '',
+              remark TEXT NOT NULL DEFAULT '',
+              creator_id TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL DEFAULT '',
+              confirmed_at TEXT,
+              confirmed_by TEXT,
+              delivery_id TEXT,
+              receipt_id TEXT,
+              FOREIGN KEY (customer_id) REFERENCES customers(id),
+              FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
+              FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
+              FOREIGN KEY (creator_id) REFERENCES users(id)
+            );
+          `);
+          database.exec(`INSERT INTO ${tempTables.return_orders}(id,return_no,source_type,source_id,customer_id,supplier_id,warehouse_id,total_cents,status,return_date,reason,remark,creator_id,created_at,updated_at,confirmed_at,confirmed_by,delivery_id,receipt_id)
+            SELECT id,return_no,source_type,source_id,customer_id,supplier_id,warehouse_id,COALESCE(total_cents,0),CASE WHEN status IN ('CONFIRMED','CANCELLED') THEN status ELSE 'DRAFT' END,COALESCE(return_date,''),COALESCE(reason,''),COALESCE(remark,''),creator_id,COALESCE(created_at,''),COALESCE(updated_at,created_at,''),confirmed_at,confirmed_by,delivery_id,receipt_id
+            FROM return_orders`);
+          database.exec('DROP TABLE return_orders');
+          database.exec(`ALTER TABLE ${tempTables.return_orders} RENAME TO return_orders`);
+        }
+      }
+
+      // ---- purchase_returns ----
+      // Schema already declares all required columns. CHECK constraint is
+      // implicit because canonical CREATE has no CHECK — but verify the
+      // runtime writes (CONFIRMED, CANCELLED) are still permitted.
+      addColumnIfMissing(database, 'purchase_returns', 'updated_at', 'updated_at TEXT');
+      database.exec("UPDATE purchase_returns SET updated_at = created_at WHERE updated_at IS NULL OR updated_at = ''");
+      addColumnIfMissing(database, 'purchase_returns', 'return_date', 'return_date TEXT');
+
+      // ---- inventory_transactions ----
+      // Legacy schema used type/quantity/balance_after, while the warehouse
+      // handlers and UI use direction/quantity_change plus source metadata.
+      // Rebuild once and preserve every legacy row.
+      violationsBefore.inventory_transactions = foreignKeyViolationsFor(database, 'inventory_transactions').length;
+      {
+        const columns = tableColumns(database, 'inventory_transactions');
+        if (!columns.has('quantity_change') || !columns.has('direction') || !columns.has('source_no') || !columns.has('creator_id')) {
+          tempTables.inventory_transactions = uniqueTempTable('inventory_transactions');
+          database.exec(`
+            CREATE TABLE ${tempTables.inventory_transactions} (
+              id TEXT PRIMARY KEY,
+              warehouse_id TEXT NOT NULL,
+              product_id TEXT NOT NULL,
+              quantity_change REAL NOT NULL,
+              direction TEXT NOT NULL CHECK(direction IN ('IN','OUT')),
+              balance_after REAL,
+              source_type TEXT NOT NULL,
+              source_id TEXT NOT NULL,
+              source_no TEXT NOT NULL DEFAULT '',
+              remark TEXT NOT NULL DEFAULT '',
+              creator_id TEXT,
+              created_at TEXT NOT NULL,
+              FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
+              FOREIGN KEY (product_id) REFERENCES products(id),
+              FOREIGN KEY (creator_id) REFERENCES users(id)
+            )
+          `);
+          database.exec(`INSERT INTO ${tempTables.inventory_transactions}(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at)
+            SELECT id,warehouse_id,product_id,quantity,
+              CASE WHEN type='OUT' OR quantity < 0 THEN 'OUT' ELSE 'IN' END,
+              balance_after,source_type,source_id,'','',NULL,created_at
+            FROM inventory_transactions`);
+          database.exec('DROP TABLE inventory_transactions');
+          database.exec(`ALTER TABLE ${tempTables.inventory_transactions} RENAME TO inventory_transactions`);
+        }
+      }
+    },
+    verify: (database) => {
+      if (!targetShapeReached(database)) return false;
+      for (const [table, tempTable] of Object.entries(tempTables)) {
+        if (tempTable && tableExists(database, tempTable)) return false;
+        if (foreignKeyViolationsFor(database, table).length > violationsBefore[table]) return false;
+      }
+      return true;
+    },
+    suspendForeignKeys: true,
+  });
 }
 
 function migrate(db) {
@@ -2624,8 +2791,18 @@ export function id() {
 // logistics modules. Canonical source types in inventory_transactions
 // are PRODUCTION_MATERIAL_ISSUE (OUT) and PRODUCTION_RECEIPT (IN).
 function migrateProductionDocuments(db) {
-  try {
-    db.exec(`
+  /*
+   * PL-RI-02：整段由 `runMigrationStep` 承载。
+   * 旧的 `catch (e) { console.error(...) }` 让生产文档表建不出来时继续启动，
+   * 运行时才以「no such table」暴露 —— 现在建表失败直接阻止启动。
+   */
+  runMigrationStep(db, {
+    id: 'm6-production-documents',
+    inspect: (database) => tableExists(database, 'production_material_issues')
+      && tableExists(database, 'production_material_issue_items')
+      && tableExists(database, 'production_receipts'),
+    apply: (database) => {
+      database.exec(`
       CREATE TABLE IF NOT EXISTS production_material_issues (
         id TEXT PRIMARY KEY,
         issue_no TEXT NOT NULL UNIQUE,
@@ -2685,8 +2862,10 @@ function migrateProductionDocuments(db) {
       CREATE INDEX IF NOT EXISTS idx_pr_status ON production_receipts(status);
       CREATE INDEX IF NOT EXISTS idx_pr_order ON production_receipts(production_order_id);
     `);
-  } catch (e) {
-    console.error('Migration production documents failed:', e.message);
-  }
+    },
+    verify: (database) => tableExists(database, 'production_material_issues')
+      && tableExists(database, 'production_material_issue_items')
+      && tableExists(database, 'production_receipts'),
+  });
 }
 

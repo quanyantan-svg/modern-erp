@@ -125,6 +125,10 @@ const FULL = [
   // The real-session fixture (server/mysql-transaction-start-safety.integration.js)
   // is registered only through the protected Gate A runner, never here.
   'server/db-transaction-start-safety.test.js',
+  // PL-RI-02 —— SQLite migration fail-closed 合同回归（fresh / upgrade /
+  // replay / 未知 DDL / 复制中断 / 校验失败 / 重启重试 / 不进入 ready）。
+  // 纯本地 SQLite，不接触 MySQL。
+  'server/db-migration-fail-closed.test.js',
   'server/sales-customer-wave7-functional.test.js',
   'server/sales-customer-wave7-acceptance.test.js',
   // SC32 / SC68 — Reservation Intent reaction suite (document.md §34.3.5

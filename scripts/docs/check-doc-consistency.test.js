@@ -13,6 +13,7 @@ const indexSource = join(here, 'lib', 'current-index.mjs');
 const governedSource = join(here, 'lib', 'governed-paths.mjs');
 const migrationIndexSource = join(here, 'lib', 'migration-index.mjs');
 const ledgerSource = join(here, 'lib', 'n7-traceability-ledger.mjs');
+const referenceCorrectionsSource = join(here, 'lib', 'reference-corrections.mjs');
 
 // 隔离临时子进程的 Git 配置读取：不触碰用户全局/系统配置，
 // 也避免 core.excludesFile 指向不可访问路径时产生警告与额外开销。
@@ -135,6 +136,7 @@ function createClone(root, label) {
   copyNormalized(governedSource, join(clone, 'scripts', 'docs', 'lib', 'governed-paths.mjs'));
   copyNormalized(migrationIndexSource, join(clone, 'scripts', 'docs', 'lib', 'migration-index.mjs'));
   copyNormalized(ledgerSource, join(clone, 'scripts', 'docs', 'lib', 'n7-traceability-ledger.mjs'));
+  copyNormalized(referenceCorrectionsSource, join(clone, 'scripts', 'docs', 'lib', 'reference-corrections.mjs'));
   writeFileSync(join(clone, 'document.md'), contractBody('1'), 'utf8');
   writeFileSync(join(clone, 'solution.md'), contractBody('2'), 'utf8');
   writeFileSync(join(clone, 'docs', 'status', 'PROJECT_STATUS.md'), contractBody('36'), 'utf8');
