@@ -4,8 +4,8 @@
 > Owner：Platform
 > 权威来源：**手册要求基线**是 [`document.md`](../../document.md) §22（2026-10-06 已批准基线）。
 > 本表只登记「当前 Coverage 应从哪里读」与「当前验收状态」，**不重新计数、不覆盖 §22 的手册要求基线**。
-> **（2026-11-13 刷新）**：21 本手册已完成逐 Capability 复核并签发域级 Acceptance 与 Capability Freeze，
-> 状态列据实记为 `FROZEN`；仅 B3122（Platform）尚未开工，记 `NOT_STARTED`。
+> **（2026-11-14 刷新）**：22 本手册已完成逐 Capability 复核并签发域级 Acceptance 与 Capability Freeze，
+> 状态列据实记为 `FROZEN`（含 B3122 / Platform，2026-11-14 签发）。
 > 逐 Capability 的证据台账在 [`docs/audits/`](../audits/)，域级验收与冻结证据在 [`docs/acceptance/`](../acceptance/)。
 > Domain 级进度见 [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) §35.3。
 
@@ -127,7 +127,7 @@
    `ACCOUNTING_ANALYTICS_CAPABILITY_FREEZE`），六本手册据此全部记 `FROZEN`；详见
    [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) §53 与
    [审计台账 §7](../audits/accounting-analytics-capability-audit-20261110.md)。
-2. **Platform（B3122）** 已于 2026-11-13 建立 Domain Closure Requirement（`docs/requirements/platform.md` §36）与 Domain Technical Design（`docs/design/platform.md` §32），21 项能力逐项复核为 3 `COVERED` / 7 `PARTIAL` / 11 `MISSING`；业务所有者裁定闭合范围（`PL-DEC-01`～`PL-DEC-03`）后目标为 **17 `COVERED` / 4 `OUT_OF_SCOPE`**。**Implementation 尚未授权开工**，故行状态仍记 `NOT_STARTED` —— 尚未实施；域级 Acceptance 与 Capability Freeze 尚未签发。
+2. **Platform（B3122）** 已于 2026-11-13 建立 Domain Closure Requirement（`docs/requirements/platform.md` §36）与 Domain Technical Design（`docs/design/platform.md` §32），21 项能力逐项复核为 3 `COVERED` / 7 `PARTIAL` / 11 `MISSING`；业务所有者裁定闭合范围（`PL-DEC-01`～`PL-DEC-03`）后目标为 **17 `COVERED` / 4 `OUT_OF_SCOPE`**（范围口径；**签发采用能力口径 19 `COVERED` / 2 `OUT_OF_SCOPE`**，二者是不同计数口径，不得互相替代）。Implementation 已于 2026-11-13／14 实施完成，**域级 Acceptance 与 Capability Freeze 已于 2026-11-14 签发**（`PLATFORM_DOMAIN_ACCEPTANCE_PASS` / `PLATFORM_CAPABILITY_FREEZE`），行状态由 `NOT_STARTED` 改为 **`FROZEN`**。Manual Closure 与 Release Readiness 仍未签发。
 3. **Inventory & Warehouse / Manufacturing & Quality / Finance Operations / Master & Engineering**
    已分别签发**独立 Domain-Level Acceptance 与 Capability Freeze**
    （`INVENTORY_WAREHOUSE_*` 2026-11-13、`MANUFACTURING_QUALITY_*` 2026-11-12、
