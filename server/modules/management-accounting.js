@@ -307,8 +307,9 @@ export async function createAllocationRule(db, req, res, actor) {
   }
   const ruleId = id();
   transaction(db, () => {
-    db.prepare('INSERT INTO allocation_rules(id,management_book_id,code,name,basis_type,driver_json,status,created_at) VALUES(?,?,?,?,?,?,?,?)')
-      .run(ruleId, bookId, code, name, basisType, JSON.stringify(driver), 'ACTIVE', nowIso());
+    // R-02：规则创建人是经营关账职责分离的权威归属（§31.16.4）。
+    db.prepare('INSERT INTO allocation_rules(id,management_book_id,code,name,basis_type,driver_json,status,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)')
+      .run(ruleId, bookId, code, name, basisType, JSON.stringify(driver), 'ACTIVE', actor.id, nowIso());
     audit(db, actor.id, 'CREATE', 'ALLOCATION_RULE', ruleId, `建立分摊规则 ${code}`);
   });
   return send(res, 201, { allocationRule: db.prepare('SELECT * FROM allocation_rules WHERE id=?').get(ruleId) });
@@ -372,12 +373,13 @@ export async function runAllocation(db, req, res, actor) {
   transaction(db, () => {
     guardOperatingAction(db, 'OPERATING_ALLOCATE', period, bookId);
     for (const item of plan) {
+      // R-02：分摊执行人是经营关账职责分离的权威归属（§31.16.4）。
       db.prepare(`INSERT INTO allocation_results(
-          id,plan_id,rule_id,source_json,target_profit_center_id,allocated_cents,status,created_at)
-        VALUES(?,?,?,?,?,?,?,?)`).run(
+          id,plan_id,rule_id,source_json,target_profit_center_id,allocated_cents,status,created_by,created_at)
+        VALUES(?,?,?,?,?,?,?,?,?)`).run(
         id(), planId, rule.id,
         JSON.stringify({ period, baseCents, totalWeight }),
-        item.profitCenterId, item.allocatedCents, 'ALLOCATED', nowIso(),
+        item.profitCenterId, item.allocatedCents, 'ALLOCATED', actor.id, nowIso(),
       );
     }
     audit(db, actor.id, 'ALLOCATE', 'MANAGEMENT_ALLOCATION', planId, `分摊 ${plan.length} 个经营单元`);
@@ -495,6 +497,41 @@ export function listOperatingPeriodClosures(db, res, actor) {
  * 关账前必须完成该期间的经营台账归集与费用分摊；未完成不得关账。经营期间与
  * 法定会计期间相互独立，但有先后约束：法定期间必须先关闭。
  */
+/**
+ * R-02 — 经营关账的职责分离（docs/design/accounting-analytics.md §31.16.4）。
+ *
+ * 关账人不得是该期经营分摊所用规则的创建人，也不得是该期分摊结果的执行人。归因只认
+ * **业务行上的权威字段**（`allocation_rules.created_by` / `allocation_results.created_by`），
+ * 不用审计日志等可变证据；归属缺失时 fail closed，不得默认放行。
+ */
+function assertOperatingCloseSod(db, { bookId, period, actorId }) {
+  const rows = db.prepare(`SELECT r.id resultId, r.created_by resultCreatedBy, r.rule_id ruleId,
+      ru.created_by ruleCreatedBy, ru.id ruleRowId
+    FROM allocation_results r
+    JOIN cost_collection_plans p ON p.id = r.plan_id
+    LEFT JOIN allocation_rules ru ON ru.id = r.rule_id
+    WHERE p.management_book_id=? AND p.period=?`).all(bookId, period);
+  if (!rows.length) return;
+  const missing = rows.filter((row) => !row.resultCreatedBy || !row.ruleCreatedBy);
+  if (missing.length) {
+    throw new HttpError(409, '该期间的分摊归属缺失，无法判定职责分离，拒绝关账', {
+      code: 'MANAGEMENT_PERIOD_SOD_ATTRIBUTION_MISSING',
+      axis: PERIOD_AXES.OPERATING, period, managementBookId: bookId,
+      missingCount: missing.length,
+      missingResultIds: missing.map((row) => row.resultId).slice(0, 20),
+    });
+  }
+  const conflict = rows.find((row) => row.resultCreatedBy === actorId || row.ruleCreatedBy === actorId);
+  if (conflict) {
+    throw new HttpError(409, '关账人不得是该期间经营台账归集与分摊的创建人或执行人', {
+      code: 'MANAGEMENT_PERIOD_SOD_VIOLATION',
+      axis: PERIOD_AXES.OPERATING, period, managementBookId: bookId,
+      role: conflict.resultCreatedBy === actorId ? 'ALLOCATION_EXECUTOR' : 'ALLOCATION_RULE_CREATOR',
+      allocationResultId: conflict.resultId,
+    });
+  }
+}
+
 export async function closeOperatingPeriod(db, req, res, actor) {
   allowAny(actor, MANAGE_PERMISSIONS);
   const body = await readJson(req);
@@ -523,6 +560,7 @@ export async function closeOperatingPeriod(db, req, res, actor) {
     if (Number(legalClosed.n) === 0) {
       throw new HttpError(409, '法定会计期间尚未关闭，经营期间不得先关闭', { code: 'MANAGEMENT_LEGAL_PERIOD_NOT_CLOSED' });
     }
+    assertOperatingCloseSod(db, { bookId, period, actorId: actor.id });
     closureId = existing ? existing.id : id();
     if (existing) {
       db.prepare("UPDATE operating_period_closures SET status='CLOSED', closed_by=?, closed_at=?, reopen_reason=NULL, reopened_by=NULL, reopened_at=NULL WHERE id=?")

@@ -4194,6 +4194,8 @@ export function createApp(db, options = {}) {
           'INVENTORY_PERIOD_CLOSED', 'FINANCIAL_PERIOD_CLOSED', 'FINANCE_PERIOD_CLOSED',
           'OPERATING_PERIOD_CLOSED', 'PERIOD_STATE_INVALID', 'PERIOD_DEPENDENCY_NOT_CLOSED',
           'PERIOD_SEQUENCE_INVALID', 'PERIOD_NOT_LATEST',
+          // R-02：经营关账的职责分离拒绝同样必须留下事务外证据。
+          'MANAGEMENT_PERIOD_SOD_VIOLATION', 'MANAGEMENT_PERIOD_SOD_ATTRIBUTION_MISSING',
         ]);
         if (periodRejectionCodes.has(error.code)) {
           try {

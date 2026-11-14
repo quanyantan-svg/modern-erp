@@ -1,6 +1,7 @@
 import { Worker } from 'node:worker_threads';
 import { createHash } from 'node:crypto';
 import { captureSqliteSnapshot, bootstrapMySql } from './mysql-schema.js';
+import { migrateManagementAccountingSodSchema } from '../migrations/management-accounting-sod-schema.js';
 import { createStructuredLogger, safeSqlLabel } from '../lib/logger.js';
 import {
   ensureV14E2CanonicalRolePermissions,
@@ -291,6 +292,8 @@ export function createMySqlDatabase(config, { createSqliteSnapshot, seedDemo = f
     // canonical INVENTORY_TRANSFER_CONFIRM permission / role mapping without
     // duplicating schema or permission rows.
     migrateV14E2BusinessDate(adapter);
+    // R-02 — 经营关账的职责分离归属字段（与 SQLite 同一权威迁移实现）。
+    migrateManagementAccountingSodSchema(adapter);
     ensureV14E2ConfirmPermission(adapter);
     ensureV14E2CanonicalRolePermissions(adapter);
     // W11-A U3 — run the same additive migration against the live adapter

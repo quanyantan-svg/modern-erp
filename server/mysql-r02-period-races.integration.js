@@ -326,10 +326,11 @@ describe('R-02 期间控制真实 MySQL 竞态（handler-vs-handler）', () => {
       .run(BOOK_ID, 'R02-BOOK', 'R-02 经营账簿', 'R-02', 'CNY', now);
     db.prepare("INSERT OR REPLACE INTO cost_collection_plans(id,management_book_id,period,source_json,status,created_by,created_at) VALUES(?,?,?,'{}','COLLECTED',?,?)")
       .run(PLAN_ID, BOOK_ID, CLOSE_PERIOD, ADMIN_ID, now);
-    db.prepare("INSERT OR REPLACE INTO allocation_rules(id,management_book_id,code,name,basis_type,driver_json,status,created_at) VALUES(?,?,?,?,?,?,'ACTIVE',?)")
-      .run(RULE_ID, BOOK_ID, RULE_CODE, 'R-02 竞态分摊规则', 'VALUE', '{}', now);
-    db.prepare("INSERT OR REPLACE INTO allocation_results(id,plan_id,rule_id,source_json,target_profit_center_id,allocated_cents,status,created_at) VALUES(?,?,?,'{}',?,?,'ALLOCATED',?)")
-      .run('r02-alloc-seed', PLAN_ID, RULE_ID, CENTER_ID, 1000, now);
+    // 归属字段必须有值：经营关账的职责分离对「归属缺失」fail closed（R-02 §31.16.4）。
+    db.prepare("INSERT OR REPLACE INTO allocation_rules(id,management_book_id,code,name,basis_type,driver_json,status,created_by,created_at) VALUES(?,?,?,?,?,?,'ACTIVE',?,?)")
+      .run(RULE_ID, BOOK_ID, RULE_CODE, 'R-02 竞态分摊规则', 'VALUE', '{}', ADMIN_ID, now);
+    db.prepare("INSERT OR REPLACE INTO allocation_results(id,plan_id,rule_id,source_json,target_profit_center_id,allocated_cents,status,created_by,created_at) VALUES(?,?,?,'{}',?,?,'ALLOCATED',?,?)")
+      .run('r02-alloc-seed', PLAN_ID, RULE_ID, CENTER_ID, 1000, ADMIN_ID, now);
     db.prepare("INSERT OR REPLACE INTO period_closures(id,period,period_year,period_month,closure_type,status,created_at) VALUES('r02-op-legal',?,2026,2,'MONTH','CLOSED',?)")
       .run(CLOSE_PERIOD, now);
 

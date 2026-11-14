@@ -51,6 +51,7 @@ import { migrateFixedAssetsSchema } from './migrations/fixed-assets-schema.js';
 import { migrateInventoryCostingSchema } from './migrations/inventory-costing-schema.js';
 import { migrateAccountingReportingSchema } from './migrations/accounting-reporting-schema.js';
 import { migrateManagementAccountingSchema } from './migrations/management-accounting-schema.js';
+import { migrateManagementAccountingSodSchema } from './migrations/management-accounting-sod-schema.js';
 import { migrateInventoryPositionSchema } from './migrations/inventory-position-schema.js';
 import { migrateSalesCustomerDomain } from './migrations/sales-customer-domain.js';
 import { migrateW11ASelectorSearchKey } from './migrations/sales-customer-wave11-a-selector-search-key.js';
@@ -605,6 +606,8 @@ function createSqliteDatabase(filename) {
   migrateAccountingReportingSchema(db);
   // Accounting & Analytics Domain Closure — AA-W7 经营会计。
   migrateManagementAccountingSchema(db);
+  // R-02 — 经营关账的职责分离归属字段（加列 + 审计证据回填）。
+  migrateManagementAccountingSodSchema(db);
   migrateInventoryPositionSchema(db);
   migrateV13Phase7cPerformance(db);
   migrateManufacturingQualitySchema(db);

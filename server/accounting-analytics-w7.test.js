@@ -238,7 +238,21 @@ describe('AA-W7 经营会计', () => {
     assert.equal(legalFirst.data.code, 'MANAGEMENT_LEGAL_PERIOD_NOT_CLOSED');
 
     closeLegalPeriod(fixture.db, PERIOD);
-    const closed = await fixture.request('POST', '/api/management/period-closures', fixture.tokens.accounting, {
+
+    // R-02（AA §35.11.4 / Design §31.16.4）：关账人不得是该期分摊规则的创建人，
+    // 也不得是该期分摊结果的执行人 —— 这里两者都是 accounting。
+    const selfClose = await fixture.request('POST', '/api/management/period-closures', fixture.tokens.accounting, {
+      managementBookId: bookId, period: PERIOD,
+    });
+    assert.equal(selfClose.status, 409, JSON.stringify(selfClose.data));
+    assert.equal(selfClose.data.code, 'MANAGEMENT_PERIOD_SOD_VIOLATION');
+    assert.equal(
+      fixture.db.prepare('SELECT COUNT(*) n FROM operating_period_closures WHERE management_book_id=? AND period=?')
+        .get(bookId, PERIOD).n, 0, '被拒的关账不得留下任何状态写入',
+    );
+
+    // 换用未参与该期分摊的角色关账 → 成功。
+    const closed = await fixture.request('POST', '/api/management/period-closures', fixture.tokens.admin, {
       managementBookId: bookId, period: PERIOD,
     });
     assert.equal(closed.status, 200, JSON.stringify(closed.data));
@@ -256,5 +270,61 @@ describe('AA-W7 经营会计', () => {
     const audit = fixture.db.prepare("SELECT * FROM audit_logs WHERE entity_type='OPERATING_PERIOD_CLOSURE' AND entity_id=? AND action='REOPEN'")
       .get(closed.data.operatingPeriodClosure.id);
     assert.ok(audit, '反关账必须留痕');
+  });
+
+  test('R-02 经营关账职责分离：归属缺失 fail closed，归属可由审计证据回填', async () => {
+    const book = await fixture.request('POST', '/api/management/books', fixture.tokens.accounting, {
+      code: 'MB-SOD', name: '职责分离账簿', legalEntity: '现代科技（中国）',
+    });
+    const bookId = book.data.managementBook.id;
+    const center = await fixture.request('POST', '/api/management/profit-centers', fixture.tokens.accounting, {
+      code: 'PC-SOD', name: '职责分离经营单元', managementBookId: bookId,
+    });
+    const centerId = center.data.profitCenter.id;
+    seedPostedVoucher(fixture.db, {
+      id: 'aa-w7-v-sod',
+      entries: [{ subjectCode: '6401', direction: 'DEBIT', amountCents: 30000 }],
+    });
+    await fixture.request('POST', '/api/management/collect', fixture.tokens.accounting, {
+      managementBookId: bookId, period: PERIOD, profitCenterId: centerId,
+      source: { kind: 'GL', accountCode: '6401' },
+    });
+    const rule = await fixture.request('POST', '/api/management/allocation-rules', fixture.tokens.accounting, {
+      code: 'AR-SOD', name: '职责分离分摊', managementBookId: bookId, basisType: 'EQUAL',
+      driver: { accountCodes: ['6401'], targets: [{ profitCenterId: centerId, weight: 1 }] },
+    });
+    await fixture.request('POST', '/api/management/allocation-runs', fixture.tokens.accounting, {
+      managementBookId: bookId, period: PERIOD, ruleId: rule.data.allocationRule.id,
+    });
+    closeLegalPeriod(fixture.db, PERIOD);
+
+    // 归属写入业务行（不是从别处推断）。
+    const stored = fixture.db.prepare('SELECT created_by FROM allocation_rules WHERE id=?').get(rule.data.allocationRule.id);
+    assert.equal(stored.created_by, 'user-accounting', '规则创建人必须落在业务行上');
+    const resultRow = fixture.db.prepare('SELECT created_by FROM allocation_results WHERE plan_id IN (SELECT id FROM cost_collection_plans WHERE management_book_id=? AND period=?) LIMIT 1')
+      .get(bookId, PERIOD);
+    assert.equal(resultRow.created_by, 'user-accounting', '分摊执行人必须落在业务行上');
+
+    // 归属缺失 → fail closed（不得默认放行）。
+    fixture.db.prepare('UPDATE allocation_rules SET created_by=NULL WHERE id=?').run(rule.data.allocationRule.id);
+    const missing = await fixture.request('POST', '/api/management/period-closures', fixture.tokens.admin, {
+      managementBookId: bookId, period: PERIOD,
+    });
+    assert.equal(missing.status, 409, JSON.stringify(missing.data));
+    assert.equal(missing.data.code, 'MANAGEMENT_PERIOD_SOD_ATTRIBUTION_MISSING');
+    assert.equal(
+      fixture.db.prepare('SELECT COUNT(*) n FROM operating_period_closures WHERE management_book_id=? AND period=?')
+        .get(bookId, PERIOD).n, 0, '被拒的关账不得留下任何状态写入',
+    );
+
+    // 归属缺失的历史行可由审计证据一次性回填（迁移的权威实现）。
+    const { migrateManagementAccountingSodSchema } = await import('./migrations/management-accounting-sod-schema.js');
+    migrateManagementAccountingSodSchema(fixture.db);
+    const restored = fixture.db.prepare('SELECT created_by FROM allocation_rules WHERE id=?').get(rule.data.allocationRule.id);
+    assert.equal(restored.created_by, 'user-accounting', '审计证据必须能把归属回填回来');
+    const recovered = await fixture.request('POST', '/api/management/period-closures', fixture.tokens.admin, {
+      managementBookId: bookId, period: PERIOD,
+    });
+    assert.equal(recovered.status, 200, JSON.stringify(recovered.data));
   });
 });
