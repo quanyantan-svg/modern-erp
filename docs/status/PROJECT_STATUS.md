@@ -5137,7 +5137,7 @@ D-05 Manual Closure 与 Release Readiness 的边界。
 
 ## 62. MySQL 生产备份 / 恢复能力缺口登记（2026-11-14）
 
-**状态**：`REGISTERED` —— **已登记、未授权、未实施**。
+**状态**：`REGISTERED` —— **已登记；业务输入 DR-01～DR-05 已裁定；未起草 Requirement、未实施**。
 
 > **本节不是任何 Capability 的 Coverage 判定。** 它不改变能力矩阵任何一行的 `状态`，
 > 不改变任何已签发的 Domain Acceptance / Capability Freeze 结论，
@@ -5174,29 +5174,40 @@ D-05 Manual Closure 与 Release Readiness 的边界。
 - 备份只需覆盖**数据**，不需要覆盖 DDL —— 恢复时可复用 / 重建 schema；
 - 迁移失败回滚可依赖**备份恢复**，而非反向 DDL。
 
-### 62.4 尚未决定的业务输入（**阻塞 Requirement 起草**）
+### 62.4 业务输入裁定（2026-11-14，业务所有者）
 
-| 编号 | 待决 | 候选 | 状态 |
+**裁定来源**：业务所有者 2026-11-14 就本节缺口登记后的推进决定（治理登记阶段内一次性裁定）。
+
+| 编号 | 项 | **裁定值** | 裁定后的合同含义 |
 |---|---|---|---|
-| DR-01 | RPO 目标 | 24h / 1h / 更短（更短则需 binlog 而非纯逻辑备份） | 待所有者裁定 |
-| DR-02 | RTO 目标 | 4h / 1h / 更短 | 待所有者裁定 |
-| DR-03 | 异机保存目标 | 对象存储 / 远端主机 / 磁带 —— **仓库不得自行假设** | 待所有者指定 |
-| DR-04 | 恢复演练频率与证据留存 | — | 待所有者裁定 |
-| DR-05 | 能力归属域 | Platform（平台层；但该域 21 项能力已于 2026-11-14 冻结，新增能力需解冻或新裁定） / 独立运维责任线 / `OUT_OF_SCOPE`（继续由运维承担并以 runbook 交付） | 待所有者裁定 |
+| DR-01 | RPO 目标 | **24 小时** | 允许的最大数据丢失窗口 = 24h。**纯逻辑备份（`mysqldump`）即可覆盖**；本轮**不引入 binlog / PITR**。若日后要求 ≤1h，须另立范围并重新裁定 |
+| DR-02 | RTO 目标 | **4 小时** | 从宣布恢复到服务可用的上限 = 4h。恢复链路 = 重建 schema + 回灌数据 + 完整性校验 + 服务重启，**须在 4 小时内完成并留证** |
+| DR-03 | 异机保存目标 | **对象存储（S3 兼容）** | 备份须复制到 S3 兼容对象存储。endpoint / bucket / 凭据**经环境变量注入，不得落仓库**；上传后须能**回读校验**以证明异机副本可用 |
+| DR-04 | 恢复演练频率与证据留存 | **随 RPO 绑定：每季度一次 + 每次发布前一次；证据与既有验收记录同址 `docs/acceptance/`** | 演练证据进入既有验收证据体系，与 Acceptance 记录同生命周期 |
+| DR-05 | 能力归属域 | **Platform 域** | 该能力落在 **Platform 域**。**后果**：Platform 的 21 项能力已于 2026-11-14 冻结（`PLATFORM_CAPABILITY_FREEZE`），新增本能力需对 `docs/requirements/platform.md` §36 做**有界解冻 / 增补**（新章节号，不改既有 21 项的冻结结论）。该解冻与 Requirement 起草属**后续阶段**，本轮**未**执行 |
+
+**已裁定的**随之确定的技术边界（**待 Requirement 层确认后才成为合同**）：
+
+- 备份**只需覆盖数据，不需覆盖 DDL** —— schema 由应用拥有且可重建（§62.3 第 1 条）；
+- **迁移失败回滚依赖备份恢复**，不需要反向 DDL（§62.3 第 2 条：MySQL 侧迁移链无破坏性 DDL）；
+- 因 RPO = 24h，**每日一次**逻辑备份即满足（与既有 SQLite backup timer 每日 02:30 同节奏）。
 
 ### 62.5 本轮边界
 
-- 本节**只**做缺口登记。**未**起草 Requirement、**未**起草 Design、**未**授权 Implementation、
+- 本节**只**做缺口登记与业务输入裁定。**未**起草 Requirement、**未**起草 Design、**未**授权 Implementation、
   **未**连接 MySQL、**未**执行任何 Gate、**未**改动部署脚本与运维文档、**未**产生任何 Git 远端写入。
 - 按 `AGENTS.md` §4，后续须依次经 Requirement → Design（**HARD STOP**）→ Implementation → Acceptance / Freeze。
 - `docs/operations/deployment.md` 的现有表述**保持不变**：该文档要求演练但不提供自动化并把责任转给运维；
   本登记**不**改变其效力，也**不**宣称仓库已具备 MySQL DR 能力。
+- **DR-05 的落地载体尚未创建**：`docs/requirements/platform.md` §36 的有界解冻与新增章节
+  属 Requirement 阶段，**本轮未执行**，也不得被描述为已解冻。
 
 ### 62.6 Owner
 
 | 角色 | 承担者 | 说明 |
 |---|---|---|
 | 登记责任 Owner | **业务所有者** | 作为 Release Readiness 闸门项，由业务所有者持有推进决定权 |
-| 能力归属 Owner | **待裁定**（见 DR-05） | 本轮**不**擅自指派给任何域 |
+| 能力归属 Owner | **Platform 域**（DR-05 裁定，2026-11-14） | Requirement / Design 落在 `docs/requirements/platform.md` 与 `docs/design/platform.md`；该域既有 21 项能力的冻结结论**不因**本次归属裁定而改变 |
 
-**剩余**：DR-01～DR-05 全部待裁定；Requirement 起草、Design、Implementation、Acceptance / Freeze 均未开始。
+**剩余**：DR-01～DR-05 **已全部裁定**；Requirement 起草（Platform §36 有界解冻 + 新章节）、
+Design、Implementation、Acceptance / Freeze **均未开始**。
