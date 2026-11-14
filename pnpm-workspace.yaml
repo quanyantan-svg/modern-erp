@@ -6,3 +6,7 @@ supportedArchitectures:
     - linux
   cpu:
     - x64
+# PL-RI-03：source-map-js 的 high 公告（GHSA-68fv-2mgg-jv7q）要求 >= 1.2.2。
+# 它是 postcss 的传递依赖，必须用 override 固定到已修复版本。
+overrides:
+  source-map-js: ^1.2.2
