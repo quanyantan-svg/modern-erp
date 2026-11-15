@@ -284,3 +284,81 @@ Material Issue Summary）/ 副产品维护 / 检验方案与检验项目明细�
 **MANUFACTURING & QUALITY DOMAIN CLOSURE REQUIREMENT — READY FOR DESIGN & IMPLEMENTATION**
 
 ---
+
+### 29.11 route exposure 与页面自身 API 权限一致性有界增补（`PENDING_APPROVAL`，2026-11-15）
+
+#### 29.11.1 身份、授权与生效边界
+
+| 项 | 内容 |
+|---|---|
+| 用途 | 消除 `manufacturing-analytics` route 的 **exposure 权限集合未覆盖该页面自身依赖的 API 权限集合**所造成的「预期外 403」：同一后端主体被前端判定为可进入该 route，又被后端判定为无权调用该 route 加载时必调的 API |
+| Owner | Manufacturing & Quality（`manufacturing-analytics` 工作面与生产报表的 owner） |
+| 状态 | `PENDING_APPROVAL`；业务所有者于 2026-11-15 授权本节 Requirement 与 Design 连续撰写，**Design 完成后 HARD STOP**。Implementation、解冻、数据库操作、发布与部署**均未授权** |
+| 权威来源 | `document.md` §29；本文件 §29.5 Permission 约束、§29.6 Compatibility / 不变性约束、§29.9 Hard Stop Conditions；`docs/status/PROJECT_STATUS.md` §66.2（覆盖分类裁定）；`docs/status/CAPABILITY_MATRIX.md` B3119（冻结后有界发现） |
+| 前置条件 | 本域整域已冻结（`MANUFACTURING_QUALITY_DOMAIN_ACCEPTANCE_PASS` / `MANUFACTURING_QUALITY_CAPABILITY_FREEZE`，2026-11-12，37 项能力）。本节触碰**权限与 route exposure 合同**，因此实施前必须由业务所有者**显式解冻**并单独授权 Implementation |
+| Supersession | 本节只**增补** §29.5 与 §29.6，**不改写** §29 已冻结结论，也**不改写** 2026-11-12 的冻结记录；本节记录的是**冻结之后**发现的有界缺陷 |
+
+本节只覆盖 `manufacturing-analytics` 一条 canonical route。`document.md` §29 的其它 route、页签、状态机、
+权限码与能力集合**均不变**。
+
+#### 29.11.2 事实基线（2026-11-15 在 HEAD `acb187d` 上实测）
+
+`manufacturing-analytics` 的 6 个页签与其 API 依赖（`src/pages/manufacturing.jsx:953`–`:980`）：
+
+| 页签 | API | 后端要求的权限 | 事实来源 |
+|---|---|---|---|
+| `wip`（**当前固定默认页签**） | `GET /api/manufacturing/reports/wip` | `PRODUCTION_ORDERS_VIEW` | `server/modules/manufacturing-execution.js:338` |
+| `yield` | `GET /api/manufacturing/reports/yield` | `PRODUCTION_ORDERS_VIEW` | 同上 `:355` |
+| `capacity` | `GET /api/manufacturing/reports/capacity` | `PRODUCTION_ORDERS_VIEW` | 同上 `:343` |
+| `execution` | `GET /api/manufacturing-analytics/execution-summary` | `PRODUCTION_ORDERS_VIEW` | 同上 `:574` |
+| `materialIssue` | `GET /api/manufacturing-analytics/material-issue-summary` | `PRODUCTION_ORDERS_VIEW` | 同上 `:604` |
+| `cost` | `GET /api/manufacturing/reports/cost` | `PRODUCTION_COSTS_VIEW` | 同上 `:360` |
+
+route 声明的 exposure 为 `any:['PRODUCTION_ORDERS_VIEW','PRODUCTION_COSTS_VIEW']`
+（`src/navigation/applicationRegistry.js:72`），**等于**上表权限的并集 —— 因此 **exposure 的语义本身正确，
+不需要改动**。不一致只发生在**页面层**：当前实现无条件渲染 5 个无权页签，并固定以 `wip` 为默认页签。
+
+触发事实：`role-accounting` 持有 `PRODUCTION_COSTS_VIEW`（`server/migrations/v13-phase6c-manufacturing-execution.js:138`）
+但**不持有** `PRODUCTION_ORDERS_VIEW`（`server/db.js:2037` 的 role 种子）→ 该角色可进入 route，却在其
+**默认页签**上被后端拒绝。`role-warehouse` 持有 `PRODUCTION_ORDERS_VIEW`、不持有 `PRODUCTION_COSTS_VIEW`，
+可正常使用全部 5 个执行类页签，但会看到 1 个无权页签并在其上被拒绝。
+
+#### 29.11.3 合同项 `MQ-EXPOSURE-01..05`
+
+- **`MQ-EXPOSURE-01`（页签与 API 依赖必须登记）**：本 route 的每一个页签与其所依赖的 API、该 API 要求的权限，
+  必须在代码中以**单一事实来源**登记；页面不得发出未登记的 API 请求。登记口径以 §29.11.2 的表为准。
+- **`MQ-EXPOSURE-02`（可见页签必须是 actor 权限的子集）**：页面渲染的页签集合必须**只包含 actor 持有相应权限的页签**；
+  无权页签**不得渲染**。现状的无条件渲染 5 个页签不符合本条。
+- **`MQ-EXPOSURE-03`（默认页签必须是有权页签）**：默认页签必须是 actor **有权访问**的页签；只持有
+  `PRODUCTION_COSTS_VIEW` 的角色其默认页签必须是 `cost`。固定以 `wip` 为默认页签不符合本条。
+- **`MQ-EXPOSURE-04`（后端语义与权限目录不变）**：后端 API 守卫语义**不变**
+  （`PRODUCTION_ORDERS_VIEW` / `PRODUCTION_COSTS_VIEW` 各自的要求不变）；**不得**新增权限码、
+  **不得**修改 `role_permissions`、**不得**放宽任何 API 守卫、**不得**改动任何角色的权限集合。
+  前端隐藏**不构成**授权：后端必须继续 fail closed。
+- **`MQ-EXPOSURE-05`（无权时必须 fail closed，不得渲染后报错）**：当 actor 对该 route 的全部页签均无权限时，
+  必须呈现**权限拒绝态**，不得先渲染页面再以错误提示暴露「无权访问」。本条与 §29.9 的 fail closed 原则一致。
+
+#### 29.11.4 验收、兼容与禁止事项
+
+**验收门禁**：
+
+1. canonical 浏览器门禁 `node scripts/acceptance/release-browser-readiness.mjs` 在 5 类 canonical 角色 × 4 档宽度下，
+   `manufacturing-analytics` 的「无预期外 4xx/5xx」判定**必须为 0**；该门禁的其余判定（渲染、横向滚动、
+   触控目标 ≥44px、refresh / Back / Forward）**不得回退**。
+2. focused 测试：对每个 canonical 角色，断言该 route 首屏发出的 API 请求集合 ⊆ 该角色权限集合；
+   断言默认页签对应请求的 API 在该角色权限内。
+3. 变异实验（证明断言承重、非空洞）：① 把默认页签改回固定 `wip` → 必须转红；
+   ② 取消页签权限过滤 → 必须转红；③ 移除 `cost` 页签的 `PRODUCTION_COSTS_VIEW` 判断 → 必须转红。
+4. `pnpm test:fast`、`pnpm build`、`git diff --check`、两种文档一致性模式。
+
+**兼容要求**：不改变任何角色的权限集合与 `role_permissions`；不改变 route 数量与 route key；不改变任何 API
+的请求/响应合同与权限判定；不改变页签**集合**（只改变**可见性**与**默认选择**）；不改变生产报表的数据口径、
+状态机、金额与估值语义；不改变既有 release tag。
+
+**禁止事项**：不得通过 allowlist / 白名单方式把 403 放进 canonical 门禁的豁免项；不得放宽后端 API 守卫；
+不得新增权限码或修改 role 种子；不得删除 `cost` 页签或以「删页签」回避 §29.11.2 的不一致；
+不得把前端隐藏当作授权实现（后端必须继续 fail closed）；不得在本节顺带改动其它 route、页签或权限；
+不得把尚未取得的真实浏览器证据写成已通过。
+
+**Requirement 状态：`PENDING_APPROVAL`（2026-11-15）。Design 已获授权并连续执行；Implementation、解冻、
+数据库操作、发布与部署均未授权。**

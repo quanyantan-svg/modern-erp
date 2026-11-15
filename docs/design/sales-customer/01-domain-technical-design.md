@@ -5335,3 +5335,94 @@ Requirement：`APPROVED`；本节 Design：`APPROVED`（业务所有者 2026-11-
 Acceptance / Freeze、发布或部署；这些操作仍须逐次单独批准。
 
 ---
+
+### 29.53 route exposure 与页面自身 API 权限一致性有界增补设计（`PENDING_APPROVAL`，2026-11-15）
+
+#### 29.53.1 设计身份、授权与边界
+
+| 项 | 内容 |
+|---|---|
+| 用途 | 实现 Requirement §34.16 的 `SC-EXPOSURE-01..05`：`sales-price-override-authorizations` 的参照加载以 actor 权限为前置；缺参照读取权限时显式呈现无权态并 fail closed |
+| Owner | Sales & Customer（`src/pages/sales-parameters.jsx` 与价格覆盖授权后端） |
+| 状态 | `PENDING_APPROVAL`；Requirement §34.16 于 2026-11-15 由业务所有者授权与本节 Design 连续执行，**Design 完成后 HARD STOP**；Implementation、解冻、数据库操作、发布与部署均未授权 |
+| 权威来源 | `solution.md` §29；Requirement §34.16；`docs/status/PROJECT_STATUS.md` §66.2 |
+| 前置条件 | 实施前必须由业务所有者**显式解冻** `SALES_CUSTOMER_CAPABILITY_FREEZE` 并单独授权 Implementation；本节不自行解冻 |
+
+设计边界：**不改** route exposure、**不改**后端 API 守卫、**不改**权限目录与 role 种子、**不新增** API、
+**不改**价格覆盖授权的业务语义。本节只改**页面层的参照加载前置条件与状态呈现**。
+
+#### 29.53.2 模块与责任（单一 canonical owner）
+
+| 责任 | 目标文件 | 单一职责 |
+|---|---|---|
+| 参照加载前置与状态呈现 | `src/pages/sales-parameters.jsx`（`PriceOverrideAuthorizations`） | 依据 actor 权限决定**是否**发起 `/api/customers`、`/api/products`；渲染有权 / 无权 / 空态三种互不混淆的状态 |
+| actor 权限读取 | `src/components/ui.jsx` 的 `can(user, permission)`（**既有**） | 不新增权限判定helper，不复制 `can` 的实现 |
+| 参照 API 守卫 | `server/modules/customers.js`、`server/modules/products.js`（**不变**） | `CUSTOMERS_VIEW`/`CUSTOMERS_MANAGE`、`PRODUCTS_VIEW`/`PRODUCTS_MANAGE` 的要求不变，继续 fail closed |
+| 签发 API 守卫 | 价格覆盖授权的 canonical owner（**不变**） | `SALES_PRICING_OVERRIDE` 的要求不变 |
+| route exposure | `src/navigation/applicationRegistry.js`（**不变**） | `any:['SALES_PRICING_VIEW','SALES_PRICING_OVERRIDE']` 保持 |
+
+不得出现第二份「谁需要哪个参照权限」的人工名单；参照 API 与其权限的对应关系由**后端守卫**唯一事实化，
+前端只做**同源读取**（按权限码判断是否发起请求），不做第二套业务判定。
+
+#### 29.53.3 调用与数据流
+
+```
+actor.permissions
+  ├─ canReadCustomers = CUSTOMERS_VIEW | CUSTOMERS_MANAGE
+  ├─ canReadProducts  = PRODUCTS_VIEW  | PRODUCTS_MANAGE
+  └─ canAuthorize     = SALES_PRICING_OVERRIDE          ← 既有语义，保留
+       └─ useEffect([权限派生])：
+            ├─ canReadCustomers → api('/api/customers')
+            ├─ canReadProducts  → api('/api/products')
+            └─ 两者皆无权 → **不发起任何请求**，进入「缺参照读取权限」态
+                 └─ 提交（POST /api/sales-price-overrides/authorize）
+                      ├─ canAuthorize = false → 既有「权限」提示段，不签发（既有行为保留）
+                      └─ canAuthorize = true 但缺参照 → 禁用签发（fail closed）
+```
+
+要点：
+
+1. **权限判定必须在 effect 之前**：请求的发起条件由权限派生值决定，不得「先请求、失败后再解释」。
+2. **两类参照可独立缺失**：客户与物料参照的读取权限彼此独立，允许只发起其中之一；两者皆无时**一次请求都不发**。
+3. **空态与无权态必须互斥且可见地不同**：
+   - 无权（未发起请求）→ 「缺少客户 / 物料参照读取权限」；
+   - 有权但返回 0 行 → 「没有可选客户 / 物料」（既有空态语义）。
+   两者的判定来源不同（前者看权限，后者看响应行数），不得用同一个空态文案承载两种事实。
+4. **签发的 fail closed**：提交按钮的可用性 = `canAuthorize && 参照已就绪`。参照未就绪时不得发起签发请求。
+
+#### 29.53.4 错误、审计、RBAC/SOD 与兼容
+
+- **错误行为**：参照请求失败沿用既有 `notify(cause.message, 'error')` 路径；**新增**的失败路径只有一条 ——
+  缺参照读取权限时**不发请求**，改为呈现无权态。不得把 403 当作「参照为空」处理，也不得把无权态写成空态。
+- **审计**：本节不产生业务状态迁移，**不写**业务 audit；证据写入 focused 测试与 canonical 浏览器门禁输出。
+- **RBAC / SOD**：后端守卫**完全不变**，继续 fail closed；前端可见性**不是**授权实现。不得新增权限码、
+  不得修改 `role_permissions`、不得放宽或收紧任何角色的权限集合、不得新增参照 API。route exposure 不变，
+  因此**没有任何角色的可进入性或可读数据发生变化** —— 本节**不改变任何权限结果**。
+- **兼容**：价格覆盖授权的业务语义不变 —— 一次性授权、授权 ID 在销售订单行上使用、安全整数分、
+  `Idempotency-Key` 幂等语义、SC19「授权与消费分离」；`role-reviewer` 的完整签发路径**逐字节不变**
+  （它同时持有签发权与两项参照读取权）；`role-sales` 的行为不变（持有参照读取权、无签发权，走既有「权限」提示段）。
+- **回滚**：本节是一次性前端行为变更，回滚即恢复「挂载即无条件加载两项参照」；
+  回滚**不得**连带修改后端守卫或权限目录。回滚后该 route 的「预期外 403」会重新出现（门禁转红），
+  该事实必须如实登记，不得通过门禁豁免掩盖。
+
+#### 29.53.5 验证矩阵与变异实验
+
+| Requirement | focused evidence | release evidence |
+|---|---|---|
+| SC-EXPOSURE-01 | 逐角色断言页面发出的 API 请求集合 ⊆ 该角色权限集合；`role-accounting` 断言**零**参照请求 | canonical 浏览器门禁（5 角色 × 4 宽度）「无预期外 4xx/5xx」= 0 |
+| SC-EXPOSURE-02 | 断言缺参照读取权时呈现无权态文案、且**不出现** 403 错误提示 | 同上 |
+| SC-EXPOSURE-03 | 断言无签发权角色不可签发（既有行为）；断言「有签发权 + 缺参照」时签发按钮禁用且不发起 POST | 同上 |
+| SC-EXPOSURE-04 | 角色权限集合快照断言（`role_permissions` 不变）；`/api/customers`、`/api/products` 守卫断言不变 | `pnpm test:fast` / FULL |
+| SC-EXPOSURE-05 | 断言 exposure 保持 `any:[SALES_PRICING_VIEW,SALES_PRICING_OVERRIDE]`（本节**不**收紧） | 同上 |
+
+**变异实验（非空洞证明）**：① 取消参照加载的权限前置 → SC-EXPOSURE-01 断言必须转红；
+② 把无权态改回错误提示 → SC-EXPOSURE-02 必须转红；③ 把无权态与空态合并为同一文案 → SC-EXPOSURE-02 必须转红；
+④ 移除「参照未就绪时禁用签发」→ SC-EXPOSURE-03 必须转红。实验后必须逐字节恢复实现。
+
+#### 29.53.6 Design 状态与 HARD STOP
+
+Requirement §34.16：`PENDING_APPROVAL`（2026-11-15）；本节 Design：`PENDING_APPROVAL`；Implementation：`NOT_AUTHORIZED`。
+
+**HARD STOP**：本节 Design 完成后**不得**进入 Implementation，等待业务所有者明确批准（并先解冻本域冻结）。
+本节不授权真实 MySQL 连接、对象存储写入、目标主机写操作、发布、部署、push、tag、Git 历史重写，
+也不授权 Acceptance / Freeze 签发。

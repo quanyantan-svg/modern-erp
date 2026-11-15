@@ -5461,6 +5461,7 @@ Design [`docs/design/platform.md` §32.17](../design/platform.md)，均为 `PEND
    且落在 Manufacturing & Quality 与 Sales & Customer 两个业务域，**必须先有 Requirement 与 Design**。
    本轮授权只覆盖触控目标整改，因此本轮**未改动任何权限、route exposure 或 API 守卫**。
    **在修复合入前，canonical 浏览器门禁仍返回退出码 1，「production deploy ready」不得被宣称。**
+   → 本项的**覆盖分类裁定**与**有界 Requirement / Design** 见 **§66**。
 
 ### 65.5 Owner
 
@@ -5469,3 +5470,88 @@ Design [`docs/design/platform.md` §32.17](../design/platform.md)，均为 `PEND
 | 触控目标整改 | 仓库 | 纯前端样式合规整改，不改变任何业务合同语义 |
 | Migration 风险工作包 | Platform（Owner）+ 业务所有者（批准） | 实施须另行授权；受影响四域的 schema 事实来源方不改变其 owner |
 | 发布 / 目标环境 / 真实 MySQL 证据 | 业务所有者 | 本轮未授权、未执行 |
+
+## 66. 浏览器门禁 403 类的覆盖分类裁定与两个业务域的有界 Requirement + Design（2026-11-15）
+
+**状态**：覆盖分类裁定 = **已裁定**（`SEMANTIC_MISMATCH`）；两个业务域的有界 Requirement / Design =
+**已起草**（`PENDING_APPROVAL`），**HARD STOP**，未进入 Implementation。
+
+本节**不是** Acceptance：它不签发任何 Acceptance / Capability Freeze / Manual Capability Closure /
+Release Readiness，也不改写 §65 的任何已登记事实（含门禁 5696 项 / 6 项失败的原始记录）。
+
+### 66.1 授权与边界
+
+| 授权 | 内容 | 本轮结果 |
+|---|---|---|
+| A | 修订 §36.17 / §32.17，解决本轮技术复核的五项问题 | 已按实测修订（见 §66.5） |
+| B | 确认浏览器门禁 403 为 `SEMANTIC_MISMATCH` | 已裁定（§66.2） |
+| C | 连续起草 Manufacturing & Quality 与 Sales & Customer 的有界 Requirement + Design | 已起草，两个 Design 完成后 HARD STOP |
+| 明确未授权 | Implementation、数据库、push、tag、release、deploy | 本轮**全部未执行** |
+
+### 66.2 覆盖分类裁定：`SEMANTIC_MISMATCH`
+
+**裁定**：§65.4 第 7 条登记的 6 项「预期外 403」失败，其覆盖分类为 **`SEMANTIC_MISMATCH`**（语义不一致），
+不是 `MISSING`（能力缺失）、不是 `PARTIAL`（实现不完整）、不是 `OUT_OF_SCOPE`（范围外）。
+
+**裁定依据**：受影响的两条 route **均已登记、页面均已实现、核心业务路径对有权角色均可用**；
+不一致发生在「**route 声明的可进入性**」与「**页面自身依赖的 API 的可调用性**」之间 —— 同一个后端主体
+（actor）被前端判定为「可进入该 route」，又被后端判定为「无权调用该 route 加载时必调的 API」。
+能力**存在**，但**语义**自相矛盾，故归入 `SEMANTIC_MISMATCH`。
+
+**根因实测（2026-11-15 在 HEAD `acb187d` 上逐行核验，非引用 §65.4 的结论）**：
+
+| route | route 声明的 exposure | 页面加载时必调的 API | API 要求的权限 | 触发角色与其实际权限 |
+|---|---|---|---|---|
+| `manufacturing-analytics` | `any:['PRODUCTION_ORDERS_VIEW','PRODUCTION_COSTS_VIEW']`（`src/navigation/applicationRegistry.js:72`） | 默认页签 `wip` → `GET /api/manufacturing/reports/wip`（`src/pages/manufacturing.jsx:954`、`:968`） | `PRODUCTION_ORDERS_VIEW`（`server/modules/manufacturing-execution.js:338`） | `role-accounting`：有 `PRODUCTION_COSTS_VIEW`（`server/migrations/v13-phase6c-manufacturing-execution.js:138`），**无** `PRODUCTION_ORDERS_VIEW` |
+| `sales-price-override-authorizations` | `any:['SALES_PRICING_VIEW','SALES_PRICING_OVERRIDE']`（`src/navigation/applicationRegistry.js:26`） | 挂载即调用 `GET /api/customers` + `GET /api/products`（`src/pages/sales-parameters.jsx:976`） | `CUSTOMERS_VIEW`/`CUSTOMERS_MANAGE`（`server/modules/customers.js:38`）、`PRODUCTS_VIEW`/`PRODUCTS_MANAGE`（`server/modules/products.js:56`） | `role-accounting`：只有 `SALES_PRICING_VIEW`（`server/db.js:2063`），**无** `CUSTOMERS_VIEW`、**无** `PRODUCTS_VIEW` |
+
+补充实测（供后续 Design 使用）：
+
+- `manufacturing-analytics` 的 6 个页签中，**5 个**要求 `PRODUCTION_ORDERS_VIEW`
+  （`wip` / `yield` / `capacity` / `execution` / `materialIssue`），**仅** `cost` 要求 `PRODUCTION_COSTS_VIEW`
+  （`server/modules/manufacturing-execution.js:338`、`:343`、`:355`、`:360`、`:574`、`:604`）。
+  当前实现无条件渲染 5 个无权页签，并固定以 `wip` 为默认页签。
+- `sales-price-override-authorizations` 的**签发**动作要求 `SALES_PRICING_OVERRIDE`；按种子
+  （`server/db.js:2061`–`2063`）只有 `role-reviewer`（与 admin）持有该权限，`role-sales` 与 `role-accounting`
+  只持有 `SALES_PRICING_VIEW`。页面已对无签发权角色渲染「权限」提示段，但**仍无条件**加载客户 / 物料参照。
+
+### 66.3 产出：有界 Requirement + Design
+
+| 域 | Requirement | Design | 合同项 |
+|---|---|---|---|
+| Manufacturing & Quality | [`docs/requirements/manufacturing-quality.md` §29.11](../requirements/manufacturing-quality.md) | [`docs/design/manufacturing-quality.md` §24.27](../design/manufacturing-quality.md) | `MQ-EXPOSURE-01..05` |
+| Sales & Customer | [`docs/requirements/sales-customer/01-domain-closure.md` §34.16](../requirements/sales-customer/01-domain-closure.md) | [`docs/design/sales-customer/01-domain-technical-design.md` §29.53](../design/sales-customer/01-domain-technical-design.md) | `SC-EXPOSURE-01..05` |
+
+两份 Requirement 与两份 Design 均为 `PENDING_APPROVAL`，采用**不改变任何权限结果**的方向
+（页面按 actor 权限自适应；后端守卫与 route exposure 语义不变），并把「是否收紧 route exposure」
+登记为**开放业务决定**，不自行吸收。
+
+### 66.4 未解决矛盾
+
+1. **两个域的整域冻结必须先解冻**：Manufacturing & Quality 已于 2026-11-12 签发
+   `MANUFACTURING_QUALITY_CAPABILITY_FREEZE`（37 项能力），Sales & Customer 已于 2026-11-13 签发
+   `SALES_CUSTOMER_CAPABILITY_FREEZE`（36 项能力）。本节的有界 Requirement / Design **触碰这两个域的
+   权限与 route exposure 合同**，因此在业务所有者**显式解冻**并另行授权 Implementation 之前，不得改动
+   任何 route exposure、API 守卫、`role_permissions` 或相关前端行为。冻结证据本身不因本节失效 ——
+   本节记录的是**冻结之后**发现的有界缺陷。
+2. **「收紧 route exposure」是未裁定的业务决定**：`sales-price-override-authorizations` 对
+   `role-sales` / `role-accounting` 暴露的签发工作面，对这两个角色不可执行（无 `SALES_PRICING_OVERRIDE`）。
+   收紧 exposure 会**减少**两个既有角色的可见入口，属权限结果变化；本轮不自行决定，登记为开放业务决定
+   （见 `docs/decisions/OPEN-BUSINESS-DECISIONS.md`）。
+3. **该缺陷是否应上升为 Platform 级通用合同**：根因形态（route exposure 声明的权限集合未覆盖页面自身
+   依赖的 API 权限集合）是**平台级**的，不止这两个域。本轮授权只覆盖 Manufacturing & Quality 与
+   Sales & Customer 两个域的有界起草，**未**起草任何 Platform 级 Requirement / Design。
+4. **canonical 浏览器门禁仍为 FAIL（退出码 1）**：在两个域的修复合入前不得宣称
+   「production deploy ready」；本轮**未**重跑该门禁（单次整轮 50–70 分钟），§65.4 记录的 6 项失败
+   与 §66.2 的根因实测来自同一 HEAD `acb187d`。
+5. **canonical 门禁只覆盖 route 层，不覆盖文档详情层**：与 §65.4 第 1 条同源，本轮未改动。
+
+### 66.5 Owner
+
+| 角色 | 承担者 | 说明 |
+|---|---|---|
+| 403 类覆盖分类裁定 | 业务所有者（授权）+ 仓库（实测举证） | 分类为 `SEMANTIC_MISMATCH`；不改变任何冻结证据 |
+| §36.17 / §32.17 五项修订 | Platform（Owner）+ 业务所有者（授权） | 合同项范围不变，只修事实基线与判定口径 |
+| Manufacturing & Quality 有界包 | Manufacturing & Quality（Owner）+ 业务所有者（解冻与实施授权） | 实施须先解冻并单独授权 |
+| Sales & Customer 有界包 | Sales & Customer（Owner）+ 业务所有者（解冻与实施授权） | 实施须先解冻并单独授权 |
+| 平台级通用合同 | 业务所有者 | 本轮未起草，见 §66.4 第 3 条 |

@@ -57,6 +57,7 @@
 | 29 | `05-wave-11-amendments.md` | W11-A U3 / Wave 9 Exact Additive Schema Compatibility — Requirement Amendment | 2026-10-30 | 精确可加 schema 兼容 | `ACTIVE` |
 | 30 | `05-wave-11-amendments.md` | W11-A U3 FAST Dual-Blocker Closure — Bounded Requirement Amendment | 2026-10-30 | FAST 双阻塞闭合 | `ACTIVE` |
 | 31 | `05-wave-11-amendments.md` | W11-A U3 Final Acceptance Readiness — Bounded Residual Risk Requirement Amendment | 2026-10-30 | 验收就绪与残余风险 | `ACTIVE` |
+| 32 | `01-domain-closure.md` | §34.16 route exposure 与页面自身 API 权限一致性有界增补（`MQ` 侧见 `docs/requirements/manufacturing-quality.md` §29.11） | 2026-11-15 | 冻结后有界缺陷：route exposure 未覆盖页面自身依赖的 API 权限集合 | `PENDING_APPROVAL`（Design 已授权并 HARD STOP） |
 
 > 处置列只表示**文档效力**，不表示能力已验收。能力验收状态一律以
 > [`docs/status/PROJECT_STATUS.md`](../../status/PROJECT_STATUS.md) §35.3 与

@@ -19,15 +19,15 @@
 | Core Scope Cleanup | [`docs/design/core-scope-cleanup.md`](docs/design/core-scope-cleanup.md) | §21 |
 | Domain Alignment | [`docs/design/domain-alignment.md`](docs/design/domain-alignment.md) | §22 |
 | Master & Engineering | [`docs/design/master-engineering.md`](docs/design/master-engineering.md) | §23 |
-| Manufacturing & Quality | [`docs/design/manufacturing-quality.md`](docs/design/manufacturing-quality.md) | §24 |
+| Manufacturing & Quality | [`docs/design/manufacturing-quality.md`](docs/design/manufacturing-quality.md) | §24（§24.27 = route exposure 与页面自身 API 权限一致性有界增补 Design，`PENDING_APPROVAL`，2026-11-15；HARD STOP） |
 | Planning | [`docs/design/planning.md`](docs/design/planning.md) | §25 |
 | Procurement & Outsourcing | [`docs/design/procurement-outsourcing.md`](docs/design/procurement-outsourcing.md) | §26；§26.34 = Package A1 有界 Design（待业务所有者审阅）；§26.35 = 委外核心执行工作面有界 Design（已验收冻结）；§26.36 = 完整 Active Contract 域级交付整改 Design，已批准并实施（`IMPLEMENTED`，待域级 Acceptance）；§26.37 = 域级交付整改的补充设计（`IMPLEMENTED`）；§26.38 = 采购参数接线、商业快照与 PRC-26 范围裁定（`IMPLEMENTED`） |
 | Procurement & Outsourcing（M1-Core 首期） | [`docs/design/procurement-outsourcing-m1-core.md`](docs/design/procurement-outsourcing-m1-core.md) | §31.13 对应有界后继设计；`M1_CORE_DESIGN_PASS` |
 | Inventory & Warehouse | [`docs/design/inventory-warehouse.md`](docs/design/inventory-warehouse.md) | §27；§27.56 = 统一期间控制接入（`PENDING_APPROVAL`，Implementation `NOT_AUTHORIZED`） |
 | Finance Operations | [`docs/design/finance-operations.md`](docs/design/finance-operations.md) | §28.0–§28.30；§28.30 = Finance 期间控制与折扣/结算接入（`PENDING_APPROVAL`，Implementation `NOT_AUTHORIZED`） |
-| Sales & Customer | [`docs/design/sales-customer/README.md`](docs/design/sales-customer/README.md) | §29 + §30 + Wave 8/9/11 基线；§29.52 = `W10-INV-RISK-01` Production Inventory Correctness Closure Design（`APPROVED`，2026-11-14；Implementation 已授权，仅仓库内代码与测试） |
+| Sales & Customer | [`docs/design/sales-customer/README.md`](docs/design/sales-customer/README.md) | §29 + §30 + Wave 8/9/11 基线；§29.52 = `W10-INV-RISK-01` Production Inventory Correctness Closure Design（`APPROVED`，2026-11-14；Implementation 已授权，仅仓库内代码与测试）；§29.53 = route exposure 与页面自身 API 权限一致性有界增补 Design（`PENDING_APPROVAL`，2026-11-15；HARD STOP） |
 | Accounting & Analytics | [`docs/design/accounting-analytics.md`](docs/design/accounting-analytics.md) | §31；§31.16 = 法定/经营期间控制接入（`PENDING_APPROVAL`，Implementation `NOT_AUTHORIZED`） |
-| Platform | [`docs/design/platform.md`](docs/design/platform.md) | §32；§32.15 = canonical 期间闸门与跨域协调（`APPROVED`，已实施并冻结）；§32.16 = Release Infrastructure 有界增补设计（`APPROVED`，2026-11-14；Implementation 已授权，仅仓库内代码、测试、脚本与模板）；§32.17 = Migration 风险工作包设计（`PENDING_APPROVAL`，2026-11-15；HARD STOP，Implementation `NOT_AUTHORIZED`） |
+| Platform | [`docs/design/platform.md`](docs/design/platform.md) | §32；§32.15 = canonical 期间闸门与跨域协调（`APPROVED`，已实施并冻结）；§32.16 = Release Infrastructure 有界增补设计（`APPROVED`，2026-11-14；Implementation 已授权，仅仓库内代码、测试、脚本与模板）；§32.17 = Migration 风险工作包设计（`PENDING_APPROVAL`，2026-11-15，含同日业务所有者技术复核修订五项；HARD STOP，Implementation `NOT_AUTHORIZED`） |
 
 ### 0.2 章节编号迁移规则
 

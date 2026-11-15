@@ -403,3 +403,91 @@ Wave H — Analytics & Integration
 **MANUFACTURING & QUALITY DOMAIN CLOSURE DESIGN — READY FOR AUTHORIZED IMPLEMENTATION**
 
 ---
+
+### 24.27 route exposure 与页面自身 API 权限一致性有界增补设计（`PENDING_APPROVAL`，2026-11-15）
+
+#### 24.27.1 设计身份、授权与边界
+
+| 项 | 内容 |
+|---|---|
+| 用途 | 实现 Requirement §29.11 的 `MQ-EXPOSURE-01..05`：`manufacturing-analytics` 的页签可见性与默认页签按 actor 权限自适应，使页面发出的每一个 API 请求都在该角色权限内 |
+| Owner | Manufacturing & Quality（`src/pages/manufacturing.jsx` 与生产报表后端） |
+| 状态 | `PENDING_APPROVAL`；Requirement §29.11 于 2026-11-15 由业务所有者授权与本节 Design 连续执行，**Design 完成后 HARD STOP**；Implementation、解冻、数据库操作、发布与部署均未授权 |
+| 权威来源 | `solution.md` §24；Requirement §29.11；`docs/status/PROJECT_STATUS.md` §66.2 |
+| 前置条件 | 实施前必须由业务所有者**显式解冻** `MANUFACTURING_QUALITY_CAPABILITY_FREEZE` 并单独授权 Implementation；本节不自行解冻 |
+
+设计边界（与 §24.0 一致）：**不改** route exposure、**不改**后端 API 守卫、**不改**权限目录与 role 种子、
+**不改**页签集合。本节只改**页面层**的页签可见性与默认页签选择。
+
+#### 24.27.2 模块与责任（单一 canonical owner）
+
+| 责任 | 目标文件 | 单一职责 |
+|---|---|---|
+| 页签与 API 依赖登记 | `src/pages/manufacturing.jsx`（`ManufacturingAnalytics`） | 一份页签表：页签 key、中文标签、目标 API、所需权限。页签表是**唯一事实来源**，页面不得再出现与页签表无关的 API 调用 |
+| 可见页签与默认页签 | 同上 | 由 actor 权限过滤页签表；选择默认页签；无权时 fail closed |
+| actor 权限读取 | `src/components/ui.jsx` 的 `can(user, permission)`（**既有**，`user.permissions.includes(permission)`） | 不新增权限判定helper，不复制 `can` 的实现 |
+| route exposure | `src/navigation/applicationRegistry.js`（**不变**） | `manufacturing-analytics` 的 exposure 维持 `any:['PRODUCTION_ORDERS_VIEW','PRODUCTION_COSTS_VIEW']` |
+| 后端守卫 | `server/modules/manufacturing-execution.js`（**不变**） | `wip` / `yield` / `capacity` / `execution` / `materialIssue` 仍要求 `PRODUCTION_ORDERS_VIEW`；`cost` 仍要求 `PRODUCTION_COSTS_VIEW` |
+
+不得出现第二份页签清单、第二份权限判定helper或第二套「哪些页签需要哪个权限」的人工名单。
+
+#### 24.27.3 调用与数据流
+
+```
+actor.permissions
+  └─ 页签表（key · label · endpoint · permission）        ← 唯一事实来源
+       └─ 可见页签 = 页签表.filter(can(user, permission))  ← 前端可见性（不构成授权）
+            ├─ 可见页签为空 → fail closed（权限拒绝态，不渲染、不发请求）
+            └─ 可见页签非空
+                 └─ 生效页签 = (当前选中页签仍在可见页签内) ? 当前选中页签 : 可见页签[0]
+                      └─ useEffect([生效页签, range]) → api(页签表[生效页签].endpoint)
+                           └─ 后端 allow(actor, 页签表[生效页签].permission) → 200 / 403
+```
+
+要点：
+
+1. **生效页签必须由可见页签派生**，不得用「切换可见性时重置 state」的方式实现 —— 后者会在 actor 权限变化后
+   保留一个已不可见的页签，产生一次性 403。
+2. **首次进入 route 时**，生效页签 = 可见页签[0]。对只持有 `PRODUCTION_COSTS_VIEW` 的角色，可见页签只有
+   `cost`，因此生效页签是 `cost`；对持有 `PRODUCTION_ORDERS_VIEW` 的角色，可见页签按页签表顺序以
+   `wip` 起始。**当前固定 `wip` 默认值的实现必须移除。**
+3. **请求只允许来自页签表**：渲染与数据加载必须读同一个页签表对象，避免「渲染的页签」与「请求的 endpoint」分叉。
+4. **页签表与后端守卫必须逐项一致**：页签表中的 `permission` 与后端 `allow(...)` 的参数必须一一对应。
+   该一致性由 §24.27.6 的 focused 测试断言（同一份页签表驱动请求与期望），不允许靠人工核对维持。
+
+#### 24.27.4 错误行为、审计、RBAC/SOD 与兼容
+
+- **错误行为**：页签请求失败时沿用既有的 `notify(e.message, 'error')` 路径；**新增**的失败路径只有一条 ——
+  可见页签为空时**不发任何请求**并呈现权限拒绝态。不得以「先请求再兜底」的方式处理无权页签。
+- **审计**：本节不产生业务状态迁移，**不写**业务 audit；证据写入 focused 测试与 canonical 浏览器门禁输出。
+- **RBAC / SOD**：后端守卫**完全不变**，继续 fail closed；前端可见性**不是**授权实现。不得新增权限码、
+  不得修改 `role_permissions`、不得放宽或收紧任何角色的权限集合。route exposure 不变，因此没有任何角色
+  的可进入性发生变化 —— 本节**不改变任何权限结果**。
+- **兼容**：页签**集合**不变（6 个页签全部保留，只是按权限可见）；页签的 API、参数与数据口径不变；
+  生产报表口径、WIP / 成本语义、状态机、金额单位均不变；既有 route key 与 route 数量不变。
+- **回滚**：本节是一次性前端行为变更，回滚即恢复固定 `wip` 默认值与无条件页签渲染；回滚**不得**连带修改
+  后端守卫或权限目录。回滚后 `manufacturing-analytics` 的「预期外 403」会重新出现（门禁转红），
+  该事实必须如实登记，不得通过门禁豁免掩盖。
+
+#### 24.27.5 验证矩阵与变异实验
+
+| Requirement | focused evidence | release evidence |
+|---|---|---|
+| MQ-EXPOSURE-01 | 页签表与后端守卫逐项一致断言（6 个页签） | FULL / HEAVY |
+| MQ-EXPOSURE-02 | 逐角色断言可见页签集合 = 页签表 ∩ 角色权限 | canonical 浏览器门禁（5 角色 × 4 宽度）「无预期外 4xx/5xx」= 0 |
+| MQ-EXPOSURE-03 | 逐角色断言首屏请求的 endpoint 在角色权限内；只持 `PRODUCTION_COSTS_VIEW` 的角色首屏请求为 `cost` | 同上 |
+| MQ-EXPOSURE-04 | 角色权限集合快照断言（改动前后 `role_permissions` 不变） | `pnpm test:fast` / FULL |
+| MQ-EXPOSURE-05 | 无可见页签时断言**不产生任何 API 请求**且呈现拒绝态 | 同上 |
+
+**变异实验（非空洞证明）**：① 默认页签改回固定 `wip` → MQ-EXPOSURE-03 断言必须转红；
+② 取消可见页签过滤 → MQ-EXPOSURE-02 断言必须转红；③ 移除 `cost` 页签的 `PRODUCTION_COSTS_VIEW` 判断 →
+MQ-EXPOSURE-01 / 03 断言必须转红；④ 把 `can` 换成恒真实现 → MQ-EXPOSURE-02 / 03 必须转红。
+实验后必须逐字节恢复实现。
+
+#### 24.27.6 Design 状态与 HARD STOP
+
+Requirement §29.11：`PENDING_APPROVAL`（2026-11-15）；本节 Design：`PENDING_APPROVAL`；Implementation：`NOT_AUTHORIZED`。
+
+**HARD STOP**：本节 Design 完成后**不得**进入 Implementation，等待业务所有者明确批准（并先解冻本域冻结）。
+本节不授权真实 MySQL 连接、对象存储写入、目标主机写操作、发布、部署、push、tag、Git 历史重写，
+也不授权 Acceptance / Freeze 签发。

@@ -1705,3 +1705,80 @@ Status going out of this Record: `WAVE8_STAGE_B_REQUIREMENT_CLOSURE_RECORDED —
 Hard Stop: this Record is bounded. It does **not** authorize any of the following without a separate user authorization: Stage C Design work on `solution.md`, any Stage D Implementation, any test run (`pnpm test:fast` / `pnpm test` / `pnpm test:heavy` / `pnpm test:mysql` / `pnpm test:mysql:concurrency` / `pnpm build`), any database connection / reset / DDL / DML, any Git operation (`add` / `commit` / `push` / `merge` / `rebase` / `reset` / `clean` / `stash` / `tag` / `push --tags`), any deletion of untracked SQLite / WAL / SHM artefacts, any modification to `APPLY_GUIDE.md` / `README.md` / `AGENTS.md` / `CLAUDE.md` / `package.json` / release tags, any new SC / Invariant / UAT / Race / Audit Capability ID, or any Wave 9–13 work. The next user action must explicitly confirm this Stage B Requirement Closure deliverable before Stage C Design starts.
 
 ---
+
+### 34.16 route exposure 与页面自身 API 权限一致性有界增补（`PENDING_APPROVAL`，2026-11-15）
+
+#### 34.16.1 身份、授权与生效边界
+
+| 项 | 内容 |
+|---|---|
+| 用途 | 消除 `sales-price-override-authorizations` route 的 **exposure 权限集合未覆盖该页面自身依赖的 API 权限集合**所造成的「预期外 403」：该 route 允许持有 `SALES_PRICING_VIEW` 的角色进入，而页面挂载即调用的客户 / 物料参照 API 要求 `CUSTOMERS_VIEW` / `PRODUCTS_VIEW`，同一主体被前端判定可进入、被后端判定无权读取参照 |
+| Owner | Sales & Customer（`sales-price-override-authorizations` 工作面与价格覆盖授权的 owner） |
+| 状态 | `PENDING_APPROVAL`；业务所有者于 2026-11-15 授权本节 Requirement 与 Design 连续撰写，**Design 完成后 HARD STOP**。Implementation、解冻、数据库操作、发布与部署**均未授权** |
+| 权威来源 | `document.md` §34；本文件 §34.7 Permission / RBAC / SOD、§34.8 Cross-Domain Boundary Table、§34.9 Compatibility / 不变性约束、§34.12 Hard Stop Conditions；`docs/status/PROJECT_STATUS.md` §66.2（覆盖分类裁定）；`docs/status/CAPABILITY_MATRIX.md` B3102（冻结后有界发现） |
+| 前置条件 | 本域整域已冻结（`SALES_CUSTOMER_DOMAIN_ACCEPTANCE_PASS` / `SALES_CUSTOMER_CAPABILITY_FREEZE`，2026-11-13，36 项能力）。本节触碰**权限与 route exposure 合同**，实施前必须由业务所有者**显式解冻**并单独授权 Implementation |
+| Supersession | 本节只**增补** §34.7 与 §34.9，**不改写** §34 已冻结结论，也**不改写** 2026-11-13 的冻结记录；本节记录的是**冻结之后**发现的有界缺陷 |
+
+本节只覆盖 `sales-price-override-authorizations` 一条 canonical route 与 SC19 手工价格覆盖授权工作面的**呈现与参照加载**。
+SC01–SC114、UAT-S-*、R-SAL-*、`document.md` §34 的其它合同**均不变**；本节**不新增** SC / Invariant / UAT / Race ID。
+
+#### 34.16.2 事实基线（2026-11-15 在 HEAD `acb187d` 上实测）
+
+| 项 | 实测事实 | 事实来源 |
+|---|---|---|
+| route exposure | `any:['SALES_PRICING_VIEW','SALES_PRICING_OVERRIDE']` | `src/navigation/applicationRegistry.js:26` |
+| 页面挂载即调用的 API | `GET /api/customers` + `GET /api/products`（`Promise.all`，无权限前置） | `src/pages/sales-parameters.jsx:976` |
+| 参照 API 的权限要求 | `/api/customers` → `CUSTOMERS_VIEW` / `CUSTOMERS_MANAGE`；`/api/products` → `PRODUCTS_VIEW` / `PRODUCTS_MANAGE` | `server/modules/customers.js:38`；`server/modules/products.js:56` |
+| 签发动作的权限要求 | `POST /api/sales-price-overrides/authorize` 要求 `SALES_PRICING_OVERRIDE` | `src/pages/sales-parameters.jsx:984`（前端 `canAuthorize`） |
+| 角色权限种子 | `role-sales`：`SALES_PRICING_VIEW` + `SALES_PRICING_MANAGE`；`role-reviewer`：`SALES_PRICING_VIEW` + `SALES_PRICING_OVERRIDE`；`role-accounting`：仅 `SALES_PRICING_VIEW` | `server/db.js:2061`–`:2063` |
+| 触发角色 | `role-accounting` 有 `SALES_PRICING_VIEW`（可进入 route），**无** `CUSTOMERS_VIEW`、**无** `PRODUCTS_VIEW` | `server/db.js:2037`、`:2063` |
+| 不触发的角色 | `role-sales` 与 `role-reviewer` 同时持有 `CUSTOMERS_VIEW` / `PRODUCTS_VIEW`，无 403 | `server/db.js:2043`、`:2046` |
+
+既有页面已对无签发权角色渲染「权限」提示段（`src/pages/sales-parameters.jsx:1024`–`:1028`），**但**参照加载
+发生在同一挂载流程中且**不以权限为前置**，因此无签发权 / 无参照读取权的角色仍会触发 403。
+
+#### 34.16.3 合同项 `SC-EXPOSURE-01..05`
+
+- **`SC-EXPOSURE-01`（参照加载必须以 actor 权限为前置）**：页面挂载时，**只有**在 actor 持有对应读取权限时才允许
+  发出参照请求；actor 缺 `CUSTOMERS_VIEW`/`CUSTOMERS_MANAGE` 时不得调用 `/api/customers`，缺
+  `PRODUCTS_VIEW`/`PRODUCTS_MANAGE` 时不得调用 `/api/products`。页面不得发出任何 actor 无权调用的 API。
+- **`SC-EXPOSURE-02`（缺参照读取权限必须显式呈现，不得暴露 403）**：当 actor 缺少参照读取权限时，页面必须呈现
+  **明确的「缺少客户 / 物料参照读取权限」状态**；**不得**以错误提示暴露 403，**不得**把空参照静默呈现为
+  「没有可选客户 / 物料」（空态与无权态必须可区分）。
+- **`SC-EXPOSURE-03`（签发权限语义不变，且缺参照时必须 fail closed）**：签发动作仍要求
+  `SALES_PRICING_OVERRIDE`；既有「无签发权角色看到权限提示、不可签发」的行为**保留**。当 actor 虽持有签发权
+  但缺少参照读取权限时，必须呈现「缺少参照读取权限，无法签发」并**禁用签发**——不得在缺参照的情况下签发授权。
+- **`SC-EXPOSURE-04`（后端与权限目录不变，不新增 API）**：**不得**修改 `/api/customers`、`/api/products` 的权限
+  守卫；**不得**把客户 / 物料读取权限放宽给定价角色；**不得**新增权限码、**不得**修改 `role_permissions`、
+  **不得**新增「价格覆盖专用参照」API；route exposure 保持 `any:['SALES_PRICING_VIEW','SALES_PRICING_OVERRIDE']`
+  不变。本节因此**不改变任何权限结果**，也**不扩大任何数据可见面**。
+- **`SC-EXPOSURE-05`（「收紧 route exposure」是未裁定的业务决定）**：本 route 对 `role-sales` 与 `role-accounting`
+  暴露了一个它们**不能执行**的签发工作面（无 `SALES_PRICING_OVERRIDE`）。收紧 exposure 为
+  `SALES_PRICING_OVERRIDE` 会**减少**这两个既有角色的可见入口，属权限结果变化，**必须由业务所有者单独裁定**。
+  本节**不实施**该收紧、也**不默认采纳**该方向；登记为开放业务决定（见
+  `docs/decisions/OPEN-BUSINESS-DECISIONS.md`）。
+
+#### 34.16.4 验收、兼容与禁止事项
+
+**验收门禁**：
+
+1. canonical 浏览器门禁 `node scripts/acceptance/release-browser-readiness.mjs` 在 5 类 canonical 角色 × 4 档宽度下，
+   `sales-price-override-authorizations` 的「无预期外 4xx/5xx」判定**必须为 0**；该门禁的其余判定**不得回退**。
+2. focused 测试：逐角色断言该页面的 API 请求集合 ⊆ 该角色权限集合；断言无参照读取权的角色呈现「缺少参照读取
+   权限」状态而非错误提示；断言有签发权但缺参照读取权时签发被禁用。
+3. 变异实验（证明断言承重、非空洞）：① 取消参照加载的权限前置 → 必须转红；
+   ② 把缺参照状态改回错误提示 → 必须转红；③ 把空参照呈现为「无可选项」空态 → 必须转红。
+4. `pnpm test:fast`、`pnpm build`、`git diff --check`、两种文档一致性模式。
+
+**兼容要求**：不改变任何角色的权限集合与 `role_permissions`；不改变 route 数量与 route key；不改变任何 API 的
+请求 / 响应合同与权限判定；不改变价格覆盖授权的业务语义（一次性授权、授权 ID 在销售订单行上使用、
+安全整数分、`Idempotency-Key` 语义、SC19 的授权与消费分离）；不改变客户 / 物料主数据的可见面；
+不改变既有 release tag。
+
+**禁止事项**：不得通过 allowlist / 白名单方式把 403 放进 canonical 门禁的豁免项；不得放宽 `/api/customers`、
+`/api/products` 的守卫；不得新增「价格覆盖专用参照」API 或新权限码；不得修改 role 种子；
+不得把「无权读取参照」呈现为「没有可选客户 / 物料」；不得在本节顺带改动其它 route、权限或 SC 合同；
+不得自行实施 §34.16.3 `SC-EXPOSURE-05` 的收紧方向。
+
+**Requirement 状态：`PENDING_APPROVAL`（2026-11-15）。Design 已获授权并连续执行；Implementation、解冻、
+数据库操作、发布与部署均未授权。**
