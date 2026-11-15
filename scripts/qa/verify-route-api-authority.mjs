@@ -118,6 +118,7 @@ async function main() {
   const failures = [];
   const consoleErrors = [];
   let visits = 0;
+  let tabClicks = 0;
   let browser = null;
   try {
     browser = await chromium.launch({ executablePath: edgePath, headless: true });
@@ -198,6 +199,7 @@ async function main() {
           // 每次重新取句柄：切页签会重绘，句柄可能失效。
           const handles = await page.$$(TAB_CONTROL_SELECTOR);
           await handles[index]?.click({ timeout: 5_000 }).catch(() => {});
+          tabClicks += 1;
           await page.waitForTimeout(1_200);
           await page.keyboard.press('Escape').catch(() => {});
           await page.waitForTimeout(150);
@@ -226,6 +228,7 @@ async function main() {
   rmSync(tempDir, { recursive: true, force: true });
 
   console.log(`枚举 (角色, route) 组合 ${visits} 个`);
+  console.log(`页签点击 ${tabClicks} 次${args.tabs ? '' : '（未启用 --tabs）'}`);
   console.log(`首屏非预期 4xx/5xx ${failures.length} 条；浏览器控制台错误 ${consoleErrors.length} 条`);
   if (failures.length) {
     console.log('非预期 4xx/5xx 明细：');

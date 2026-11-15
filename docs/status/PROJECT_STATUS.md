@@ -5769,6 +5769,7 @@ Design [`docs/design/inventory-warehouse.md` §27.58](../design/inventory-wareho
 | 门禁 | 结果 |
 |---|---|
 | `node scripts/qa/verify-route-api-authority.mjs`（穷尽枚举，202 组合） | **PASS** —— 首屏非预期 4xx/5xx **0** 条；浏览器控制台错误 **0** 条 |
+| 同上 `--tabs`（页签点击枚举） | **PASS** —— 页签点击 **264** 次（证明该分支非空洞），首屏与页签级非预期 4xx/5xx **0** 条 |
 | 页签点击复核（`reviewer` × `inventory`） | **PASS** —— 可见 11 个页签全部打开无 4xx/5xx，控制台错误 0 |
 | `node --test server/route-exposure-semantic-parity.test.js` | **PASS 39/39**（原 23 例 + 平台级 16 例） |
 | `node scripts/acceptance/inventory-warehouse-responsive-uat.mjs` | **PASS 108/108**（I&W 域浏览器回归：10 屏 × 4 档宽度，触控目标 0 项过小） |
