@@ -28,7 +28,7 @@
 | Finance Operations | [`docs/requirements/finance-operations.md`](docs/requirements/finance-operations.md) | §33（§33.51 = FO51–FO53 与跨域期间守卫修订，`APPROVED`，2026-11-14；Design 已授权） |
 | Sales & Customer | [`docs/requirements/sales-customer/README.md`](docs/requirements/sales-customer/README.md) | §34 + Wave 8/9/10/11 修订；`W10-INV-RISK-01` 生产库存正确性闭合 Requirement 见 `04-wave-10-amendments.md` 末节（`APPROVED`，Design `APPROVED`，Implementation 已授权） |
 | Accounting & Analytics | [`docs/requirements/accounting-analytics.md`](docs/requirements/accounting-analytics.md) | §35（Accounting & Analytics Domain Closure Requirement；§35.11 = 法定／经营期间一致性修订，`APPROVED`，2026-11-14（含同日增补：经营关账职责分离与归属字段）；Design 已授权） |
-| Platform | [`docs/requirements/platform.md`](docs/requirements/platform.md) | §36（Platform 平台层域 Domain Closure Requirement；§36.15 = PL-13 期间控制收敛修订，`APPROVED`；§36.16 = Release Infrastructure 有界增补，`APPROVED`、Design `APPROVED`、Implementation 已授权） |
+| Platform | [`docs/requirements/platform.md`](docs/requirements/platform.md) | §36（Platform 平台层域 Domain Closure Requirement；§36.15 = PL-13 期间控制收敛修订，`APPROVED`；§36.16 = Release Infrastructure 有界增补，`APPROVED`、Design `APPROVED`、Implementation 已授权；§36.17 = Migration 风险工作包，`PENDING_APPROVAL`、Design 已授权并 HARD STOP） |
 
 ### 0.2 章节编号迁移规则
 

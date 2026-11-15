@@ -485,3 +485,114 @@ Platform 是九域架构（8 Business Domains + Platform）中的**平台层**�
 禁止事项：不得把 Manual Capability Closure 或九域 Release Readiness 签发重新纳入本轮；不得记录或提交 secret；不得在普通测试中连接 MySQL；不得为通过 audit 使用 `skip`、删断言、忽略 high/critical、把 build dependency 伪装成运行依赖，或把历史日志改写为“从未出错”。
 
 **Requirement status：`APPROVED`（2026-11-14）。Design 已授权；Implementation、数据库操作、发布与部署均未授权。**
+
+### 36.17 Migration 风险工作包（`PENDING_APPROVAL`，2026-11-15）
+
+#### 36.17.1 身份、授权与生效边界
+
+| 项 | 内容 |
+|---|---|
+| 用途 | 闭合 2026-11-15 阶段 III 收口登记的三项 migration 风险：吞错 catch 站点、非事务固定 `_new` 表重建、表重建导致的索引丢失；把 §36.16.3 已有的 migration fail-closed 禁止条款，从 `server/db.js` 扩展到全部 `server/migrations/**` canonical 迁移文件 |
+| Owner | Platform（迁移执行器与 `server/migrations/**` 的 canonical owner）。Inventory & Warehouse、Manufacturing & Quality、Procurement & Outsourcing、Sales & Customer 仅作为受影响 schema 事实的来源方，其既有 owner、业务语义与能力矩阵状态均不变 |
+| 状态 | `PENDING_APPROVAL`；业务所有者于 2026-11-15 授权本节 Requirement 与 Design 连续撰写，Design 完成后 HARD STOP。Implementation、数据库操作、发布与部署**均未授权** |
+| 权威来源 | `document.md` §17、§22.22；本文件 §36.16（`PL-RI-02`）；`docs/status/PROJECT_STATUS.md` §65；`log/2026-11-15.md` 阶段 III「未解决矛盾」第 2、3、4 条 |
+| Supersession | 本节只**增补** §36.16.3 的适用范围，不改写 §36.16 已批准结论，也不改写任何已冻结的历史记录 |
+
+本节包含四个独立但共同服务于「迁移失败必须可诊断、不得静默、不得破坏既有数据」的合同项：
+`PL-MG-01` 吞错 catch 消除；`PL-MG-02` 表重建原子化；`PL-MG-03` 索引保全；`PL-MG-04` 机器可验证守卫与双后端等价。
+
+#### 36.17.2 事实基线（2026-11-15 实测清单）
+
+基线由既有守卫 `node scripts/qa/verify-migration-fail-closed.mjs` 与一次全新 SQLite 初始化实测得出，是本节的唯一事实来源。
+
+**A 类 —— `server/migrations/**` 内吞错 catch 站点：10 处 / 8 个文件**（Requirement §36.16.3 的禁止条款已覆盖这些站点；但 Design §32.16.2 把 SQLite migration 原语的 owner 限定为 `server/db.js`，§32.16.4.4 只概括授权「用宽泛 catch 继续启动的升级段逐项迁入 runner」，未列明 `server/migrations/**` 的具体站点、表重建原子化与索引保全要求）：
+
+| # | 位置 | 现状 |
+|---|---|---|
+| A-1 | `inventory-position-schema.js:45` | `safeCreateIndex` catch-all |
+| A-2 | `inventory-position-schema.js:271` | `upd.run` catch-all 后改写 key 重试 |
+| A-3 | `procurement-outsourcing-opening-schema.js:62` | `safeIndex` catch-all |
+| A-4 | `sales-customer-wave6-returns.js:192` | `dropMySqlConstraintIfExists` catch-all |
+| A-5 | `v13-phase1-contracts.js:125` | `addColumn` catch-all |
+| A-6 | `v13-phase2-source-integrity.js:12` | `addColumn` catch-all |
+| A-7 | `v13-phase3-quality-gates.js:10` | `addColumn` catch-all |
+| A-8 | `v13-phase6b-traceability-quality.js:5` | `add` catch-all |
+| A-9 | `v14-out-procurement-final-acceptance.js:14` | `safeAddColumn` catch-all |
+| A-10 | `v14-out-procurement-final-acceptance.js:18` | `safeIndex` catch-all |
+
+**B 类 —— 固定 `_new` 表名且无事务边界的表重建：10 处 / 7 个文件**（实测计数为 10；`log/2026-11-15.md` 第 3 条写「8 处」但列出 10 个位置，本节以实测为准并保留原日志行不改写）：
+
+| # | 位置 | 临时表 | 前置无条件 DROP |
+|---|---|---|---|
+| B-1 | `inventory-position-schema.js:298` | `inventory_new` | 无 |
+| B-2 | `manufacturing-quality-schema.js:35` | `production_orders_new` | `:33` 有 |
+| B-3 | `manufacturing-quality-schema.js:92` | `production_order_operations_new` | `:90` 有 |
+| B-4 | `procurement-outsourcing-opening-schema.js:162` | `outsourcing_wip_identity_effects_new` | 无 |
+| B-5 | `sales-customer-wave11-credit-evaluation-result-application.js:108` | `credit_profile_ratings_new` | 无 |
+| B-6 | `sales-customer-wave6-returns.js:231` | `sales_order_replacements_new` | 无 |
+| B-7 | `v14-out-procurement-final-acceptance.js:34` | `planning_outsource_handoffs_new` | 无 |
+| B-8 | `v14-out-procurement-final-acceptance.js:95` | `logistics_quality_policy_snapshots_new` | 无 |
+| B-9 | `v23-manufacturing-quality-closure.js:48` | `production_order_operations_v23_new` | `:46` 有 |
+| B-10 | `v23-manufacturing-quality-closure.js:116` | `production_inspections_v23_new` | `:114` 有 |
+
+实测：以上 7 个文件**均未**使用显式事务或 `runMigrationStep`，即 create → copy → drop → rename 全程不在原子边界内。
+
+**C 类 —— 表重建导致的索引丢失：3 个索引**（全新初始化实测，第二次启动才补齐）：
+
+| 索引 | 所在表 | 创建方 | 被谁删除 |
+|---|---|---|---|
+| `idx_po_instruction` | `production_orders` | `v13-phase4-production-integrity.js:26` | B-2 重建，未重建 |
+| `idx_po_instruction_item` | `production_orders` | `v13-phase4-production-integrity.js:27` | B-2 重建，未重建 |
+| `idx_production_inspections_operation` | `production_inspections` | `manufacturing-quality-schema.js:279` | B-10 重建，未重建 |
+
+该缺口随 SQLite 快照派生路径传播：`captureSqliteSnapshot` 使用与生产同一条 `createSqliteDatabase` 迁移链，`planMySqlIndexReconciliation` 只按快照补索引，因此快照缺失的索引在 MySQL bootstrap 后同样缺失。真实 MySQL 侧证据须在获授权的 ACK-4 campaign 中取得，本节不据此宣称 MySQL 已受影响。
+
+**D 类 —— 由 B 类推导出的数据丢失路径（本节新增风险认定）**：非事务重建在 `DROP 旧表` 与 `RENAME` 之间失败时，旧表已不存在、数据只存在于临时表。下一次启动的行为按站点分为四种，**严重度依次递减**：
+
+| 形态 | 站点 | 失效序列 | 后果 |
+|---|---|---|---|
+| **静默销毁型** | B-2 `production_orders` | 基础 `migrate()` 以旧形态重建**空** `production_orders` → 守卫判定不成立 → `DROP TABLE IF EXISTS production_orders_new` 丢弃唯一副本 → `INSERT … SELECT` 从空表复制 → **迁移成功** | **数据永久消失，应用正常启动，无任何报错** |
+| **销毁后失败型** | B-3 `production_order_operations` | 正式表缺失时守卫不提前返回 → `DROP TABLE IF EXISTS production_order_operations_new` 丢弃副本 → 随后的 `INSERT … FROM production_order_operations` 因源表缺失失败 | 数据丢失**且**应用拒绝启动 |
+| **失败但保留副本型** | B-1 `inventory`、B-4 `outsourcing_wip_identity_effects`、B-5 `credit_profile_ratings`、B-6 `sales_order_replacements`、B-7 `planning_outsource_handoffs`、B-8 `logistics_quality_policy_snapshots` | 重建因「临时表已存在」或「源表缺失」失败 | 应用拒绝启动，但数据副本仍留在临时表中，可人工恢复 |
+| **孤儿型** | B-9 `production_order_operations_v23_new`、B-10 `production_inspections_v23_new` | inspect 守卫在正式表缺失时提前返回 | 正式表持续缺失、临时表成为孤立副本；应用不可用，数据需人工恢复 |
+
+D 类是本工作包的**首要风险**：B-2 的失效路径在既有代码下**既不报错也不阻断启动**，属于静默数据丢失。所有 A / B / C 类收敛必须以 D 类不再成立为验收目标。
+
+#### 36.17.3 `PL-MG-01` 吞错 catch 必须消除
+
+- `server/migrations/**` 内不得存在 catch-all、空 catch、仅注释后继续、或仅 `console.error` 后继续的站点。
+- 「预期幂等」（列已存在、索引已存在）必须通过 **schema inspection** 判定，不得依赖错误文本匹配或捕获后忽略。
+- 允许的窄化 catch 只有一种形态：错误类别被**显式枚举**，且该类别之外的一切错误一律向上传播并带上 migration 标识与安全诊断。错误文本匹配仅可用于区分**同一错误类别内部**的变体，不得用于判定「这一整类错误都可以忽略」。
+- 错误输出不得包含数据库密码、连接串、token 或业务数据。
+- 已有守卫 `scripts/qa/verify-migration-fail-closed.mjs` 的「范围外待处理」计数必须归零；该计数归零后，守卫不得因此失效，而应扩展为覆盖 `server/migrations/**` 全域的常驻守卫。
+
+#### 36.17.4 `PL-MG-02` 表重建必须原子且可恢复
+
+- 表重建必须处于事务或等价原子边界内；失败时不得留下临时表残留、半复制数据或已删除的旧表。
+- 重建必须使用**运行内唯一**的临时表名，或使用保留命名空间并显式判定其归属；不得再以固定表名配合无条件 `DROP TABLE IF EXISTS` 的方式清理上次残留。
+- 迁移启动时必须显式判定「旧表缺失但临时表存在」的恢复态，并**完成**该次交换，不得丢弃承载数据的临时表。
+- 外键强制必须在原子边界之外按需关闭、在边界结束后立即恢复；失败路径同样必须恢复，不得让连接停留在外键关闭状态。
+- 行数与内容不变量必须在切换前证明；重建前后行数不一致时必须失败，不得以部分数据继续启动。
+
+#### 36.17.5 `PL-MG-03` 索引保全
+
+- 任何表重建都不得删除目标表上已有的索引；若重建后的目标形态与重建前不一致，必须显式重建全部应存在的索引。
+- 每张被重建的表都必须有一份**权威索引清单**，重建后必须逐项核对；缺项即失败。
+- 全新初始化后的 schema 索引集合必须与既有库升级后的索引集合一致；「全新初始化缺索引、第二次启动才补齐」的状态不得继续存在。
+
+#### 36.17.6 `PL-MG-04` 机器可验证守卫与双后端等价
+
+- 必须提供机器可验证的守卫，至少覆盖：吞错 catch 计数、非事务固定 `_new` 表重建计数、重建后索引缺失计数；三项均须为 0 才可判定通过。
+- 守卫必须给出**逐条位置**的清单，计数变化必须可定位到具体文件与行。
+- SQLite 与 MySQL 的迁移语义必须保持等价：MySQL 侧不执行 SQLite 专用 DDL，MySQL schema 由 SQLite 快照派生；快照缺索引不得被当作「目标库本来就没有」。
+- 真实 MySQL 证据仍属受保护 campaign；本地 SQLite 证据不得被表述为 MySQL 证据。
+
+#### 36.17.7 验收、兼容与禁止事项
+
+验收门禁至少包括：focused 迁移测试（fresh / upgrade / replay / 未知 DDL / 复制中断 / 校验失败 / 重启重试）、`scripts/qa/verify-migration-fail-closed.mjs` 归零、新增守卫三项归零、`pnpm test`、`pnpm test:heavy`、`pnpm build`、`git diff --check`、两种文档一致性模式。
+
+兼容要求：不改变九域业务语义、API 业务合同、业务 schema 事实、权限结果、单据状态机、金额单位与既有 tag；**不得新增业务表、业务列、CHECK 约束或数据回填**；历史行内容不得被改写；MySQL 侧 DDL 语义不变。
+
+禁止事项：不得以 `catch` 改名、注释化或 `try {} catch {}` 形式保留吞错；不得用 `skip`、删断言或放宽门禁制造绿色；不得把「第二次启动补齐」当作幂等证明；不得在普通测试中连接 MySQL；不得在本轮顺带修改任何业务 schema、权限或状态机；不得把未取得的真实 MySQL 证据写成已通过。
+
+**Requirement status：`PENDING_APPROVAL`（2026-11-15）。Design 已获授权并连续执行；Implementation、数据库操作、发布与部署均未授权。**

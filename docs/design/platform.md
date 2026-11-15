@@ -1383,3 +1383,141 @@ Requirement §36.16：`APPROVED`；本节 Design：`APPROVED`（业务所有者 
 **边界**：本次 Implementation 授权只覆盖仓库内代码、测试、脚本与模板变更。它**不**授权真实 MySQL 连接、
 对象存储写入、目标主机写操作、发布、部署、push、tag 或 Git 历史重写；这些操作仍须逐次单独批准。
 Acceptance / Freeze 仍须业务所有者最终签发。
+
+### 32.17 Migration 风险工作包设计（`PENDING_APPROVAL`，2026-11-15）
+
+#### 32.17.1 设计身份、授权与边界
+
+| 项 | 内容 |
+|---|---|
+| 用途 | 实现 Requirement §36.17 的 `PL-MG-01..04`：消除 `server/migrations/**` 的吞错 catch、把固定 `_new` 表重建改为原子交换、保全重建表的索引、建立机器可验证守卫 |
+| Owner | Platform。Inventory & Warehouse、Manufacturing & Quality、Procurement & Outsourcing、Sales & Customer 的既有 owner、schema 业务事实与能力矩阵状态不变 |
+| 状态 | `PENDING_APPROVAL`；Requirement §36.17 于 2026-11-15 由业务所有者授权与本节 Design 连续执行，**Design 完成后 HARD STOP**；Implementation、数据库操作、发布与部署均未授权 |
+| 权威来源 | `solution.md` §20、§32；Requirement §36.17；`docs/status/PROJECT_STATUS.md` §65；本节只增补既有 Platform Design，不改写 §32.16 已批准结论 |
+
+设计坚持四个边界：幂等判定只靠 schema inspection，不靠错误文本；原子性只由**一个**执行器提供，不新建第二套；索引清单只由**一个**来源提供，不手写第二份；证据只由**一个**守卫产出，不在多处重复判定。
+
+#### 32.17.2 模块与责任（单一 canonical owner）
+
+| 责任 | 目标文件 | 单一职责 |
+|---|---|---|
+| 迁移原语 | `server/migrations/migration-runner.js`（**既有**，PL-RI-02） | `runMigrationStep` / `addColumnIfMissing` / `addColumnFromStatement` / `createIndexIfMissing` / `tableSql` / `indexExists`；原子边界、外键窗口与 fail-closed 的**唯一**实现 |
+| 表重建原语 | `server/migrations/table-rebuild.js`（**新增**） | 运行内唯一临时表名、create → copy → 行数核对 → drop → rename → 索引复原的原子交换、恢复态判定、遗留孤儿核对 |
+| 索引复原 | `server/migrations/index-manifest.js`（**新增**） | 重建前索引集合的捕获与复原清单；被重建表的权威索引声明 |
+| 迁移文件 | `server/migrations/*.js` | 只保留业务语义（目标 DDL 形态、行列映射）；幂等判定与原子性一律委托上述原语，不再自带 `safe*` helper |
+| 吞错守卫 | `scripts/qa/verify-migration-fail-closed.mjs`（**既有，扩展**） | 扫描域从 PL-RI-02 授权清单扩展到 `server/migrations/**` 全域；输出逐条位置清单 |
+| 原子性守卫 | `scripts/qa/verify-migration-atomicity.mjs`（**新增**） | 固定 `_new` 重建计数、非事务重建计数、fresh-init 与二次启动索引集合差异，三项均须为 0 |
+
+不得出现第二套 migration 执行器、第二套索引清单或第二份「哪些站点算吞错」的人工名单。`runMigrationStep` 已在 `server/db.js` 有 6 处在用调用点（PL-RI-02 实施成果），本节只把它扩展到 `server/migrations/**`，不改其语义。
+
+`createIndexIfMissing` 要求调用方**显式**给出 `{ table, index }` 身份（既有 `safeCreateIndex` / `safeIndex` 只传 SQL，身份信息在调用点并不存在）。迁移文件必须把这些身份补齐为代码常量，并通过 `assertIdentifier` 的标识符白名单；不得为了少写一个参数而恢复成「靠捕获异常判断是否已存在」。
+
+#### 32.17.3 调用与数据流
+
+既有调用序列 `createSqliteDatabase` → `migrate*(db)` **保持不变**；变化只在每个迁移单元内部：
+
+```
+createSqliteDatabase(path)
+  └─ migrate*(db)                              ← 调用序列不变
+       └─ 迁移单元内部改为：
+            runMigrationStep(db, {
+              id: '<migration-id>',            ← 错误与临时表命名的唯一标识
+              inspect: (db) => 目标形态已满足,
+              apply:   (db) => 业务 DDL + rebuildTable(...),
+              verify:  (db) => 索引集合 + 行数不变量,
+              suspendForeignKeys: 需要时 true,
+            })
+```
+
+`runMigrationStep` 已实现 inspect / apply / verify、事务或 SAVEPOINT 边界、失败整体回滚、未知错误带 migration 标识上抛，以及**事务外**的 SQLite 外键窗口。本节**复用**它，不新建第二套执行器。
+
+`rebuildTable` 只在 `apply` 阶段被调用，不自行 `BEGIN` / `COMMIT`，也不自行操作 `PRAGMA foreign_keys`；外键窗口由 `runMigrationStep({suspendForeignKeys})` 唯一管理。
+
+#### 32.17.4 `PL-MG-01` 吞错 catch 的逐点收敛
+
+| # | 位置 | 收敛方式 |
+|---|---|---|
+| A-1 | `inventory-position-schema.js:45` | 删除 `safeCreateIndex`；调用点改用 `createIndexIfMissing(db, sql, {table, index})` |
+| A-2 | `inventory-position-schema.js:271` | 窄化为**唯一约束冲突**单一错误类；重试 key 的写入留在同一事务内；重试仍失败必须上抛 |
+| A-3 | `procurement-outsourcing-opening-schema.js:62` | 删除 `safeIndex`；改用 `createIndexIfMissing` |
+| A-4 | `sales-customer-wave6-returns.js:192` | 窄化为**约束不存在**单一错误类（MySQL 分支）；其余错误上抛 |
+| A-5 | `v13-phase1-contracts.js:125` | 删除 `addColumn` helper；改用 `addColumnFromStatement` |
+| A-6 | `v13-phase2-source-integrity.js:12` | 同上 |
+| A-7 | `v13-phase3-quality-gates.js:10` | 同上 |
+| A-8 | `v13-phase6b-traceability-quality.js:5` | 同上 |
+| A-9 | `v14-out-procurement-final-acceptance.js:14` | 删除 `safeAddColumn`；改用 `addColumnIfMissing` |
+| A-10 | `v14-out-procurement-final-acceptance.js:18` | 删除 `safeIndex`；改用 `createIndexIfMissing` |
+
+`migration-runner.js` 内的两处 best-effort catch（回滚失败、连接失效时恢复 `foreign_keys`）属 §36.16.3 与 §32.16.4.4 已批准的窄化例外：它们不吞掉原始异常，必须原样保留，并在守卫中以**显式具名例外**登记，不得成为通配豁免。
+
+窄化 catch 的判定规则：错误类别必须以**可枚举的诊断特征**判定（错误码 / 约束名 / 冲突类型），不得用「消息包含某关键词即认为可忽略」的方式吞掉整类未知错误。
+
+#### 32.17.5 `PL-MG-02` 表重建原子化
+
+`rebuildTable(db, { id, table, createSql, copySql, columnList, expectedRowCount, declaredIndexes, suspendForeignKeys })` 的内部序列，全部位于 `runMigrationStep` 的事务边界内：
+
+1. **恢复态判定**：目标表缺失而临时表存在 → 进入完成交换路径（rename + 索引复原），**不得**丢弃承载数据的临时表。
+2. **唯一临时表名**：`<table>__rb_<id>_<run-unique>`，其中后缀只允许标识符安全字符（十六进制 / base36），整体必须通过既有 `assertIdentifier` 白名单校验；不再使用固定 `_new` 名。
+3. **交换**：`CREATE TABLE <temp>` → `INSERT INTO <temp> SELECT … FROM <table>` → 行数核对（`<temp>` 行数 == `expectedRowCount`）→ `DROP TABLE <table>` → `ALTER TABLE <temp> RENAME TO <table>` → 复原索引集合。
+4. **失败**：事务整体回滚 → 旧表原样保留，临时表随事务消失，无残留、无半复制数据、旧表不被删除。
+
+**遗留孤儿核对**（针对旧代码已经产生的固定名残留）：迁移启动时对已知固定名（`inventory_new`、`production_orders_new`、`production_order_operations_new`、`outsourcing_wip_identity_effects_new`、`credit_profile_ratings_new`、`sales_order_replacements_new`、`planning_outsource_handoffs_new`、`logistics_quality_policy_snapshots_new`、`production_order_operations_v23_new`、`production_inspections_v23_new`）逐一判定：
+
+| 状态 | 处置 |
+|---|---|
+| 正式表存在且**行数 > 0** | 临时表是陈旧副本 → 安全删除（正式表是权威） |
+| 正式表存在但**行数 = 0**，临时表**有行** | **不得删除临时表**：以临时表内容为准完成交换（这是 Requirement D 类「静默销毁型」的恢复路径；正式表是基础 `migrate()` 重建出的空壳） |
+| 正式表缺失、临时表存在 | **完成交换**：rename 为正式表并复原索引，不得删除 |
+| 两者都缺失 | fail closed：该表不可用，迁移失败并给出 migration 标识 |
+| 两者都存在且临时表为空 | 视为陈旧副本，安全删除临时表 |
+
+核对必须**先于**任何迁移单元执行，并把判定结果写入启动日志；发现「正式表为空壳 + 临时表有数据」时必须以数据为准，不得按「正式表是权威」直接删除。
+
+#### 32.17.6 `PL-MG-03` 索引复原
+
+- `index-manifest.js` 记录**被重建表的权威索引声明**（名称、列、唯一性），来源为该表在仓库中的唯一 canonical DDL 声明；不维护第二份人工清单。
+- `rebuildTable` 在 `DROP` 之前从 `sqlite_master` 捕获目标表的显式索引集合（名称 + 原始 `CREATE` 语句，排除 `sqlite_autoindex_*`），交换完成后逐条复原；`declaredIndexes` 与捕获集合取并集。
+- `verify` 阶段断言：重建后索引集合 ⊇ 重建前索引集合 ∪ 声明集合；缺项即失败并回滚。
+- **对 MySQL 的传导**：MySQL schema 由 SQLite 快照派生（`captureSqliteSnapshot` → `bootstrapMySql`），快照缺失的索引不会在 MySQL 侧被补齐。因此索引复原必须发生在**快照生成之前**——即 SQLite 迁移链修好后，全新 MySQL bootstrap 与既有 MySQL 的 `planMySqlIndexReconciliation` 才都能得到 `idx_po_instruction`、`idx_po_instruction_item`、`idx_production_inspections_operation`。真实 MySQL 侧证据仍须获授权的 ACK-4 campaign 取得。
+
+#### 32.17.7 `PL-MG-04` 机器可验证守卫
+
+`scripts/qa/verify-migration-atomicity.mjs` 的三项判定，**每一项都必须为 0**：
+
+| # | 判定 | 依据 |
+|---|---|---|
+| G-1 | 固定 `_new` 表重建站点计数 | 扫描 `server/migrations/**` 的 `CREATE TABLE …_new` |
+| G-2 | 无原子边界的表重建站点计数 | 扫描重建站点所在文件是否缺少 `runMigrationStep` / 显式事务 |
+| G-3 | 全新初始化与二次启动的索引集合差异 | 用同一库建两次快照，比较全部表的索引集合 |
+
+G-3 是本设计的核心 oracle：当前状态下它恰好报出 `idx_po_instruction`、`idx_po_instruction_item`、`idx_production_inspections_operation` 三个差异；修复后必须为 0，且**不得**以「第二次启动会补齐」作为通过依据。
+
+`verify-migration-fail-closed.mjs` 的扫描域扩展到 `server/migrations/**` 全域，「范围外待处理」计数必须归零；`migration-runner.js` 的两处窄化例外以具名条目登记。两个守卫都必须输出**逐条位置**清单，并登记进 `scripts/testing/test-suites.js`（FAST + FULL）。
+
+#### 32.17.8 错误、审计、RBAC/SOD 与兼容
+
+- **错误行为**：`MigrationError` 携带 `migrationId` 与阶段（inspect / apply / verify），消息经 `redactSecrets` 脱敏；未知错误一律上抛并阻止应用进入 ready；不得输出业务数据、连接串或密码。
+- **审计**：本工作包只改 schema 形态，不产生业务状态迁移，因此**不写**应用业务 audit；证据写入守卫输出与验收记录，不得伪装成业务审计流。
+- **RBAC / SOD**：不新增 route、不新增 permission、不改 `role_permissions`；迁移在启动期执行、没有用户主体；迁移**不得**成为绕过 SOD 的路径——它只改 schema，不写业务数据，也不改变任何单据状态机。
+- **状态迁移**：只涉及「库 schema 形态」，不涉及任何业务单据状态机、期间闸门或估值语义。
+- **兼容**：业务 schema 事实不变——不新增业务表、业务列、CHECK 约束，不做任何历史数据回填或改写；唯一允许的 schema 差异是**补回本应存在的索引**，索引不是业务事实。API 业务合同、权限结果、金额单位与既有 release tag 均不变。
+- **回滚**：代码回滚按逻辑单元整体回退；**已原子化的迁移不得回退成吞错实现**；已存在的遗留孤儿临时表在回滚后仍必须能被识别为孤儿，不得被误当成正式表。
+
+#### 32.17.9 验证矩阵、实施顺序与变异实验
+
+| Requirement | focused evidence | release evidence |
+|---|---|---|
+| PL-MG-01 | 10 站点逐点用例（错误拒绝 / 正确重放 / 未知错误上抛） | `verify-migration-fail-closed.mjs` 归零 + FULL / HEAVY |
+| PL-MG-02 | 崩溃注入：copy 中断、DROP 后中断、rename 前中断 → 断言旧表完好、无残留、可重试 | 全新库 / 升级库 / 重放 + FULL / HEAVY |
+| PL-MG-03 | fresh-init 与二次启动索引集合一致断言 | 同上 + `verify-migration-atomicity.mjs` G-3 归零 |
+| PL-MG-04 | 三项判定归零 + 负控 | 两种文档一致性模式 + `git diff --check` |
+
+实施顺序：① `PL-MG-04` 守卫先行（让现状报红，建立基线与防回归）→ ② `PL-MG-01` 逐点收敛 → ③ `PL-MG-03` 索引清单与复原 → ④ `PL-MG-02` 表重建原语与 10 个站点迁移 → ⑤ 遗留孤儿核对 → ⑥ 聚焦测试 + FULL / HEAVY / build / 两种文档一致性模式。
+
+**变异实验（非空洞证明）**：① 移除 `runMigrationStep` 的 `verify` 调用 → PL-MG-02 / PL-MG-03 断言必须转红；② 把临时表名改回固定 `_new` → G-1 必须转红；③ 删除一次索引复原 → G-3 必须转红；④ 把一处窄化 catch 改回 catch-all → 吞错守卫必须转红。实验后必须逐字节恢复实现。
+
+#### 32.17.10 Design 状态与 HARD STOP
+
+Requirement §36.17：`PENDING_APPROVAL`（2026-11-15）；本节 Design：`PENDING_APPROVAL`；Implementation：`NOT_AUTHORIZED`。
+
+**HARD STOP**：本节 Design 完成后**不得**进入 Implementation，等待业务所有者明确批准。本节不授权真实 MySQL 连接、对象存储写入、目标主机写操作、发布、部署、push、tag、Git 历史重写，也不授权 Acceptance / Freeze 签发。

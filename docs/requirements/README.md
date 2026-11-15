@@ -19,7 +19,7 @@
 | [`finance-operations.md`](./finance-operations.md) | Finance Operations | `document.md` §33 | Requirement 完成；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12，`FINANCE_OPERATIONS_DOMAIN_ACCEPTANCE_PASS`，58 项 `COVERED`） |
 | [`sales-customer/`](./sales-customer/) | Sales & Customer | `document.md` §34 + Wave 8/9/10/11 修订 | 既有 Requirement 与整域 Freeze 保持不变；`04-wave-10-amendments.md` 末节 `W10-INV-RISK-01` 独立生产库存正确性闭合 Requirement 已批准（2026-11-14），Design 已授权 |
 | [`accounting-analytics.md`](./accounting-analytics.md) | Accounting & Analytics | `document.md` §35 | Requirement 完成并获批准（`APPROVED`，2026-11-10）；AA-W1..AA-W7 全部纳入 Domain Closure，AA-31 多币种 `OUT_OF_SCOPE`；域级 Acceptance 与 Capability Freeze 已签发（2026-11-12，`ACCOUNTING_ANALYTICS_DOMAIN_ACCEPTANCE_PASS`，43 项 `COVERED`） |
-| [`platform.md`](./platform.md) | Platform | `document.md` §36 | 既有 21 项能力已完成域级 Acceptance / Freeze；§36.15 期间控制修订已批准并冻结；§36.16 Release Infrastructure 有界增补已批准（2026-11-14），Design 已授权且不改写既有 Freeze 历史 |
+| [`platform.md`](./platform.md) | Platform | `document.md` §36 | 既有 21 项能力已完成域级 Acceptance / Freeze；§36.15 期间控制修订已批准并冻结；§36.16 Release Infrastructure 有界增补已批准（2026-11-14），Design 已授权且不改写既有 Freeze 历史；§36.17 Migration 风险工作包 `PENDING_APPROVAL`（2026-11-15），Design 已授权并 HARD STOP |
 
 > 状态列的完整依据见 [`docs/status/PROJECT_STATUS.md`](../status/PROJECT_STATUS.md) §35.3；
 > M1-Core 首期包级 Acceptance 的当前状态见同表 §37.55，B3101 / B3121 静态代码审计基线见同表 §38
