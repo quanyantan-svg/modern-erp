@@ -404,7 +404,7 @@ Wave H — Analytics & Integration
 
 ---
 
-### 24.27 route exposure 与页面自身 API 权限一致性有界增补设计（`PENDING_APPROVAL`，2026-11-15）
+### 24.27 route exposure 与页面自身 API 权限一致性有界增补设计（`APPROVED`，2026-11-15）
 
 #### 24.27.1 设计身份、授权与边界
 
@@ -412,9 +412,9 @@ Wave H — Analytics & Integration
 |---|---|
 | 用途 | 实现 Requirement §29.11 的 `MQ-EXPOSURE-01..05`：`manufacturing-analytics` 的页签可见性与默认页签按 actor 权限自适应，使页面发出的每一个 API 请求都在该角色权限内 |
 | Owner | Manufacturing & Quality（`src/pages/manufacturing.jsx` 与生产报表后端） |
-| 状态 | `PENDING_APPROVAL`；Requirement §29.11 于 2026-11-15 由业务所有者授权与本节 Design 连续执行，**Design 完成后 HARD STOP**；Implementation、解冻、数据库操作、发布与部署均未授权 |
-| 权威来源 | `solution.md` §24；Requirement §29.11；`docs/status/PROJECT_STATUS.md` §66.2 |
-| 前置条件 | 实施前必须由业务所有者**显式解冻** `MANUFACTURING_QUALITY_CAPABILITY_FREEZE` 并单独授权 Implementation；本节不自行解冻 |
+| 状态 | `APPROVED`（业务所有者于 2026-11-15 批准本节）；Implementation **已授权**（同日），范围仅限本节验证矩阵所列的仓库内代码与测试变更 |
+| 权威来源 | `solution.md` §24；Requirement §29.11；`docs/status/PROJECT_STATUS.md` §66.2、§67 |
+| 显式有界解冻 | 业务所有者于 2026-11-15 显式解冻**仅限 `manufacturing-analytics` 这一条 route** 的相关冻结合同；本域其余合同与 2026-11-12 的冻结记录保持不变 |
 
 设计边界（与 §24.0 一致）：**不改** route exposure、**不改**后端 API 守卫、**不改**权限目录与 role 种子、
 **不改**页签集合。本节只改**页面层**的页签可见性与默认页签选择。
@@ -484,10 +484,12 @@ actor.permissions
 MQ-EXPOSURE-01 / 03 断言必须转红；④ 把 `can` 换成恒真实现 → MQ-EXPOSURE-02 / 03 必须转红。
 实验后必须逐字节恢复实现。
 
-#### 24.27.6 Design 状态与 HARD STOP
+#### 24.27.6 Design 状态与授权边界
 
-Requirement §29.11：`PENDING_APPROVAL`（2026-11-15）；本节 Design：`PENDING_APPROVAL`；Implementation：`NOT_AUTHORIZED`。
+Requirement §29.11：`APPROVED`（2026-11-15）；本节 Design：`APPROVED`（同日）；Implementation：`AUTHORIZED`
+（2026-11-15，范围仅限本节验证矩阵所列的仓库内代码与测试变更）。
 
-**HARD STOP**：本节 Design 完成后**不得**进入 Implementation，等待业务所有者明确批准（并先解冻本域冻结）。
-本节不授权真实 MySQL 连接、对象存储写入、目标主机写操作、发布、部署、push、tag、Git 历史重写，
-也不授权 Acceptance / Freeze 签发。
+**授权边界**：本次 Implementation 授权**不**包含真实 MySQL 连接、对象存储写入、目标主机写操作、
+Acceptance / Freeze 签发、发布、部署、push、tag、Git 历史重写；这些操作仍须逐次单独批准。
+本节的实施**不得**越出 §29.11.3 `MQ-EXPOSURE-01..05` 与本节设计的范围 —— 不得改动 route exposure、
+后端守卫、权限目录、role 种子或其它 route。

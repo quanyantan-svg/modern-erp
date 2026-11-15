@@ -36,6 +36,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { can } from '../components/ui.jsx';
+import { priceOverrideReferenceAccess, loadPriceOverrideReferences } from '../lib/salesPriceOverrideReferences.js';
 import {
   BottomActionBar,
   BusinessContentSection,
@@ -960,6 +961,8 @@ export function ProductClassifications({ user, notify }) {
 
 export function PriceOverrideAuthorizations({ user, notify }) {
   const [references, setReferences] = useState({ customers: [], products: [] });
+  const [referenceError, setReferenceError] = useState('');
+  const [referenceStatus, setReferenceStatus] = useState('idle');
   const [form, setForm] = useState({
     customerId: '',
     productId: '',
@@ -972,19 +975,36 @@ export function PriceOverrideAuthorizations({ user, notify }) {
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
 
+  // SC-EXPOSURE-01/02：参照加载以 actor 权限为前置 —— 无权的数据源一次请求都不发；
+  // 「无权读取参照」与「有权但为空」是两种互不混淆的状态（SC-EXPOSURE-02）。
+  const permissionKey = (user?.permissions || []).join(',');
+  const access = priceOverrideReferenceAccess(user?.permissions);
+
   useEffect(() => {
-    Promise.all([api('/api/customers'), api('/api/products')])
-      .then(([customers, products]) => setReferences({
-        customers: customers.customers || [],
-        products: products.products || [],
-      }))
-      .catch((cause) => notify(cause.message || '加载参照数据失败', 'error'));
-  }, [notify]);
+    if (!access.any) { setReferences({ customers: [], products: [] }); setReferenceError(''); setReferenceStatus('idle'); return undefined; }
+    let active = true;
+    setReferenceStatus('idle');
+    loadPriceOverrideReferences(user?.permissions, api).then(({ references: loaded, errors }) => {
+      if (!active) return;
+      setReferences(loaded);
+      setReferenceError(errors.map((item) => item.message).join(' | '));
+      setReferenceStatus(errors.length ? 'error' : 'ready');
+      if (errors.length) notify(errors[0].message || '加载参照数据失败', 'error');
+    });
+    return () => { active = false; };
+  }, [permissionKey, notify]);
 
   const canAuthorize = can(user, 'SALES_PRICING_OVERRIDE');
+  // SC-EXPOSURE-03：有签发权但读不到参照时必须 fail closed —— 不得在缺参照的情况下签发。
+  const referenceReady = access.any;
 
   async function submit(event) {
     event.preventDefault();
+    // SC-EXPOSURE-03：缺参照读取权限时必须 fail closed —— 不得在缺参照的情况下签发授权。
+    if (!referenceReady) {
+      notify('缺少客户 / 物料参照读取权限，无法签发价格覆盖授权', 'error');
+      return;
+    }
     if (!form.customerId || !form.productId || !form.manualPriceCents || !form.overrideReason.trim()) {
       notify('请填写客户、物料、手工单价与覆盖原因', 'error');
       return;
@@ -1018,12 +1038,32 @@ export function PriceOverrideAuthorizations({ user, notify }) {
         title="价格覆盖授权"
         context="SC19 · 手工价格覆盖的独立授权"
         primaryAction={canAuthorize
-          ? <PrimaryButton type="button" disabled={busy} onClick={submit}>签发授权</PrimaryButton>
+          ? <PrimaryButton type="button" disabled={busy || !referenceReady} onClick={submit}>签发授权</PrimaryButton>
           : null}
       />
       {!canAuthorize && (
         <BusinessContentSection title="权限">
           <p className="muted">当前账号没有 SALES_PRICING_OVERRIDE 权限，无法签发价格覆盖授权。</p>
+        </BusinessContentSection>
+      )}
+      {!access.any && (
+        <BusinessContentSection title="参照数据">
+          <p className="muted">当前账号没有客户 / 物料参照读取权限，无法选择签发对象，也无法签发价格覆盖授权。</p>
+        </BusinessContentSection>
+      )}
+      {access.any && referenceError && (
+        <BusinessContentSection title="参照数据">
+          <p className="muted">部分参照数据加载失败：{referenceError}</p>
+        </BusinessContentSection>
+      )}
+      {access.any && referenceStatus === 'ready' && !references.customers.length && (
+        <BusinessContentSection title="参照数据">
+          <p className="muted">当前没有可选客户。</p>
+        </BusinessContentSection>
+      )}
+      {access.any && referenceStatus === 'ready' && !references.products.length && (
+        <BusinessContentSection title="参照数据">
+          <p className="muted">当前没有可选物料。</p>
         </BusinessContentSection>
       )}
       <BusinessContentSection title="授权申请" description="授权是一次性的；签发后在销售订单行上使用授权 ID 提交手工价格。">
@@ -1066,7 +1106,7 @@ export function PriceOverrideAuthorizations({ user, notify }) {
           </div>
           {canAuthorize && (
             <BottomActionBar>
-              <PrimaryButton type="submit" disabled={busy}>{busy ? '签发中…' : '签发价格覆盖授权'}</PrimaryButton>
+              <PrimaryButton type="submit" disabled={busy || !referenceReady}>{busy ? '签发中…' : '签发价格覆盖授权'}</PrimaryButton>
             </BottomActionBar>
           )}
         </form>

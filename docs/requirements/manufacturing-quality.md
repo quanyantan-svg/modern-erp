@@ -285,7 +285,7 @@ Material Issue Summary）/ 副产品维护 / 检验方案与检验项目明细�
 
 ---
 
-### 29.11 route exposure 与页面自身 API 权限一致性有界增补（`PENDING_APPROVAL`，2026-11-15）
+### 29.11 route exposure 与页面自身 API 权限一致性有界增补（`APPROVED`，2026-11-15）
 
 #### 29.11.1 身份、授权与生效边界
 
@@ -293,9 +293,10 @@ Material Issue Summary）/ 副产品维护 / 检验方案与检验项目明细�
 |---|---|
 | 用途 | 消除 `manufacturing-analytics` route 的 **exposure 权限集合未覆盖该页面自身依赖的 API 权限集合**所造成的「预期外 403」：同一后端主体被前端判定为可进入该 route，又被后端判定为无权调用该 route 加载时必调的 API |
 | Owner | Manufacturing & Quality（`manufacturing-analytics` 工作面与生产报表的 owner） |
-| 状态 | `PENDING_APPROVAL`；业务所有者于 2026-11-15 授权本节 Requirement 与 Design 连续撰写，**Design 完成后 HARD STOP**。Implementation、解冻、数据库操作、发布与部署**均未授权** |
-| 权威来源 | `document.md` §29；本文件 §29.5 Permission 约束、§29.6 Compatibility / 不变性约束、§29.9 Hard Stop Conditions；`docs/status/PROJECT_STATUS.md` §66.2（覆盖分类裁定）；`docs/status/CAPABILITY_MATRIX.md` B3119（冻结后有界发现） |
-| 前置条件 | 本域整域已冻结（`MANUFACTURING_QUALITY_DOMAIN_ACCEPTANCE_PASS` / `MANUFACTURING_QUALITY_CAPABILITY_FREEZE`，2026-11-12，37 项能力）。本节触碰**权限与 route exposure 合同**，因此实施前必须由业务所有者**显式解冻**并单独授权 Implementation |
+| 状态 | `APPROVED`（业务所有者于 2026-11-15 批准本节）；Implementation **已授权**（2026-11-15 同一次裁定），范围仅限 §29.11.4 验收门禁所列的仓库内代码与测试变更 |
+| 权威来源 | `document.md` §29；本文件 §29.5 Permission 约束、§29.6 Compatibility / 不变性约束、§29.9 Hard Stop Conditions；`docs/status/PROJECT_STATUS.md` §66.2（覆盖分类裁定）、§67（批准、解冻与实施授权）；`docs/status/CAPABILITY_MATRIX.md` B3119（冻结后有界发现） |
+| 显式有界解冻 | 业务所有者于 2026-11-15 **显式解冻**本域中与 `manufacturing-analytics` 这**一条** route 合同相关的冻结部分（即 §29.5 中该 route 的 exposure 与页签权限口径）。**解冻范围仅限这一条 route**：本域其余 route、页签、权限码、能力集合与 2026-11-12 的域级 Acceptance / Capability Freeze 记录**保持冻结不变**；本节**不改写**冻结记录，冻结历史仍然成立 |
+| 前置条件 | 本域整域已冻结（`MANUFACTURING_QUALITY_DOMAIN_ACCEPTANCE_PASS` / `MANUFACTURING_QUALITY_CAPABILITY_FREEZE`，2026-11-12，37 项能力）。本节触碰**权限与 route exposure 合同**，因此实施前必须由业务所有者**显式解冻**并单独授权 Implementation —— **该解冻与实施授权已于 2026-11-15 由业务所有者给出** |
 | Supersession | 本节只**增补** §29.5 与 §29.6，**不改写** §29 已冻结结论，也**不改写** 2026-11-12 的冻结记录；本节记录的是**冻结之后**发现的有界缺陷 |
 
 本节只覆盖 `manufacturing-analytics` 一条 canonical route。`document.md` §29 的其它 route、页签、状态机、
@@ -360,5 +361,6 @@ route 声明的 exposure 为 `any:['PRODUCTION_ORDERS_VIEW','PRODUCTION_COSTS_VI
 不得把前端隐藏当作授权实现（后端必须继续 fail closed）；不得在本节顺带改动其它 route、页签或权限；
 不得把尚未取得的真实浏览器证据写成已通过。
 
-**Requirement 状态：`PENDING_APPROVAL`（2026-11-15）。Design 已获授权并连续执行；Implementation、解冻、
-数据库操作、发布与部署均未授权。**
+**Requirement 状态：`APPROVED`（2026-11-15，业务所有者批准）。Design：`APPROVED`（同日批准）。
+Implementation：已授权（2026-11-15），范围仅限本节验收门禁所列的仓库内代码与测试变更；
+真实 MySQL 连接、数据库操作、Acceptance / Freeze 签发、发布与部署**未授权**。**

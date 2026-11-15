@@ -5,6 +5,7 @@ import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.js
 import TrackingAllocationEditor from '../components/TrackingAllocationEditor.jsx';
 import { copySourceAllocations } from '../lib/tracking.js';
 import { presentBusinessValue } from '../lib/presentation.js';
+import { permittedManufacturingAnalyticsTabs, manufacturingAnalyticsRequest } from '../lib/manufacturingAnalyticsTabs.js';
 import { BusinessAction, BusinessPageHeader, BusinessPageShell, BusinessActionBar, CompactRecordList, RecordCard, HelpDisclosure } from '../components/design-system.jsx';
 import { BomApprovalBadge, BomAnalysisActions, BomBatchMaintenance, BomLifecycleActions, BomTree } from '../components/BomGovernancePanel.jsx';
 import AttachmentPanel from '../components/AttachmentPanel.jsx';
@@ -951,32 +952,40 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
 }
 
 export function ManufacturingAnalytics({ user, notify }) {
-  const [tab, setTab] = useState('wip'); const [data, setData] = useState([]); const [analyticalOnly, setAnalyticalOnly] = useState(false);
+  const [selectedTab, setSelectedTab] = useState(''); const [data, setData] = useState([]); const [analyticalOnly, setAnalyticalOnly] = useState(false);
   const [range, setRange] = useState({ from: '', to: '' });
-  const isSummaryTab = tab === 'execution' || tab === 'materialIssue';
+  // MQ-EXPOSURE-01..03：页签与 API 依赖的唯一登记在 src/lib/manufacturingAnalyticsTabs.js；
+  // 可见页签与默认页签按 actor 权限派生，页面因此不会发出 actor 无权调用的请求。
+  const permittedTabs = permittedManufacturingAnalyticsTabs(user?.permissions);
+  const request = manufacturingAnalyticsRequest(user?.permissions, selectedTab);
+  const tab = request?.key || '';
+  const isSummaryTab = request?.kind === 'summary';
   useEffect(() => {
-    if (isSummaryTab) {
+    if (!request) { setData([]); setAnalyticalOnly(false); return; }
+    if (request.kind === 'summary') {
       const query = new URLSearchParams();
       if (range.from) query.set('from', range.from);
       if (range.to) query.set('to', range.to);
-      const path = tab === 'execution'
-        ? `/api/manufacturing-analytics/execution-summary${query.toString() ? `?${query}` : ''}`
-        : `/api/manufacturing-analytics/material-issue-summary${query.toString() ? `?${query}` : ''}`;
+      const path = `${request.endpoint}${query.toString() ? `?${query}` : ''}`;
       api(path).then((r) => { setData(r.rows || []); setAnalyticalOnly(false); }).catch((e) => { setData([]); notify(e.message, 'error'); });
       return;
     }
-    api(`/api/manufacturing/reports/${tab}`).then((r) => { setData(r.rows || []); setAnalyticalOnly(Boolean(r.analyticalOnly)); }).catch((e) => notify(e.message, 'error'));
-  }, [tab, range.from, range.to]);
+    api(request.endpoint).then((r) => { setData(r.rows || []); setAnalyticalOnly(Boolean(r.analyticalOnly)); }).catch((e) => notify(e.message, 'error'));
+  }, [request?.key, request?.endpoint, range.from, range.to]);
   const tabContext = tab === 'wip' ? '在制' : tab === 'yield' ? '良率 / 报废' : tab === 'capacity' ? '产能' : tab === 'cost' ? '生产成本' : tab === 'execution' ? '执行汇总' : '物料领用汇总';
+  // MQ-EXPOSURE-05：一个页签都无权时必须 fail closed —— 不渲染数据面、不发任何请求。
+  if (!permittedTabs.length) {
+    return <BusinessPageShell className="manufacturing-analytics-v15" width="rail">
+      <BusinessPageHeader title="生产执行分析" context="—" help={<HelpDisclosure summary="分析口径"><p>在制、良率、产能与管理成本均由权威生产事件派生；管理成本不等同于财务库存计价。</p></HelpDisclosure>}/>
+      <Empty title="没有权限" text="当前账号没有生产执行分析所需的权限（PRODUCTION_ORDERS_VIEW 或 PRODUCTION_COSTS_VIEW）。"/>
+    </BusinessPageShell>;
+  }
   return <BusinessPageShell className="manufacturing-analytics-v15" width="rail">
     <BusinessPageHeader title="生产执行分析" context={tabContext} help={<HelpDisclosure summary="分析口径"><p>在制、良率、产能与管理成本均由权威生产事件派生；管理成本不等同于财务库存计价。</p></HelpDisclosure>}/>
     <div className="tabs">
-      <button className={tab==='wip'?'active':''} onClick={() => setTab('wip')}>在制</button>
-      <button className={tab==='yield'?'active':''} onClick={() => setTab('yield')}>良率 / 报废</button>
-      <button className={tab==='capacity'?'active':''} onClick={() => setTab('capacity')}>产能</button>
-      <button className={tab==='execution'?'active':''} onClick={() => setTab('execution')}>执行汇总</button>
-      <button className={tab==='materialIssue'?'active':''} onClick={() => setTab('materialIssue')}>物料领用汇总</button>
-      {can(user,'PRODUCTION_COSTS_VIEW') && <button className={tab==='cost'?'active':''} onClick={() => setTab('cost')}>生产成本</button>}
+      {permittedTabs.map((item) => (
+        <button key={item.key} className={tab===item.key?'active':''} onClick={() => setSelectedTab(item.key)}>{item.label}</button>
+      ))}
     </div>
     {isSummaryTab && <div className="form-grid mq-range">
       <label>起始日期<input type="date" value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value })}/></label>

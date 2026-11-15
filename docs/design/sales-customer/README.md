@@ -11,7 +11,7 @@
 
 | 文件 | 原章节 | 内容 | 基线状态 |
 |---|---|---|---|
-| `01-domain-technical-design.md` | §29 | Domain Technical Design 基线；§29.52 = `W10-INV-RISK-01` 有界增补 Design；§29.53 = route exposure 与页面自身 API 权限一致性有界增补 Design | `ACTIVE`（§29.52 `APPROVED`（2026-11-14）、Implementation 已授权（仅仓库内代码与测试）；§29.53 `PENDING_APPROVAL`（2026-11-15，HARD STOP）；§36 在其与 §30 冲突处以 §36 为准） |
+| `01-domain-technical-design.md` | §29 | Domain Technical Design 基线；§29.52 = `W10-INV-RISK-01` 有界增补 Design；§29.53 = route exposure 与页面自身 API 权限一致性有界增补 Design | `ACTIVE`（§29.52 `APPROVED`（2026-11-14）、Implementation 已授权（仅仓库内代码与测试）；§29.53 `APPROVED`（2026-11-15，Implementation 已授权，仅仓库内代码与测试）；§36 在其与 §30 冲突处以 §36 为准） |
 | `02-wave-plan.md` | §30 + §30.26 | Domain Implementation Wave Plan 与最终摘要 | `ACTIVE`（计划文本，冲突处以 §36 为准） |
 | `03-wave-8-baseline.md` | §35.18–§35.19、§35.22–§35.24、§35.27 | Wave 8 冻结技术基线 | `FROZEN`（§35.27：§35.18–§35.26 构成 Wave 8 最终接受技术基线） |
 | `04-wave-9-credit-baseline.md` | §36 + §36.16 | Sales Credit Stage C Combined Design Reconciliation | `FROZEN`（§36.16：§36.0–§36.15 构成 Wave 9 冻结技术基线；§36 自述为 Waves 9–11 的**唯一 Active Design 层**） |

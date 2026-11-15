@@ -5555,3 +5555,145 @@ Release Readiness，也不改写 §65 的任何已登记事实（含门禁 5696 
 | Manufacturing & Quality 有界包 | Manufacturing & Quality（Owner）+ 业务所有者（解冻与实施授权） | 实施须先解冻并单独授权 |
 | Sales & Customer 有界包 | Sales & Customer（Owner）+ 业务所有者（解冻与实施授权） | 实施须先解冻并单独授权 |
 | 平台级通用合同 | 业务所有者 | 本轮未起草，见 §66.4 第 3 条 |
+
+## 67. 两个业务域有界包的批准、显式有界解冻与实施授权（2026-11-15）
+
+**状态**：Requirement §29.11 / §34.16 与 Design §24.27 / §29.53 全部 `APPROVED`；两个域**对应 route 合同显式有界解冻**；
+Implementation **已授权并已实施**；`SC-EXPOSURE-05` 裁定**暂不收紧、延期处理**。
+Platform §36.17 / §32.17 **暂不批准** —— 已按业务所有者要求退回修订，修订后 **HARD STOP**。
+
+本节**不是** Acceptance：它不签发任何 Acceptance / Capability Freeze / Manual Capability Closure /
+Release Readiness，也**不改写** 2026-11-12（M&Q）与 2026-11-13（S&C）的域级冻结记录 —— 那两份冻结证据
+仍然成立，本轮只是**有界地**解冻了其中两条 route 合同。
+
+### 67.1 授权与边界
+
+| 授权 | 内容 | 本轮结果 |
+|---|---|---|
+| A | 批准 §29.11 / §24.27 与 §34.16 / §29.53 | 已批准（`APPROVED`，2026-11-15） |
+| B | `SC-EXPOSURE-05` 裁定为暂不收紧、延期处理 | 已裁定并登记（`DEFERRED`） |
+| C | 显式有界解冻两个域对应 route 合同，并授权其 Implementation | 已解冻、已授权、**已实施** |
+| D | §36.17 / §32.17 暂不批准，退回修订上述五项，修订后继续 HARD STOP | 已完成第二轮对抗性复核并修订（修正五处）；**未**进入 Implementation |
+| 明确未授权 | 数据库、push、tag、release、deploy | 本轮**全部未执行** |
+
+### 67.2 批准与显式有界解冻
+
+| 域 | Requirement | Design | 解冻范围（显式、有界） | **未**解冻部分 |
+|---|---|---|---|---|
+| Manufacturing & Quality | §29.11 `APPROVED` | §24.27 `APPROVED` | 仅 `manufacturing-analytics` **一条** route 的 exposure 与页签权限口径 | 本域其余 route、页签、权限码、37 项冻结能力与 2026-11-12 冻结记录 |
+| Sales & Customer | §34.16 `APPROVED` | §29.53 `APPROVED` | 仅 `sales-price-override-authorizations` **一条** route 的 exposure 与参照读取口径 | 本域其余 route、SC 合同、权限码、36 项冻结能力与 2026-11-13 冻结记录 |
+
+解冻是**有界**的：它只放开实施所必需的**这一条** route 合同，两个域的整域冻结记录（域级 Acceptance 与
+Capability Freeze）继续有效，不被改写、不被降级。
+
+### 67.3 `SC-EXPOSURE-05` 裁定
+
+**业务所有者裁定（2026-11-15）：本轮暂不收紧，延期处理。** 因此 `sales-price-override-authorizations` 的
+exposure 维持 `any:['SALES_PRICING_VIEW','SALES_PRICING_OVERRIDE']` **不变**；本轮有界包**只**做
+「不改变任何权限结果」的页面层修复。该方向**仍然开放**，未来执行须单独授权并重新评估对
+`role-sales` / `role-accounting` 可见入口的影响。登记状态见
+[`docs/decisions/OPEN-BUSINESS-DECISIONS.md`](../decisions/OPEN-BUSINESS-DECISIONS.md) §3。
+
+### 67.4 实施内容与证据
+
+**新增（实现）**
+
+| 文件 | 责任 |
+|---|---|
+| `src/lib/manufacturingAnalyticsTabs.js` | 生产执行分析的**页签与 API 依赖唯一登记**：页签 key / 标签 / 目标 API / 该 API 要求的权限；按 actor 权限过滤可见页签；选出生效页签与应请求的 endpoint |
+| `src/lib/salesPriceOverrideReferences.js` | 价格覆盖授权的**参照加载策略唯一登记**：参照数据源与其读取权限；按权限决定发起哪些请求；区分「无权读取参照」与「有权但为空」 |
+| `server/route-exposure-semantic-parity.test.js` | focused 合同测试（FULL）：登记与后端守卫逐项一致、逐角色请求集合落在权限内、默认页签可调用、无权时零请求、无权态与空态可区分、页面不得自带第二份端点清单 |
+
+**修改**
+
+| 文件 | 改动 |
+|---|---|
+| `src/pages/manufacturing.jsx` | `ManufacturingAnalytics`：可见页签按权限过滤；生效页签按权限派生（默认页签 = 第一个有权页签）；无权页签不渲染；一个页签都无权时 fail closed，不发请求 |
+| `src/pages/sales-parameters.jsx` | `PriceOverrideAuthorizations`：参照加载以权限为前置（无权的数据源一次请求都不发）；缺参照读取权时呈现明确无权态并禁用签发；无权态 / 失败 / 空态三者互不混淆 |
+| `scripts/testing/test-suites.js` | focused 测试登记在 FULL（需真实种子库读角色权限，FAST 不得依赖临时 SQLite） |
+
+**后端、权限与 schema 改动：无。** route exposure、API 守卫、`role_permissions`、权限码、业务 schema、
+单据状态机、金额与估值语义**全部未改** —— 两个域的缺陷在**页面层**闭合。
+
+**变异实验（证明断言承重、非空洞；实验后逐字节恢复，SHA-256 校验一致）**
+
+| # | 变异 | 实测 |
+|---|---|---|
+| M1 | 默认页签写死为 `wip` | **4 例转红** |
+| M2 | 取消页签权限过滤 | **7 例转红** |
+| M3 | 篡改 `cost` 页签的权限登记 | **7 例转红** |
+| M4 | 参照加载取消权限前置 | **2 例转红** |
+| M5 | 篡改 `products` 参照的权限登记 | **1 例转红** |
+| M6 | 删除页面层的无权早退 | **0 例转红** —— 该变异**语义等价**：真正的闸门在共享模块，页面层早退是冗余护栏 |
+| M6' | 页面恢复无条件加载客户 / 物料参照 | **1 例转红**（D2） |
+
+M6 的 0 转红本身是**结论而非缺陷**：它证明承重的是共享策略模块，而不是页面层的重复判断 —— 符合
+§24.27.2「唯一事实来源」的设计意图。
+
+**门禁**
+
+| 门禁 | 结果 |
+|---|---|
+| `node --test server/route-exposure-semantic-parity.test.js` | **PASS 23/23** |
+| `pnpm test:fast` | **PASS 774/774**（86 suites） |
+| `pnpm test`（FULL） | **PASS 4117/4117**（532 suites，退出码 0；含本轮新增的 23 例 focused 合同测试） |
+| `pnpm build` | **PASS** |
+| `git diff --check` | **PASS** |
+| 文档一致性 current / migration 两模式 | **PASS**（current：N1、N3–N9 全通过、N2 `RETIRED`；migration：C1–C6 全通过） |
+| `node scripts/acceptance/release-browser-readiness.mjs` | **FAIL（退出码 1）—— 判定 5696 项、失败 2 项**：`PRODUCT_FAILURE=2` / `FIXTURE_FAILURE=0` / `CONTRACT_DRIFT=0`；角色 5/5、宽度 4/4。**本轮两条 route 的失败已全部消失**（上轮 6 项失败全部来自它们）；剩余 2 项属 §67.6 第 2 条的**第三条 route**（`inventory`，属 Inventory & Warehouse 域，本轮未授权） |
+
+### 67.5 §36.17 / §32.17 第二轮对抗性复核（退回修订五项）
+
+业务所有者**暂不批准** Platform 的两节并要求「退回修订上述五项」。第二轮在 HEAD 上逐条重放全部事实断言，
+修正以下**五处**（合同项 `PL-MG-01..04` 的范围与口径不变，只加严事实取证与可重放性）：
+
+| # | 问题 | 修正 |
+|---|---|---|
+| 1 | `server/db.js` 非迁移路径 `SWALLOWED` 站点计数错误（初稿记 8 处），且只要求「登记」而未登记 | 实测 **7 处**（另有 3 处 `NARROW_RETHROW`），已在 §36.17.3 **逐行列出**并标注「范围外 · 未处置」 |
+| 2 | B 类「7 个文件均未使用显式事务」缺取证方式 | 补逐文件核对：`runMigrationStep` 均为 0 次；`inventory-position-schema.js` 的 3 处 `BEGIN` **全在 `CREATE TRIGGER` 触发器体内**，不是事务 |
+| 3 | G-1 扫描口径的穷尽性未声明 | 补「全仓无 `_tmp` / `_bak` / `_old` / `_copy` / `_backup` / `_staging` 等其它临时表命名模式」，故 G-1 当前穷尽；新增模式必须同步扩展 G-1 |
+| 4 | E-3 的站点归属不可复核 | 补 7 处 db.js 重建站点各自所属的 `runMigrationStep` step |
+| 5 | G-3 的 upgrade 路径夹具来源未定义 | 明确仓库内**不存在** legacy 数据库二进制夹具，「既有库」必须以**脚本构造**（范式取自 `server/db-migration-fail-closed.test.js:224`），夹具与判定同批提交并可独立重放；并新增通用条款「每条事实断言必须给出取证方式、可被第三方重放」 |
+
+另补：顶层事务前置条件的**可满足性**已实测（迁移链是 `server/db.js` 的顶层 `migrate*(db)` 序列，
+`transaction()` 仅用于运行期）—— fail closed 规则不会打断既有迁移链。
+
+### 67.6 未解决矛盾
+
+1. **canonical 浏览器门禁仍为 FAIL（退出码 1）**，但失败来源已改变：本轮两条 route 的 6 项失败**全部消失**，
+   剩余 **2 项**落在**第三条 route** `inventory`（Inventory & Warehouse 域），根因是同一缺陷形态：
+   `src/pages/inventory-work.jsx:182-183` 的 hub **无条件**加载 `/api/inventory-stock-statuses`
+   （守卫 `allowAny(['STOCK_STATUS_VIEW','STOCK_STATUS_MANAGE'])`）与 `/api/warehouse-bins`
+   （守卫 `allowAny(['WAREHOUSE_BIN_VIEW','WAREHOUSE_BIN_MANAGE'])`），而 `role-reviewer` 两者皆无
+   → 403。该缺陷**既有**且**与本轮改动无关**（本轮未触碰 Inventory & Warehouse 的任何文件），
+   但它落在**第三个域**，不在本轮授权内，**本轮未处置**。建议的后续有界单元：与 §29.11 / §34.16 同形态的
+   Inventory & Warehouse 有界 Requirement + Design（同样采用「页面按权限自适应、不改后端守卫与 exposure」方向）。
+   在其合入前，门禁仍返回退出码 1，**不得**宣称 production deploy ready。
+2. **门禁的失败清单是「时序相关」的，不是完整的缺陷清单**：上轮（`acb187d`）的 6 项失败全部来自本轮的两条 route，
+   `inventory` 的这 2 项**没有被记录**；本轮它出现了。这与 §65.4 第 2 条同源 —— **不得**把任何一次门禁的失败
+   列表当作「缺陷已穷尽枚举」的证据。缺陷清单必须以**代码层取证**为准（本节即为实例：代码取证直接定位到
+   `inventory-work.jsx:182-183` 与两处守卫）。
+3. **既有抖动：`scripts/admin/mysql-dr.test.js` T9「两次备份的 key 必须不同」**。根因是
+   `scripts/admin/lib/mysql-dr.mjs:318` 的 `buildObjectKey` 用**毫秒级**时间戳生成唯一性 —— 同毫秒内的两次
+   调用产生完全相同的 object key（Windows 计时器粒度使同毫秒概率很高）。单独运行 3/3 通过；在浏览器门禁与
+   FULL 并行占用 CPU 时复现。**该缺陷与本轮改动无关**（本轮未触碰 `scripts/admin/**`），但它同时意味着
+   **生产上同一毫秒内的两次备份会撞 key**。修复属 PL-RI-01 备份工具范围，**本轮未授权、未实施**；
+   建议的后续有界单元：为 `buildObjectKey` 增加随机后缀，并把 T9 改为断言「唯一性来自随机分量而非时间戳」。
+4. **§36.17 / §32.17 仍未获批准**：已按要求完成第二轮修订（§67.5），**HARD STOP**，未进入 Implementation；
+   `PL-MG-01..04` 的实现未开始。
+5. **平台级通用合同仍未起草**：route exposure 未覆盖页面依赖的 API 权限集合是**平台级**缺陷形态，且本轮已
+   在**三个域**各暴露一处（Manufacturing & Quality、Sales & Customer、Inventory & Warehouse）；
+   本轮只覆盖前两个域，未起草任何 Platform 级 Requirement / Design。
+6. **canonical 浏览器门禁只覆盖 route 层，不覆盖文档详情层**：与 §65.4 第 1 条同源，本轮未改动。
+
+### 67.7 Owner
+
+| 角色 | 承担者 | 说明 |
+|---|---|---|
+| 两个业务域有界包 | Manufacturing & Quality / Sales & Customer（Owner）+ 业务所有者（批准、解冻、实施授权） | 实施已完成；域级 Acceptance / Capability Freeze 仍需独立签发 |
+| 有界解冻 | 业务所有者 | 仅两条 route 合同；域级冻结记录保持不变 |
+| `SC-EXPOSURE-05` | 业务所有者 | 裁定暂不收紧、延期处理；方向仍然开放 |
+| `inventory` route 同形态缺陷 | Inventory & Warehouse（Owner）+ 业务所有者（授权） | 见 §67.6 第 1 条；本轮未处置、未起草 |
+| §36.17 / §32.17 第二轮修订 | Platform（Owner）+ 业务所有者（退回修订） | 合同项范围不变；实施未授权 |
+| `buildObjectKey` 同毫秒碰撞 | Platform / 运维（备份工具 owner）+ 业务所有者（授权） | 见 §67.6 第 3 条；本轮未处置 |
+| 发布 / 数据库 / 真实 MySQL 证据 | 业务所有者 | 本轮未授权、未执行 |

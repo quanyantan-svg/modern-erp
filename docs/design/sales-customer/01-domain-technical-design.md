@@ -5336,7 +5336,7 @@ Acceptance / Freeze、发布或部署；这些操作仍须逐次单独批准。
 
 ---
 
-### 29.53 route exposure 与页面自身 API 权限一致性有界增补设计（`PENDING_APPROVAL`，2026-11-15）
+### 29.53 route exposure 与页面自身 API 权限一致性有界增补设计（`APPROVED`，2026-11-15）
 
 #### 29.53.1 设计身份、授权与边界
 
@@ -5344,9 +5344,10 @@ Acceptance / Freeze、发布或部署；这些操作仍须逐次单独批准。
 |---|---|
 | 用途 | 实现 Requirement §34.16 的 `SC-EXPOSURE-01..05`：`sales-price-override-authorizations` 的参照加载以 actor 权限为前置；缺参照读取权限时显式呈现无权态并 fail closed |
 | Owner | Sales & Customer（`src/pages/sales-parameters.jsx` 与价格覆盖授权后端） |
-| 状态 | `PENDING_APPROVAL`；Requirement §34.16 于 2026-11-15 由业务所有者授权与本节 Design 连续执行，**Design 完成后 HARD STOP**；Implementation、解冻、数据库操作、发布与部署均未授权 |
-| 权威来源 | `solution.md` §29；Requirement §34.16；`docs/status/PROJECT_STATUS.md` §66.2 |
-| 前置条件 | 实施前必须由业务所有者**显式解冻** `SALES_CUSTOMER_CAPABILITY_FREEZE` 并单独授权 Implementation；本节不自行解冻 |
+| 状态 | `APPROVED`（业务所有者于 2026-11-15 批准本节）；Implementation **已授权**（同日），范围仅限本节验证矩阵所列的仓库内代码与测试变更 |
+| 权威来源 | `solution.md` §29；Requirement §34.16；`docs/status/PROJECT_STATUS.md` §66.2、§67 |
+| 显式有界解冻 | 业务所有者于 2026-11-15 显式解冻**仅限 `sales-price-override-authorizations` 这一条 route** 的相关冻结合同；本域其余合同与 2026-11-13 的冻结记录保持不变 |
+| `SC-EXPOSURE-05` 裁定 | 业务所有者于 2026-11-15 裁定**暂不收紧** route exposure、延期处理；本节因此**不改动** exposure（`any:['SALES_PRICING_VIEW','SALES_PRICING_OVERRIDE']`） |
 
 设计边界：**不改** route exposure、**不改**后端 API 守卫、**不改**权限目录与 role 种子、**不新增** API、
 **不改**价格覆盖授权的业务语义。本节只改**页面层的参照加载前置条件与状态呈现**。
@@ -5419,10 +5420,12 @@ actor.permissions
 ② 把无权态改回错误提示 → SC-EXPOSURE-02 必须转红；③ 把无权态与空态合并为同一文案 → SC-EXPOSURE-02 必须转红；
 ④ 移除「参照未就绪时禁用签发」→ SC-EXPOSURE-03 必须转红。实验后必须逐字节恢复实现。
 
-#### 29.53.6 Design 状态与 HARD STOP
+#### 29.53.6 Design 状态与授权边界
 
-Requirement §34.16：`PENDING_APPROVAL`（2026-11-15）；本节 Design：`PENDING_APPROVAL`；Implementation：`NOT_AUTHORIZED`。
+Requirement §34.16：`APPROVED`（2026-11-15）；本节 Design：`APPROVED`（同日）；Implementation：`AUTHORIZED`
+（2026-11-15，范围仅限本节验证矩阵所列的仓库内代码与测试变更）。
 
-**HARD STOP**：本节 Design 完成后**不得**进入 Implementation，等待业务所有者明确批准（并先解冻本域冻结）。
-本节不授权真实 MySQL 连接、对象存储写入、目标主机写操作、发布、部署、push、tag、Git 历史重写，
-也不授权 Acceptance / Freeze 签发。
+**授权边界**：本次 Implementation 授权**不**包含真实 MySQL 连接、对象存储写入、目标主机写操作、
+Acceptance / Freeze 签发、发布、部署、push、tag、Git 历史重写；这些操作仍须逐次单独批准。
+本节的实施**不得**越出 §34.16.3 `SC-EXPOSURE-01..05` 与本节设计的范围 —— 不得改动 route exposure、
+后端守卫、权限目录、role 种子或其它 route；`SC-EXPOSURE-05` 已裁定暂不收紧，不得在实施中顺带收紧。

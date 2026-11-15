@@ -1706,7 +1706,7 @@ Hard Stop: this Record is bounded. It does **not** authorize any of the followin
 
 ---
 
-### 34.16 route exposure 与页面自身 API 权限一致性有界增补（`PENDING_APPROVAL`，2026-11-15）
+### 34.16 route exposure 与页面自身 API 权限一致性有界增补（`APPROVED`，2026-11-15）
 
 #### 34.16.1 身份、授权与生效边界
 
@@ -1714,9 +1714,10 @@ Hard Stop: this Record is bounded. It does **not** authorize any of the followin
 |---|---|
 | 用途 | 消除 `sales-price-override-authorizations` route 的 **exposure 权限集合未覆盖该页面自身依赖的 API 权限集合**所造成的「预期外 403」：该 route 允许持有 `SALES_PRICING_VIEW` 的角色进入，而页面挂载即调用的客户 / 物料参照 API 要求 `CUSTOMERS_VIEW` / `PRODUCTS_VIEW`，同一主体被前端判定可进入、被后端判定无权读取参照 |
 | Owner | Sales & Customer（`sales-price-override-authorizations` 工作面与价格覆盖授权的 owner） |
-| 状态 | `PENDING_APPROVAL`；业务所有者于 2026-11-15 授权本节 Requirement 与 Design 连续撰写，**Design 完成后 HARD STOP**。Implementation、解冻、数据库操作、发布与部署**均未授权** |
-| 权威来源 | `document.md` §34；本文件 §34.7 Permission / RBAC / SOD、§34.8 Cross-Domain Boundary Table、§34.9 Compatibility / 不变性约束、§34.12 Hard Stop Conditions；`docs/status/PROJECT_STATUS.md` §66.2（覆盖分类裁定）；`docs/status/CAPABILITY_MATRIX.md` B3102（冻结后有界发现） |
-| 前置条件 | 本域整域已冻结（`SALES_CUSTOMER_DOMAIN_ACCEPTANCE_PASS` / `SALES_CUSTOMER_CAPABILITY_FREEZE`，2026-11-13，36 项能力）。本节触碰**权限与 route exposure 合同**，实施前必须由业务所有者**显式解冻**并单独授权 Implementation |
+| 状态 | `APPROVED`（业务所有者于 2026-11-15 批准本节）；Implementation **已授权**（2026-11-15 同一次裁定），范围仅限 §34.16.4 验收门禁所列的仓库内代码与测试变更 |
+| 权威来源 | `document.md` §34；本文件 §34.7 Permission / RBAC / SOD、§34.8 Cross-Domain Boundary Table、§34.9 Compatibility / 不变性约束、§34.12 Hard Stop Conditions；`docs/status/PROJECT_STATUS.md` §66.2（覆盖分类裁定）、§67（批准、解冻、实施授权与 `SC-EXPOSURE-05` 裁定）；`docs/status/CAPABILITY_MATRIX.md` B3102（冻结后有界发现） |
+| 显式有界解冻 | 业务所有者于 2026-11-15 **显式解冻**本域中与 `sales-price-override-authorizations` 这**一条** route 合同相关的冻结部分（即 §34.7 中该 route 的 exposure 与参照读取口径）。**解冻范围仅限这一条 route**：本域其余 route、SC 合同、权限码、能力集合与 2026-11-13 的域级 Acceptance / Capability Freeze 记录**保持冻结不变**；本节**不改写**冻结记录，冻结历史仍然成立 |
+| 前置条件 | 本域整域已冻结（`SALES_CUSTOMER_DOMAIN_ACCEPTANCE_PASS` / `SALES_CUSTOMER_CAPABILITY_FREEZE`，2026-11-13，36 项能力）。本节触碰**权限与 route exposure 合同**，因此实施前必须由业务所有者**显式解冻**并单独授权 Implementation —— **该解冻与实施授权已于 2026-11-15 由业务所有者给出** |
 | Supersession | 本节只**增补** §34.7 与 §34.9，**不改写** §34 已冻结结论，也**不改写** 2026-11-13 的冻结记录；本节记录的是**冻结之后**发现的有界缺陷 |
 
 本节只覆盖 `sales-price-override-authorizations` 一条 canonical route 与 SC19 手工价格覆盖授权工作面的**呈现与参照加载**。
@@ -1752,11 +1753,14 @@ SC01–SC114、UAT-S-*、R-SAL-*、`document.md` §34 的其它合同**均不变
   守卫；**不得**把客户 / 物料读取权限放宽给定价角色；**不得**新增权限码、**不得**修改 `role_permissions`、
   **不得**新增「价格覆盖专用参照」API；route exposure 保持 `any:['SALES_PRICING_VIEW','SALES_PRICING_OVERRIDE']`
   不变。本节因此**不改变任何权限结果**，也**不扩大任何数据可见面**。
-- **`SC-EXPOSURE-05`（「收紧 route exposure」是未裁定的业务决定）**：本 route 对 `role-sales` 与 `role-accounting`
-  暴露了一个它们**不能执行**的签发工作面（无 `SALES_PRICING_OVERRIDE`）。收紧 exposure 为
-  `SALES_PRICING_OVERRIDE` 会**减少**这两个既有角色的可见入口，属权限结果变化，**必须由业务所有者单独裁定**。
-  本节**不实施**该收紧、也**不默认采纳**该方向；登记为开放业务决定（见
-  `docs/decisions/OPEN-BUSINESS-DECISIONS.md`）。
+- **`SC-EXPOSURE-05`（收紧 route exposure 的裁定：本轮暂不收紧，延期处理）**：本 route 对 `role-sales` 与
+  `role-accounting` 暴露了一个它们**不能执行**的签发工作面（无 `SALES_PRICING_OVERRIDE`）。收紧 exposure 为
+  `SALES_PRICING_OVERRIDE` 会**减少**这两个既有角色的可见入口，属权限结果变化。
+  **业务所有者于 2026-11-15 裁定：本轮暂不收紧，延期处理** —— 因此本节维持 exposure 不变
+  （`any:['SALES_PRICING_VIEW','SALES_PRICING_OVERRIDE']`），**不实施**收紧方向。登记状态见
+  `docs/decisions/OPEN-BUSINESS-DECISIONS.md` 的 `SC-EXPOSURE-05` 行。
+  延期**不等于关闭**：该方向在本节实施后仍然开放；未来若要执行，必须单独授权，并重新评估对
+  `role-sales` / `role-accounting` 可见入口的影响。
 
 #### 34.16.4 验收、兼容与禁止事项
 
@@ -1780,5 +1784,6 @@ SC01–SC114、UAT-S-*、R-SAL-*、`document.md` §34 的其它合同**均不变
 不得把「无权读取参照」呈现为「没有可选客户 / 物料」；不得在本节顺带改动其它 route、权限或 SC 合同；
 不得自行实施 §34.16.3 `SC-EXPOSURE-05` 的收紧方向。
 
-**Requirement 状态：`PENDING_APPROVAL`（2026-11-15）。Design 已获授权并连续执行；Implementation、解冻、
-数据库操作、发布与部署均未授权。**
+**Requirement 状态：`APPROVED`（2026-11-15，业务所有者批准）。Design：`APPROVED`（同日批准）。
+Implementation：已授权（2026-11-15），范围仅限本节验收门禁所列的仓库内代码与测试变更；
+真实 MySQL 连接、数据库操作、Acceptance / Freeze 签发、发布与部署**未授权**。**
