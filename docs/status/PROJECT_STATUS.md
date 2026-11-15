@@ -5834,6 +5834,17 @@ Design [`docs/design/inventory-warehouse.md` §27.58](../design/inventory-wareho
 8. **穷尽枚举只覆盖 5 类 canonical 角色**：`role-outsourcing` 与 `role-outsourcing-receiving`
    两个种子角色不在门禁角色集合内（与 canonical 浏览器门禁同口径），因此未被枚举。
 
+### 68.9 发布动作（2026-11-15，业务所有者授权）
+
+| 项 | 内容 |
+|---|---|
+| 授权 | 业务所有者于 2026-11-15 明确授权「push 到 github/master」与「打 release tag」，并选定**用户测试版使用 SQLite 后端** |
+| 发布身份 | `v1.7.0-rc.1`（annotated tag，指向 commit `a940d1f`）。采用仓库既有的 release candidate 命名先例（`v1.1.0-rc.3` / `v1.2.0-rc.2`），把 `v1.7.0` 的正式身份留给生产发布 |
+| 版本 | `package.json` `1.6.2` → **`1.7.0-rc.1`**；版本守卫测试同步 |
+| push | `master` → `github/master`：`f3bff82..a940d1f`（**29 个提交**）。既有 release tag 未移动、删除或重建 |
+| 发布文档 | `docs/releases/v1.7.0-rc.1.md`、`docs/releases/v1.7.0-rc.1-checklist.md`；README 发布身份与基线表述同步 |
+| **未执行** | 生产部署、MySQL 连接与 ACK-4 campaign、Gitee（`origin`）远端 —— `origin/master` 仍落后本地 **145** 个提交（该远端早已停用，本次授权只涉及 `github`）；未签发任何 Acceptance / Capability Freeze / Manual Capability Closure / Release Readiness |
+
 ### 68.8 Owner
 
 | 角色 | 承担者 | 说明 |
