@@ -2,7 +2,7 @@
 
 Modern ERP 是一套基于 **React 19 + Vite 7 + Node.js 22.23.2 + SQLite/MySQL 8** 构建的现代制造业 ERP。产品采用 **mobile-first** 形态，但不牺牲成熟 ERP 的业务语义、控制机制、来源关系、状态机、审计和财务一致性。
 
-当前已发布基线仍为 **v1.6.2**，`package.json` 当前版本为 `1.6.2`。`master` 是持续开发分支，可以领先最新 release tag；精确开发状态以 Git SHA 或 `git describe` 为准。既有 release tag 不得移动、删除或重建。
+当前发布身份为 **v1.7.0-rc.1**（用户测试候选版本），`package.json` 当前版本为 `1.7.0-rc.1`；上一个已发布生产基线为 **v1.6.2**。`master` 是持续开发分支，可以领先最新 release tag；精确开发状态以 Git SHA 或 `git describe` 为准。既有 release tag 不得移动、删除或重建。
 
 ## 产品架构
 
@@ -65,9 +65,12 @@ Modern ERP 是一套基于 **React 19 + Vite 7 + Node.js 22.23.2 + SQLite/MySQL 
 **[docs/status/PROJECT_STATUS.md](./docs/status/PROJECT_STATUS.md)**。
 本文件不维护第二份状态表。
 
-当前基线：已发布 release tag `v1.6.2`，`package.json` 版本 `1.6.2`；
-`master` 是持续开发分支，可领先 release tag。精确开发状态以 Git SHA 或 `git describe` 为准。
+当前基线：发布 tag `v1.7.0-rc.1`（**用户测试候选版本**，SQLite 后端），`package.json` 版本 `1.7.0-rc.1`；
+上一个已发布生产基线为 `v1.6.2`。`master` 是持续开发分支，可领先 release tag。
+精确开发状态以 Git SHA 或 `git describe` 为准。
 **没有任何 Domain 达到 Release Readiness；生产发布仍未获授权。**
+发布内容与实测门禁见 [`docs/releases/v1.7.0-rc.1.md`](docs/releases/v1.7.0-rc.1.md)
+与 [`docs/releases/v1.7.0-rc.1-checklist.md`](docs/releases/v1.7.0-rc.1-checklist.md)。
 
 ## 核心范围、端到端主链与当前运行限制
 
