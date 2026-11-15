@@ -5697,3 +5697,148 @@ M6 的 0 转红本身是**结论而非缺陷**：它证明承重的是共享策�
 | §36.17 / §32.17 第二轮修订 | Platform（Owner）+ 业务所有者（退回修订） | 合同项范围不变；实施未授权 |
 | `buildObjectKey` 同毫秒碰撞 | Platform / 运维（备份工具 owner）+ 业务所有者（授权） | 见 §67.6 第 3 条；本轮未处置 |
 | 发布 / 数据库 / 真实 MySQL 证据 | 业务所有者 | 本轮未授权、未执行 |
+
+## 68. 首次用户测试版发布收口：全系统复核、阻塞修复与 Platform 级 route API 授权合同（2026-11-15）
+
+**状态**：全系统复核**已完成**；已确认的发布阻塞项**已修复**；Platform 级 route API 授权一致性合同
+（Requirement §36.18 / Design §32.18）与 Inventory & Warehouse 有界包（§32.13 / §27.58）
+**已批准、已设计、已实施**；canonical 浏览器发布门禁**已转绿**。
+
+本节**不是** Acceptance：它不签发任何 Acceptance / Capability Freeze / Manual Capability Closure /
+Release Readiness，也**不改写** 2026-11-12（M&Q）、2026-11-13（S&C、I&W）的域级冻结记录 ——
+本轮只对 `inventory` 这**一条** route 合同做了**显式有界解冻**。
+
+### 68.1 授权与边界
+
+| 授权 | 内容 | 本轮结果 |
+|---|---|---|
+| A | 复核整个系统，修复存在的阻塞，达到可发布状态 | 已完成（AUDIT → REQUIREMENT → DESIGN → IMPLEMENTATION 连续执行，AGENTS.md §4.0） |
+| 明确未授权 | push / tag / merge / release / deploy、数据库破坏性操作、真实 MySQL campaign、Acceptance / Freeze 签发 | 本轮**全部未执行** |
+
+### 68.2 审计方法：穷尽枚举取代「门禁输出即清单」
+
+§65.4 第 2 条与 §67.6 第 2 条已两次登记：canonical 浏览器门禁的 FAIL 清单**随运行时序漂移**，
+**不得**当作「缺陷已穷尽枚举」的证据。本轮据此建立了两条取证路径：
+
+| 手段 | 覆盖面 | 隔离方式 | 用途 |
+|---|---|---|---|
+| `scripts/qa/verify-route-api-authority.mjs`（**本轮新增**） | 93 route × 5 类 canonical 角色 = **202** 个 (角色, route) 组合 | 每个 (角色, route) **隔离 reload** | 判定「可见 route 但首屏请求无权 API」是否已消除 |
+| 页签点击枚举（同脚本 `--tabs`） | 同上 + 页面内全部页签控件 | 同上 | 判定「页签可点击但打开必 403」是否已消除 |
+
+两者都**只读**：临时 SQLite 库建在系统临时目录并在结束时删除；不写仓库、不连 MySQL、不改业务数据。
+
+### 68.3 审计结论：唯一剩余阻塞
+
+穷尽枚举在修复前的 HEAD `6272337` 上给出**唯一**一组首屏阻塞：
+
+| 角色 | route | 403 的 API | 后端守卫 |
+|---|---|---|---|
+| `role-reviewer` | `inventory` | `GET /api/inventory-stock-statuses` | `allowAny(['STOCK_STATUS_VIEW','STOCK_STATUS_MANAGE'])`（`server/modules/stock-status.js:28`） |
+| `role-reviewer` | `inventory` | `GET /api/warehouse-bins` | `allowAny(['WAREHOUSE_BIN_VIEW','WAREHOUSE_BIN_MANAGE'])`（`server/modules/warehouse-bin.js:25`） |
+
+首屏之外，页签点击枚举给出 **10 组**页签级 403，**全部**落在同一条 route、同一角色：
+`inventory` × `role-reviewer` 的「仓位 / 库存状态 / 所有权 / 库存参数 / 组装拆卸 / 条码 / 调整 /
+初始化与期初 / 其他出入库 / 锁库」。其余 4 类 canonical 角色、其余 92 条 route 首屏与页签均为 **0**。
+
+**结论**：这是 §67.6 第 1 条登记的第三域实例，与 M&Q（§29.11）、S&C（§34.16）**同形** ——
+route 声明的 exposure 权限集合未覆盖该页面自身依赖的 API 权限集合。三个域各踩一次，
+说明缺的是**平台级合同**，不是第三个域的补丁。
+
+### 68.4 平台级合同与实施
+
+**Requirement** [`docs/requirements/platform.md` §36.18](../requirements/platform.md)（`PL-EXPOSURE-01..07`）、
+**Design** [`docs/design/platform.md` §32.18](../design/platform.md)。
+**Inventory & Warehouse 有界包**：Requirement [`docs/requirements/inventory-warehouse.md` §32.13](../requirements/inventory-warehouse.md)（`IW-EXPOSURE-01..05`）、
+Design [`docs/design/inventory-warehouse.md` §27.58](../design/inventory-warehouse.md)。
+
+| 文件 | 改动 |
+|---|---|
+| `src/lib/routeApiAuthority.js` | **新增**（Platform）：通用原语 —— 依赖登记归一化为与后端守卫同形（`all` / `any`）、按 actor 权限过滤、按权限加载、可读性判定 |
+| `src/lib/inventoryWorkReferences.js` | **新增**（I&W）：`inventory` 的 4 个参照数据源登记与加载策略 |
+| `src/lib/inventoryWorkTabs.js` | **新增**（I&W）：21 个页签在**打开时**读取的端点与后端守卫口径登记 |
+| `src/pages/inventory-work.jsx` | 参照加载按权限前置；页签按权限过滤（不可读页签不渲染）；生效页签 = 第一个可读页签；无可读页签时 fail closed；无权参照以**明确的无权提示**呈现，与空态可区分 |
+| `server/route-exposure-semantic-parity.test.js` | 扩展为**平台级** focused 守卫：三个登记模块归一化后与后端实际守卫**逐项相等**；逐 canonical 角色（真实种子库）断言包含性；页面不得自带第二份端点清单；`inventory` 的 exposure 与 21 个页签的 key/标签被锁定 |
+| `scripts/qa/verify-route-api-authority.mjs` | **新增**：穷尽枚举入口 |
+| `scripts/admin/lib/mysql-dr.mjs` + `scripts/admin/mysql-dr.test.js` | 修正 T9 的错误断言（见 §68.6 第 3 条） |
+
+**后端、权限与 schema 改动：无。** route exposure、API 守卫、`role_permissions`、权限码、业务 schema、
+单据状态机、金额与估值语义**全部未改** —— 缺陷在**页面层**闭合。
+
+### 68.5 门禁证据
+
+| 门禁 | 结果 |
+|---|---|
+| `node scripts/qa/verify-route-api-authority.mjs`（穷尽枚举，202 组合） | **PASS** —— 首屏非预期 4xx/5xx **0** 条；浏览器控制台错误 **0** 条 |
+| 页签点击复核（`reviewer` × `inventory`） | **PASS** —— 可见 11 个页签全部打开无 4xx/5xx，控制台错误 0 |
+| `node --test server/route-exposure-semantic-parity.test.js` | **PASS 39/39**（原 23 例 + 平台级 16 例） |
+| `node scripts/acceptance/inventory-warehouse-responsive-uat.mjs` | **PASS 108/108**（I&W 域浏览器回归：10 屏 × 4 档宽度，触控目标 0 项过小） |
+| `node scripts/acceptance/release-browser-readiness.mjs` | ****PASS** —— 判定 **5696** 项、失败 **0** 项；`PRODUCT_FAILURE=0` / `FIXTURE_FAILURE=0` / `CONTRACT_DRIFT=0`；角色 5/5、宽度 4/4（**本门禁首次全绿**）** |
+| `pnpm test:fast` | ****PASS 774/774**（86 suites）** |
+| `pnpm test`（FULL） | ****PASS 4134/4134**（535 suites，退出码 0；改动前基线 4117/4117）** |
+| `pnpm test:heavy` | ****PASS 68/68**（18 suites）** |
+| `pnpm build` | ****PASS**（`✓ built in 4.40s`）** |
+| `git diff --check` | ****PASS**（无空白错误）** |
+| 文档一致性 current / migration 两模式 | ****PASS**（current：N1、N3–N9 全通过、N2 `RETIRED`；migration：C1–C6 全通过）** |
+
+### 68.6 审计中发现并已修正 / 已登记的其余事项
+
+1. **`buildObjectKey` 同毫秒碰撞（§67.6 第 3 条）：根因描述经实测不成立，断言本身有缺陷。**
+   原记录称「生产上同一毫秒内的两次备份会撞 key」。实测：生产唯一调用方
+   `scripts/admin/mysql-backup.mjs:83` 每次运行新建 `crypto.randomUUID()` 作为 `runId`，
+   因此两次不同运行**不会**撞 key；`runId` 相同即同一逻辑运行，撞 key 是正确行为。
+   真实缺陷在 T9：它断言「同一组输入必须得到不同 key」，这与 object key 的**不可变**语义矛盾，
+   且在两次调用落入同一毫秒时**必然**失败（CPU 竞争下复现）。
+   本轮修法：`buildObjectKey` 增加可注入的 `now`（时间戳分量显式且可测），key 保持**确定性**；
+   T9 改为断言真实合同 —— ① 同一组输入得到同一个 key；② 不同 `runId` 得到不同 key；
+   ③ 在**固定时钟**下两个 key 的时钟分量完全相同（证明唯一性来自 `runId` 而非毫秒时间戳）；
+   ④ 未传 `runId` 时每次调用自带新的 run id。
+   **与 §67.6 建议的「增加随机后缀」不同**：随机后缀会让 object key 失去不可变性
+   （重跑同一备份运行会指向新对象），因此本轮不采用，改为修正断言并显式声明唯一性来源。
+2. **§65.3 C 类「全新初始化索引缺失」：在首装路径**不成立**。**
+   用 recording mock adapter 驱动 `bootstrapMySql` 读取其会发出的精确 DDL：
+   SQLite 快照 422 张表、**389 个显式索引**，MySQL bootstrap **389/389 全覆盖**（另多出 4 个 MySQL 专属索引）；
+   差集里的 282 条全部是 SQLite 的隐式唯一索引（`sqlite_autoindex_*`），在 MySQL 侧表达为
+   `CREATE TABLE` 内的 `UNIQUE KEY`，**不是缺口**。
+   因此 C 类风险只可能出现在 **live-upgrade** 路径（既有 MySQL 库被表重建掉索引），
+   该路径需要真实 MySQL campaign 才能验证 —— 本轮未授权、未执行。
+3. **`inventory` 的 21 个页签中，3 个页签（批号调整 / 形态转换 / 容器）打开时不读取任何列表端点**，
+   其单据列表在实现中从未加载。这是**能力缺口**而非阻塞，本轮未处置，登记为开放项。
+4. **写路径授权未经系统审计**：本轮只审计了读路径。`POST /api/inventory-stock-status-changes`
+   等写入口在 handler 内没有显式 `allow()`（依赖下层的 `applyInventoryMutation`）。
+   写路径授权属于独立的授权审计范围，**本轮未处置**。
+
+### 68.7 未解决矛盾
+
+1. **四个库存报表端点没有后端权限守卫**：`GET /api/inventory-ledger`、`/api/inventory-aging`、
+   `/api/inventory-slow-moving`、`/api/inventory/alerts` 在 `server/app.js` 的 dispatch 中
+   **没有任何 `allow()`**（`server/app.js:4842`–`:4852`、`:4413`），即**任何已认证用户**都能直接读取库存台账、
+   账龄、呆滞与预警。权限目录里有专门的 `INVENTORY_REPORT_VIEW`（`server/db.js:269`，当前只授予
+   `role-warehouse` 与 admin），但端点上没有生效。
+   **本轮未处置**：补守卫会改变权限结果（`role-sales` / `role-reviewer` / `role-accounting`
+   当前可直接调这些端点，补守卫后将被拒），属业务所有者的独立裁定；
+   用 `INVENTORY_VIEW` 还是 `INVENTORY_REPORT_VIEW` 同样是政策选择。
+   **建议的有界后续单元**：Inventory & Warehouse 有界 Requirement + Design，给出守卫口径与
+   「报表页签是否随该权限隐藏」的联动结论。本轮按 §67.3 既定口径登记为**开放业务决定**，
+   不自行吸收。
+2. **§36.17 / §32.17 Migration 风险工作包仍为 `PENDING_APPROVAL`**：A 类吞错 catch 与 B 类无事务表重建
+   是 **upgrade 路径**的风险，不阻塞**首装**用户测试版；C 类在首装路径已实测不成立（§68.6 第 2 条）。
+   本轮**未**修改任何 migration 文件。
+3. **`SC-EXPOSURE-05`（收紧 route exposure）仍然开放**：本轮沿用既定口径，未收紧任何 exposure。
+4. **§62 的 MySQL 备份 / 恢复能力缺口**：目标生产路径仍没有仓库提供的备份 / 恢复自动化。
+   它**阻塞生产发布**，但**不阻塞**首次用户测试版（测试期数据可由 SQLite 或一次性测试库承载）。
+5. **Manual Capability Closure（B3101–B3122）与九域 Release Readiness 仍未签发** —— 业务所有者的独立决定。
+6. **写路径授权未审计**（§68.6 第 4 条）：读路径已闭合，写路径仍是盲区。
+7. **canonical 浏览器门禁只覆盖 route 层，不覆盖文档详情层**（继承自 §65.4 第 1 条）：
+   `orders/<id>` 这类详情页上的触控目标不在门禁覆盖内，本轮未改动。
+8. **穷尽枚举只覆盖 5 类 canonical 角色**：`role-outsourcing` 与 `role-outsourcing-receiving`
+   两个种子角色不在门禁角色集合内（与 canonical 浏览器门禁同口径），因此未被枚举。
+
+### 68.8 Owner
+
+| 角色 | 承担者 | 说明 |
+|---|---|---|
+| Platform 级 route API 授权合同 | Platform（Owner）+ 业务所有者（批准、授权实施） | §36.18 / §32.18 已 `APPROVED`，Implementation 已实施 |
+| `inventory` route 有界解冻 | 业务所有者 | 仅 `inventory` 一条 route 合同；域级冻结记录保持不变 |
+| 库存报表端点缺失守卫 | Inventory & Warehouse（Owner）+ 业务所有者（守卫口径裁定） | 见 §68.7 第 1 条；本轮未处置 |
+| Migration 风险工作包 | Platform（Owner）+ 业务所有者（批准） | §36.17 / §32.17 仍 `PENDING_APPROVAL`；本轮未实施 |
+| 发布 / 数据库 / 真实 MySQL 证据 | 业务所有者 | 本轮未授权、未执行 |

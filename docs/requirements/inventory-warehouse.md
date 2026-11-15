@@ -626,3 +626,85 @@ step transfer:
 - 真实 MySQL race 必须调用真实月结 handler 和真实 inventory mutation handler；直接插入关闭行、只检查
   最终数量落在两个值之一、或允许双方成功但不证明快照包含 mutation，均不构成合格证据。
 - SQLite / MySQL 双路径必须保持相同关闭结果、错误语义、事务回滚和重开恢复行为。
+
+### 32.13 route exposure 与页面自身 API 权限一致性有界增补（`APPROVED`，2026-11-15）
+
+#### 32.13.1 身份、授权与生效边界
+
+| 项 | 内容 |
+|---|---|
+| 用途 | 消除 `inventory` route 的 **exposure 权限集合未覆盖该页面自身依赖的 API 权限集合**所造成的「预期外 403」：同一后端主体被前端判定为可进入该 route，又被后端判定为无权调用该 route 加载时必调的 API |
+| Owner | Inventory & Warehouse（`inventory` 单一 canonical 工作面与库存参照的 owner） |
+| 状态 | `APPROVED`（业务所有者于 2026-11-15 批准本节）；Design §27.58 同日 `APPROVED`；Implementation **已授权**（2026-11-15），范围仅限 §32.13.4 验收门禁所列的仓库内代码与测试变更 |
+| 权威来源 | `document.md` §32；本文件 §32.5 Frozen Core Invariants、§32.9 Acceptance Criteria、§32.10 Hard Stop Conditions；平台合同 [`docs/requirements/platform.md` §36.18](../requirements/platform.md)（`PL-EXPOSURE-01..07`）；`docs/status/PROJECT_STATUS.md` §67.6 第 1 条与 §67.6 第 5 条 |
+| 显式有界解冻 | 业务所有者于 2026-11-15 的「修复存在的阻塞、达到可发布状态」指令，**显式有界解冻**本域中与 `inventory` 这**一条** route 合同相关的冻结部分（即该 route 的 exposure 口径与页面参照加载口径）。**解冻范围仅限这一条 route**：本域其余 route、页签、权限码、能力集合与 2026-11-13 的域级 Acceptance / Capability Freeze 记录**保持冻结不变**；本节**不改写**冻结记录，冻结历史仍然成立 |
+| 前置条件 | 本域整域已冻结（`INVENTORY_WAREHOUSE_DOMAIN_ACCEPTANCE_PASS` / `INVENTORY_WAREHOUSE_CAPABILITY_FREEZE`，2026-11-13，44 项能力）。本节触碰**权限与 route exposure 合同**，因此实施前必须由业务所有者**显式解冻**并单独授权 Implementation —— **该解冻与实施授权已于 2026-11-15 由业务所有者给出** |
+| Supersession | 本节只**增补** §32.5 与 §32.9，**不改写** §32 已冻结结论，也**不改写** 2026-11-13 的冻结记录；本节记录的是**冻结之后**发现的有界缺陷 |
+
+本节只覆盖 `inventory` 一条 canonical route。本文件 §32 的其它 route、页签、状态机、
+权限码与能力集合**均不变**。
+
+#### 32.13.2 事实基线（2026-11-15 在 HEAD `6272337` 上实测）
+
+`inventory` route 的 exposure 为 `any:['INVENTORY_VIEW']`（`src/navigation/applicationRegistry.js:43`）。
+页面 hub 的 `useInventoryReferences`（`src/pages/inventory-work.jsx:172`–`:183`）**无条件**加载 4 个参照端点：
+
+| 参照 | API | 后端要求的权限 | 事实来源 | `role-reviewer` 是否持有 |
+|---|---|---|---|---|
+| 仓库 | `GET /api/warehouses` | `WAREHOUSES_VIEW` / `WAREHOUSES_MANAGE` | `server/modules/warehouses.js:30` | 是（`WAREHOUSES_VIEW`） |
+| 货品 | `GET /api/products` | `PRODUCTS_VIEW` / `PRODUCTS_MANAGE` | `server/modules/products.js:56` | 是（`PRODUCTS_VIEW`） |
+| 库存状态 | `GET /api/inventory-stock-statuses` | `STOCK_STATUS_VIEW` / `STOCK_STATUS_MANAGE` | `server/modules/stock-status.js:28` | **否** |
+| 仓位 | `GET /api/warehouse-bins` | `WAREHOUSE_BIN_VIEW` / `WAREHOUSE_BIN_MANAGE` | `server/modules/warehouse-bin.js:25` | **否** |
+
+触发事实：`role-reviewer` 持有 `INVENTORY_VIEW`（`server/db.js:2046`）因此**可进入** `inventory` route，
+但不持有 `STOCK_STATUS_*` 与 `WAREHOUSE_BIN_*`，因此被后端拒绝。
+
+**穷尽性**：93 条 canonical route × 5 类 canonical 角色、每个 (角色, route) 隔离 reload 的穷尽枚举中，
+`inventory` × `role-reviewer` 是**唯一**的首屏 403 组合（平台合同 §36.18.2）。
+`role-warehouse` 持有 `WAREHOUSE_BIN_*` 与 `STOCK_STATUS_*`（`server/db.js:2050`），因此同一 route 对其**可用**——
+说明这不是「route 暴露给了不该暴露的角色」，而是**页面按角色加载参照**的缺失。
+
+#### 32.13.3 合同项 `IW-EXPOSURE-01..05`
+
+- **`IW-EXPOSURE-01`（参照必须登记）**：本 route 的 4 个参照数据源、其端点与读取权限，
+  必须在代码中以**单一事实来源**登记；页面不得自行维护第二份端点清单。
+  登记口径以 §32.13.2 的表为准，并与平台合同 `PL-EXPOSURE-01` / `PL-EXPOSURE-02` 一致。
+- **`IW-EXPOSURE-02`（无权的数据源一次请求都不发）**：actor 无权读取的参照数据源，
+  首屏**不得**发起任何请求；不得「先请求、后被拒绝」。
+- **`IW-EXPOSURE-03`（无权态与空态必须可区分）**：无权读取参照时，页面必须呈现**明确的无权态**，
+  **不得**把它渲染成「没有可选仓位 / 库存状态」。
+- **`IW-EXPOSURE-04`（后端语义与权限目录不变）**：后端 API 守卫语义**不变**；
+  **不得**新增权限码、**不得**修改 `role_permissions`、**不得**放宽任何 API 守卫、
+  **不得**改动任何角色的权限集合、`inventory` route 的 exposure **不变**。
+  前端隐藏**不构成**授权：后端必须继续 fail closed。
+- **`IW-EXPOSURE-05`（页签不得暴露无权能力）**：本工作面的页签若其自身依赖的读取权限
+  actor 不具备，该页签**不得**以「可点击但必然报错」的形式呈现；
+  不得让测试者在页签内遇到预期外 403。
+
+#### 32.13.4 验收、兼容与禁止事项
+
+**验收门禁**：
+
+1. 穷尽枚举：93 route × 5 canonical 角色的首屏非预期 4xx/5xx 组合数 = 0，控制台错误数 = 0；
+2. canonical 浏览器门禁 `node scripts/acceptance/release-browser-readiness.mjs` 退出码 0，三类失败均为 0；
+3. focused 合同测试：登记与后端实际守卫逐项一致；逐角色断言首屏请求集合 ⊆ 该角色权限；
+   无权时零请求；无权态与空态可区分；页面不得自带第二份端点清单；
+4. 变异实验：① 取消按权限过滤 → 必须转红；② 篡改登记的权限码 → 必须转红；
+   ③ 恢复无条件加载 → 必须转红；
+5. `pnpm test:fast`、`pnpm test`、`pnpm test:heavy`、`pnpm build`、`git diff --check`、
+   两种文档一致性模式。
+
+**兼容要求**：不改变任何角色的权限集合与 `role_permissions`；不改变 route 数量与 route key；
+不改变 `inventory` route 的 exposure；不改变任何 API 的请求 / 响应合同与权限判定；
+不改变 21 个页签的**集合**（只改变**可见性**与参照加载）；不改变库存数量、状态机、估值与
+会计口径；不改变既有 release tag。
+
+**禁止事项**：不得以 allowlist / 白名单方式把 403 放进 canonical 门禁的豁免项；不得放宽后端 API 守卫；
+不得新增权限码或修改 role 种子；不得以「收紧 exposure」回避本节不一致
+（该方向仍是 `docs/decisions/OPEN-BUSINESS-DECISIONS.md` 登记的开放业务决定）；
+不得删除页签或以「删页签」回避 §32.13.2 的不一致；不得把前端隐藏当作授权实现
+（后端必须继续 fail closed）；不得把尚未取得的真实浏览器证据写成已通过。
+
+**Requirement 状态：`APPROVED`（2026-11-15，业务所有者批准）。Design §27.58：`APPROVED`（同日批准）。
+Implementation：已授权（2026-11-15），范围仅限本节验收门禁所列的仓库内代码与测试变更；
+真实 MySQL 连接、数据库操作、Acceptance / Freeze 签发、发布与部署**未授权**。**

@@ -681,3 +681,113 @@ E 类**不是新增数据丢失风险**（db.js 的 7 处重建已在原子边�
 禁止事项：不得以 `catch` 改名、注释化或 `try {} catch {}` 形式保留吞错；不得用 `skip`、删断言或放宽门禁制造绿色；不得把「第二次启动补齐」当作幂等证明；不得在普通测试中连接 MySQL；不得在本轮顺带修改任何业务 schema、权限或状态机；不得把未取得的真实 MySQL 证据写成已通过；**不得**以文件级推断代替逐站点判定；**不得**以固定名称清单代替恢复态的模式发现；**不得**复制 `isUniqueConstraintError` 既有先例的错误字段判定写法；**不得**新建第二份临时表命名或表重建实现。
 
 **Requirement status：`PENDING_APPROVAL`（2026-11-15）。Design 已获授权并连续执行；Implementation、数据库操作、发布与部署均未授权。**
+
+### 36.18 Route 首屏 API 授权一致性通用合同（`APPROVED`，2026-11-15）
+
+> **授权来源**：业务所有者于 2026-11-15 的一次性指令「复核整个系统、修复存在的阻塞、达到可发布的状态」。
+> 该指令一次性授权 AUDIT → REQUIREMENT → DESIGN → IMPLEMENTATION 的连续执行（AGENTS.md §4.0）；
+> **未**授权 push / tag / merge / release / deploy、数据库破坏性操作、真实 MySQL campaign 与任何 Acceptance / Freeze 签发。
+
+#### 36.18.1 身份、Owner 与生效边界
+
+| 项 | 内容 |
+|---|---|
+| 用途 | 把「route 声明的 exposure 权限集合未覆盖该页面自身依赖的 API 权限集合」这一**已在三个业务域各自暴露**的缺陷形态，从域级一次性修补升级为**平台级通用合同** + 机器可验证守卫 |
+| Owner | Platform（`src/navigation/applicationRegistry.js` 的 route exposure 合同与跨域前端授权原语的 canonical owner）。各业务域仍是各自页面与业务语义的 owner |
+| 状态 | `APPROVED`（2026-11-15）；Design §32.18 同日 `APPROVED`；Implementation 已授权，范围仅限 §36.18.5 所列仓库内代码、测试与脚本 |
+| 权威来源 | `document.md` §17、§22.22；本文件 §36.16.5（`PL-RI-04` canonical 浏览器门禁）；`docs/status/PROJECT_STATUS.md` §66.2、§66.4 第 3 条、§67.4、§67.6 第 1/2/5 条 |
+| Supersession | 本节**不改写** §36.16、§36.17，也不改写 Manufacturing & Quality §29.11 与 Sales & Customer §34.16 的已批准结论；本节记录的是这两个域级包**之后**发现的第三个域实例与平台级归因 |
+
+#### 36.18.2 事实基线（2026-11-15 在 HEAD `6272337` 上实测，非引用既有结论）
+
+**枚举方法**：93 条 canonical route × 5 类 canonical 角色，每条 route 由该角色可见时执行
+「direct URL → **完整 reload** → 等待 networkidle」，逐条记录全部 `/api/` 响应状态。
+该方法与 canonical 浏览器门禁的判定面一致，但**对每个 (角色, route) 做隔离 reload**，
+因此不继承门禁「hash 跳转 + Back/Forward 造成失败清单随运行时序漂移」的已知缺陷
+（`PROJECT_STATUS.md` §65.4 第 2 条、§67.6 第 2 条）。枚举共覆盖 **202** 个 (角色, route) 组合。
+
+**枚举结论（穷尽）**：全部 202 个组合中，**首屏出现非预期 4xx/5xx 的组合只有一个**：
+
+| 角色 | route | 403 的 API | 后端守卫（实测行号） | 角色实测权限 |
+|---|---|---|---|---|
+| `role-reviewer` | `inventory` | `GET /api/inventory-stock-statuses` | `allowAny(['STOCK_STATUS_VIEW','STOCK_STATUS_MANAGE'])`（`server/modules/stock-status.js:28`） | 两者皆无 |
+| `role-reviewer` | `inventory` | `GET /api/warehouse-bins` | `allowAny(['WAREHOUSE_BIN_VIEW','WAREHOUSE_BIN_MANAGE'])`（`server/modules/warehouse-bin.js:25`） | 两者皆无 |
+
+其余 201 个组合**首屏 0 个非预期 4xx/5xx**，且**无浏览器控制台错误**。据此确认：
+
+- §67.4 已实施的两个域级包**当前有效**：`manufacturing-analytics`（accounting × 4 档）与
+  `sales-price-override-authorizations`（sales / reviewer）不再产生首屏 403；
+- `inventory` 是该缺陷形态在**第三个业务域**的实例，根因与前两处**同形**：
+  `src/pages/inventory-work.jsx:172`–`:183` 的 `useInventoryReferences` **无条件**加载 4 个参照端点，
+  而 `inventory` route 的 exposure 只有 `any:['INVENTORY_VIEW']`
+  （`src/navigation/applicationRegistry.js:43`）；
+  `role-reviewer` 持有 `INVENTORY_VIEW` 但不持有上述 2 组守卫（`server/db.js:2046`）。
+
+**平台级归因**：route 的 exposure 与页面自身的 API 依赖之间**没有合同**，因此每个域各自踩坑 ——
+Manufacturing & Quality（§29.11）、Sales & Customer（§34.16）、Inventory & Warehouse（本节实例）。
+在平台级合同缺位的前提下，「修一个域」不能保证「下一个域不复发」。
+
+#### 36.18.3 合同项 `PL-EXPOSURE-01..07`
+
+- **`PL-EXPOSURE-01`（首屏 API 依赖必须登记）**：每条 canonical route 在**首屏**加载的 API 依赖，
+  及其所要求的权限，必须在代码中以**单一事实来源**登记。页面不得自行维护第二份端点清单，
+  不得发出未登记的首屏请求。
+- **`PL-EXPOSURE-02`（登记必须与后端实际守卫逐项一致）**：登记的权限集合必须等于**后端 handler 内的实际守卫**，
+  由机器从服务端源码解析核对，**不得**手抄、不得凭前端推断。任一条不一致即判定失败。
+- **`PL-EXPOSURE-03`（逐角色包含性）**：对每一类 canonical 角色，若该角色**可见**某条 route，
+  则该 route 的首屏请求集合必须**完全落在**该角色的可读端点集合内。
+  「先发请求、后被后端拒绝」即判定失败 —— **前端隐藏不构成授权**，后端继续 fail closed。
+- **`PL-EXPOSURE-04`（exposure 语义不变）**：修法**不得**默认采用「收紧 route exposure」，
+  因为它改变权限结果（可见入口减少），属业务所有者的独立裁定。
+  本合同沿用 `SC-EXPOSURE-05` 的既定口径（`PROJECT_STATUS.md` §67.3）：**页面按 actor 权限自适应，
+  后端守卫与 route exposure 语义不变**。收紧 exposure 仍是开放业务决定，登记于
+  `docs/decisions/OPEN-BUSINESS-DECISIONS.md`，**不**在本合同内自行吸收。
+- **`PL-EXPOSURE-05`（无权态与空态必须可区分）**：actor 无权读取某个依赖时，页面必须呈现**明确的无权态**，
+  **不得**把它渲染成「没有可选数据」；一个依赖都无权时必须 **fail closed**（不发任何请求）。
+- **`PL-EXPOSURE-06`（缺陷清单必须来自可复跑的穷尽枚举）**：判定「该缺陷形态是否已消除」必须依据
+  **可复跑的穷尽枚举**（每个 (角色, route) 隔离 reload），**不得**以单次浏览器门禁的 FAIL 列表作为
+  穷尽证据；枚举必须输出 (角色, route, 端点, 状态) 四元组，且可被第三方在同 HEAD 上重放得到相同结论。
+- **`PL-EXPOSURE-07`（门禁不得自我豁免）**：任何「预期外 403」**不得**进入门禁 allowlist；
+  `NOTIFICATION_VIEW` / `WORKFLOW_TASK_VIEW` 一类的徽标请求已按 `PL-RI-04` 由 route exposure 前置，
+  不得以「徽标例外」放宽本节判定。
+
+#### 36.18.4 与既有合同的关系
+
+| 既有合同 | 关系 |
+|---|---|
+| `PL-RI-04`（§36.16.5）canonical 浏览器门禁 | **仍然有效且仍是发布门禁**。本节只补「缺陷清单必须来自穷尽枚举」的取证口径，不改变门禁的判定面 |
+| §36.16.5 徽标条款 | **未改写**。`src/App.jsx` 的通知 / 流程待办徽标已按 route exposure 前置，本节不涉及 |
+| Manufacturing & Quality §29.11（`MQ-EXPOSURE-01..05`） | **未改写**。其页签登记仍由 `src/lib/manufacturingAnalyticsTabs.js` 持有；本节要求该登记同时满足 `PL-EXPOSURE-02` 与 `PL-EXPOSURE-03` |
+| Sales & Customer §34.16（`SC-EXPOSURE-01..05`） | **未改写**。其参照登记仍由 `src/lib/salesPriceOverrideReferences.js` 持有；同上 |
+| `SC-EXPOSURE-05`（收紧 exposure 的开放决定） | **仍开放**，按 §36.18.3 的 `PL-EXPOSURE-04` 延期处理 |
+
+#### 36.18.5 验收、兼容与禁止事项
+
+**验收门禁**：
+
+1. **穷尽枚举**：新增的可复跑枚举入口对 93 条 route × 5 类 canonical 角色输出
+   「首屏非预期 4xx/5xx 组合数 = 0」，且**首屏控制台错误数 = 0**。
+2. **平台级 focused 守卫**：对**全部**已登记 route，逐条断言
+   ① 登记的权限集合 == 后端实际守卫（`PL-EXPOSURE-02`）；
+   ② 对每一类 canonical 角色（取自**真实种子库**的 `role_permissions`，不是手抄名单），
+   若角色可见该 route，则该 route 的首屏依赖全部可读（`PL-EXPOSURE-03`）；
+   ③ 页面**不得**自带第二份端点清单（登记处之外的字面量调用即失败）。
+3. **canonical 浏览器门禁**：`node scripts/acceptance/release-browser-readiness.mjs` 返回退出码 0，
+   且 `PRODUCT_FAILURE` / `FIXTURE_FAILURE` / `CONTRACT_DRIFT` 三类均为 0。
+4. **变异实验（证明断言承重、非空洞）**：至少三条 —— ① 把某页的首屏默认依赖改回固定项 → 必须转红；
+   ② 取消按权限过滤 → 必须转红；   ③ 篡改登记中的权限码 → 必须转红。
+5. `pnpm test:fast`、`pnpm test`、`pnpm test:heavy`、`pnpm build`、`git diff --check`、
+   两种文档一致性模式（current / migration）。
+
+**兼容要求**：不改变任何角色的权限集合与 `role_permissions`；不新增、不删除权限码；
+不改变 route 数量与 route key；不改变任何 API 的请求 / 响应合同与权限判定；
+不改变单据状态机、金额与估值语义、业务 schema、既有 release tag。
+
+**禁止事项**：不得以 allowlist / 白名单把 403 放进门禁豁免项；不得放宽后端 API 守卫；
+不得新增权限码或修改 role 种子；不得以「收紧 exposure」作为默认修法；
+不得把前端隐藏当作授权实现；不得在登记缺项时以「登记不全」为由豁免判定；
+不得把一次浏览器门禁的 FAIL 列表写成「缺陷已穷尽枚举」；不得把未取得的真实 MySQL 证据写成已通过。
+
+**Requirement 状态：`APPROVED`（2026-11-15）。Design §32.18：`APPROVED`（同日）。
+Implementation：已授权（2026-11-15），范围仅限本节验收门禁所列的仓库内代码、测试与脚本；
+真实 MySQL 连接、数据库操作、Acceptance / Freeze 签发、发布与部署**未授权**。**

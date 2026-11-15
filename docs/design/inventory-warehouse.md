@@ -2066,3 +2066,73 @@ R-02 重新阻塞发布。
 > 早期 Finance technical 内容（§9.4 / §13）保留为 historical context；以本节为唯一权威。
 > 本节实现后取代 `solution.md §13.1 / §13.2` 中关于 AR / AP / Invoice 的旧描述；`§13.3 / §13.4 / §13.5` 已由 `document.md §33.1.3` normalization 明确归属 Accounting & Analytics，本节不重复。
 > Implementation 阶段严禁新增 capability ID、UAT、RACE；不得绕开 §28 引入第二 AR/AP ledger 或第二 Treasury movement engine。
+
+## 27.58 route exposure 与页面自身 API 权限一致性有界增补设计（`APPROVED`，2026-11-15）
+
+> 合同：Requirement [`docs/requirements/inventory-warehouse.md` §32.13](../requirements/inventory-warehouse.md)（`IW-EXPOSURE-01..05`）。
+> 平台合同：Requirement [`docs/requirements/platform.md` §36.18](../requirements/platform.md)（`PL-EXPOSURE-01..07`）、
+> Design [`docs/design/platform.md` §32.18](../design/platform.md)。
+> 本节只描述实现过程，不粘贴实现代码。
+
+### 27.58.1 边界
+
+本节只改 `inventory` 一条 canonical route 的**页面参照加载口径**。本域其余 route、21 个页签的**集合**、
+权限码、能力集合与 2026-11-13 的域级 Acceptance / Capability Freeze 记录**保持不变**。
+
+后端 API 守卫**一字不改**；`inventory` route 的 exposure `any:['INVENTORY_VIEW']` **不变**；
+不新增权限码、不修改 `role_permissions`。前端隐藏不构成授权：后端继续 fail closed。
+
+方向固定为「页面按 actor 权限自适应」，**不是**「收紧 exposure」——后者改变权限结果，
+是 `docs/decisions/OPEN-BUSINESS-DECISIONS.md` 登记的开放业务决定，本节不自行吸收。
+
+### 27.58.2 模块与调用
+
+| 文件 | 改动 |
+|---|---|
+| `src/lib/inventoryWorkReferences.js`（**新增**） | `inventory` 的 4 个参照数据源登记（端点 / 响应字段 / 读取权限）+ 按权限的加载策略与可读性判定；机制复用平台原语 `src/lib/routeApiAuthority.js` |
+| `src/pages/inventory-work.jsx` | `useInventoryReferences` 由 `(notify)` 改为 `(user, notify)`，按 actor 权限发起请求；无权参照**一次请求都不发**；参照可读性随 `references` 下发，供页签判定无权态 |
+
+参照登记（唯一事实来源）：
+
+| 参照 key | 端点 | 读取权限（后端守卫口径） |
+|---|---|---|
+| `warehouses` | `GET /api/warehouses` | `WAREHOUSES_VIEW` / `WAREHOUSES_MANAGE`（择一） |
+| `products` | `GET /api/products` | `PRODUCTS_VIEW` / `PRODUCTS_MANAGE`（择一） |
+| `stockStatuses` | `GET /api/inventory-stock-statuses` | `STOCK_STATUS_VIEW` / `STOCK_STATUS_MANAGE`（择一） |
+| `bins` | `GET /api/warehouse-bins` | `WAREHOUSE_BIN_VIEW` / `WAREHOUSE_BIN_MANAGE`（择一） |
+
+### 27.58.3 页面行为
+
+1. **首屏**：只请求 actor 有权读取的参照。`role-reviewer` 进入 `inventory` 时**不再**请求库存状态与仓位。
+2. **无权态与空态**：无权读取的参照对应页签呈现明确的「无权限」状态；
+   有权但无数据呈现「暂无记录」。二者不得共用同一个空态。
+3. **页签不得暴露无权能力**：页签自身所需的读取权限 actor 不具备时，
+   不得以「可点击但必然 403」的形式呈现（`IW-EXPOSURE-05`）。
+4. **逐项失败不互相阻断**：单个参照加载失败不影响其它参照；失败被提示，不静默。
+
+### 27.58.4 事务、审计、金额与错误行为
+
+本节**只改读路径**：不新增写入口、不新增事务边界、不新增审计事件、不改变库存数量、
+状态机、估值与会计口径。错误行为按 `IW-EXPOSURE-03` 处理：无权是**状态**不是**错误**，
+失败才是错误。
+
+### 27.58.5 回滚
+
+新增模块与页面改动可整体回退。回退后 `inventory` route 对 `role-reviewer` 的首屏 403 会重新出现，
+因此回退必须与平台守卫的同批改动同批进行，不得只回退其一。
+
+### 27.58.6 验证与变异实验
+
+focused 证据：登记与后端守卫逐项一致；逐 canonical 角色（真实种子库）断言首屏请求集合 ⊆ 该角色权限；
+无权时零请求；无权态与空态可区分；页面不得自带第二份端点清单。
+release 证据：穷尽枚举 93 route × 5 角色首屏非预期 4xx/5xx = 0；canonical 浏览器门禁退出码 0。
+
+变异实验：① 参照加载改回无条件 → 包含性断言必须转红；② 篡改 `stockStatuses` 的权限登记 →
+守卫一致性断言必须转红；③ 恢复页签的无权态渲染 → 无权态/空态断言必须转红。
+
+### 27.58.7 Design 状态
+
+Requirement §32.13：`APPROVED`（2026-11-15）；本节 Design：`APPROVED`（同日）；
+Implementation：**已授权**（范围仅限本节所列仓库内代码与测试）。
+
+**未授权**：真实 MySQL 连接、数据库破坏性操作、Acceptance / Freeze 签发、push / tag / merge / release / deploy。

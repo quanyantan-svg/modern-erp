@@ -314,9 +314,18 @@ export function runMysqlImport({ database, user, password, dumpPath, mysqlPath =
   });
 }
 
-/** 生成对象存储的不可变 object key。 */
-export function buildObjectKey({ prefix = 'modern-erp/dr/', commit = 'unknown', runId = randomUUID(), kind = 'daily' } = {}) {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+/**
+ * 生成对象存储的不可变 object key。
+ *
+ * 不可变 = 同一组输入必须得到同一个 key：重跑同一备份运行必须指向同一个对象。
+ * 因此唯一性**不**来自时钟 —— 时间戳只是可读前缀；两次不同运行的区分来自 `runId`。
+ * 生产调用方 `scripts/admin/mysql-backup.mjs` 每次运行都新建 `crypto.randomUUID()` 作为 `runId`，
+ * 所以两次不同运行不会撞 key；`runId` 相同即同一逻辑运行，撞 key 是正确行为。
+ *
+ * `now` 可注入，使时间戳分量的断言不依赖真实时钟（毫秒级时钟无法用于确定性断言）。
+ */
+export function buildObjectKey({ prefix = 'modern-erp/dr/', commit = 'unknown', runId = randomUUID(), kind = 'daily', now = new Date() } = {}) {
+  const stamp = new Date(now).toISOString().replace(/[:.]/g, '-');
   return `${prefix}${kind}/${stamp}-${String(commit).slice(0, 12)}-${runId}.sql`;
 }
 

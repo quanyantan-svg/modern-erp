@@ -177,6 +177,8 @@ MySQL destructive/reset 测试只能运行于明确标识为 disposable/test 且
 | `pnpm test:finance:responsive` | Finance 六入口 × 320/390/430/680 真实浏览器验收 |
 | `pnpm test:finance:uat` | Finance Operations 58 项能力矩阵 + 32 项最终业务 UAT |
 | `pnpm test:sales:wave2-responsive` | Sales Wave 2 定价/折扣工作面 320/390/430/680 真实浏览器验收 |
+| `pnpm test:release:browser` | canonical 浏览器发布门禁（5 类 canonical 角色 × 4 档宽度 × 93 条 route，含 direct URL / refresh / Back-Forward） |
+| `pnpm verify:route-api-authority` | route 首屏 API 授权一致性穷尽枚举（93 route × 5 角色，逐 (角色, route) 隔离 reload；加 `--tabs` 额外枚举页签点击后的 4xx/5xx） |
 
 Finance Operations 的 FO01–FO58 服务、界面/API、schema、测试与 UAT 追溯见 [能力矩阵](docs/operations/finance-operations-capability-matrix.md)。
 | `pnpm backup-db` | SQLite 备份 |
@@ -211,7 +213,7 @@ scripts/gates/
 scripts/diagnostics/
 scripts/acceptance/
 scripts/testing/
-scripts/qa/（治理守卫：跨域错误码耦合、历史验收记录有效性）
+scripts/qa/（治理守卫：跨域错误码耦合、历史验收记录有效性、前后端路由配对、route 首屏 API 授权一致性穷尽枚举）
 
 deploy/
 docs/operations/
@@ -230,6 +232,7 @@ log/
 - `src/pages/engineering-reference.jsx` / `engineering-substitute.jsx` / `engineering-change.jsx`：Master & Engineering 工程资料、替代/配置、ECO 工作面；
 - `src/pages/planning-workbench.jsx`：Planning 计划订单与计划员例外工作台；
 - `src/pages/finance-operations.jsx`：Finance Operations 发票与资金 hub；应收、收款、应付、付款沿用各自 canonical 工作面；
+- `src/lib/routeApiAuthority.js`：Platform 的 route 首屏 API 授权一致性**通用原语**（依赖登记归一化、按权限过滤与加载）；各域的依赖数据由各域登记模块持有（`src/lib/manufacturingAnalyticsTabs.js`、`src/lib/salesPriceOverrideReferences.js`、`src/lib/inventoryWorkReferences.js`、`src/lib/inventoryWorkTabs.js`）；
 - `src/pages/inventory-work.jsx`：Inventory & Warehouse 库存与仓储的**单一** canonical 工作面（21 个页签：即时库存、仓位、库存状态、所有权、库存参数、盘点、批号调整、形态转换、组装拆卸、ABC、条码、容器、扫码、调拨、调整、初始化与期初、其他出入库、分步调拨、状态调整、锁库、库存报表）；
 - `server/modules/inventory-stocktake.js` / `inventory-transfer.js` / `inventory-container.js`：盘点、调拨、容器（装箱 / 拆包）的**唯一**写入口；
 - `server/modules/inventory-abc-classifications.js` / `inventory-assembly-disassembly.js` / `inventory-barcode-generation.js`：ABC 分类、组装拆卸、条码生成与标签渲染；

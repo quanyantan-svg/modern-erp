@@ -135,13 +135,30 @@ test('T8 RPO / RTO 计时：超出即判定失败', () => {
   assert.equal(stale.ok, false);
 });
 
-test('T9 object key 不可变且含 commit 与 run id', () => {
-  const first = buildObjectKey({ prefix: 'p/', commit: 'abcdef1234567890', runId: 'run-1', kind: 'daily' });
-  const second = buildObjectKey({ prefix: 'p/', commit: 'abcdef1234567890', runId: 'run-1', kind: 'daily' });
-  assert.notEqual(first, second, '两次备份的 key 必须不同');
+test('T9 object key 不可变、含 commit 与 run id，唯一性不来自时钟', () => {
+  // 不可变：同一组输入（含同一时刻）必须得到同一个 key —— 重跑同一备份运行必须指向同一对象。
+  const fixedNow = new Date('2026-11-14T12:00:00.000Z');
+  const first = buildObjectKey({ prefix: 'p/', commit: 'abcdef1234567890', runId: 'run-1', kind: 'daily', now: fixedNow });
+  const second = buildObjectKey({ prefix: 'p/', commit: 'abcdef1234567890', runId: 'run-1', kind: 'daily', now: fixedNow });
+  assert.equal(first, second, '同一组输入必须得到同一个 key（不可变）');
   assert.ok(first.includes('abcdef123456'));
   assert.ok(first.includes('run-1'));
   assert.ok(first.startsWith('p/daily/'));
+
+  // 唯一性来源：时钟分量完全相同时，不同 run 仍然得到不同 key —— 唯一性来自 run id，不来自毫秒时间戳。
+  const other = buildObjectKey({ prefix: 'p/', commit: 'abcdef1234567890', runId: 'run-2', kind: 'daily', now: fixedNow });
+  assert.notEqual(first, other, '不同 run id 必须得到不同 key');
+  assert.equal(
+    first.slice(0, first.indexOf('abcdef123456')),
+    other.slice(0, other.indexOf('abcdef123456')),
+    '两次调用的时钟分量必须完全相同（证明 key 的差异不来自时钟）',
+  );
+
+  // 未显式传入 run id 时，每次调用都必须自带新的 run id —— 生产调用方
+  // `scripts/admin/mysql-backup.mjs` 显式传入每次新建的 crypto.randomUUID()。
+  const defaulted = buildObjectKey({ prefix: 'p/', commit: 'abcdef1234567890', kind: 'daily', now: fixedNow });
+  const defaultedAgain = buildObjectKey({ prefix: 'p/', commit: 'abcdef1234567890', kind: 'daily', now: fixedNow });
+  assert.notEqual(defaulted, defaultedAgain, '未传 run id 时每次调用都必须得到不同的 key');
 });
 
 test('T10 manifest 不含凭据', () => {

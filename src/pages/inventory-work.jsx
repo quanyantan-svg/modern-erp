@@ -39,6 +39,12 @@ import { Icon } from '../components/icons.jsx';
 import TrackingAllocationEditor from '../components/TrackingAllocationEditor.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { withProductTracking } from '../lib/tracking.js';
+import {
+  inventoryWorkReferenceAccess, loadInventoryWorkReferences,
+} from '../lib/inventoryWorkReferences.js';
+import {
+  effectiveInventoryWorkTab, permittedInventoryWorkTabs,
+} from '../lib/inventoryWorkTabs.js';
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
@@ -167,30 +173,32 @@ function InventoryWorkCheckbox({ label, checked, onChange }) {
 // Reference data shared by several surfaces (warehouses / products / bins /
 // stock statuses). Loaded once by the hub and handed down so that every
 // editor offers a real source object instead of a bare id text box.
+//
+// IW-EXPOSURE-01..03：参照数据源与其读取权限的唯一登记在
+// src/lib/inventoryWorkReferences.js；加载以 actor 权限为前置 —— 无权的数据源
+// 一次请求都不发，「无权」与「为空」是两种不同的状态。
 // ---------------------------------------------------------------------------
 
-function useInventoryReferences(notify) {
+function useInventoryReferences(user, notify) {
+  const permissions = user?.permissions || [];
+  const permissionKey = permissions.join(',');
   const [warehouses, setWarehouses] = useState([]);
   const [products, setProducts] = useState([]);
   const [stockStatuses, setStockStatuses] = useState([]);
   const [bins, setBins] = useState([]);
   const [loaded, setLoaded] = useState(false);
-  const load = useCallback(() => {
-    Promise.all([
-      api('/api/warehouses').catch(() => ({ warehouses: [] })),
-      api('/api/products').catch(() => ({ products: [] })),
-      api('/api/inventory-stock-statuses').catch(() => ({ stockStatuses: [] })),
-      api('/api/warehouse-bins').catch(() => ({ bins: [] })),
-    ]).then(([w, p, s, b]) => {
-      setWarehouses((w.warehouses || []).filter((x) => x.active !== false));
-      setProducts((p.products || []).filter((x) => x.active !== false));
-      setStockStatuses(s.stockStatuses || []);
-      setBins(b.bins || []);
-      setLoaded(true);
-    }).catch((e) => notify?.(e.message || '基础数据加载失败', 'error'));
-  }, [notify]);
+  const load = useCallback(async () => {
+    const result = await loadInventoryWorkReferences(permissions, api);
+    setWarehouses(result.references.warehouses.filter((x) => x.active !== false));
+    setProducts(result.references.products.filter((x) => x.active !== false));
+    setStockStatuses(result.references.stockStatuses);
+    setBins(result.references.bins);
+    setLoaded(true);
+    if (result.errors.length) notify?.(result.errors[0].message, 'error');
+  }, [permissionKey, notify]);
   useEffect(() => { void load(); }, [load]);
-  return { warehouses, products, stockStatuses, bins, loaded, reloadReferences: load };
+  const access = useMemo(() => inventoryWorkReferenceAccess(permissions), [permissionKey]);
+  return { warehouses, products, stockStatuses, bins, loaded, access, reloadReferences: load };
 }
 
 const warehouseOptions = (warehouses) => warehouses.map((w) => ({ value: w.id, label: `${w.code} · ${w.name}` }));
@@ -219,7 +227,7 @@ const OWNER_TYPE_OPTIONS = [
 ];
 
 export function InventoryInstantQuery({ user, notify, references }) {
-  const { warehouses, products, stockStatuses, bins } = references;
+  const { warehouses, products, stockStatuses, bins, access } = references;
   const [filters, setFilters] = useState({ warehouseId: '', productId: '', binId: '', ownerType: '', ownerId: '', stockStatus: '', lotId: '', serialId: '' });
   const [draft, setDraft] = useState(filters);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -264,6 +272,14 @@ export function InventoryInstantQuery({ user, notify, references }) {
           </div>
         )}
       >
+        {access && !(access.bins && access.stockStatuses) && (
+          <InlineAlert tone="info">
+            当前账号缺少部分库存参照读取权限
+            {!access.bins ? '（仓位 WAREHOUSE_BIN_VIEW）' : ''}
+            {!access.stockStatuses ? '（库存状态 STOCK_STATUS_VIEW）' : ''}
+            ，对应的筛选项不可用；按仓库 / 货品查询不受影响。
+          </InlineAlert>
+        )}
         <InventoryWorkState loading={loading} error={error} onRetry={load} empty={!summary.length && !positions.length}>
           {Boolean(summary.length) && (
             <div className="inv-work-subsection">
@@ -1811,36 +1827,17 @@ export function InventoryScan({ user, notify, references }) {
 // Hub — the mobile work surface that hosts every capability above.
 // ---------------------------------------------------------------------------
 
-const WORK_TABS = [
-  { key: 'instant', label: '即时库存' },
-  { key: 'bins', label: '仓位' },
-  { key: 'statuses', label: '库存状态' },
-  { key: 'owners', label: '所有权' },
-  { key: 'parameters', label: '库存参数' },
-  { key: 'stocktake', label: '盘点' },
-  { key: 'lot', label: '批号调整' },
-  { key: 'form', label: '形态转换' },
-  { key: 'assembly', label: '组装拆卸' },
-  { key: 'abc', label: 'ABC' },
-  { key: 'barcode', label: '条码' },
-  { key: 'containers', label: '容器' },
-  { key: 'scan', label: '扫码' },
-  { key: 'transfer', label: '调拨' },
-  { key: 'adjustment', label: '调整' },
-  { key: 'initialization', label: '初始化与期初' },
-  { key: 'native', label: '其他出入库' },
-  { key: 'step', label: '分步调拨' },
-  { key: 'status', label: '状态调整' },
-  { key: 'locks', label: '锁库' },
-  { key: 'reports', label: '库存报表' },
-];
-
+// IW-EXPOSURE-01 / 05：页签与其在**打开时**读取的端点、后端守卫口径的唯一登记在
+// src/lib/inventoryWorkTabs.js。可见页签按 actor 权限过滤，打开页签不会产生预期外 403。
 export function InventoryWork({ user, notify }) {
   const navigation = useAppNavigation();
-  const [tab, setTab] = useState('instant');
+  const permissions = user?.permissions || [];
+  const [selectedTab, setSelectedTab] = useState('');
   const [screen, setScreen] = useState(null);
-  const references = useInventoryReferences(notify);
+  const references = useInventoryReferences(user, notify);
   const { warehouses, products } = references;
+  const permittedTabs = permittedInventoryWorkTabs(permissions);
+  const tab = effectiveInventoryWorkTab(permissions, selectedTab);
   // The detail and the editor replace the whole work surface, so the shell
   // has to carry the way back.
   useEffect(() => {
@@ -1863,16 +1860,27 @@ export function InventoryWork({ user, notify }) {
       : <InventoryAdjustmentDetailV16 value={screen.value} notify={notify} onEdit={() => setScreen({ kind: 'adjustment', mode: 'editor', value: screen.value })} onChanged={() => setScreen(null)} />;
   }
 
+  // IW-EXPOSURE-05：一个可打开的页签都没有时必须 fail closed —— 不渲染工作面、
+  // 不发起任何请求，而不是渲染后再报错。
+  if (!permittedTabs.length) {
+    return (
+      <BusinessPageShell className="v16-inventory-shell inv-work" width="rail">
+        <BusinessPageHeader title="库存作业" context="—" />
+        <EmptyState title="没有权限" description="当前账号没有可打开的库存工作面页签（需要 INVENTORY_VIEW 或相应的库存子域读取权限）。" />
+      </BusinessPageShell>
+    );
+  }
+
   return (
     <BusinessPageShell className="v16-inventory-shell inv-work" width="rail">
       <nav className="inv-work-tabs" aria-label="库存控制">
-        {WORK_TABS.map((item) => (
+        {permittedTabs.map((item) => (
           <button
             key={item.key}
             type="button"
             className={tab === item.key ? 'is-active' : ''}
             aria-current={tab === item.key ? 'page' : undefined}
-            onClick={() => setTab(item.key)}
+            onClick={() => setSelectedTab(item.key)}
           >
             {item.label}
           </button>
@@ -1928,10 +1936,11 @@ function InventoryIdentityV16({ code, title, status, subtitle }) { return <heade
 
 function InventoryFactsV16({ facts }) { return <dl className="v16-inventory-facts">{facts.map((fact) => <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value ?? '—'}</dd></div>)}</dl>; }
 
-function useInventoryDocuments(endpoint, key, status, notify) {
+function useInventoryDocuments(endpoint, key, status, notify, enabled = true) {
   const [rows, setRows] = useState([]); const [loading, setLoading] = useState(true); const [error, setError] = useState('');
   const load = () => { setLoading(true); setError(''); api(`${endpoint}${status ? `?status=${status}` : ''}`).then((r) => setRows(r[key] || [])).catch((e) => { setError(e.message); notify(e.message, 'error'); }).finally(() => setLoading(false)); };
-  useEffect(() => { void load(); }, [status]); return { rows, loading, error, load };
+  // enabled=false 时一次请求都不发 —— 无权读取的列表不得先请求再被后端拒绝（IW-EXPOSURE-02）。
+  useEffect(() => { if (enabled) void load(); }, [status, enabled]); return { rows, loading, error, load };
 }
 
 function InventoryDocumentToolbarV16({ options, status, setStatus, canCreate, createLabel, onCreate }) { return <div className="v16-inventory-document-tools"><SegmentedControl options={options} value={status} onChange={setStatus}/>{canCreate && <button className="primary" onClick={onCreate} aria-label={createLabel}>新建</button>}</div>; }
@@ -1957,7 +1966,7 @@ function InventoryTransferEditorV16({ warehouses, products, notify, onSaved }) {
   return <InventoryEditorShellV16 title="新建调拨" onSubmit={save}><div className="v16-inventory-form-grid"><label>业务日期<input type="date" required value={form.businessDate} onChange={(e) => setForm({ ...form, businessDate: e.target.value })}/></label><label>调出仓库<select required value={form.fromWarehouseId} onChange={(e) => setForm({ ...form, fromWarehouseId: e.target.value })}><option value="">请选择</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></label><label>调入仓库<select required value={form.toWarehouseId} onChange={(e) => setForm({ ...form, toWarehouseId: e.target.value })}><option value="">请选择</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></label><label>备注<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })}/></label></div><InventoryLinesEditorV16 items={form.items} products={products} onAdd={() => setForm({ ...form, items: [...form.items, { productId: '', quantity: 1, trackingAllocations: [] }] })} onRemove={(i) => setForm({ ...form, items: form.items.filter((_, index) => index !== i) })} render={(row, i) => <><select required value={row.productId} onChange={(e) => update(i, withProductTracking(row, e.target.value))}><option value="">选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><input aria-label="调拨数量" type="number" min="0.01" step="0.01" required value={row.quantity} onChange={(e) => update(i, { quantity: e.target.value, trackingAllocations: [] })}/><TrackingAllocationEditor product={products.find((p) => p.id === row.productId)} warehouseId={form.fromWarehouseId} quantity={row.quantity} businessDate={form.businessDate} direction="OUT" value={row.trackingAllocations || []} onChange={(trackingAllocations) => update(i, { trackingAllocations })} notify={notify}/></>}/></InventoryEditorShellV16>;
 }
 
-function InventoryAdjustmentListV16({ user, notify, onOpen, onCreate }) { const [status, setStatus] = useState(''); const state = useInventoryDocuments('/api/inventory-adjustments', 'inventoryAdjustments', status, notify); if (!can(user, 'INVENTORY_ADJUSTMENT_MANAGE')) return <EmptyState title="暂无调整权限"/>; return <><InventoryDocumentToolbarV16 options={[['','全部'],['DRAFT','草稿'],['CONFIRMED','已确认'],['CANCELLED','已取消']].map(([value,label]) => ({ value, label }))} status={status} setStatus={setStatus} canCreate onCreate={onCreate} createLabel="新建库存调整"/><InventoryState {...state} empty={!state.rows.length} filtered={Boolean(status)} onRetry={state.load}><div className="v16-inventory-list">{state.rows.map((row) => <InventoryRowV16 key={row.id} code={row.adjustment_no} title={row.warehouseName} status={<StatusChip status={row.status}>{INVENTORY_STATUS[row.status]}</StatusChip>} lines={[businessDate(row.adjustment_date), `${row.itemCount} 项 · ${row.reason}`]} onClick={() => onOpen(row)}/>)}</div></InventoryState></>; }
+function InventoryAdjustmentListV16({ user, notify, onOpen, onCreate }) { const [status, setStatus] = useState(''); const canManage = can(user, 'INVENTORY_ADJUSTMENT_MANAGE'); const state = useInventoryDocuments('/api/inventory-adjustments', 'inventoryAdjustments', status, notify, canManage); if (!canManage) return <EmptyState title="暂无调整权限"/>; return <><InventoryDocumentToolbarV16 options={[['','全部'],['DRAFT','草稿'],['CONFIRMED','已确认'],['CANCELLED','已取消']].map(([value,label]) => ({ value, label }))} status={status} setStatus={setStatus} canCreate onCreate={onCreate} createLabel="新建库存调整"/><InventoryState {...state} empty={!state.rows.length} filtered={Boolean(status)} onRetry={state.load}><div className="v16-inventory-list">{state.rows.map((row) => <InventoryRowV16 key={row.id} code={row.adjustment_no} title={row.warehouseName} status={<StatusChip status={row.status}>{INVENTORY_STATUS[row.status]}</StatusChip>} lines={[businessDate(row.adjustment_date), `${row.itemCount} 项 · ${row.reason}`]} onClick={() => onOpen(row)}/>)}</div></InventoryState></>; }
 
 function InventoryAdjustmentDetailV16({ value, notify, onEdit, onChanged }) { const [detail, setDetail] = useState(null); const [action, setAction] = useState(null); const load = () => api(`/api/inventory-adjustments/${value.id}`).then((r) => setDetail(r.inventoryAdjustment)).catch((e) => notify(e.message, 'error')); useEffect(() => { void load(); }, []); const change = async (name) => { try { await api(`/api/inventory-adjustments/${value.id}/${name}`, { method: 'POST' }); notify(name === 'confirm' ? '库存调整已确认' : '库存调整已取消'); onChanged(); } catch (e) { notify(e.message, 'error'); } }; if (!detail) return <BusinessPageShell className="v16-inventory-shell" width="rail"><Loading/></BusinessPageShell>; return <BusinessPageShell className="v16-inventory-shell v16-inventory-detail" width="rail"><InventoryIdentityV16 code={detail.adjustment_no} title={detail.warehouseName} status={<StatusChip status={detail.status}>{INVENTORY_STATUS[detail.status]}</StatusChip>}/><InventoryFactsV16 facts={[{ label: '调整日期', value: businessDate(detail.adjustment_date) }, { label: '调整原因', value: detail.reason }, { label: '制单人', value: detail.creatorName }, { label: '确认人', value: detail.confirmedByName || '—' }]}/><InventoryLineSectionV16 items={detail.items} quantityKey="quantityDelta" signed/>{detail.status === 'DRAFT' && <BottomActionBar><button className="secondary" onClick={onEdit}>编辑草稿</button><ConfirmDelete label="库存调整单" onConfirm={async () => { await api(`/api/inventory-adjustments/${detail.id}`, { method: 'DELETE' }); notify('库存调整草稿已删除'); onChanged(); }}/><button className="danger-button" onClick={() => setAction('cancel')}>取消调整</button><button className="confirm-button" onClick={() => setAction('confirm')}>确认调整</button></BottomActionBar>}{action === 'confirm' && <ConfirmSheet title="确认库存调整？" message="确认后将按有符号调整数量更新库存。" confirmLabel="确认调整" onClose={() => setAction(null)} onConfirm={() => void change('confirm')}/>} {action === 'cancel' && <DangerSheet title="取消库存调整？" message="取消后草稿不可再执行。" confirmLabel="取消调整" onClose={() => setAction(null)} onConfirm={() => void change('cancel')}/>}</BusinessPageShell>; }
 
@@ -2376,7 +2385,7 @@ export function InventoryStepTransfer({ user, notify, references }) {
 // ---------------------------------------------------------------------------
 
 export function InventoryStatusChange({ user, notify, references }) {
-  const { warehouses, products, stockStatuses } = references;
+  const { warehouses, products, stockStatuses, access } = references;
   const [form, setForm] = useState({ warehouseId: '', productId: '', quantity: '', fromStatus: 'AVAILABLE', toStatus: '', businessDate: todayIso(), reason: '' });
 
   const submit = async (event) => {
@@ -2401,6 +2410,9 @@ export function InventoryStatusChange({ user, notify, references }) {
       title="库存状态调整"
       description="同一物理库存在两个状态之间迁移：数量、所有权与仓位不变。"
     >
+      {access && !access.stockStatuses && (
+        <InlineAlert tone="info">当前账号没有库存状态读取权限（STOCK_STATUS_VIEW / STOCK_STATUS_MANAGE），无法选择原状态与目标状态。</InlineAlert>
+      )}
       <InventoryWorkEditorShell title="库存状态调整" onSubmit={submit} submitLabel="提交状态调整">
         <div className="inv-work-form-grid">
           <InventoryWorkSelect label="仓库" required value={form.warehouseId} onChange={(v) => setForm({ ...form, warehouseId: v })} options={warehouseOptions(warehouses)} />

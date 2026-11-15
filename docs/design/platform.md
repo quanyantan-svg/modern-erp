@@ -1596,3 +1596,116 @@ G-3 是本设计的核心 oracle：当前状态下它恰好报出 `idx_po_instru
 Requirement §36.17：`PENDING_APPROVAL`（2026-11-15，含同日技术复核修订五项）；本节 Design：`PENDING_APPROVAL`（同上）；Implementation：`NOT_AUTHORIZED`。
 
 **HARD STOP**：本节 Design 完成后**不得**进入 Implementation，等待业务所有者明确批准。本节不授权真实 MySQL 连接、对象存储写入、目标主机写操作、发布、部署、push、tag、Git 历史重写，也不授权 Acceptance / Freeze 签发。
+
+### 32.18 Route 首屏 API 授权一致性通用设计（`APPROVED`，2026-11-15）
+
+> 合同：Requirement [`docs/requirements/platform.md` §36.18](../requirements/platform.md)（`PL-EXPOSURE-01..07`）。
+> 授权来源：业务所有者 2026-11-15 的一次性指令（AGENTS.md §4.0 连续阶段授权）。
+> 本节只描述实现过程，不粘贴实现代码。
+
+#### 32.18.1 边界与不变式
+
+本设计**只**闭合「route 首屏请求 ⊆ actor 可读端点」这一条不变式。它**不**改变：
+
+- 任何 API 的请求 / 响应合同与后端权限判定（后端继续 fail closed）；
+- 任何角色的权限集合、`role_permissions`、权限码目录；
+- 任何 route 的 exposure 语义、route 数量与 route key；
+- 任何业务 schema、单据状态机、金额与估值语义；
+- `PL-RI-04` canonical 浏览器门禁的判定面（门禁仍是发布门禁）。
+
+**方向固定**：修法是「页面按 actor 权限自适应」，**不是**「收紧 route exposure」——
+后者改变权限结果（可见入口减少），属业务所有者的独立裁定，沿用 `SC-EXPOSURE-05` 的 `DEFERRED` 口径。
+
+#### 32.18.2 模块与文件清单
+
+| 文件 | 性质 | 责任 |
+|---|---|---|
+| `src/lib/routeApiAuthority.js` | **新增**（Platform owner） | 通用原语：依赖登记归一化、按权限过滤、按权限加载、可读性判定。**不持有任何具体 route 的依赖数据** |
+| `src/lib/inventoryWorkReferences.js` | **新增**（Inventory & Warehouse owner） | `inventory` route 的 4 个参照数据源登记与加载策略 |
+| `src/pages/inventory-work.jsx` | 修改（Inventory & Warehouse owner） | hub 的参照加载改为按权限前置；无权参照的页签呈现明确无权态 |
+| `server/route-exposure-semantic-parity.test.js` | 修改（Platform owner） | 平台级 focused 守卫：三个登记模块统一归一化后，逐条核对后端守卫并做逐角色包含性断言 |
+| `scripts/qa/verify-route-api-authority.mjs` | **新增**（Platform owner） | 穷尽枚举：93 route × 5 canonical 角色，逐 (角色, route) 隔离 reload，输出 (角色, route, 端点, 状态) 四元组 |
+| `src/lib/manufacturingAnalyticsTabs.js` | **不改**（Manufacturing & Quality owner） | 已冻结域合同 §29.11 的登记模块；本设计只要求它同时满足 `PL-EXPOSURE-02` / `PL-EXPOSURE-03` |
+| `src/lib/salesPriceOverrideReferences.js` | **不改**（Sales & Customer owner） | 已冻结域合同 §34.16 的登记模块；同上 |
+
+**为什么登记模块按 route 分域持有而不是集中在平台模块**：单一事实来源的口径是
+「**一条 route 的依赖只有一个登记处**」，而不是「所有 route 的依赖放在同一个文件」。
+集中放置会让平台模块反向依赖各域业务语义，并迫使改写两个已冻结域的合同（需再次解冻）。
+
+#### 32.18.3 归一化口径：与后端守卫同形
+
+后端守卫只有两种形态：`allow(actor, 'X')`（必须全部持有）与 `allowAny(actor, ['X','Y'])`（持有其一即可）。
+前端登记因此归一化为同一形状：
+
+| 登记写法 | 归一化结果 | 对应后端守卫 |
+|---|---|---|
+| `{ permission: 'X' }` | `{ kind: 'all', codes: ['X'] }` | `allow(actor, 'X')` |
+| `{ permissions: ['X','Y'] }` | `{ kind: 'any', codes: ['X','Y'] }` | `allowAny(actor, ['X','Y'])` |
+
+守卫从**服务端源码**解析（`server/app.js` 的路由登记 → owner 模块 → handler 函数体 → `allow` / `allowAny` 调用），
+与前端登记逐项比对。**不手抄、不靠前端推断**：任一条不一致即判定失败。
+
+#### 32.18.4 加载语义
+
+1. **无权即不发**：只对 actor 有权读取的依赖发起请求；无权的数据源**一次请求都不发**。
+2. **无权态 ≠ 空态**：无权读取时页面呈现明确的「无权限」状态；有权但无数据时呈现「暂无数据」。
+   两者不得共用同一个空态组件。
+3. **逐项失败不互相阻断**：单个依赖加载失败不影响其它依赖；失败被登记并提示，不得静默。
+4. **全部无权即 fail closed**：一个依赖都无权时，页面呈现权限拒绝态，**不发任何请求**。
+5. **前端隐藏不构成授权**：以上全部是前端行为；后端守卫一字不改，继续 fail closed。
+
+#### 32.18.5 机器守卫
+
+| 守卫 | 入口 | 判定内容 |
+|---|---|---|
+| 平台级 focused 合同测试 | `server/route-exposure-semantic-parity.test.js`（FULL） | ① 三个登记模块归一化后，与后端实际守卫**逐项相等**；② 逐 canonical 角色（取自**真实种子库**的 `role_permissions`）：角色可见该 route ⇒ 该 route 的首屏依赖全部可读；③ 无权时零请求；④ 无权态与空态可区分；⑤ 页面不得自带第二份端点清单 |
+| 穷尽枚举 | `scripts/qa/verify-route-api-authority.mjs` | 93 route × 5 角色的首屏非预期 4xx/5xx 与浏览器控制台错误必须为 0 |
+
+focused 测试的**角色权限取自真实种子库**，不是手抄名单 —— 迁移追加的权限
+（例如 `role-accounting` 的 `PRODUCTION_COSTS_VIEW`）必须被看见。
+
+穷尽枚举之所以单独存在：canonical 浏览器门禁用 hash 跳转 + Back/Forward 遍历 route，
+其 FAIL 清单会随运行时序漂移（同一份代码两次跑的失败列表不同），
+因此**单次门禁输出不能作为「缺陷已穷尽枚举」的证据**；穷尽枚举对每个 (角色, route) 做隔离 reload，
+清单是确定的、可被第三方在同 HEAD 上重放的。两者都保留：门禁是发布门禁，枚举是取证工具。
+
+#### 32.18.6 Inventory & Warehouse 的具体应用
+
+`inventory` route 的 exposure 是 `any:['INVENTORY_VIEW']`（`src/navigation/applicationRegistry.js:43`）。
+hub 的 `useInventoryReferences` 曾无条件加载 4 个参照端点，其中 2 个的守卫不是所有可见该 route 的角色都持有
+（详见 Requirement §32.13.2）。改造后：
+
+- 4 个参照的登记进入 `src/lib/inventoryWorkReferences.js`；
+- `useInventoryReferences` 接收 `user`，按权限发起请求；无权参照**不发请求**；
+- 页签自身的读取权限不足时，呈现明确无权态，而不是「可点击但必然 403」。
+
+#### 32.18.7 兼容、事务、审计、错误行为与回滚
+
+- **兼容**：不改变 API 合同、权限结果、route 集合、页签集合、业务语义。前端行为变化仅限「不再发出无权请求」与「无权态文案」。
+- **事务 / 审计 / 金额**：本设计**不涉及**任何写路径，因此不新增事务边界、不新增审计事件、不改变金额与估值语义。
+- **错误行为**：依赖加载失败按 §32.18.4 第 3 条登记并提示；无权**不是错误**，走无权态而非错误态。
+- **回滚**：新增文件与页面改动可整体回退；回退后 `inventory` route 的 403 会重新出现，
+  因此回退必须与本节的守卫改动同批，不得只回退其一。
+
+#### 32.18.8 验证矩阵与变异实验
+
+| Requirement | focused evidence | release evidence |
+|---|---|---|
+| `PL-EXPOSURE-01` | 登记模块存在且页面引用它；页面不得出现登记外的首屏端点字面量 | 穷尽枚举 + canonical 门禁 |
+| `PL-EXPOSURE-02` | 登记归一化结果与后端守卫逐项相等（三个登记模块全部覆盖） | 同上 |
+| `PL-EXPOSURE-03` | 逐 canonical 角色包含性断言（真实种子库） | 同上 |
+| `PL-EXPOSURE-04` | 三条 route 的 exposure 未被改动（断言固化） | 同上 |
+| `PL-EXPOSURE-05` | 无权态与空态可区分的用例 | 同上 |
+| `PL-EXPOSURE-06` | 枚举脚本可复跑：同 HEAD 两次运行输出一致 | 枚举脚本归零 |
+| `PL-EXPOSURE-07` | 门禁 allowlist 中不存在任何 403 豁免项 | canonical 门禁三类失败均为 0 |
+
+**变异实验（非空洞证明）**：① 把 `inventory` 的参照加载改回无条件 → 包含性断言必须转红；
+② 篡改登记中的 `STOCK_STATUS_VIEW` → 守卫一致性断言必须转红；
+③ 把枚举脚本的隔离 reload 去掉、改为纯 hash 跳转 → 枚举必须复现出时序漂移（说明隔离 reload 是承重的）。
+
+#### 32.18.9 Design 状态
+
+Requirement §36.18：`APPROVED`（2026-11-15）；本节 Design：`APPROVED`（同日）；
+Implementation：**已授权**（范围仅限 §32.18.2 所列仓库内文件与 §32.18.8 的门禁）。
+
+**未授权**：真实 MySQL 连接、数据库破坏性操作、Acceptance / Freeze 签发、push / tag / merge / release / deploy。

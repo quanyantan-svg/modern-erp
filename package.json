@@ -48,6 +48,7 @@
     "reset-data": "node server/reset-data.js",
     "verify:dependencies": "node scripts/qa/verify-production-dependencies.mjs",
     "verify:migration-fail-closed": "node scripts/qa/verify-migration-fail-closed.mjs",
+    "verify:route-api-authority": "node scripts/qa/verify-route-api-authority.mjs",
     "test:release:browser": "node scripts/acceptance/release-browser-readiness.mjs",
     "backup-db:mysql": "node scripts/admin/mysql-backup.mjs",
     "restore-db:mysql": "node scripts/admin/mysql-restore.mjs",

@@ -12,12 +12,16 @@ test('D6 unifies inventory query and operations without calling confirmation app
   assert.match(source, /className="v16-inventory-shell[^"]*" width="rail"/);
   assert.match(source, /aria-label="库存控制"/);
   assert.match(source, /确认调拨/);
-  // V24 (2026-11-12): the canonical work surface renders its tab set from
-  // the WORK_TABS table, so the operator capability labels are asserted on
-  // that table.
-  assert.match(source, /label: '调拨'/);
-  assert.match(source, /label: '盘点'/);
-  assert.match(source, /label: '调整'/);
+  // V24 (2026-11-15): the operator capability tab labels moved from the page's
+  // inline WORK_TABS table into the single registration module
+  // src/lib/inventoryWorkTabs.js (Platform contract §36.18, PL-EXPOSURE-01 —
+  // a page must not keep a second tab / endpoint list). The labels are
+  // therefore asserted on that module, and the page is asserted to use it.
+  const tabs = read('src/lib/inventoryWorkTabs.js');
+  assert.match(source, /from '\.\.\/lib\/inventoryWorkTabs\.js'/);
+  assert.match(tabs, /label: '调拨'/);
+  assert.match(tabs, /label: '盘点'/);
+  assert.match(tabs, /label: '调整'/);
 });
 
 test('D6 treats inventory movements as a report and traceability as evidence', () => {

@@ -18,6 +18,11 @@ const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf
 //     (the canonical stocktake owns the tracked identity of the counted
 //     line in the module, not in the client).
 const inventory = read('src/pages/inventory-work.jsx');
+// V24 (2026-11-15) — 页签标签与页签的读取端点登记迁到唯一登记模块
+// src/lib/inventoryWorkTabs.js（Platform 合同 §36.18 的 PL-EXPOSURE-01：
+// 页面不得维护第二份端点 / 页签清单）。断言因此落在登记模块上，
+// 并额外断言页面确实使用该登记 —— 原意（这些操作能力必须在本工作面上）不变。
+const inventoryTabs = read('src/lib/inventoryWorkTabs.js');
 const extensions = read('src/pages/inventory-extensions.jsx');
 const logistics = read('src/pages/logistics-finance.jsx');
 const main = read('src/main.jsx');
@@ -32,7 +37,8 @@ matches('02 exposes inventory module token', css, /--v16-module-inventory:\s*#16
 matches('03 caps inventory rail at 680px', css, /width:\s*min\(100%,\s*680px\)/);
 matches('04 reserves mobile bottom action space', css, /bottom-nav-height/);
 matches('05 inventory uses the domain tab navigation', inventory, /aria-label="库存控制"/);
-for (const [index, label] of ['即时库存', '调拨', '盘点', '调整'].entries()) matches(`0${index + 6} tab ${label}`, inventory, new RegExp(`label: '${label}'`));
+for (const [index, label] of ['即时库存', '调拨', '盘点', '调整'].entries()) matches(`0${index + 6} tab ${label}`, inventoryTabs, new RegExp(`label: '${label}'`));
+matches('06b 库存工作面使用唯一页签登记', inventory, /from '\.\.\/lib\/inventoryWorkTabs\.js'/);
 matches('10 inventory registers shell back action', inventory, /setHeaderBackAction/);
 matches('11 inventory detail and editor are full-page branches', inventory, /screen\.mode === 'editor'/);
 misses('13 active P6 inventory surface has no HelpDisclosure', inventory, /<HelpDisclosure/);
