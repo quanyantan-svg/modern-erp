@@ -5341,3 +5341,131 @@ FULL 首轮出现 4 项失败，全部由本轮改动触发，逐项修复后复
 |---|---|---|
 | 登记责任 Owner | **业务所有者** | 作为部署收口闸门项，由业务所有者持有推进决定权 |
 | 技术修复 Owner | 仓库 | 本轮为技术缺陷修复，不改变任何业务合同语义（除 §64.2 P1-1② 的 AA 有界增补） |
+
+## 65. 浏览器发布门禁触控目标整改与 Migration 风险工作包（2026-11-15）
+
+**状态**：触控目标整改 = `IMPLEMENTED`（实现完成、本地门禁通过，**未**签发 Acceptance）；
+Migration 风险工作包 Requirement / Design = `PENDING_APPROVAL`（**HARD STOP**，未进入 Implementation）。
+
+本节**不是** Acceptance：它不签发任何 Acceptance / Capability Freeze / Manual Capability Closure /
+Release Readiness，也不改变能力矩阵任何一行的状态。
+
+### 65.1 授权与边界
+
+| 授权 | 内容 | 本轮结果 |
+|---|---|---|
+| A | 实施浏览器发布门禁触控目标整改 | 已实施并本地验证 |
+| B | Migration 风险工作包连续执行 Requirement 与 Design，Design 完成后 HARD STOP | Requirement §36.17 与 Design §32.17 已完成，**HARD STOP** |
+| 明确未授权 | 数据库、对象存储、目标主机、push、tag、release、deploy | 本轮**全部未执行** |
+
+### 65.2 触控目标整改（Implementation）
+
+#### 65.2.1 合同依据
+
+本次整改**不引入新合同**，只把产品拉回**已批准**的既有合同：
+
+- Requirement §36.16.5（`PL-RI-04`）：canonical 浏览器门禁必须验证「关键控件触控高度」；
+- Requirement `manufacturing-quality` 「触控目标不小于 44px」、`finance-operations` 「>= 44px」；
+- Design §32.12.2：移动优先 390 CSS px 基线，另验 320 / 430 / 680，**可点目标 ≥ 44 px**；
+- Design §32.16.6：canonical 浏览器门禁的判定口径与三类失败分类。
+
+因此本单元**未**新增 Requirement / Design：它不产生新业务规则，无 schema / API / 权限 / 状态机 /
+金额语义变化。若业务所有者认为需要独立 Requirement，应退回 Requirement 层处理。
+
+#### 65.2.2 缺陷清单（穷尽实测）
+
+实测范围：93 条 canonical route × 4 档宽度（320 / 390 / 430 / 680）。**admin 角色可见全部 route**，
+因此以 admin 覆盖 93 条 route 完成缺陷类别枚举；已定位缺陷的 4 条 route 另补测全部 5 类 canonical 角色。
+5 类角色 × 全部 route 的权威判定由 canonical 浏览器门禁给出（见 §65.2.4）。
+
+| # | route | 元素 | 实测 | 根因 | 修复 |
+|---|---|---|---|---|---|
+| 1 | `accounting` | Toolbar 清除搜索按钮 | 28×44（宽不足） | `.search__clear { width:28px; min-width:28px }` | width / min-width → 44px，min-height → 44px |
+| 2 | `business-overview` | 支撑业务链接 | 高 36px | `.flow-support-link { min-height:36px }` | min-height → 44px |
+| 3 | `planned-orders` | 计划订单状态分段控件按钮 | 宽 43px（仅 320px 档） | `.segmented-control button` 有 `min-height:38px` 但**无 min-width** | min-width → 44px、min-height → 44px；控件补 `overflow-x:auto; scrollbar-width:thin`（与既有 `.finance-hub .segmented-control` 同一形态），避免 min-width 引发整页横向滚动 |
+| 4 | `finance-treasury` | 结算账户卡「维护账户」动作链接 | 60×23 | `.record-card > footer a` 无触控尺寸规则 | `display:inline-flex; align-items:center; min-height:44px` |
+
+除上述 4 类外，其余 **89** 条 route 在 admin × 4 档宽度下**无**任何低于 44px 的可点目标。
+canonical 浏览器门禁的整轮 **5696** 项判定中，**触控目标类失败为 0 项**，确认本单元整改已生效。
+
+#### 65.2.3 改动边界
+
+`src/styles.css` 共 5 条规则（4 改 1 增）。**零** JSX、**零** API、**零** schema、**零**权限、
+**零**单据状态机、**零**金额与估值语义改动；不新增业务字段、路由或依赖。
+
+#### 65.2.4 门禁
+
+| 门禁 | 结果 |
+|---|---|
+| `node scripts/acceptance/release-browser-readiness.mjs` | **FAIL（退出码 1）** —— 判定 **5696** 项、失败 **6** 项；`PRODUCT_FAILURE=6` / `FIXTURE_FAILURE=0` / `CONTRACT_DRIFT=0`；角色 5/5、宽度 4/4。**6 项全部属于「预期外 403」类，触控目标类失败为 0 项**（见 §65.4 第 7 条） |
+| `scripts/acceptance/platform-workfaces-responsive-uat.mjs` | **PASS 40/40**（10 屏 × 4 档宽度，`undersized=0`） |
+| `pnpm test:fast` | **PASS 774/774**（86 suites） |
+| `pnpm build` | **PASS**（`✓ built in 3.74s`） |
+| `git diff --check` | **PASS**（无空白错误） |
+| 文档一致性 current / migration 两模式 | **PASS**（current：N1、N3–N9 全通过、N2 `RETIRED`；migration：C1–C6 全通过） |
+
+### 65.3 Migration 风险工作包（Requirement + Design，HARD STOP）
+
+产出：Requirement [`docs/requirements/platform.md` §36.17](../requirements/platform.md)、
+Design [`docs/design/platform.md` §32.17](../design/platform.md)，均为 `PENDING_APPROVAL`。
+
+事实基线（实测，非引用）：
+
+| 类别 | 实测结果 |
+|---|---|
+| A 吞错 catch | 10 处 / 8 个文件（`server/migrations/**`） |
+| B 固定 `_new` 表重建且无事务边界 | 10 处 / 7 个文件（7 个文件均无显式事务与 `runMigrationStep`） |
+| C 表重建导致的索引丢失 | 3 个索引；全新初始化后缺失，第二次启动才补齐 |
+| D 数据丢失路径 | 由 B 推导，逐站点核对后分为**四种**形态 |
+
+合同项：`PL-MG-01` 吞错 catch 消除、`PL-MG-02` 表重建原子化、`PL-MG-03` 索引保全、
+`PL-MG-04` 机器可验证守卫与双后端等价。
+
+**HARD STOP**：Design §32.17 完成后按 AGENTS.md §4.3 停止，**未**进入 Implementation；
+`server/migrations/**`、`server/db.js`、`scripts/qa/**` 均未改动。
+
+### 65.4 未解决矛盾
+
+1. **canonical 浏览器门禁的覆盖边界只到 route 层，不到文档详情层。** `orders/<id>` 这类详情页不在
+   canonical 门禁的 route 清单内，因此其上的触控目标**不会被门禁发现**。本轮实测发现销售订单详情页
+   「查看业务流程 ›」仍为 **36px**（`src/pages/master-data.jsx` 的 `v16-sales-order-detail__overview`）。
+   该项**已在 Sales & Customer 域级冻结时作为 6 项残余之一被接受**（见 §65.5 的残余登记），
+   本轮**未改动**——改动需先解冻该域合同，属业务所有者决定，不得在本轮自行吸收。
+2. **阶段 III 记录的「9 项缺陷」不完整。** 该次登记列出 3 个 route、9 项触控缺陷，但未包含本轮实测到的
+   第 4 类（`finance-treasury`「维护账户」60×23）。该元素是**无 class 的裸 `<a>`**，本轮 5 条 CSS 选择器
+   均不匹配它，因此与本次整改**无关**，在 HEAD 上可独立复现。**前次门禁记录不能作为「触控目标缺陷已
+   穷尽枚举」的证据**；本轮的穷尽清单以 §65.2.2 为准。
+3. **前次日志的章节引用有误**：`PL-RI-02` 的 fail-closed 条款位于 Requirement **§36.16.3**
+   （§36.16.2 是 `PL-RI-01` MySQL 备份）；阶段 III 日志中的「§36.16.2」引用不准确。新正文一律引用
+   §36.16.3，原日志行不改写。
+4. **阶段 III 记录的「8 处表重建」计数有误**：实测为 **10 处 / 7 个文件**（原记录列出 10 个位置）。
+   以 §65.3 的实测清单为准。
+5. **真实 MySQL / 对象存储 / 目标主机证据仍缺**（继承自阶段 III，本轮未授权、未执行）：
+   `PL-RI-01` 的备份 / 上传 / 回读 / 空与损坏拒绝 / 全新隔离库恢复 / 完整性校验 / live-ready / RPO-RTO
+   实测 / 保留清理演练；`PL-RI-05` 的 TLS 证书链与续期、到期监控、防火墙与云安全组、
+   `nginx -t` / `systemd-analyze verify` 实跑、真实客户端 IP 传递、回滚演练；`AC-RISK-04` 的真实 MySQL
+   并发证明。**在补齐前不得宣称九域 Release Readiness 或 production deploy ready。**
+6. **Migration 风险工作包尚未获批**：§36.17 / §32.17 为 `PENDING_APPROVAL`，`PL-MG-01..04` 的实现未开始。
+   在获批并单独取得 Implementation 授权前，不得改动任何 migration 文件。
+7. **canonical 浏览器门禁仍报出 6 项「预期外 403」——属另一类既有缺陷，本轮授权不覆盖。**
+   门禁本轮判定 5696 项、失败 6 项，**触控目标类失败为 0**（整改已生效），但 6 项失败全部是
+   route exposure 与页面自身 API 权限不一致：
+
+   | route | 角色 × 宽度 | 403 的 API | route 声明的 exposure | API 要求的权限 | 实测角色权限 |
+   |---|---|---|---|---|---|
+   | `manufacturing-analytics` | accounting × 320 / 430 | `/manufacturing/reports/wip` | `PRODUCTION_ORDERS_VIEW` 或 `PRODUCTION_COSTS_VIEW` | `PRODUCTION_ORDERS_VIEW` | 只有 `PRODUCTION_COSTS_VIEW` |
+   | `sales-price-override-authorizations` | accounting × 430 | `/customers`、`/products` | `SALES_PRICING_VIEW` 或 `SALES_PRICING_OVERRIDE` | `CUSTOMERS_VIEW`/`CUSTOMERS_MANAGE`、`PRODUCTS_VIEW`/`PRODUCTS_MANAGE` | 只有 `SALES_PRICING_VIEW` |
+
+   共同根因：**route 声明的 exposure 权限集合未覆盖该页面自身依赖的 API 权限集合**。两种修法方向
+   （收紧 route exposure / 放宽页面 API 守卫）都改变权限结果，属 AGENTS.md §6 与 §9 的高风险面，
+   且落在 Manufacturing & Quality 与 Sales & Customer 两个业务域，**必须先有 Requirement 与 Design**。
+   本轮授权只覆盖触控目标整改，因此本轮**未改动任何权限、route exposure 或 API 守卫**。
+   **在修复合入前，canonical 浏览器门禁仍返回退出码 1，「production deploy ready」不得被宣称。**
+
+### 65.5 Owner
+
+| 角色 | 承担者 | 说明 |
+|---|---|---|
+| 触控目标整改 | 仓库 | 纯前端样式合规整改，不改变任何业务合同语义 |
+| Migration 风险工作包 | Platform（Owner）+ 业务所有者（批准） | 实施须另行授权；受影响四域的 schema 事实来源方不改变其 owner |
+| 发布 / 目标环境 / 真实 MySQL 证据 | 业务所有者 | 本轮未授权、未执行 |
