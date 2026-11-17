@@ -6554,6 +6554,126 @@ legacy 写入点未动。
 停在 **Implementation 完成、本地门禁全绿**。下一步需要业务所有者**单独授权**的三件事：
 
 1. **部署到客户测试环境**并复跑批次链路（入库 → 委外发料 → 委外收货 → 加工费过账）与 `system-health` 前后
-   对比 —— 目标环境上**已存在**跟踪物料的 DRAFT 采购入库单，部署后可直接确认，无需数据修复。
-2. **真实 MySQL 证据**：本轮本地门禁跑的是 SQLite 路径；MySQL 路径需按 ACK-4 campaign 规程单独取得授权。
+   对比 —— **已于 2026-11-17 执行完毕，见 §76**。
+   （更正本节早先的说法：目标环境上那 4 张跟踪物料 DRAFT 入库单中，**只有 1 张**带有效批次号、
+   可直接确认；另 2 张的批次分配为 **NULL 批次号**（客户端未填），属**数据问题**，在确认环节被
+   「批次分配必须引用批次或填写批次号」拒绝，**不是**代码缺陷；第 4 张为不跟踪物料。）
+2. **真实 MySQL 证据**：本轮本地门禁跑的是 SQLite 路径；目标环境实测跑的是**真实 MySQL 8**
+   （`backend=mysql`），但它**不是** ACK-4 campaign，按 [`MYSQL-EV-01`](../decisions/mysql-evidence-policy-20261112.md)
+   **不得**作为可引用的域级 MySQL 证据；正式证据仍需按 ACK-4 规程单独授权执行。
 3. **Acceptance / Freeze 签发**：本节状态是 `IMPLEMENTED` 而非 `ACCEPTED`，未经用户最终验收不得签发。
+
+## 76. 采购入库跟踪物料收敛的部署与目标环境验证（2026-11-17）
+
+**状态**：`DEPLOYED` —— §75 的实现已在**真实目标环境**部署，并复跑了批次链路与 `system-health` 前后对比。
+本节**不是 Acceptance**，不签发任何 Acceptance / Capability Freeze / Manual Closure / Release Readiness；
+它也**不**改写 §75（实施）与既有域级结论。
+
+### 76.1 授权与边界
+
+业务所有者 2026-11-17：「部署到客户测试环境 + 复跑批次链路（入库 → 委外发料 → 委外收货 → 加工费过账）
+与 system-health 前后对比」。授权范围 = 部署 + 目标环境验证。
+
+| 纪律 | 落实 |
+|---|---|
+| 只改本项目 | 仅 `/opt/modern-erp` 的代码；未触碰 nginx 配置、既有站点与 `calculator_db` |
+| **不重启 MySQL** | 部署前后 `ActiveEnterTimestamp` 均为 `Fri 2026-10-02 21:45:34 CST`（未变） |
+| 不重启 nginx | `ActiveEnterTimestamp` 仍为 `Fri 2026-10-02 21:45:30 CST`（未变；本次无前端改动，未换 `dist`） |
+| 只重启本服务 | 仅 `systemctl restart modern-erp.service`（`Tue 2026-11-17 22:13:30` → `Wed 2026-11-18 01:15:53`），启动日志 `server_started backend=mysql` |
+| 不 push / tag / merge / release | 本地仓库领先 `github/master` 5 个提交，**未推送**；远端未改 |
+
+### 76.2 落地事实
+
+| 项 | 值 |
+|---|---|
+| 代码 | `/opt/modern-erp` 置于 **`ff5f6a8`**（= 本地 `master` HEAD），经**增量** `git bundle`（104,189 B，sha256 `46a3c7f7714fa8949067e14bff2d76beb6d4a2b1920db521cd411a71fbcee322` 双向一致，`git bundle verify` 通过，前置提交 `b5360f1` 主机已有），**未 push** |
+| 落地方式 | `git fetch <bundle> master` + `git reset --hard FETCH_HEAD`，以**服务账号 `modern-erp`** 执行（`.git` 属主为该账号，`ubuntu` 无写权限） |
+| 落地后工作树 | `git status --short` 为空（干净） |
+| **文件一致性** | 5 个关键文件的**工作树 blob 哈希与提交 blob 逐个相同**：`purchase-receipt-engine.js` `ba3c3dd8…`、`operational-inventory-legs.js` `da12f640…`、`financial-inventory.js` `e4e69da6…`、`test-suites.js` `d10a398a…`、`procurement-tracked-receipt.test.js` `b6e33051…`。（`purchase-receipt-engine.js` 的 **md5** 与本地不同，纯因本地工作树为 CRLF、主机为 git 规范化的 LF；内容逐字节等价，`diff` 忽略行尾后为空。） |
+| 前端 | 本次**无 `src/` 改动**，因此未重建、未换 `dist`、未 reload nginx |
+| 备份 | 部署前 `mysqldump modern_erp`（2,355,278 B，md5 `7027e13c39d8ae4c5bd9807743d23de4`）→ `/var/backups/modern-erp/mysql/pre-trk-20261118-011453.sql`；4 个被改代码文件 → `/opt/modern-erp-rollback/pre-trk/` |
+| 就绪 | `/api/health` 200、`/` 200；`/api/live`、`/api/ready` 未认证 401（与既有口径一致） |
+
+### 76.3 批次链路前后对比（同一实例、同一脚本）
+
+| 步骤 | 部署前（`b5360f1`） | 部署后（`ff5f6a8`） |
+|---|---|---|
+| 请购 → 审批 → 生成 PO → 审批 | PASS | PASS |
+| 采购入库（带批次分配） | PASS（201） | PASS（201） |
+| IQC 建档 → 完成 | PASS | PASS |
+| **确认采购入库** | **FAIL 400「产品 … 启用了 LOT 跟踪，请改用 applyInventoryMutation()」** | **PASS 200** |
+| 批次身份已建立且有数量 | FAIL（未找到批次身份） | PASS（`UAT-E2E-after-…`，currentQuantity = 20） |
+| 委外订单 → 用料快照 → CONFIRM_PLAN → RELEASE | PASS | PASS |
+| **委外发料（带批次身份）** | **FAIL 409「LOT 物料必须提供唯一批次身份」** | **PASS 201** |
+| 加工费 PO（权威单价 800 分）→ 提交 → 审批 | 未到达 | PASS |
+| 委外完工通知 → 确认 | 未到达 | PASS |
+| 委外收货（带序列号身份）→ **确认生效** | 未到达 | PASS 200（倒冲 3 件，携带价值 **3600** 分） |
+| 加工费账单 → **过账** | 未到达 | PASS 200（800 分） |
+
+> 过程中被系统**正确拒绝**的三处（均为脚本取值或数据问题，不是缺陷）：客户端加工费单价 3000 与
+> 权威价格表 800 不一致（409 `OUTSOURCING_PROCESSING_PRICE_ASSERTION_MISMATCH`）；委外收货明细
+> 字段名用错（`materialListId` → `processingPoItemId` / `sourceNoticeItemId`）；序列号成品必须先
+> 登记序列号身份（`POST /api/inventory-serials`）。
+
+### 76.4 库内权威证据（真实 MySQL 8）
+
+| 项 | 值 |
+|---|---|
+| 入库单 | `PR4935781192`，`total_cents` 24000，`billing_mode` SEPARATE，`status` CONFIRMED |
+| canonical 仓位 | 批次 `UAT-E2E-after-1794906980978` @ UAT-WH01：`quantity` **17**（20 入 − 3 委外发料），`owner_type` ENTERPRISE，`stock_status` AVAILABLE，`bin_id` NULL，`position_key` 已写 |
+| 批次维度投影 | `inventory_lot_balances` 同批次同仓 **17** —— **与 canonical 库存一致** |
+| 身份级估值流水 | `PURCHASE_RECEIPT`：`quantity_delta` **+20**、`value_delta_cents` **+24000**、`unit_cost_cents` **1200**、`valuation_basis` APPROVED_PO_PRICE、`lot_id` 非空 |
+| 身份级估值余额 | `LOT:UAT-WH01:UAT-RM02:38e469e5…` → quantity **17**、value **20400**（= 17 × 1200） |
+| 委外发料 / 倒冲 | `OUTSOURCING_ISSUE` −3 / +3（`ORIGINAL_COST`，单价 1200）、`OUTSOURCING_BACKFLUSH` −3 / −3600，均带 `lot_id` |
+| 成品侧 | `OUTSOURCING_RECEIPT` +1 / **+4400**（`OUTSOURCING_ACTUAL_COST`），序列号身份级余额 `SERIAL:6be48e48…` = 1 件 / 4400 分 |
+
+**结论**：批次物料的**采购价估值**在真实 MySQL 8 上贯穿了「入库 → 委外发料 → 委外倒冲 → 成品收货」，
+且**数量、批次投影、身份级估值池三者完全一致**。
+
+### 76.5 `system-health` 前后对比
+
+**前后是同样的 5 项 FAIL，无新增、无消失**：
+
+| 检查 | 部署前 | 部署后 | 归因 |
+|---|---|---|---|
+| `TRACKED_DIMENSION_VS_CANONICAL` | FAIL，difference **2**（`UAT-RM02` 1150-150、`UAT-FG02` 200-0） | FAIL，difference **2**（`UAT-RM02` **1167-167**、`UAT-FG02` 200-0） | 差额 **1000 → 1000 不变**：本轮入库 20、委外发料 3，**canonical 与投影同步各 +17**（结构性历史差额未变） |
+| `INVENTORY_QUANTITY_VS_VALUATION` | FAIL，difference **4174** | FAIL，difference **4174** | **完全不变** —— 新入库全部已估值，未产生未估值旧库存 |
+| `LEGACY_UNVALUED_MOVEMENTS` | FAIL，**32** | FAIL，**32** | 不变 |
+| `INVENTORY_VALUE_TO_GL` | FAIL，**−42000** | FAIL，**−42800** | 增量 −800：**GL 存货科目 +24000**（采购入库凭证 1403 借 24000），**估值台账 +24800**（24000 + 委外收货 4400 − 倒冲 3600）；差额 800 = **委外收货不生成总账凭证**这一既有覆盖缺口（此前因跟踪物料无估值而不可见） |
+| `RECEIPT_GRNI_TO_GL` | FAIL，**−8100000** | FAIL，**−8148000** | 该检查公式恒为 **−2 × 未结转 GRNI**（实测 `grniGl` = −4,074,000、`grniExpected` = +4,074,000）；本轮确认入库 24000 使未结转 GRNI +24000 → 差额 **−48000**，属该检查的既有结构性表现，非新增不一致 |
+
+### 76.6 共享主机零干扰核验
+
+| 项 | 结果 |
+|---|---|
+| MySQL | **未重启**（`ActiveEnterTimestamp` 部署前后同为 `Fri 2026-10-02 21:45:34 CST`） |
+| nginx | **未重启**（`Fri 2026-10-02 21:45:30 CST`） |
+| 五个服务 | `modern-erp` / `nginx` / `mysql` / `calculator-backend` / `pairbook-web` 全部 `active` |
+| 同机既有项目 | `calculator`(8082) **200**、`pairbook`(18088) **200** |
+| `calculator_db` | 表数 **1**（`calculation_history`），**未触碰** |
+| `modern_erp` | 425 表 / 5 触发器 / 1 视图（与部署前一致） |
+| 磁盘 | 49 G 可用（14% 占用） |
+
+### 76.7 未解决事项
+
+1. **委外收货不生成总账凭证**（既有覆盖缺口，本轮因链路跑通而**首次可见**）：成品入库只在估值台账记
+   +4400，GL 存货科目无对应分录，差额 800。属 Accounting & Analytics / Outsourcing 的口径裁定项，
+   本轮**不改**。
+2. **其余 11 处 legacy 物理写入点**仍拒绝跟踪物料（Requirement §31.21.4 第 1 项）：生产领料 / 退料 /
+   完工 / 副产品、销售退货、期初导入、各类冲销。**委外发料与委外收货不受影响**（已走 canonical 写入器）。
+3. **两张 DRAFT 入库单的批次分配为 NULL 批次号**（客户端未填批次号）→ 确认时以
+   「批次分配必须引用批次或填写批次号」拒绝。属**数据问题**，需业务侧补填；**不是**代码缺陷。
+4. **ACK-4 campaign 未运行**：本轮目标环境实测跑的是**真实 MySQL 8**（`backend=mysql`），但它**不是**
+   ACK-4 campaign，按 [`MYSQL-EV-01`](../decisions/mysql-evidence-policy-20261112.md) **不得**作为可引用的
+   域级 MySQL 证据；正式证据路径需业务所有者单独授权。
+5. **浏览器门禁未跑**：本次无 `src/` 改动（前端产物未变），故未跑 canonical 浏览器发布门禁。
+6. §70.6 的其余事项未变：COS 备份凭据与 timer、无 TLS、安全组复核、SSH 口令轮换。
+
+### 76.8 Owner
+
+| 角色 | 承担者 | 说明 |
+|---|---|---|
+| 部署与目标环境验证 | 仓库（执行）+ 业务所有者（授权） | 已执行并实测；**不是 Acceptance** |
+| 委外收货的 GL 覆盖缺口（§76.7-1） | Accounting & Analytics + Outsourcing + 业务所有者 | 待裁定 |
+| 其余 11 处 legacy 写入点 | Procurement & Manufacturing + 业务所有者 | 待裁定（§31.21.6-2） |
+| ACK-4 campaign / Acceptance / Freeze / 推送 / tag / release | 业务所有者 | 本轮**未**执行 |
