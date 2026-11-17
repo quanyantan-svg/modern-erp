@@ -6371,3 +6371,86 @@ push / tag / merge / release / deploy。
 | 跟踪维度投影一致性（`IW-TRACE-04` / `05`） | Inventory & Warehouse | 已实施（一般路径维护 + 幂等对齐迁移） |
 | 平台前提播种（`PL-SEED-01..05`） | Platform（播种机制）+ Sales & Customer（参数取值）+ Manufacturing & Quality（质检点默认） | 已实施；**播种目标边界待业务所有者确认**（§73.5-1） |
 | Acceptance / Freeze / Release Readiness | 业务所有者 | 本轮**未**签发 |
+
+## 74. D4 变更部署至腾讯云客户测试环境（2026-11-17）
+
+**状态**：`DEPLOYED` —— §73 的 D4 变更已在**真实目标环境**部署并实测验证。
+本节**不是 Acceptance**，不签发任何 Acceptance / Capability Freeze / Manual Closure / Release Readiness；
+它也不改写 §71（验收）与 §73（实施）的结论。
+
+### 74.1 授权与边界
+
+业务所有者 2026-11-17：「把这些更改部署到腾讯云」。本次授权范围为**部署与目标环境验证**。
+
+| 纪律 | 落实 |
+|---|---|
+| 只改本项目 | 仅 `/opt/modern-erp` 的代码与 `dist`、`modern_erp` 库、`modern-erp.service` |
+| **不重启 MySQL** | 全程未重启：`ActiveEnterTimestamp` 仍为 `Fri 2026-10-02 21:45:34 CST`，Uptime 由 3975818 连续增至 3976246 |
+| 不动既有站点 / 服务 | `calculator`(8082) / `pairbook-web`(18088) 未重启、未改配置；nginx 未 `restart`（静态资源由磁盘提供，无需 reload） |
+| 不动既有数据库 | `calculator_db` 与 `calculator_user` 未触碰（只读核验见表下） |
+| 不 push / tag / merge / release | 本地仓库的两个提交**未推送**；远端未改 |
+
+### 74.2 落地事实
+
+| 项 | 值 |
+|---|---|
+| 代码 | `/opt/modern-erp` 置于 **`d02ef853`**（= 本地 `master` HEAD），经 `git bundle`（16,824,724 B，md5 `05d262cbd272c3a0ed1808ebb962e0a0` 双向一致，`git bundle verify` 通过），**未 push** |
+| 部署前代码状态 | 主机工作树带 14 个未提交改动（上一轮的 MySQL 8 方言修复经 scp 落地）—— **逐文件 md5 与本地 `fe8a8e3` 完全一致**，因此 `git reset --hard` 未丢失任何修复 |
+| 前端 | `pnpm exec vite build --outDir dist.new` 后**目录换入**（构建期不向 nginx 暴露半成品）；产物哈希与本地构建逐个一致（如 `page-inventory-work-BXZpk9PQ.js`） |
+| 服务 | `systemctl restart modern-erp.service`（**只重启这一个**）；启动日志 `server_started backend=mysql`，无异常 |
+| 备份 | 部署前 `mysqldump modern_erp`（2,127,128 B，md5 `77dc9f0c0730d9963cbd4cdb1d2b95e1`）→ `/var/backups/modern-erp/mysql/pre-d4-20261117-220909.sql`；前端产物备份 → `/opt/modern-erp-rollback/dist.pre-d4` |
+
+### 74.3 迁移在真实 MySQL 8 上的实测结果
+
+| 迁移 | 结果 |
+|---|---|
+| `v25-tracked-dimension-alignment` | `inventory_lot_balances` 由 **0 行 → 3 行 / 合计 150**（按 canonical 仓位回填：3 个批次各 50，仓库 UAT-WH01）；序列号当前位置纠正 1 条（`current_warehouse_id` 由 NULL → UAT-WH01） |
+| `v25-platform-prerequisite-seeds` | `sales_parameters` SYSTEM 行**已存在**（取值与 `PL-SEED-02` 批准值一致，`created_by=user-admin-init`）→ 播种**跳过**，未覆盖；`quality_control_points` 由 1 行 → 3 行（新增 `QCP-IN-GLOBAL` / `QCP-OUT-GLOBAL`，均 `inspection_required=1`）。**客户手工安装的 `QCP-UAT-SALES-DELIVERY`（`scope=PRODUCT`、`inspection_required=0`）原样保留** —— 解析顺序 `PRODUCT` 优先于 `GLOBAL`，其免检效力不变 |
+
+### 74.4 目标环境验证证据
+
+| 项 | 结果 |
+|---|---|
+| 5 个新端点（直连 3001 与经 nginx 80） | 部署前 **404** → 部署后 **401**（已注册且守卫生效）；经认证后 `uat_warehouse` 全部 **200** |
+| 守卫口径 | `uat_reviewer`（只持 `INVENTORY_VIEW`）：两个主档列表 **200**、三个单据列表 **403** ✓ |
+| 批次主档数据 | `GET /api/inventory-lots` → 13 个批次，其中 3 个 `onHandQuantity=50`、所在仓 `UAT-WH01` ✓ |
+| 序列号主档数据 | `GET /api/inventory-serials` → 11 条 ✓ |
+| **浏览器实测（真实 Edge，390 px，走 SSH 隧道）** | ①「批次」身份列表：**3 条显示数量 50 / 仓库 UAT-WH01**（部署前恒为 0），请求 URL 实测为 `/api/tracking/identities?type=LOT&search=`（非空洞）<br>②「批号调整 / 形态转换 / 容器」三个页签：**各自发起对应端点请求**，并渲染显式空态（部署前是空白页）<br>③ 审核员视角：三个页签**不再出现**（可见页签 21 → 8）<br>④ **浏览器错误 0** |
+| `GET /api/tracking/reconcile` | 200，`ok=false`（残余见 §74.5-1） |
+| `GET /api/system-health` | 200，24 项检查；`TRACKED_DIMENSION_VS_CANONICAL` 差异 **2**（残余见 §74.5-1）；另有 4 项失败为**部署前既有**（见 §74.5-2） |
+| 既有项目未受影响 | `calculator`(8082) **200**、`pairbook`(18088) **200**；5 个服务全部 `active`；`calculator_db` 表数未变 |
+
+### 74.5 未解决事项
+
+1. **`TRACKED_DIMENSION_VS_CANONICAL` 仍有 2 处差异（结构性，不可由投影消除）**：
+   - `UAT-RM02`（LOT）：canonical 650 / 投影 150 —— 差额 **500** 来自**两个不带批次身份的规范仓位**
+     （`lot_id IS NULL`）；LOT 货品的仓位没有批次身份，投影**在结构上无法表示**它。
+   - `UAT-FG02`（SERIAL）：canonical 100 / 投影 0 —— 两个规范仓位**不带序列号身份**，11 条序列号中
+     仅有 3 条有仓位；同样无 canonical 仓位可回填。
+   - 根因是**历史入库单据未带跟踪身份**（4 笔 `OTHER_RECEIPT` 中有 1 笔 500 单位无批次身份）。
+     本次修复使**今后**经 canonical 写入器的移动必然维护投影；历史那 500 单位**不会被追认**，
+     需要业务所有者决定如何处置（重新以带身份的入库冲销重建 / 或接受差额）。
+   - 另：`reconcile` 端点本身按「每条仓位行 vs 该 (仓, 货品) 聚合」比较，多仓位时结构性不成立 —— 属既有缺陷，未在本轮处置。
+2. **另 4 项健康检查失败为部署前既有**：`INVENTORY_QUANTITY_VS_VALUATION`(2373)、
+   `INVENTORY_VALUE_TO_GL`(-41000)、`RECEIPT_GRNI_TO_GL`(-8100000)、`LEGACY_UNVALUED_MOVEMENTS`(26)。
+   这四项只读估值 / 总账 / 移动流水表，而本轮两个迁移**只写** `inventory_lot_balances`、
+   `inventory_serials.current_warehouse_id`、`quality_control_points`（`sales_parameters` 未写）；
+   上述表在本实例的 `inventory` 21 行 / `users` 8 / `audit_logs` 1610 / 估值流水 110 行与部署前转储逐表一致。
+3. **一次操作失误已恢复（须记录）**：为核对「其余健康检查是否为部署前既有」，我用部署前转储在**同一实例**
+   建临时库比对 —— 转储带 `--databases modern_erp`，导入时**重建了 `modern_erp` 本身**，
+   使投影与播种结果被回退（业务数据未损：最新业务流水为 19:07，早于转储；触发器 5 / 视图 1 完好）。
+   恢复方式为重启 `modern-erp.service` 让幂等迁移重放，状态已复原并复验。临时库已删除。
+   **教训**：比对副本必须用**不带 `--databases`** 的转储并导入到**独立库名**，或直接在独立实例上做。
+4. **本次部署的提交未推送**：仓库本地 `master` 领先 `github/master` 4 个提交（含 D1–D5 方言修复与 D4）；
+   主机运行的正是这些提交。推送需业务所有者批准。
+5. §70.6 的其余事项未变：MySQL 自动备份与异机副本（缺 COS 凭据）、无 TLS、安全组复核、SSH 口令轮换。
+6. **canonical 浏览器发布门禁未跑**：本次只做目标环境**定点**验证（三个页签 + 批次主屏 + 权限收敛），
+   未跑 93 route × 5 角色的全量巡检。
+
+### 74.6 Owner
+
+| 角色 | 承担者 | 说明 |
+|---|---|---|
+| 本次部署与目标环境验证 | 仓库（执行）+ 业务所有者（授权） | 已执行并实测；**不是 Acceptance** |
+| 残余跟踪维度差额的处置 | Inventory & Warehouse + 业务所有者 | 待裁定（§74.5-1） |
+| 推送 / tag / release | 业务所有者 | 本轮**未**执行 |
