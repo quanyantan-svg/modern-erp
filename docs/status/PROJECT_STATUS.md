@@ -5984,3 +5984,91 @@ Manual Closure / Release Readiness，也不改写任何已签发的域级结论�
 | 导航分组与界面语言合同 | Platform（Owner）+ 业务所有者（批准、授权实施） | §36.19 / §32.19 已 `APPROVED`，Implementation 已实施 |
 | 腾讯云部署执行清单 | Operations + 业务所有者 | §10 已交付；**目标环境验证与部署授权未取得** |
 | Acceptance / Freeze / Release Readiness | 业务所有者 | 本轮**未**签发 |
+## 70. 腾讯云轻量应用服务器部署：客户测试环境（MySQL 8）（2026-11-17）
+
+**状态**：`DEPLOYED`（已在真实目标环境部署并验证）—— 本节**不是 Acceptance**，不签发任何
+Acceptance / Capability Freeze / Manual Closure / Release Readiness；
+它也不改写 §69 的结论。
+
+### 70.1 授权与边界
+
+| 授权 | 内容 | 结果 |
+|---|---|---|
+| A | 「推进腾讯云部署」 | 已执行 |
+| A | 登录用户 `ubuntu`，`sudo` 免密 | 已确认（`id` 显示 `27(sudo)`；`sudo -n true` 通过） |
+| A | **复用已有 MySQL**，新建独立库与独立账号（不装第二个实例） | 已执行 |
+| A | 入口用 **IP + HTTP**，域名与 TLS 后续 | 已执行（nginx 新增 `listen 80`） |
+| A | 管理员用户名 `admin`，密码由本次生成 | 已执行 |
+| 明确未授权 | push / tag / merge / release、既有项目与既有 MySQL 资源的修改 | **全部未执行** |
+
+### 70.2 目标环境事实（部署前只读侦察所得）
+
+| 项 | 值 |
+|---|---|
+| 主机 | `129.204.51.149`（`VM-0-3-ubuntu`），Ubuntu 22.04.5 LTS，3.7 GiB 内存 / 59 GB 磁盘（可用 49 GB） |
+| 运行时 | 系统 `/usr/bin/node` v22.23.3、npm 10.9.9、pnpm 11.24.0（与 `packageManager` 精确一致）、corepack 0.36.0、nginx 1.18.0、git |
+| 数据库 | MySQL 8.0.46，`bind-address=127.0.0.1`，`log_bin=ON`，`log_bin_trust_function_creators=OFF`，root 走 `auth_socket` |
+| **既有项目** | ① `calculator`：nginx `sites-enabled/calculator` → **8082**；python `127.0.0.1:8000`；库 `calculator_db` / 账号 `calculator_user`（`ALL PRIVILEGES ON calculator_db.*`）<br>② `pairbook-web`：systemd `pairbook-web.service` → node `0.0.0.0:18088` |
+| 空闲资源 | **80**（nginx 未监听）、**3001**、磁盘 49 GB、内存 2.1 GB 可用 |
+| 网络 | npm 走 `mirrors.tencentyun.com/npm`（PONG）；GitHub 可达（但本次**未使用 push**） |
+
+### 70.3 零干扰执行纪律
+
+本次部署**只新增**资源，**不修改、不重启**任何既有组件：
+
+| 纪律 | 落实方式 |
+|---|---|
+| 不动既有站点 | 新增 `/etc/nginx/conf.d/modern-erp.conf`；`sites-enabled/calculator` 未触碰；nginx 仅 `nginx -t` 通过后 **`reload`**（未 `restart`） |
+| 不动既有服务 | 新增独立单元 `modern-erp.service` 与独立用户 `modern-erp` / `modern-erp-backup`；`calculator-backend` / `pairbook-web` 未重启 |
+| 不动既有数据库 | 复用 3306 实例，**只**新建库 `modern_erp` 与账号 `modern_erp`@`127.0.0.1`；`calculator_db` / `calculator_user` 未改 |
+| **不重启 MySQL** | 触发器所需的 `log_bin_trust_function_creators` 用 `SET GLOBAL` **立即生效**，并写入 `/etc/mysql/mysql.conf.d/modern-erp.cnf` 供将来自然重启后仍生效 —— 全程未重启 MySQL，`calculator` **零中断** |
+| 不动系统运行时 | 复用系统 node/pnpm，**未**装 nvm、**未**升级系统 node、**未**执行 `apt upgrade` / `autoremove` |
+| 不覆盖既有内容 | 部署目录、库、账号、nginx 块、systemd 单元全部先做存在性检查，存在即中止 |
+
+### 70.4 落地清单
+
+| 项 | 值 |
+|---|---|
+| 代码 | `/opt/modern-erp`，commit **`06d630c`**（= §69 的修整提交），经 `git bundle` 传输（17 MB，MD5 校验一致），**未 push** |
+| 数据 / 备份 / 附件 | `/var/lib/modern-erp`、`/var/backups/modern-erp`、`/var/lib/modern-erp/attachments` |
+| 环境文件 | `/etc/modern-erp/env`（`root:modern-erp`、`0640`） |
+| 服务 | `modern-erp.service`，`127.0.0.1:3001`，`Restart=on-failure` |
+| 反代 | nginx `listen 80` → `127.0.0.1:3001`；`client_max_body_size 12m`；`X-Forwarded-For` 固定 `$remote_addr` |
+| 数据库 | 库 `modern_erp`（**425 张表 + 5 个触发器 + 1 个视图**），账号权限**仅限本库**：全局仅 `USAGE`，库级含 `SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER/DROP/INDEX/REFERENCES/CREATE TEMPORARY TABLES/LOCK TABLES/EXECUTE/CREATE VIEW/TRIGGER` |
+
+**过程中的一次故障与修复**：首次启动因 `CREATE VIEW command denied to user 'modern_erp'@'localhost'`
+反复重启失败。根因是 MySQL 的 `CREATE VIEW` / `SHOWVIEW` 是**独立于 `CREATE` 的权限**（`SHOWVIEW`
+为列级权限，视图创建者本身隐含拥有，无需授予）。修复方式是在**本库范围内**补授 `CREATE VIEW` 与
+`DROP`；**未**授予任何全局权限，**未**改动 `calculator_user` 的授权。
+
+### 70.5 验证证据（全部在目标环境实测）
+
+| 项 | 结果 |
+|---|---|
+| `live` / `ready` / 首页（直连 3001 与经 nginx 80） | **200 / 200 / 200** |
+| 未认证 `GET /api/users` | **401**（不是 500） |
+| 管理员登录（经 nginx 80） | **成功** |
+| 带 token `GET /api/users` / `/api/roles` / `/api/dashboard` | **200 / 200 / 200** |
+| **`POST /api/users`（admin 新增用户）** | **201**（即用户报告的失效能力已恢复） |
+| 管理员清理探针用户 `PATCH /api/users/:id` | **200**（探针账号已置为停用） |
+| 静态资源 `/assets/index-*.js` | **200** |
+| **浏览器端到端**（真实 Edge，390 px，走 SSH 隧道指向同一实例） | 9 个分组标题**全中文**；「**系统设置**」分组存在且含「用户与权限」；「用户与权限」页页眉主操作位显示「**新增用户**」；点击后弹窗打开（登录账号 / 用户姓名 / 初始密码 / 所属角色）；**浏览器错误 0** |
+| **既有项目未受影响** | `calculator-backend` / `pairbook-web` / `nginx` / `mysql` 均 `active`；`calculator`(8082) **200**、`pairbook`(18088) **200**；`calculator_db` 表数与 `calculator_user` 授权**均未变** |
+
+### 70.6 未解决事项
+
+1. **MySQL 备份与异机副本尚未启用**：`PL-RI-01` 的 `scripts/admin/mysql-backup.mjs` 依赖
+   `ERP_DR_S3_*`（腾讯云 COS）凭据，**本次未取得凭据**，因此 `modern-erp-mysql-backup.timer`
+   **未安装**。在取得 COS 凭据并完成一次恢复演练之前，该环境**没有自动化备份**。
+   （测试期数据为全新生成，风险可接受；但一旦开始录入真实业务数据，此项即成为闸门。）
+2. **对外仅 HTTP，无 TLS**：按业务所有者决定先走 IP + HTTP。登录口令与业务数据**明文过公网**，
+   必须在给客户试用前补 TLS（`deploy/nginx/modern-erp-tls.conf.example` 为模板）。
+3. **安全组需业务所有者复核**：本次未操作腾讯云控制台。已确认 80 与 22 可达；
+   需确认 **3306 与 3001 未对公网开放**（应用侧它们只监听回环）。
+4. **SSH 口令已在会话中传递**：按建议在部署完成后**轮换**该口令；公钥已装入
+   `/home/ubuntu/.ssh/authorized_keys`，后续可只用公钥。
+5. **本地 commit `06d630c` 未推送**：`github/master` 与 `origin`（Gitee）均未更新，
+   等待业务所有者决定。
+6. **`uat_probe` 停用账号仍留在库中**：仓库没有 `DELETE /api/users` 路由（只有 `POST` / `PATCH`），
+   只能停用（`active=false`），故该探针账号以**停用态**留存于 `modern_erp.users`。
+   如需彻底移除，须由业务所有者授权后直接操作该库。
