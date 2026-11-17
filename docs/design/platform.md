@@ -1947,3 +1947,44 @@ Implementation：**已授权**（范围仅限 §32.19.2 所列仓库内文件与
 
 **未授权**：腾讯云部署与任何远程写操作、数据库操作、真实 MySQL campaign、
 Acceptance / Freeze / Release Readiness 签发、push / tag / merge / release。
+
+
+### 32.20 MySQL 8 方言兼容与追踪估值一致性设计（`APPROVED`，2026-11-17）
+
+#### 32.20.1 改动清单
+
+| 文件 | 改动 |
+|---|---|
+| `server/database/mysql-ddl.js`（新增） | `translateSqliteDdl()`：把运行时 `CREATE TABLE` 的 `TEXT` 按 canonical 规则译为 `VARCHAR(128)` / `LONGTEXT`，并把 `LONGTEXT` 的默认值写成 `DEFAULT ('…')` |
+| `server/database/mysql-adapter.js` | `translateSqliteSql()` 接入 DDL 形状翻译；活体迁移路径调用估值对齐 |
+| `server/lib/schema-ensure.js`（新增） | `ensureIndex()`：MySQL 先查 `information_schema` 再建索引；SQLite 走 `IF NOT EXISTS` |
+| `server/lib/tracking-valuation.js`（新增） | `VALUATION_BY_TRACKING` 与 `canonicalValuationMethod()` —— 追踪策略与估值方法的**单一事实来源** |
+| `server/migrations/v14-tracked-valuation-alignment.js`（新增） | 幂等对齐存量错配行（只动 `valuation_activated_at IS NULL` 的行） |
+| `server/modules/products.js` | 产品创建按 canonical 映射写入 `valuation_method` |
+| `server/modules/traceability-quality.js` | 追踪策略变更同步 `valuation_method` |
+| `server/modules/financial-inventory.js` | 估值映射改为引用共享单一事实来源 |
+| `server/modules/lifecycle-engine.js` | `rowid` → `(created_at, id)` 复合排序与行值比较；空图守卫 |
+| `server/modules/outsourcing-finance.js` | `o.order_id` → `MAX(o.order_id)`，兼容 `ONLY_FULL_GROUP_BY` |
+| `server/modules/inventory-assembly-disassembly.js`、`inventory-step-transfer.js`、`settlement-core.js` | `CREATE INDEX IF NOT EXISTS` → `ensureIndex()` |
+
+#### 32.20.2 关键设计取舍
+
+1. **为什么修翻译层而不是逐模块改 DDL**：§71.5 的 D1 根因是「快照 bootstrap 有 canonical
+   列类型解析器、运行时 DDL 走另一条路」。逐模块改会遗漏同类写法 ——
+   `server/modules/` 与 `server/lib/` 下共 17 个模块在运行时用 `db.exec` 自建表。
+2. **索引幂等为什么必须显式检查**：MySQL 没有 `CREATE INDEX IF NOT EXISTS`，
+   单条语句无法表达「不存在才创建」；翻译层只能改形状，不能改语义。
+   因此索引幂等下沉为一个显式的方言感知原语 `ensureIndex()`。
+3. **`rowid` 为什么不加成列**：加自增列需要两侧 schema 变更（SQLite 的 `AUTOINCREMENT`
+   只能用于 `INTEGER PRIMARY KEY`，与既有 `TEXT PRIMARY KEY` 冲突）。
+   改用 `(created_at, id)` 复合键：两种方言都支持，且是**确定性全序**，
+   满足「来源溯源」所需的稳定顺序语义。
+4. **估值对齐为什么不直接改 `changeValuationMethod`**：该函数在存在已过账估值移动时
+   拒绝变更（正确）。存量对齐走独立迁移，且只动估值未激活的行 —— 已激活的货品保持冻结语义。
+
+#### 32.20.3 Design 状态
+
+Requirement §36.20：`APPROVED`（2026-11-17）；本节 Design：`APPROVED`（同日）。
+Implementation：**已实施**（`PL-DDL-01`、`PL-DDL-02`、`PL-GROUP-01`、`PL-VALUATION-01`、
+`PL-VALUATION-02`、`PL-EMPTY-01`）；**`PL-DDL-01` 之外的 §36.19 D4（批次 / 序列号 /
+批号调整 / 容器 的列表端点）尚未实施**。

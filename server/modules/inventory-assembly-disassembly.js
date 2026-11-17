@@ -17,6 +17,7 @@
 // `DSA-...` for disassembly).
 
 import { transaction, id as genId } from '../db.js';
+import { ensureIndex } from '../lib/schema-ensure.js';
 import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, assertAllowedFields, readJson, send } from '../lib/http.js';
 import { applyInventoryMutation } from '../lib/inventory-mutation.js';
@@ -55,8 +56,6 @@ function ensureTable(db) {
       created_at TEXT NOT NULL,
       confirmed_at TEXT
     );
-    CREATE INDEX IF NOT EXISTS idx_inventory_assembly_orders_type ON inventory_assembly_orders(order_type, status);
-    CREATE INDEX IF NOT EXISTS idx_inventory_assembly_orders_production ON inventory_assembly_orders(production_order_id);
     CREATE TABLE IF NOT EXISTS inventory_assembly_order_items (
       id TEXT PRIMARY KEY,
       order_id TEXT NOT NULL REFERENCES inventory_assembly_orders(id),
@@ -72,8 +71,10 @@ function ensureTable(db) {
       bin_id TEXT,
       created_at TEXT NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS idx_inventory_assembly_order_items_order ON inventory_assembly_order_items(order_id);
   `);
+  ensureIndex(db, 'idx_inventory_assembly_orders_type', 'inventory_assembly_orders', 'order_type, status');
+  ensureIndex(db, 'idx_inventory_assembly_orders_production', 'inventory_assembly_orders', 'production_order_id');
+  ensureIndex(db, 'idx_inventory_assembly_order_items_order', 'inventory_assembly_order_items', 'order_id');
 }
 
 function generateDocNo(orderType) {

@@ -8,6 +8,7 @@
 // the step-transfer layer enforces the in-transit availability bound.
 
 import { transaction, id as genId } from '../db.js';
+import { ensureIndex } from '../lib/schema-ensure.js';
 import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, assertAllowedFields, readJson, send } from '../lib/http.js';
 import { applyInventoryMutation } from '../lib/inventory-mutation.js';
@@ -35,8 +36,8 @@ function ensureTable(db) {
       FOREIGN KEY (warehouse_id_source) REFERENCES warehouses(id),
       FOREIGN KEY (warehouse_id_destination) REFERENCES warehouses(id)
     );
-    CREATE INDEX IF NOT EXISTS idx_inventory_step_transfer_source ON inventory_step_transfer_in_transit(source_transfer_id, product_id);
   `);
+  ensureIndex(db, 'idx_inventory_step_transfer_source', 'inventory_step_transfer_in_transit', 'source_transfer_id, product_id');
 }
 
 function getStepRow(db, sourceTransferId, productId, sourceWh, destWh) {

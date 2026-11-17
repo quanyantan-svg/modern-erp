@@ -6197,3 +6197,60 @@ ABC `basis=VALUE` 缺估值快照 409、坏账核销自批 403、重复编号规
 | 本轮验收 | 业务所有者（授权）+ 仓库（执行） | 结果如上；本节不是 Acceptance 签发 |
 | D1–D5 修复 | Platform / 各域 Owner + 业务所有者（批准） | 需走 Requirement → Design → Implementation |
 | Acceptance / Freeze / Release Readiness | 业务所有者 | 本轮**未**签发 |
+
+
+## 72. MySQL 8 方言兼容与追踪估值一致性修复（2026-11-17）
+
+**状态**：`IMPLEMENTED`（部分）—— §71.5 检出的 D1 / D2 / D3 / D5 已修复并**在目标环境实测通过**；
+**D4（批次 / 序列号 / 批号调整 / 容器 的列表端点）尚未实施**。
+本节**不是 Acceptance**，不签发任何 Acceptance / Freeze / Release Readiness。
+
+### 72.1 授权
+
+业务所有者 2026-11-17「推进修复 D4 和 D5 也做 D5 按照你的推荐做」。D5 的推荐做法：
+**根因修复（产品创建与追踪策略变更同步估值方法）+ 共享单一事实来源 + 幂等存量对齐迁移**，
+不改 `changeValuationMethod` 的冻结语义。
+
+### 72.2 已实施并验证（目标环境实测）
+
+| 缺陷 | 修法 | 实测 |
+|---|---|---|
+| **D1** 运行时自建表用 SQLite 专有 DDL（`TEXT` 参与键 / `TEXT` 带默认值 / `CREATE INDEX IF NOT EXISTS`） | 新增 `server/database/mysql-ddl.js` 翻译层（列类型 + 默认值表达式）与 `server/lib/schema-ensure.js` 的方言感知 `ensureIndex()`；3 个模块改用 `ensureIndex()` | `/api/inventory/barcode/rules`、`/api/inventory/abc`、`/api/inventory/abc/analysis`、`/api/inventory/assembly-orders` **全部 200**（原 500） |
+| **D2** `rowid` 是 SQLite 伪列 | `lifecycle-engine.js` 改用 `(created_at, id)` 复合排序与行值比较；另补空图守卫（原空图会 TypeError 500） | `/api/lifecycle/analyze` 真实 id 与不存在 id **均 200** |
+| **D3** `GROUP BY` 撞 `ONLY_FULL_GROUP_BY` | `o.order_id` → `MAX(o.order_id)` | `/api/procurement/outsourcing/processing-fee-bills` **200**（原 500） |
+| **D5** 追踪策略与估值方法错配 | 共享单一事实来源 `server/lib/tracking-valuation.js`；产品创建与追踪策略变更同步写入；新增幂等对齐迁移 `server/migrations/v14-tracked-valuation-alignment.js`（只动 `valuation_activated_at IS NULL` 的行），SQLite 与 MySQL 两条路径都调用 | 实测 `UAT-RM02` 由 `LOT / MOVING_AVERAGE` 修正为 `LOT / LOT_SPECIFIC_POOL` |
+
+### 72.3 未实施
+
+**D4：批次 / 序列号 / 批号调整 / 容器 四个列表端点仍为 404。**
+根因是后端只注册了 POST 与 `/:id`，没有列表读取端点。需要补：
+`GET /api/inventory-lots`、`GET /api/inventory-serials`、`GET /api/inventory-lot-adjustments`、
+`GET /api/inventory-containers`，并在 `src/lib/inventoryWorkTabs.js` 登记读取端点、
+在 `src/pages/inventory-work.jsx` 让「批号调整」页签加载列表
+（该组件**已有列表 UI**，只是从未加载数据 —— 草稿单刷新后即不可寻回）。
+
+### 72.4 门禁证据
+
+| 门禁 | 结果 |
+|---|---|
+| `pnpm test:fast` | **PASS 775 / 775** |
+| focused suites（lifecycle / outsourcing-finance / abc-assembly-barcode / 产品一致性 / 发票生命周期） | **PASS 114 / 114** |
+| 目标环境端点复验 | §72.2 表中 7 个端点全部 200（修复前 5 个 500 / 2 个 500） |
+| 变更面 | 10 个既有文件 + 4 个新增文件；未改任何业务规则、状态机、权限码、金额语义 |
+
+### 72.5 未解决矛盾
+
+1. **D4 未实施**（见 §72.3）—— 批次 / 序列号 / 批号调整 / 容器 四个界面仍无数据源。
+2. **部署实例与仓库代码已一致**（本轮修复已随 git bundle 之外的 scp 同步到
+   `/opt/modern-erp`，但**仓库尚未提交**该修复 —— 提交与推送需业务所有者批准）。
+3. **变更未经用户仓库的 canonical 浏览器发布门禁**（本轮只跑了 focused + FAST）。
+4. §71.7 登记的其余观察（`purchase-receipt-engine` 的 legacy `adjustInventory`、
+   库存原生单据不写 `inventory_lot_balances`、`runAllocateSequence` 非原子）**未处置**。
+
+### 72.6 Owner
+
+| 角色 | 承担者 | 说明 |
+|---|---|---|
+| D1 / D2 / D3 / D5 修复 | Platform（翻译层）+ Inventory & Warehouse（估值语义） | 已实施并实测 |
+| D4 列表端点 | Inventory & Warehouse | **未实施** |
+| Acceptance / Freeze / Release Readiness | 业务所有者 | 本轮**未**签发 |

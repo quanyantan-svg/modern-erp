@@ -1,9 +1,11 @@
 import { id } from '../db.js';
 import { HttpError, allowAny, send } from '../lib/http.js';
 import { guardPeriodAction, guardVoucherAction, runGuardedMutation } from './period-control.js';
+import { VALUATION_BY_TRACKING } from '../lib/tracking-valuation.js';
 
 const EPS = 1e-9;
-const VALUATION_BY_TRACKING = Object.freeze({ NONE: 'MOVING_AVERAGE', LOT: 'LOT_SPECIFIC_POOL', SERIAL: 'SPECIFIC_SERIAL' });
+// 映射来自共享单一事实来源（server/lib/tracking-valuation.js）。
+export { VALUATION_BY_TRACKING };
 
 export function valuationMethod(db, productId) {
   const product = db.prepare('SELECT tracking_policy,valuation_method FROM products WHERE id=?').get(productId);

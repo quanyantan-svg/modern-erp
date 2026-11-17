@@ -141,11 +141,11 @@ function sourceRows(db, table, entityType, entityId) {
 
 function inventoryEffects(db, entityType, entityId) {
   return db.prepare(`
-    SELECT rowid lifecycle_rowid,* FROM inventory_transactions
-    WHERE source_type=? AND source_id=? ORDER BY created_at,rowid
+    SELECT * FROM inventory_transactions
+    WHERE source_type=? AND source_id=? ORDER BY created_at,id
   `).all(entityType, entityId).map((row) => ({
     id: row.id,
-    ledgerSequence: Number(row.lifecycle_rowid),
+    ledgerKey: { createdAt: row.created_at, id: row.id },
     warehouseId: row.warehouse_id,
     productId: row.product_id,
     quantity: Number(row.quantity_change),
@@ -463,9 +463,10 @@ function graphBuilder(db, rootType, rootId, includeExternal) {
       const consumers = db.prepare(`
         SELECT source_type,source_id,source_no,created_at
         FROM inventory_transactions
-        WHERE warehouse_id=? AND product_id=? AND direction='OUT' AND rowid>?
-        ORDER BY rowid
-      `).all(effect.warehouseId, effect.productId, effect.ledgerSequence);
+        WHERE warehouse_id=? AND product_id=? AND direction='OUT'
+          AND (created_at, id) > (?, ?)
+        ORDER BY created_at, id
+      `).all(effect.warehouseId, effect.productId, effect.ledgerKey.createdAt, effect.ledgerKey.id);
       for (const consumer of consumers) {
         const type = SOURCE_ENTITY_TYPES[consumer.source_type];
         if (type) add(type, consumer.source_id, includeExternal, 'INVENTORY_CONSUMPTION', node.key, true);
@@ -500,6 +501,8 @@ function classifyGraph(graph) {
     nodes: unsupported.map((node) => node.key),
   });
   if (blockers.length) return { classification: 'BLOCKED', blockers };
+  // 空图（业务记录不存在或已无关联事实）不是崩溃理由：给出明确结论即可。
+  if (!root) return { classification: 'SAFE_DELETE', blockers: [] };
   if (ARCHIVE_ONLY_TYPES.has(root.entityType) || (selected.length === 1 && ARCHIVE_STATUSES.has(root.status))) {
     return { classification: 'ARCHIVE_ONLY', blockers: [] };
   }
@@ -842,7 +845,7 @@ function applyInventoryCleanup(db, groups, actorId) {
 
     const remaining = db.prepare(`
       SELECT id,quantity_change,direction FROM inventory_transactions
-      WHERE warehouse_id=? AND product_id=? ORDER BY rowid
+      WHERE warehouse_id=? AND product_id=? ORDER BY created_at, id
     `).all(group.warehouseId, group.productId);
     const signedChange = (row) => row.direction === 'OUT' ? -Number(row.quantity_change) : Number(row.quantity_change);
     const remainingChange = remaining.reduce((sum, row) => sum + signedChange(row), 0);

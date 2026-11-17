@@ -1238,7 +1238,7 @@ export function listProcessingFeeBills(db, res, actor, url) {
   const params = [];
   if (outsourcingOrderId) { where.push('o.order_id=?'); params.push(outsourcingOrderId); }
   if (supplierId) { where.push('b.supplier_id=?'); params.push(supplierId); }
-  const rows = db.prepare(`SELECT b.*, o.order_id outsourcing_order_id
+  const rows = db.prepare(`SELECT b.*, MAX(o.order_id) outsourcing_order_id
     FROM supplier_bills b
     JOIN supplier_bill_items bi ON bi.bill_id=b.id
     LEFT JOIN outsourcing_receipt_items rbi ON rbi.id=bi.commercial_source_item_id

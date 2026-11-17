@@ -4,6 +4,7 @@ import {
   assertM15ReadyForOutsourcingTracking, hasM15IdentityColumn, OUTSOURCING_SOURCE_TYPES,
 } from '../migrations/m15-tracked-identity-key.js';
 import { HttpError, allow, allowAny, readJson, send } from '../lib/http.js';
+import { canonicalValuationMethod } from '../lib/tracking-valuation.js';
 
 const EPS = 1e-9;
 const POLICIES = ['NONE', 'LOT', 'SERIAL'];
@@ -64,7 +65,10 @@ export function changeTrackingPolicy(db, actor, productId, { policy, shelfLifeDa
   }
   const at = nowIso();
   transaction(db, () => {
-    db.prepare('UPDATE products SET tracking_policy=?,shelf_life_days=?,tracking_effective_at=?,updated_at=? WHERE id=?').run(next, shelf, at, at, productId);
+    // 追踪策略与财务估值方法必须同步（Requirement §36.20 PL-VALUATION-01）；
+    // 否则该货品的库存估值动作会被 valuationMethod() 的 fail closed 永久拒绝。
+    db.prepare('UPDATE products SET tracking_policy=?,valuation_method=?,shelf_life_days=?,tracking_effective_at=?,updated_at=? WHERE id=?')
+      .run(next, canonicalValuationMethod(next), shelf, at, at, productId);
     db.prepare('INSERT INTO product_tracking_policy_history(id,product_id,old_policy,new_policy,shelf_life_days,reason,changed_by,changed_at) VALUES(?,?,?,?,?,?,?,?)')
       .run(id(), productId, product.tracking_policy, next, shelf, why, actor.id, at);
     audit(db, actor.id, 'TRACKING_POLICY_CHANGE', 'PRODUCT', productId, `${product.tracking_policy} -> ${next}; ${why}`);

@@ -50,6 +50,7 @@ import {
   send,
 } from '../lib/http.js';
 import { TRACKING_POLICIES } from './traceability-quality.js';
+import { canonicalValuationMethod } from '../lib/tracking-valuation.js';
 import { deleteMasterRecord } from './data-lifecycle.js';
 
 export function listProducts(db, res, actor, url) {
@@ -72,8 +73,8 @@ export async function createProduct(db, req, res, actor) {
   const shelfLifeDays = body.shelfLifeDays === '' || body.shelfLifeDays == null ? null : Number(body.shelfLifeDays);
   if (shelfLifeDays !== null && (!Number.isSafeInteger(shelfLifeDays) || shelfLifeDays <= 0)) throw new HttpError(400, '保质期必须为正整数天');
   const baseUom=String(body.baseUomCode||product.unit).trim().toUpperCase(); db.prepare('INSERT OR IGNORE INTO uoms(code,name,created_at,updated_at) VALUES(?,?,?,?)').run(baseUom,baseUom,now,now);
-  db.prepare(`INSERT INTO products(id,code,name,unit,base_uom_code,purchase_uom_code,sales_uom_code,price_cents,standard_manufacturing_cost_cents,stock_quantity,inventory_classification,tracking_policy,shelf_life_days,tracking_effective_at,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,0,?,?,?,?,1,?,?)`)
-    .run(productId, product.code, product.name, baseUom, baseUom, body.purchaseUomCode||null, body.salesUomCode||null, product.priceCents, standardCost, classification, trackingPolicy, shelfLifeDays, now, now, now);
+  db.prepare(`INSERT INTO products(id,code,name,unit,base_uom_code,purchase_uom_code,sales_uom_code,price_cents,standard_manufacturing_cost_cents,stock_quantity,inventory_classification,tracking_policy,valuation_method,shelf_life_days,tracking_effective_at,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,1,?,?)`)
+    .run(productId, product.code, product.name, baseUom, baseUom, body.purchaseUomCode||null, body.salesUomCode||null, product.priceCents, standardCost, classification, trackingPolicy, canonicalValuationMethod(trackingPolicy), shelfLifeDays, now, now, now);
   audit(db, actor.id, 'CREATE', 'PRODUCT', productId, `${product.code}; tracking=${trackingPolicy}`);
   return send(res, 201, { id: productId });
 }

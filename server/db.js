@@ -19,6 +19,7 @@ import { migrateV13Phase6AFinancialControls } from './migrations/v13-phase6a-fin
 import { migrateV13Phase6BTraceabilityQuality } from './migrations/v13-phase6b-traceability-quality.js';
 import { migrateV13Phase6CManufacturingExecution } from './migrations/v13-phase6c-manufacturing-execution.js';
 import { migrateV13Phase6DFinancialInventory } from './migrations/v13-phase6d-financial-inventory.js';
+import { alignTrackedValuationMethods } from './migrations/v14-tracked-valuation-alignment.js';
 import { migrateV13Phase6ECommercialGoLive } from './migrations/v13-phase6e-commercial-golive.js';
 import { migrateV13Phase7cPerformance } from './migrations/v13-phase7c-performance.js';
 import { migrateR4PurchaseSourceCardinality } from './migrations/r4-purchase-source-cardinality.js';
@@ -676,6 +677,8 @@ function initializeSqliteDatabase(db, filename) {
   migrateV13Phase6BTraceabilityQuality(db);
   migrateV13Phase6CManufacturingExecution(db);
   migrateV13Phase6DFinancialInventory(db);
+  // 追踪策略与财务估值方法对齐（幂等；Requirement §36.20 PL-VALUATION-02）。
+  alignTrackedValuationMethods(db);
   migrateV13Phase6ECommercialGoLive(db);
   migrateProcurementOutsourcingFinanceSchema(db);
   migrateProcurementOutsourcingOpeningSchema(db);

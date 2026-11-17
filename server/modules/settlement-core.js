@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { ensureIndex } from '../lib/schema-ensure.js';
 
 import { applyDueScheduleForOpenItem } from './finance-due-plan.js';
 
@@ -34,10 +35,6 @@ export function migrateSettlementSchema(db) {
   if (duplicateAr || duplicateAp) throw new Error(`M8 migration blocked: duplicate legacy source ${JSON.stringify(duplicateAr || duplicateAp)}`);
 
   db.exec(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_ar_source_unique ON account_receivables(source_type,source_id);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_ap_source_unique ON account_payables(source_type,source_id);
-    CREATE INDEX IF NOT EXISTS idx_ar_business_date ON account_receivables(business_date);
-    CREATE INDEX IF NOT EXISTS idx_ap_business_date ON account_payables(business_date);
 
     CREATE TABLE IF NOT EXISTS payment_collection_items (
       id TEXT PRIMARY KEY,
@@ -57,9 +54,13 @@ export function migrateSettlementSchema(db) {
       FOREIGN KEY (disbursement_id) REFERENCES payment_disbursements(id) ON DELETE CASCADE,
       FOREIGN KEY (payable_id) REFERENCES account_payables(id)
     );
-    CREATE INDEX IF NOT EXISTS idx_collection_items_receivable ON payment_collection_items(receivable_id);
-    CREATE INDEX IF NOT EXISTS idx_disbursement_items_payable ON payment_disbursement_items(payable_id);
   `);
+  ensureIndex(db, 'idx_ar_source_unique', 'account_receivables', 'source_type,source_id', { unique: true });
+  ensureIndex(db, 'idx_ap_source_unique', 'account_payables', 'source_type,source_id', { unique: true });
+  ensureIndex(db, 'idx_ar_business_date', 'account_receivables', 'business_date');
+  ensureIndex(db, 'idx_ap_business_date', 'account_payables', 'business_date');
+  ensureIndex(db, 'idx_collection_items_receivable', 'payment_collection_items', 'receivable_id');
+  ensureIndex(db, 'idx_disbursement_items_payable', 'payment_disbursement_items', 'payable_id');
 
   const stamp = now();
   db.prepare("UPDATE account_receivables SET source_no=COALESCE(NULLIF(source_no,''),source_id), business_date=COALESCE(NULLIF(business_date,''),substr(created_at,1,10)), updated_at=COALESCE(NULLIF(updated_at,''),created_at)").run();

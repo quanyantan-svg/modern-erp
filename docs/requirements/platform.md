@@ -940,3 +940,50 @@ commit `c77616b`（2026-10-06，「refactor: 收敛ERP八域与平台架构」�
 Implementation：已授权（2026-11-17），范围仅限本节验收门禁所列的仓库内代码、测试与脚本；
 腾讯云部署、数据库操作、Acceptance / Freeze / Release Readiness 签发、push / tag / merge / release
 **均未授权**。**
+
+
+### 36.20 MySQL 8 方言兼容与追踪估值一致性修复（`APPROVED`，2026-11-17）
+
+> **授权来源**：业务所有者 2026-11-17「推进修复 D4 和 D5 也做 D5 按照你的推荐做」。
+> 该指令授权对 §71 检出的缺陷做修复；腾讯云部署仍为**单独授权**事项。
+
+#### 36.20.1 身份与边界
+
+| 项 | 内容 |
+|---|---|
+| 用途 | 闭合 §71.5 检出的 MySQL 8 方言不兼容缺陷与追踪估值错配 |
+| Owner | Platform（MySQL 适配器与翻译层）；Inventory & Warehouse（估值语义）；各受影响模块 Owner |
+| 状态 | `APPROVED`（2026-11-17）；Design §32.20 同日 `APPROVED`；Implementation 已实施 |
+| Supersession | 不改写 §71 的验收结论；不改写任何域级 Acceptance / Freeze |
+
+#### 36.20.2 合同项
+
+- **`PL-DDL-01`（运行时 DDL 形状翻译）**：运行自建表的 DDL 必须物化出与快照 bootstrap
+  **同一份物理 schema**。MySQL 8 不接受 `TEXT` 参与键、不接受 `TEXT` 带默认值、
+  不支持 `CREATE INDEX IF NOT EXISTS`。因此：
+  ① 翻译层必须把参与键的 `TEXT` 译为 `VARCHAR(128)`、其余译为 `LONGTEXT`，
+  并把 `LONGTEXT` 的字符串默认值写成表达式形式 `DEFAULT ('…')`；
+  ② 索引的幂等创建必须显式做存在性检查（`information_schema`）后再建，
+  不得依赖 `IF NOT EXISTS`。
+- **`PL-DDL-02`（不得依赖 SQLite 伪列）**：`rowid` 是 SQLite 伪列，MySQL 无此列。
+  需要稳定全序的表必须使用**两种方言都支持的**排序键（`created_at, id`），
+  行值比较必须写成 `(a, b) > (?, ?)`。
+- **`PL-GROUP-01`（聚合必须兼容 `ONLY_FULL_GROUP_BY`）**：带 `GROUP BY` 的查询，
+  被选出的非分组列必须用聚合函数包裹，或来自函数依赖的主键。
+- **`PL-VALUATION-01`（追踪策略与估值方法同源）**：财务估值方法由追踪策略唯一决定
+  （`NONE→MOVING_AVERAGE`、`LOT→LOT_SPECIFIC_POOL`、`SERIAL→SPECIFIC_SERIAL`）。
+  映射必须是**单一事实来源**；产品创建、追踪策略变更都必须按它写入 `valuation_method`，
+  不得依赖列默认值。
+- **`PL-VALUATION-02`（存量对齐必须幂等）**：已存在的错配行必须由一条幂等迁移按
+  canonical 映射对齐，且**只动估值尚未激活**的行（估值已激活的货品其方法已冻结）。
+- **`PL-EMPTY-01`（空结果不是崩溃理由）**：查询返回空集合时必须给出明确结论，
+  不得因解引用空元素而抛出 500。
+
+#### 36.20.3 验收门禁
+
+1. 目标环境上 §71.5 列出的全部 500 端点返回 2xx（真实业务 id 与不存在 id 两种输入都要覆盖）。
+2. `pnpm test:fast` 与受影响的 focused suite 全部通过。
+3. 变异实验：把翻译层的 DDL 翻译关掉 → 500 复现；把 `PL-VALUATION-01` 的写入去掉 →
+   新建 LOT 货品的估值方法再次错配。
+
+**Requirement 状态：`APPROVED`（2026-11-17）。Implementation 已实施（部分）。**

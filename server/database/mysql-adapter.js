@@ -1,6 +1,7 @@
 import { Worker } from 'node:worker_threads';
 import { createHash } from 'node:crypto';
 import { captureSqliteSnapshot, bootstrapMySql } from './mysql-schema.js';
+import { translateSqliteDdl } from './mysql-ddl.js';
 import { migrateManagementAccountingSodSchema } from '../migrations/management-accounting-sod-schema.js';
 import { createStructuredLogger, safeSqlLabel } from '../lib/logger.js';
 import {
@@ -9,6 +10,7 @@ import {
   migrateV14E2BusinessDate,
 } from '../migrations/v14-e2-business-date.js';
 import { migrateW11ASelectorSearchKey } from '../migrations/sales-customer-wave11-a-selector-search-key.js';
+import { alignTrackedValuationMethods } from '../migrations/v14-tracked-valuation-alignment.js';
 import {
   MYSQL_RESPONSE_HEADER_BYTES,
   abandonWorkerRequest,
@@ -20,6 +22,10 @@ const RESPONSE_BYTES = 16 * 1024 * 1024;
 
 export function translateSqliteSql(sql) {
   let translated = String(sql).trim();
+  // 运行时自建表的 DDL 形状翻译（Requirement §36.20 PL-DDL-01）。
+  // 快照 bootstrap 路径早已有 canonical 的列类型 / 默认值解析器；运行时 DDL 走的是
+  // 另一条路，不翻译就会让同一份 schema 在两条路径上物化出不同的物理结构。
+  translated = translateSqliteDdl(translated);
   const needsSyntheticId = /\b(?:INSERT(?:\s+OR\s+(?:IGNORE|REPLACE))?|REPLACE)\s+INTO\s+(?:inventory|inventory_period_closures|period_closures)\s*\((?!\s*id\s*,)/i.test(translated);
   translated = translated.replace(
     /SELECT\s+1\s+FROM\s+pragma_table_info\s*\(\s*\?\s*\)\s+WHERE\s+name\s*=\s*('(?:''|[^'])*')/gi,
@@ -302,6 +308,8 @@ export function createMySqlDatabase(config, { createSqliteSnapshot, seedDemo = f
     // existing deployment gains the columns and the same fail-closed
     // reconciliation before the adapter can be returned to the application.
     migrateW11ASelectorSearchKey(adapter);
+    // 追踪策略与财务估值方法对齐（幂等；与 SQLite 同一权威实现）。
+    alignTrackedValuationMethods(adapter);
     return adapter;
   } catch (error) {
     adapter.close();
