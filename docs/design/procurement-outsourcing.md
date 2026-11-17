@@ -313,7 +313,7 @@
   - 先 lock `po_changes` 与 `purchase_orders` 与 `po_delivery_schedule`（如有 schedule）；
   - `assertRemainingQuantity` 复用既有 helper，扩展支持 `schedule_id`；
   - `commercial_snapshot` 校验（discount / price / source 不变）；
-  - 既有 inventory / LOT-SERIAL / valuation / IQC 调用不变；不重写 inventory mutation；
+  - ~~既有 inventory / LOT-SERIAL / valuation / IQC 调用不变；不重写 inventory mutation~~（**2026-11-17 有界修订，见 §26.41**）：该句对 `tracking_policy = NONE` 的采购入库**继续有效**；对 LOT / SERIAL 跟踪货品，物理数量写入改为经唯一 canonical 写入器 `applyInventoryMutation`（Design §27.6 / §27.8 唯一入口），跟踪维度写入（`postTrackedMovement`）与估值口径（`receiveValue`，身份级估值池）**不变**；
   - 新业务 `default_receipt_billing_mode` 来自 `procurement_parameters`；LEGACY_DIRECT 数据保持兼容；
   - `po_line.gift = 1` 时 entry 仍按 `unit_price_cents=0` 写入 valuation（carry value = 0）；不影响 inventory qty+。
 
@@ -1327,7 +1327,7 @@ Repository 已经具备：
 - Purchase Receipt execution：`server/modules/procurement-receiving.js` EXTEND 既有 + 既有 `commercial-golive.js::autoBillReceipt`；
 - IQC：`server/modules/quality-gates.js` + `authoritative-quality.js` + `manufacturing-quality.js` source-type extension；**不**新建 Quality engine；
 - LOT / SERIAL：`server/lib/stock.js` + `traceability-quality.js`；**不**新建 tracking engine；
-- Inventory mutation：`server/lib/stock.js::adjustInventory` + `financial-inventory.js::receiveValue` / `issueValue`；
+- Inventory mutation：`server/lib/inventory-mutation.js::applyInventoryMutation`（唯一入口，Design §27.6 / §27.8；**2026-11-17 有界修订，见 §26.41**）+ `financial-inventory.js::receiveValue` / `issueValue`；
 - Inventory valuation：`server/modules/financial-inventory.js::allocateProportionalCents` + `createSystemVoucher`；
 - Supplier Bill / AP / GRNI：`server/modules/settlement-core.js::ensureSubledger` + `applyCreditAdjustment` + `commercial-golive.js::createSupplierBill`；
 - Tax codes / tax snapshot：`server/modules/commercial-golive.js::taxSnapshot`；
@@ -2536,3 +2536,191 @@ Design §26.15 的**扫码入仓闭环**（`lookup-document` / `draft-receipt` /
 
 - 全部为增量：新增只读/写端点与前端面板，既有路由与页面行为不变。
 - 前端面板可独立下线而不影响服务端合同；服务端合同不可在档案维护面缺失时降级为「无档案即放行」。
+
+### 26.41 采购入库确认的跟踪物料支持与物理写入器收敛（2026-11-17；`APPROVED`）
+
+> **用途 / Owner / 状态 / 权威关系**：本节落实 Requirement §31.21：把采购入库确认的物理数量写入收敛到
+> 唯一 canonical 写入器，使批次 / 序列号跟踪物料可以完成入库并拿到身份级采购价估值。
+> Owner 为 Procurement & Outsourcing Domain Owner（写入器语义与 Inventory & Warehouse 共治）。
+> 状态 `APPROVED`（2026-11-17）。**Implementation 未授权** —— 按 AGENTS.md §4.3，Design 完成后 HARD STOP，
+> 须由业务所有者单独明确批准 Implementation。
+>
+> **本节是对 §26.12 与 §26.29 的有界修订**：见 §26.41.9。
+
+#### 26.41.1 canonical owner 与职责边界
+
+| 职责 | 唯一 owner | 本节是否改动 |
+|---|---|---|
+| 采购入库单据生命周期、容量 / 交期校验、IQC、期间守卫、AP 确认、凭证组装、审计 | `server/modules/purchase-receipt-engine.js::confirmPurchaseReceiptCore` | **不改**（只替换其中两行职责） |
+| 物理数量写入（`inventory` 表与 `inventory_transactions`） | `server/lib/inventory-mutation.js::applyInventoryMutation` | **改**：由 legacy 写入器切换到 canonical 写入器 |
+| 跟踪身份主档（批次 / 序列号）、批次余额、跟踪移动 | `server/modules/traceability-quality.js::postTrackedMovement` | **不改**（该调用已在 `:278`，且是身份可解析的前提） |
+| 估值（身份级估值池、估值流水、估值余额） | `server/modules/financial-inventory.js::receiveValue` / `receiveSourceValue` | **改**：由单笔来源估值改为**逐腿**估值，并引用各自的物理流水 |
+| 库存腿的解析与逐腿写入编排 | `server/lib/operational-inventory-legs.js::resolveOperationalLegs` / `applyOperationalInventoryLegs` | **改**：编排函数增补 IN 形态 |
+
+**禁止**：在采购入库引擎内自建第二套腿解析或第二套比例拆分算法；**禁止**在确认路径上手写
+`inventory_transactions` INSERT；**禁止**绕过 `applyInventoryMutation` 直接写 `inventory`。
+
+#### 26.41.2 调用与数据流
+
+确认环节（`confirmPurchaseReceiptCore`，运行在既有 `transaction(db, …)` 内）对每条入库明细按下列顺序执行：
+
+1. **既有校验**（不变）：锁定单据 → 校验 PO 一致 / `STANDARD_PURCHASE` / 供应商一致 → `assertQualityGate(IQC)` →
+   `guardPeriodAction(INVENTORY_MUTATION)` → 交期与容量上界。
+2. **跟踪身份写入**（既有，`:278`）：`postTrackedMovement` 建批次 / 序列号主档、改批次余额、写
+   `tracked_inventory_movements`，并把该行的 `tracked_source_allocations` 置为 `posted=1` 且回填
+   `lot_id` / `serial_id`。
+3. **腿解析**（新）：`resolveOperationalLegs(db, { warehouseId, productId, quantity: baseQuantity, allocationRows })`，
+   `allocationRows` 取该行的 `tracked_source_allocations` 行。
+   - **硬约束：腿必须在 `postTrackedMovement` 之后解析** —— 只有那时身份才已确定（与销售退货面的既有注释一致）。
+   - NONE 产品 → 一条默认位置腿（`ENTERPRISE / AVAILABLE / bin=null / lot=null / serial=null`）。
+   - LOT / SERIAL 产品 → 按分配证据解析出的精确多条腿；身份不可确定 → 409 fail closed。
+   - 腿数量之和**必须**等于 `baseQuantity`；不等 → 409（既有语义「身份分配数量 … 与业务数量 … 不一致」）。
+4. **物理写入**（新，替换 `:279` 的 `adjustInventory` 与 `:281` 的手写 `inventory_transactions` INSERT）：
+   `applyOperationalInventoryLegs(db, { sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId, sourceItemId: item.id,
+   businessDate: receipt_date, legs, actor, idempotencyKeyPrefix: `PURCHASE_RECEIPT:${receiptId}:${item.id}`,
+   sourceNo: receipt_no, remark: '采购入库', direction: 'IN' })`。
+   - 每条腿一次 `applyInventoryMutation`，`toPosition` 取该腿的 canonical 维度（含 `lotId` / `serialId`），
+     `trackingMode: 'EXTERNAL'`、`valuationMode: 'EXTERNAL'`（跟踪维度与估值仍由各自的 owner 拥有，避免重复写入）。
+   - 腿按 `position_key` 升序写入，顺序确定。
+5. **估值**（改，替换 `:282` 的单笔 `receiveSourceValue`）：逐腿 `receiveValue`，每腿携带该腿自己的
+   `lotId` / `serialId` / 数量 / **物理流水 id**，金额按腿数量比例拆分、末腿吸收尾差（尾差 ≤ 1 分）。
+   - 估值方法由 `valuationMethod()` 从 `tracking_policy` 推导：LOT → `LOT_SPECIFIC_POOL`（余额键
+     `LOT:{warehouse}:{product}:{lot}`），SERIAL → `SPECIFIC_SERIAL`（余额键 `SERIAL:{serial}`），
+     NONE → `MOVING_AVERAGE`（余额键 `NONE:{warehouse}:{product}`）。
+6. **既有后续动作**（不变）：单据置 `CONFIRMED` → `recognizeFinanceExposure`（AP）→ 凭证 → 关单触发 → 审计。
+
+**单位口径**：腿数量、估值数量、物理数量**同一口径**，均为该入库行的**基本单位数量** `baseQuantity`。
+分配原数量之和必须等于 `baseQuantity` —— 该守恒由第 2 步（`normalizedAllocations`）与第 3 步
+（`resolveAllocatedLegs`）**两处独立** fail closed 校验。其必然后果是：跟踪物料的入库要求单据单位与
+基本单位的换算系数为 1；换算系数 ≠ 1 时以既有 409 fail closed（见 §26.41.9 已知边界）。
+
+#### 26.41.3 模块改动清单
+
+| 文件 | 改动 | 性质 |
+|---|---|---|
+| `server/modules/purchase-receipt-engine.js` | `:279` 的 `adjustInventory` 与 `:281` 的手写 `inventory_transactions` INSERT **删除**；改为「腿解析 → 逐腿物理写入 → 逐腿估值」三步；`:278` 的 `postTrackedMovement` 保持不动并移到腿解析之前 | 业务引擎收敛 |
+| `server/lib/operational-inventory-legs.js` | `applyOperationalInventoryLegs` 增补 IN 形态（`toPosition` 取代 `fromPosition`），OUT 路径行为**逐字节不变**；返回值增补**每条腿附带自身 transactionId** 的腿列表，调用方**不得**按平行数组下标自行对齐 | 共享编排增补 |
+| `server/modules/financial-inventory.js` | `receiveSourceValue` 增补可选输入 `legs`（每项 `{lotId, serialId, quantity, transactionId}`）：提供 `legs` 时按腿比例拆分金额并逐腿 `receiveValue`；未提供时**既有行为完全不变**（`server/modules/production-workflow.js:194` 的既有调用不受影响） | 估值原语增补 |
+| 新增 `server/procurement-tracked-receipt.test.js` | §26.41.8 的合同测试 | 测试 |
+| `scripts/testing/test-suites.js` | 新测试文件登记进 `FULL` 集合 | 测试登记 |
+
+**不改动**：`server/lib/stock.js`（legacy 适配器保留给其余 8 个调用点）、`server/lib/inventory-mutation.js`
+（canonical 写入器本身）、`server/modules/traceability-quality.js`、`server/modules/outsourcing*.js`、
+前端任何文件（界面已提供批次 / 序列号分配输入，口径本就对齐，Requirement `PRC-TRK-10`）。
+
+#### 26.41.4 事务、幂等、并发与错误行为
+
+- **事务**：确认全程运行在 `server/app.js:7023` 的既有 `transaction(db, …)` 内；
+  `applyInventoryMutation` 检测到外层事务后**不再自行开事务**（Design §27.43.2）。身份写入、物理写入、
+  估值、凭证、AP、审计处于**同一事务**，任一失败整体回滚（Requirement `PRC-TRK-07`）。
+- **幂等**：
+  - 单据级（既有，不改）：`idempotencyReplay(db, 'PURCHASE_RECEIPT_CONFIRM', …)` + 单据状态守卫
+    （`PURCHASE_RECEIPT_ALREADY_CONFIRMED`）。
+  - 腿级（新）：幂等键沿用既有编排格式 `${prefix}:${positionKey}:${movementKind}:v1`，即
+    `PURCHASE_RECEIPT:${receiptId}:${item.id}:{positionKey}:IN:v1` —— 由入库单、明细行与位置确定，
+    **不含随机或时间成分**（Requirement `PRC-TRK-06`）。
+  - 重放不一致（canonical 写入器返回 `replayed` 而无 movement）：**不得**重复写估值，按既有面同款语义
+    fail closed（409「采购入库库存事务缺失」）。
+- **并发**：腿写入前由 canonical 写入器按 `position_key` 升序 `FOR UPDATE` 锁定目标仓位；同一入库单的
+  并发确认由单据状态守卫与既有幂等键挡回既有拒绝路径。
+- **错误行为**（**不新增**错误码，沿用既有语义与既有面口径）：
+
+| 情形 | 拒绝 | 来源 |
+|---|---|---|
+| 跟踪物料缺少可确定的身份分配证据 | 409「产品 … 启用了 LOT 跟踪，但缺少可确定的身份分配证据」 | `resolveOperationalLegs`（既有） |
+| 分配数量之和不等于行数量 | 409「身份分配数量 … 与业务数量 … 不一致」 | `resolveAllocatedLegs`（既有） |
+| 分配缺失 / 序列号重复 / 分配不平 | 409 `LOT_REQUIRED` / `SERIAL_REQUIRED` / `TRACKING_QUANTITY_MISMATCH` / `SERIAL_DUPLICATE` | `postTrackedMovement`（既有） |
+| 仓位管理仓库 | 409「仓库 … 启用仓位管理，无法确定唯一的库存位置」 | `resolveOperationalLegs`（既有，与另外三个作业面统一） |
+| 估值腿与物理腿数量不一致 | 409「身份分配数量与估值数量不一致」 | `receiveSourceValue`（既有） |
+| 腿级重放不一致 | 409「采购入库库存事务缺失」 | 本节（与既有面同款） |
+
+  拒绝**全部**发生在任何库存、批次、序列号、估值、凭证与 AP 写入之前，或与写入同事务回滚。
+
+#### 26.41.5 状态转换、RBAC、审计与会计口径
+
+- **状态转换**：不变 —— `purchase_receipts.status` 仅 `DRAFT → CONFIRMED`（`CANCELLED` 仅对 `DRAFT`）。
+  本节**不**新增状态、不新增状态机、不新增转换守卫。
+- **RBAC / SOD**：不变 —— 确认仍只认 `PURCHASE_RECEIPTS_MANAGE`（`server/app.js:7014`）；**不新增权限码**、
+  **不修改** `role_permissions`、**不修改**任何角色的权限集合。
+- **审计**：不变 —— 仍只写既有那一条 `CONFIRM / PURCHASE_RECEIPT` 审计（`:307`）；批次 / 序列号主档由
+  traceability 自身记录。本节**不新增**审计行，避免同一动作双审计。
+- **会计口径**：不变 —— 库存科目借记与 GRNI / AP 贷记的科目、金额、凭证组装逻辑全部不动
+  （`:283` 的 `inventoryEntries` 与 `:292-298` 的凭证分支）；跟踪身份只改变**物理腿与估值归属**，
+  不改变**金额口径**（Requirement `PRC-TRK-08`）。
+
+#### 26.41.6 Schema / Migration 与 SQLite / MySQL 双路径
+
+- **无 schema 变更**：不新增表、列、索引、约束、CHECK 或默认值；**不新增 migration**。
+  涉及的全部表均已存在：`inventory`（`position_key` 唯一）、`inventory_transactions`、
+  `tracked_inventory_movements`、`tracked_source_allocations`、`inventory_lot_balances`、
+  `inventory_valuation_movements`、`inventory_valuation_balances`、`inventory_lots`、`inventory_serials`。
+- **SQLite / MySQL 双路径**：不新增任何方言分支。canonical 写入器与腿编排均已通过 MySQL 8 方言修复
+  （`ON CONFLICT(position_key)`、`FOR UPDATE` 的 `db.dialect === 'mysql'` 判定），本节复用既有实现。
+
+#### 26.41.7 兼容与回滚
+
+- **成功路径兼容**：`tracking_policy = NONE` 的采购入库，数量、估值、库存流水、单据状态机、幂等与总账结果
+  与实施前**一致**；唯一差异是仓位管理仓库的拒绝由 400 改为 409（Requirement `PRC-TRK-09` 的唯一例外，
+  与另外三个作业面统一）。库存流水字段逐项等价：行数、方向、`quantity_change`、`balance_after`、
+  `source_type='PURCHASE_RECEIPT'`、`source_id`、`source_no`、`remark='采购入库'`、`creator_id`、
+  `business_date = receipt_date`、`valuation_status` 初值与 `VALUED` 回写。
+- **API 兼容**：不改路由、不改请求体、不改响应体、不改状态码（除上条例外）；前端**不需要**任何改动。
+- **回滚**：代码回滚即可（无 schema 变更、无数据迁移、无历史数据改写）。回滚窗口内跟踪物料入库将重新
+  被拒（回到实施前行为），属已知且可接受的降级；**不追认**回滚前按新写入器写入的跟踪物料数据，
+  也**不删除**它们（同一 `position_key` 语义，回滚不会造成数据不一致）。
+- **未授权**：真实 MySQL 连接、数据库写操作、Acceptance / Freeze 签发、发布与部署**均未授权**。
+
+#### 26.41.8 测试、变异实验与验收证据
+
+- **新增 focused 套件** `server/procurement-tracked-receipt.test.js`（登记进 `FULL`），至少覆盖：
+  1. 批次货品入库确认成功：canonical position 数量、`inventory_lot_balances`、估值流水的 `lot_id` 与金额守恒；
+  2. 序列号货品入库确认成功：序列号主档与 `SPECIFIC_SERIAL` 估值；
+  3. 多批次分配 → 多条腿、多个 position、估值按比例拆分且合计守恒；
+  4. 分配缺失 / 数量不平 → 409 且**零副作用**（批次 / 序列号 / 库存 / 流水 / 估值均无新增行）；
+  5. 重复确认 → 数量、批次余额、估值余额**不**增加；
+  6. **静态断言**：采购入库确认路径对 `adjustInventory` / `setInventoryQuantity` 的调用数为 **0**
+     （Requirement `PRC-TRK-05` / `PRC-TRK-AC-04`）；
+  7. 幂等键**确定性**静态断言：键由 `receiptId` / `item.id` / `positionKey` 构成，不含随机或时间成分；
+  8. 不跟踪物料回归：既有采购入库行为等价；
+  9. 负控：跟踪物料的**采购退货 / 生产领料**仍被拒（残余能力明示，Requirement §31.21.4 第 1 项）。
+- **变异实验（非空洞证明）**：至少两条独立负控 —— 例如把腿的 `toPosition.lotId` 置空、把估值腿与物理腿
+  错位 —— 必须使对应断言**转红**，且生产文件按字节还原。断言「能通过」本身**不**作为证据。
+- **既有套件保持**：`server/v16-p4-purchase-receipts.test.js`、`server/procurement-receiving-returns.test.js`、
+  `server/uat-r4-purchase-source-chain.test.js`、`server/procurement-execution-suite.test.js`、
+  `server/business-integrity-stabilization.test.js`、`server/m14-discounts.test.js`、
+  `server/m1c-wp1-procurement-notice-conversion.test.js`、`server/m1c-wp1-r1-schedule-patch.test.js`。
+- **门禁**：`pnpm test:fast`、`pnpm test`、`pnpm build`、`git diff --check`、文档一致性 `--mode current`
+  与 `--mode migration` 双模式、5 个 QA 守卫。
+- **目标环境复跑**（部署需单独授权）：批次入库 → 委外发料 → 委外收货 → 加工费过账的端到端链路，
+  以及 `GET /api/system-health` 的前后对比。Requirement `PRC-TRK-11` 的级联解除**以该实测为准**。
+
+#### 26.41.9 已知边界与未解决矛盾
+
+**已知边界（既有，非本节引入）**：
+
+1. **换算系数边界**：跟踪物料入库要求单据单位与基本单位的换算系数为 1（分配守恒的必然后果）；
+   系数 ≠ 1 时以既有 409 fail closed，**不**产生口径不一致的数据。
+2. **其余 8 处 legacy 写入点**（Requirement §31.21.4 第 1 项）仍拒绝跟踪物料：库存调整单冲销、销售退货入库、
+   生产补料、生产领料（两处）、生产退料、生产完工入库、副产品入库。**委外 / 生产出库路径**对跟踪物料的
+   可用性因此仍受限。
+3. **历史无身份库存**不追认、不改写（Requirement §31.21.4 第 2 项）。
+
+**未解决矛盾**（与 Requirement §31.21.6 一一对应，本节不自行决定）：
+
+1. §27.6 声明的 `tracking` 输入对象（`{lotAllocations, serialAllocations}`）在实现中**未落地**；本节按已验收的
+   逐分配 position 元组形式承接。该字段的处置属 Inventory 域冻结正文，需业务所有者裁定。
+2. 其余 8 处 legacy 写入点的处置顺序（是否与本节同批收敛）。
+3. `PRC-TRK-11` 的委外级联解除属「同源消解」还是「独立缺陷」，须以实施后实测为准。
+4. 历史无批次身份库存是否需要单独的追认 / 修复决策。
+5. **新增（由本节 Design 发现）**：跟踪维度投影 `inventory_lot_balances` 的维护者存在两个 ——
+   `postTrackedMovement`（按**分配原数量**维护）与 canonical 写入器的 `maintainTrackedDimension`
+   （按**写入数量**维护）。当单据单位与基本单位换算系数 ≠ 1 时两者口径不同。本节**不改写**任一维护者，
+   登记为待裁定项；在本节的换算系数 = 1 边界内两者口径一致。
+
+**对既有正文的修订**：
+
+- §26.12 的「既有 inventory / LOT-SERIAL / valuation / IQC 调用不变；不重写 inventory mutation」一句
+  **在跟踪物料范围内被本节有界解冻并取代**；该句对 `tracking_policy = NONE` 的采购入库继续有效。
+- §26.29 的「Inventory mutation：`server/lib/stock.js::adjustInventory` + `financial-inventory.js::receiveValue` /
+  `issueValue`」**更正**为 `server/lib/inventory-mutation.js::applyInventoryMutation`（唯一入口，Design §27.6 /
+  §27.8）+ `financial-inventory.js::receiveValue` / `issueValue`；其余 canonical owner 表述不变。

@@ -1327,3 +1327,102 @@ M1-Core §7.5 对 `M1C-G03/G06` 的首期合同保留**数量归属守恒**、�
 | `PRC-DLV-32` | 第四轮新增子能力在产品内可达：采购订单详情、寻源与定价、委外加工三个工作面渲染对应面板，390 CSS px 下无整页横向滚动，金额与状态一律取自服务端。 |
 | `PRC-DLV-33` | 供应商品类单向门禁、M1-Core G06 被取代断言的重新确认与 G07 固定场景重新冻结三项裁定被登记。 |
 | `PRC-DLV-34` | OUT-22 成品退货的正式延期决策（`MC-REQ-16`）被登记，既有稳定拒绝边界不变。 |
+
+### 31.21 采购入库确认的跟踪物料合同与物理写入器收敛（2026-11-17；`APPROVED`）
+
+> **用途 / Owner / 状态 / 权威关系**：本节固化「批次 / 序列号跟踪物料无法通过采购入库收货」这一阻塞级
+> 缺陷的业务合同、范围边界与未解决矛盾。Owner 为 Procurement & Outsourcing Domain Owner；物理写入器语义与
+> Inventory & Warehouse 共治（裁定见 §31.21.3）。生命周期状态 `APPROVED`（2026-11-17）。
+> 对应 Design 见 `solution.md §26` → `docs/design/procurement-outsourcing.md` §26.41（2026-11-17 同日批准）。
+> 本节**不取代** §31.1～§31.20 的任何正文；既有域级 Acceptance / Freeze（2026-11-11，50 能力）继续作为
+> 历史时点记录保留。
+>
+> **授权来源**：业务所有者 2026-11-17 复测判定后裁定「补齐跟踪物料入库」并选定「修完再交付」，
+> 明确该处置须走 Requirement → Design → Implementation。本节据此**有界解冻** §31.13.2 `MC-REQ-01`
+> 与 §26.12 对采购入库确认写入路径的既有表述，**仅覆盖本节合同项列出的范围**。
+> Implementation 授权：待本节 Design 批准后由业务所有者单独明确（AGENTS.md §4.3 HARD STOP）。
+
+#### 31.21.1 事实基础（仓库代码取证 + 客户测试环境实测，2026-11-17）
+
+| # | 事实 | 证据 |
+|---|---|---|
+| F1 | 采购入库确认仍调用 legacy 物理写入器 | `server/modules/purchase-receipt-engine.js:279` → `adjustInventory(db, warehouse_id, product_id, baseQuantity, now)` |
+| F2 | 该适配器**按设计**拒绝跟踪物料与仓位仓 | `server/lib/stock.js:49` → 400「产品 … 启用了 LOT 跟踪，请改用 applyInventoryMutation()」；`server/lib/stock.js:38` 拒绝仓位仓 |
+| F3 | 同一路径**已先行**执行跟踪维度写入 | `server/modules/purchase-receipt-engine.js:278` `postTrackedMovement`：建批次 / 序列号主档、批次余额、`tracked_inventory_movements`、回填 `tracked_source_allocations.lot_id` |
+| F4 | 同一路径**已调用**身份级估值 | `server/modules/purchase-receipt-engine.js:282` `receiveSourceValue(... 'APPROVED_PO_PRICE')`；`server/modules/financial-inventory.js:135-145` 已按 allocation 比例拆分并写 LOT / SERIAL 估值池 |
+| F5 | canonical 写入器**已登记**采购入库来源类型，但此前无任何生产调用方 | `server/lib/inventory-mutation.js:49` `SOURCE_TYPES` 含 `'PURCHASE_RECEIPT'` |
+| F6 | 跟踪维度的物理写入合同**早已存在**，当前状态是违反而非缺失 | `docs/design/inventory-warehouse.md` §27.8「只有 applyInventoryMutation（唯一入口）允许写 inventory」、§27.43.1 §A / §C / §D；`docs/requirements/inventory-warehouse.md` §32.14 `IW-TRACE-04` |
+| F7 | 采购域 Design 与该合同**冲突** | `docs/design/procurement-outsourcing.md` §26.12「既有 inventory / LOT-SERIAL / valuation / IQC 调用不变；不重写 inventory mutation」、§26.29 把 `server/lib/stock.js::adjustInventory` 列为复用的 canonical owner |
+| F8 | 状态登记表给出的处置建议**与 §27.8 冲突** | `docs/status/PROJECT_STATUS.md` §71.7-1 建议「改用同文件已有的 `adjustInventoryAtPosition`」——该函数直接写 `inventory` 表，违反 §27.8 唯一入口条款 |
+| F9 | 客户实例实测：跟踪物料入库在确认环节被拒 | `POST /api/purchase-receipts/{id}` → 400；两个跟踪货品（`UAT-RM02` 批次 / `UAT-FG02` 序列号）的 `inventory_valuation_movements` 与 `inventory_valuation_balances` 均为 **0 行** |
+| F10 | 委外发料被**连带**阻断 | 409「委外物料缺少权威估值余额」（`OUTSOURCING_VALUATION_UNVERIFIED`），委外收货 / 完工 / 加工费过账随之级联失败 |
+| F11 | 失败**零副作用** | 确认在 `server/app.js:7023` 的 `transaction(db, …)` 内；失败整体回滚，不留批次 / 序列号 / 库存 / 估值半成品 |
+| F12 | 界面**已经**提供批次 / 序列号分配输入 | `src/pages/logistics-finance.jsx` 的 `v16-purchase-receipt-editor` 对跟踪货品渲染 `TrackingAllocationEditor`（`direction="IN"`）；`server/app.js:6986` 的读取端点已返回 `trackingAllocations` |
+| F13 | 既有测试**无相反断言** | 全仓 `server/*.test.js` 无任何测试断言跟踪物料**不得**经采购入库收货；`server/v16-p4-purchase-receipts.test.js` 仅做前端源码静态断言 |
+
+**根因归并**：F1 是**唯一**的物理写入断点。F3、F4 两项（跟踪维度写入与身份级估值）在该路径上**已经实现**，
+只因 F1 抛错而随事务整体回滚，从而表现为「跟踪物料拿不到采购价估值」；F5 表明 canonical 写入器已具备承接
+条件。F7、F8 是**文档口径冲突**，不是事实冲突。
+
+#### 31.21.2 合同条款
+
+| ID | 条款 |
+|---|---|
+| `PRC-TRK-01` | 采购入库单对 `tracking_policy ∈ {LOT, SERIAL}` 的货品，**必须**能够完成确认并进入 `CONFIRMED`；**不得**在确认环节以「产品启用了 LOT / SERIAL 跟踪」为由拒绝该单据。 |
+| `PRC-TRK-02` | 确认时该行的批次 / 序列号分配**必须**已存在，且各分配数量合计**等于**该行基本单位数量。缺失或不平 → 明确拒绝（`LOT_REQUIRED` / `SERIAL_REQUIRED` / `TRACKING_QUANTITY_MISMATCH`），且**零副作用**。 |
+| `PRC-TRK-03` | 确认产生的数量增量**必须**落在 canonical position 元组上：`(product, warehouse, bin=NULL, owner=ENTERPRISE / owner_id=NULL, stock_status=AVAILABLE, lot_id=该分配批次, serial_id=该分配序列号)`。同一批次的多行入库**必须**累加到同一 position，**不得**新建平行仓位行。 |
+| `PRC-TRK-04` | 采购价估值**必须**按分配数量比例拆分并落到**身份级**估值池（LOT → `LOT:{warehouse}:{product}:{lot}`；SERIAL → `SERIAL:{serial}`）；`inventory_valuation_movements` 的 `lot_id` / `serial_id` **必须**非空，数量合计 = 该行数量，金额合计 = 该行金额（整数分，尾差 ≤ 1 分由最后一份吸收）。 |
+| `PRC-TRK-05` | 采购入库确认路径**不得**调用 legacy `adjustInventory` / `setInventoryQuantity`；物理数量写入**必须**经唯一 canonical 写入器 `applyInventoryMutation`。 |
+| `PRC-TRK-06` | 确认**必须**幂等：同一入库单重复确认**不得**重复增加库存数量、批次余额与估值余额；canonical 写入器的幂等键**必须**由入库单、明细行与分配序确定，不得含随机或时间成分。 |
+| `PRC-TRK-07` | 任一校验或写入失败**必须**整体回滚：**不得**留下批次主档、序列号主档、库存 position、库存流水、跟踪移动、批次余额或估值流水的半成品。 |
+| `PRC-TRK-08` | 会计结果**不得**因跟踪身份而改变：库存科目借记与 GRNI / AP 贷记的科目、金额口径与不跟踪物料**完全一致**。 |
+| `PRC-TRK-09` | `tracking_policy = NONE` 的采购入库行为**必须**与本节实施前完全一致：数量、估值、库存流水、单据状态机、幂等与总账结果均不变。**唯一例外**：仓位管理仓库的拒绝由 400「…请改用 applyInventoryMutation()」改为 409「…无法确定唯一的库存位置」，与销售出库 / 销售退货 / 采购退货三个既有作业面的拒绝口径统一；该差异**不**改变任何成功路径的结果，也**不**新增成功路径的失败。 |
+| `PRC-TRK-10` | 界面与服务端对批次 / 序列号分配的口径**必须**一致：服务端**不得**接受界面无法表达的分配，界面**不得**渲染服务端必然拒绝的输入（本项当前已成立，作为回归护栏固定）。 |
+| `PRC-TRK-11` | 跟踪物料完成采购入库后，委外发料的「缺少权威估值余额」拒绝**应当**随之解除（前提是该委外发料路径已使用 canonical 写入器）。本节**不**直接修改委外路径；若实测**不**解除，按 §31.21.6 登记为新缺陷，**不得**在本节内顺带改写委外写入器。 |
+
+#### 31.21.3 与既有合同的冲突裁定
+
+| 冲突 | 裁定 | 依据 |
+|---|---|---|
+| 采购域 Design §26.12「既有 inventory / LOT-SERIAL / valuation / IQC 调用不变；不重写 inventory mutation」与 §27.8「只有 `applyInventoryMutation` 允许写 inventory」 | 以 **Inventory 域 §27.8 / §27.43.1 为准**：物理写入器唯一性是跨域合同，采购域**不得**自建或保留第二写入器。§26.12 的该句在**本节范围内**被有界解冻，由 Design §26.41 取代；句首「既有 inventory / LOT-SERIAL / valuation / IQC 调用**不变**」对不跟踪物料继续有效。 | `docs/design/inventory-warehouse.md` §27.8、§27.43.1 §C「tracking-aware 路径**禁止**调用 `adjustInventory()`」、§27.43.1 §D「不得依赖『以后逐步迁移』」 |
+| 采购域 Design §26.29 把 `server/lib/stock.js::adjustInventory` 列为复用的 canonical owner | 该表述**更正**为 `server/lib/inventory-mutation.js::applyInventoryMutation` + `financial-inventory.js::receiveValue` / `issueValue`。 | 同上；§27.6「唯一 mutation dispatcher」 |
+| `docs/status/PROJECT_STATUS.md` §71.7-1 建议「改用 `adjustInventoryAtPosition`」 | 该建议**不采纳**：`adjustInventoryAtPosition` 直接写 `inventory` 表，违反 §27.8 唯一入口条款。处置方案只能是 canonical 写入器。 | §27.8 |
+| Design §27.6 声明的 `tracking` 输入对象（`{lotAllocations:[], serialAllocations:[]}`）在实现中**未落地** | 本节按**已验收**的逐分配 position 元组形式承接（`SALES_RETURN` 同款）。§27.6 该字段的处置登记为 §31.21.6 开放项，本节**不**擅自改写 Inventory 域冻结正文。 | `server/modules/sales-return-canonical-writer.js` 的已验收实现 |
+
+#### 31.21.4 明确不在本节范围内的事项
+
+1. **其余 legacy 物理写入点的收敛**。生产代码中除采购入库确认外，另有 **8 处** `adjustInventory` 调用点：
+   库存调整单冲销（`server/app.js:6110`）、销售退货入库（`server/app.js:7569`）、生产补料
+   （`server/modules/manufacturing-materials.js:157`）、生产领料（同文件 `:308`）、生产领料
+   （`server/modules/production-workflow.js:116`）、生产退料（同文件 `:134`）、生产完工入库（同文件 `:185`）、
+   副产品入库（同文件 `:315`）。这些路径对跟踪物料**仍然拒绝**，本节**不**修改它们，但**必须**在交付说明中
+   明示为残余能力缺口。
+2. **历史无批次身份库存的数据修复**（客户实例 `UAT-RM02` 1150-150、`UAT-FG02` 200-0）。本节**不追认、不改写**；
+   投影与 canonical 库存的历史差额按 `docs/requirements/inventory-warehouse.md` §32.14 `IW-TRACE-04` 的既有口径处理。
+3. **§27.6 `tracking` 输入对象的实现落地**（见 §31.21.6 开放项 1）。
+4. **委外 / 生产领料等出库路径**的跟踪身份写者收敛。
+5. **健康检查残余**（`TRACKED_DIMENSION_VS_CANONICAL` 2 处差异、`INVENTORY_QUANTITY_VS_VALUATION`、
+   `INVENTORY_VALUE_TO_GL`、`RECEIPT_GRNI_TO_GL`、`LEGACY_UNVALUED_MOVEMENTS`）的数据侧处置。
+
+#### 31.21.5 可验收条件
+
+| ID | 验收条件 |
+|---|---|
+| `PRC-TRK-AC-01` | 批次货品与序列号货品各完成一次采购入库确认（客户环境 + 本地门禁各一轮），返回 200，单据状态为 `CONFIRMED`。 |
+| `PRC-TRK-AC-02` | 确认后 `inventory` 中该仓该批次的 canonical position 行数量 = 本次入库量；`inventory_lot_balances` 同批次同仓数量与之**一致**；不存在平行仓位行。 |
+| `PRC-TRK-AC-03` | `inventory_valuation_movements` 中该入库行的记录 `lot_id` / `serial_id` 非空，数量合计 = 行数量，金额合计 = 行金额；对应身份级估值余额行的数量与金额随之更新。 |
+| `PRC-TRK-AC-04` | 采购入库确认路径对 `adjustInventory` / `setInventoryQuantity` 的调用数为 **0**（静态断言随回归固定）。 |
+| `PRC-TRK-AC-05` | 重复确认同一入库单：数量、批次余额、估值余额**不**增加；返回既有结果或既有业务拒绝，**不**产生第二组流水。 |
+| `PRC-TRK-AC-06` | 分配缺失 / 数量不平时确认被拒，且批次主档、序列号主档、库存、库存流水、跟踪移动、批次余额、估值流水**均无**新增行。 |
+| `PRC-TRK-AC-07` | 跟踪物料入库的总账结果与不跟踪物料同金额入库**一致**（库存科目借记、GRNI 或 AP 贷记）。 |
+| `PRC-TRK-AC-08` | `tracking_policy = NONE` 的采购入库既有回归全部保持通过。 |
+
+#### 31.21.6 未解决矛盾（需业务所有者裁定，本节不自行决定）
+
+1. **§27.6 `tracking` 输入对象**：实现落地（在 canonical 写入器中新增多分配输入形态），还是改写 §27.6 使其与
+   已验收的逐分配 position 元组形式一致？后者涉及 Inventory 域冻结正文，本节无权单方改写。
+2. **其余 8 处 legacy 写入点的处置顺序**：是否与本节同批收敛（同批则扩大本节范围），还是排入下一轮。
+3. **委外跟踪物料链路的解除验证**：`PRC-TRK-11` 的解除属「同源消解」还是「独立缺陷」，须以实施后的实测为准，
+   不得预先宣称。
+4. **历史无批次身份库存**（`UAT-RM02` 1150-150 等）是否需要单独的追认 / 修复决策 —— 该决策影响
+   `TRACKED_DIMENSION_VS_CANONICAL` 健康项，但与本节的写入器收敛**互不依赖**。
