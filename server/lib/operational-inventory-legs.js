@@ -344,9 +344,14 @@ export function resolveSalesReturnReversalLegs(db, {
  * 每条腿都是一次独立的 `applyInventoryMutation()`：
  *   - `trackingMode: 'EXTERNAL'` —— tracking 仍由业务 handler 拥有；
  *   - `valuationMode: 'EXTERNAL'` —— 估值仍由业务 handler 拥有；
- *   - 幂等键固定为 `${prefix}:${positionKey}:OUT:v1`，重放不会重复扣减。
+ *   - 幂等键固定为 `${prefix}:${positionKey}:{kind}:v1`，重放不会重复扣减。
  *
- * @returns {{movements: Array, transactionIds: Array<string>}}
+ * `direction: 'IN'` 表示入库形态：写入落在 `toPosition`（目标仓位）而不是
+ * `fromPosition`（来源仓位）。OUT 形态的行为与既有实现逐字节一致。
+ *
+ * @returns {{movements: Array, transactionIds: Array<string>, legs: Array}}
+ *   `legs` 是**排序后**的腿，每条腿附带它自己那一笔物理流水 id（`transactionId`）。
+ *   调用方**不得**按平行数组下标自行对齐腿与流水 id。
  */
 export function applyOperationalInventoryLegs(db, {
   sourceType,
@@ -359,16 +364,19 @@ export function applyOperationalInventoryLegs(db, {
   sourceNo = null,
   remark = null,
   movementKind = 'OUT',
+  direction = null,
 }) {
+  const kind = direction === 'IN' ? 'IN' : movementKind;
   const ordered = [...legs].sort((a, b) => (a.positionKey < b.positionKey ? -1 : a.positionKey > b.positionKey ? 1 : 0));
   const movements = [];
   const transactionIds = [];
+  const appliedLegs = [];
   for (const leg of ordered) {
     const quantity = Number(leg.quantity);
     if (!Number.isFinite(quantity) || quantity <= 0) {
       throw new HttpError(400, '库存腿数量不合法');
     }
-    const fromPosition = {
+    const position = {
       productId: leg.productId,
       warehouseId: leg.warehouseId,
       binId: leg.binId ?? null,
@@ -387,17 +395,19 @@ export function applyOperationalInventoryLegs(db, {
       remark,
       businessDate,
       actor: actor ? { id: actor.id } : undefined,
-      movementKind,
+      movementKind: kind,
       quantity,
-      fromPosition,
-      idempotencyKey: `${idempotencyKeyPrefix}:${leg.positionKey}:${movementKind}:v1`,
+      ...(kind === 'IN' ? { toPosition: position } : { fromPosition: position }),
+      idempotencyKey: `${idempotencyKeyPrefix}:${leg.positionKey}:${kind}:v1`,
       trackingMode: 'EXTERNAL',
       valuationMode: 'EXTERNAL',
     });
+    const legTransactionId = (result?.movements || []).map((movement) => movement.transactionId).find(Boolean) || null;
+    appliedLegs.push({ ...leg, transactionId: legTransactionId });
     for (const movement of result?.movements || []) {
       movements.push(movement);
       if (movement.transactionId) transactionIds.push(movement.transactionId);
     }
   }
-  return { movements, transactionIds };
+  return { movements, transactionIds, legs: appliedLegs };
 }

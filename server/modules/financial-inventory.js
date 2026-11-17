@@ -138,10 +138,17 @@ function identityAllocations(db, sourceType, sourceId, sourceItemId) {
 }
 
 export function receiveSourceValue(db, input) {
-  const method=valuationMethod(db,input.productId); const allocations=method==='MOVING_AVERAGE'?[{ quantity:input.quantity,lotId:null,serialId:null }]:identityAllocations(db,input.sourceType,input.sourceId,input.sourceItemId);
+  const method=valuationMethod(db,input.productId);
+  // 逐腿估值：调用方已经解析并写入了物理腿（每条腿带自己的库存流水 id），估值必须
+  // 落在**同一条腿**的身份与流水上 —— 重新按 allocation 猜测会把金额记到错误的身份
+  // 或错误的库存流水上。未提供 legs 时沿用既有口径，行为不变。
+  const legs=Array.isArray(input.legs)?input.legs:null;
+  const allocations=legs
+    ? legs.map((leg)=>({ quantity:Number(leg.quantity),lotId:leg.lotId??null,serialId:leg.serialId??null,transactionId:leg.transactionId??null }))
+    : method==='MOVING_AVERAGE'?[{ quantity:input.quantity,lotId:null,serialId:null }]:identityAllocations(db,input.sourceType,input.sourceId,input.sourceItemId);
   if(!allocations.length) throw new HttpError(409,'跟踪库存缺少已过账身份分配');
   const totalQty=allocations.reduce((s,x)=>s+Number(x.quantity),0); if(Math.abs(totalQty-Number(input.quantity))>EPS) throw new HttpError(409,'身份分配数量与估值数量不一致');
-  let remaining=Number(input.valueCents); return allocations.map((allocation,index)=>{ const value=index===allocations.length-1?remaining:allocateProportionalCents(Number(input.valueCents),Number(allocation.quantity),totalQty); remaining-=value; return receiveValue(db,{...input,...allocation,valueCents:value}); });
+  let remaining=Number(input.valueCents); return allocations.map((allocation,index)=>{ const value=index===allocations.length-1?remaining:allocateProportionalCents(Number(input.valueCents),Number(allocation.quantity),totalQty); remaining-=value; return receiveValue(db,{...input,...allocation,inventoryTransactionId:allocation.transactionId??input.inventoryTransactionId,valueCents:value}); });
 }
 
 export function issueSourceValue(db, input) {

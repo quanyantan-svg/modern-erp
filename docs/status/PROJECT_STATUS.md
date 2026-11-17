@@ -6461,8 +6461,8 @@ push / tag / merge / release / deploy。
 
 - 业务所有者 2026-11-17 复测判定后裁定「补齐跟踪物料入库」并选定「修完再交付」，明确该处置须走
   Requirement → Design → Implementation。
-- 本轮执行 **AUDIT → REQUIREMENT → DESIGN**（AGENTS.md §4.0 连续阶段授权）；**Design 完成后 HARD STOP**，
-  Implementation **未授权**，须业务所有者单独批准。
+- 本轮执行 **AUDIT → REQUIREMENT → DESIGN**（AGENTS.md §4.0 连续阶段授权），Design 完成后 HARD STOP；
+  业务所有者随后**单独明确批准 Implementation**，本轮据此实施。
 - 未 push / tag / merge / release；未签发 Acceptance / Freeze / Release Readiness；未连接真实 MySQL、
   未执行数据库写操作、未部署。
 
@@ -6478,7 +6478,7 @@ push / tag / merge / release / deploy。
 | canonical 写入器承接能力 | `COVERED` | `SOURCE_TYPES` 已登记 `'PURCHASE_RECEIPT'`（`inventory-mutation.js:49`） |
 | 失败零副作用 | `COVERED` | 确认在 `transaction(db, …)` 内（`app.js:7023`） |
 | 委外发料 409 | 派生物（**非独立缺陷**） | 根因是跟踪物料拿不到采购价估值（F10） |
-| 其余 8 处 legacy 写入点 | `PARTIAL` | 库存调整冲销 / 销售退货 / 生产补料 / 生产领料 ×2 / 生产退料 / 完工入库 / 副产品入库仍拒绝跟踪物料；**本轮不收敛**，登记为残余能力缺口 |
+| 其余 legacy 写入点（共 11 处） | `PARTIAL` | `adjustInventory` 8 处（库存调整等单据冲销 / 销售退货入库 / 生产补料 / 生产领料 ×2 / 生产退料 / 完工入库 / 副产品入库）+ `setInventoryQuantity` 3 处（期初导入 / 销售·采购退货冲销 / 生命周期清理）仍拒绝跟踪物料与仓位仓；**本轮不收敛**，登记为残余能力缺口。**已收敛不得再列为残余**：采购退货确认路径与库存调整单确认路径 |
 | §27.6 `tracking` 输入对象 | `SEMANTIC_MISMATCH`（文档 vs 实现） | Design 声明该字段，实现未落地；已验收的 SALES_RETURN 用逐分配 position 元组 |
 | §26.12 / §26.29 采购域 Design | **合同冲突** | 「不重写 inventory mutation」与 §27.8 唯一入口条款直接矛盾 |
 | `PROJECT_STATUS` §71.7-1 的处置建议 | **建议本身错误** | 建议改用 `adjustInventoryAtPosition`，该函数直接写 `inventory`，违反 §27.8 |
@@ -6488,8 +6488,8 @@ push / tag / merge / release / deploy。
 
 | 文档 | 章节 | 状态 |
 |---|---|---|
-| `docs/requirements/procurement-outsourcing.md` | §31.21 采购入库确认的跟踪物料合同与物理写入器收敛 | `APPROVED`（2026-11-17） |
-| `docs/design/procurement-outsourcing.md` | §26.41 采购入库确认的跟踪物料支持与物理写入器收敛 | `APPROVED`（2026-11-17） |
+| `docs/requirements/procurement-outsourcing.md` | §31.21 采购入库确认的跟踪物料合同与物理写入器收敛 | `APPROVED` → **`IMPLEMENTED`**（2026-11-17，尚未验收） |
+| `docs/design/procurement-outsourcing.md` | §26.41 采购入库确认的跟踪物料支持与物理写入器收敛 | `APPROVED` → **`IMPLEMENTED`**（2026-11-17，尚未验收） |
 | `docs/design/procurement-outsourcing.md` | §26.12 / §26.29 的既有表述 | **有界修订并取代**（见 §26.41.9） |
 | `document.md` / `solution.md` | 采购域导航 | 已同步（并补登记此前遗漏的 §31.19 / §31.20 / §26.39 / §26.40） |
 
@@ -6497,38 +6497,63 @@ Requirement 条款 `PRC-TRK-01..11` 与验收条件 `PRC-TRK-AC-01..08`；Design
 事务 / 幂等 / 并发 / 错误行为、状态机 / RBAC / 审计 / 会计口径、无 schema 变更与双路径、兼容与回滚、
 测试与变异实验计划、已知边界与未解决矛盾。
 
-### 75.4 门禁证据
+### 75.4 已实施（2026-11-17）
+
+**Implementation 授权**：业务所有者于 2026-11-17 在 Design 批准后单独明确批准（AGENTS.md §4.3 HARD STOP 已履行）。
+
+| 文件 | 改动 |
+|---|---|
+| `server/modules/purchase-receipt-engine.js` | 删除 `:279` 的 legacy `adjustInventory` 与 `:281` 的手写 `inventory_transactions` INSERT；改为「`postTrackedMovement` → 腿解析 → 逐腿 canonical 写入 → 逐腿估值」；移除 `adjustInventory` 导入 |
+| `server/lib/operational-inventory-legs.js` | `applyOperationalInventoryLegs` 增补 IN 形态（`toPosition`），OUT 路径逐字节不变；返回值增补每条腿附带自身 `transactionId` 的 `legs` |
+| `server/modules/financial-inventory.js` | `receiveSourceValue` 增补可选 `legs` 输入（逐腿拆分金额并引用各自库存流水）；未提供 `legs` 时既有行为完全不变（`production-workflow.js:194` 的既有调用不受影响） |
+| `server/procurement-tracked-receipt.test.js`（新增） | 9 条合同测试：批次可确认、序列号可确认、多批次拆腿、身份证据缺失 fail closed、分配不平零副作用、重复确认不重复入账、幂等键确定性、不跟踪物料回归、残余写入点仍拒绝 |
+| `scripts/testing/test-suites.js` | 新套件登记进 `FULL` |
+
+**未改动**：schema、migration、权限码、`role_permissions`、前端文件、状态机、审计行、错误码；其余 11 处
+legacy 写入点未动。
+
+**实施中查出的合同事实更正（已同步回 §31.21.4 / §26.41.9 / 本节）**：残余 legacy 写入点是 **11 处**
+（`adjustInventory` 8 + `setInventoryQuantity` 3），不是 8 处；采购退货**确认**路径与库存调整单确认路径
+**早已收敛**，不得再列为残余（仍被拒的是采购退货的**冲销**）。
+
+### 75.5 门禁证据
 
 | 门禁 | 结果 |
 |---|---|
+| `pnpm test`（FULL，543 suites） | **4168 / 4168 PASS**（基线 4159，净增 9 = 新套件），退出码 0 |
+| `pnpm build` | PASS（8.66s） |
+| `git diff --check` | PASS |
 | `node scripts/docs/check-doc-consistency.mjs --mode current` | **ALL CHECKS PASSED**（N1、N3–N9 PASS；N2 `RETIRED`） |
 | `node scripts/docs/check-doc-consistency.mjs --mode migration` | **ALL CHECKS PASSED**（C1–C6） |
-| `git diff --check` | PASS |
-| Implementation 相关门禁（`pnpm test:fast` / `pnpm test` / `pnpm build`） | **未运行** —— Implementation 未授权，本轮零代码改动 |
+| 5 个 QA 守卫 | 全部 PASS |
+| 变异实验（2 条独立负控） | ① 把腿的 `toPosition.lotId` 置空 → 4 条断言转红；② 断开估值腿与物理流水的关联 → 3 条断言转红（含「每条估值流水引用自己那条腿的库存流水」）。两次生产文件均按 sha256 逐字节还原 |
 
-### 75.5 未解决矛盾
+### 75.6 未解决矛盾
 
 1. §27.6 声明的 `tracking` 输入对象未落地：实现多分配输入形态，还是改写 §27.6 使其与已验收的逐分配
    position 元组形式一致？（Inventory 域冻结正文，须业务所有者裁定）
-2. 其余 8 处 legacy 写入点是否与本节同批收敛。
+2. 其余 11 处 legacy 写入点是否与本节同批收敛。
 3. `PRC-TRK-11` 的委外级联解除属「同源消解」还是「独立缺陷」，须以实施后实测为准。
 4. 历史无批次身份库存（`UAT-RM02` 差额 500、`UAT-FG02` 差额 200）是否需要单独的追认 / 修复决策。
 5. **Design 新发现**：跟踪维度投影 `inventory_lot_balances` 有两个维护者 —— `postTrackedMovement`（按分配
    原数量）与 canonical 写入器的 `maintainTrackedDimension`（按写入数量）；单据单位与基本单位换算系数 ≠ 1
    时两者口径不同。本轮不改写任一维护者，登记待裁定。
 
-### 75.6 Owner
+### 75.7 Owner
 
 | 角色 | 承担者 | 说明 |
 |---|---|---|
 | AUDIT / Requirement / Design | 仓库（执行） | 已完成并落盘 |
-| Implementation | 业务所有者 | **未授权**，等待批准 |
-| §75.5-1（§27.6 字段） | Inventory & Warehouse + 业务所有者 | 待裁定 |
-| §75.5-2（其余 8 处写入点） | Procurement & Manufacturing + 业务所有者 | 待裁定 |
-| 推送 / tag / release / 部署 | 业务所有者 | 本轮**未**执行 |
+| Implementation | 仓库（执行）+ 业务所有者（授权） | 已实施并通过本地门禁；**不是 Acceptance** |
+| §75.6-1（§27.6 字段） | Inventory & Warehouse + 业务所有者 | 待裁定 |
+| §75.6-2（其余 11 处写入点） | Procurement & Manufacturing + 业务所有者 | 待裁定 |
+| Acceptance / Freeze / 部署 / 推送 / tag / release | 业务所有者 | 本轮**未**执行 |
 
-### 75.7 下一阶段 / 暂停点
+### 75.8 下一阶段 / 暂停点
 
-停在 **Design 完成**，按 AGENTS.md §4.3 HARD STOP。Implementation 获批后按 §26.41.3 的改动清单实施，
-并按 §26.41.8 跑 focused + 全量门禁 + 变异实验，再经授权部署到客户测试环境复跑批次链路
-（入库 → 委外发料 → 委外收货 → 加工费过账）。
+停在 **Implementation 完成、本地门禁全绿**。下一步需要业务所有者**单独授权**的三件事：
+
+1. **部署到客户测试环境**并复跑批次链路（入库 → 委外发料 → 委外收货 → 加工费过账）与 `system-health` 前后
+   对比 —— 目标环境上**已存在**跟踪物料的 DRAFT 采购入库单，部署后可直接确认，无需数据修复。
+2. **真实 MySQL 证据**：本轮本地门禁跑的是 SQLite 路径；MySQL 路径需按 ACK-4 campaign 规程单独取得授权。
+3. **Acceptance / Freeze 签发**：本节状态是 `IMPLEMENTED` 而非 `ACCEPTED`，未经用户最终验收不得签发。

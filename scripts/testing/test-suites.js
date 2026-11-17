@@ -403,6 +403,10 @@ const FULL = [
   'server/outsourcing-wip-transfer.test.js',
   'server/procurement-return-execution.test.js',
   'server/procurement-execution-suite.test.js',
+  // 采购入库确认的跟踪物料合同（Requirement §31.21 / Design §26.41）：批次 / 序列号
+  // 物料可确认、数量落带身份的 canonical position、估值落身份级估值池、失败零副作用、
+  // 重复确认不重复入账、幂等键确定性、不跟踪物料回归、残余写入点仍然拒绝。
+  'server/procurement-tracked-receipt.test.js',
   'server/out-final-acceptance.test.js',
   // 委外核心执行工作面（Requirement §31.15；Design §26.35）：订单状态机安全门禁、
   // 供应商资格按业务日期判定、受限读模型与职责分离、OUTSOURCE 通知来源级授权。

@@ -2537,13 +2537,13 @@ Design §26.15 的**扫码入仓闭环**（`lookup-document` / `draft-receipt` /
 - 全部为增量：新增只读/写端点与前端面板，既有路由与页面行为不变。
 - 前端面板可独立下线而不影响服务端合同；服务端合同不可在档案维护面缺失时降级为「无档案即放行」。
 
-### 26.41 采购入库确认的跟踪物料支持与物理写入器收敛（2026-11-17；`APPROVED`）
+### 26.41 采购入库确认的跟踪物料支持与物理写入器收敛（2026-11-17；`APPROVED` → `IMPLEMENTED`）
 
 > **用途 / Owner / 状态 / 权威关系**：本节落实 Requirement §31.21：把采购入库确认的物理数量写入收敛到
 > 唯一 canonical 写入器，使批次 / 序列号跟踪物料可以完成入库并拿到身份级采购价估值。
 > Owner 为 Procurement & Outsourcing Domain Owner（写入器语义与 Inventory & Warehouse 共治）。
-> 状态 `APPROVED`（2026-11-17）。**Implementation 未授权** —— 按 AGENTS.md §4.3，Design 完成后 HARD STOP，
-> 须由业务所有者单独明确批准 Implementation。
+> 状态 `IMPLEMENTED`（2026-11-17：按本节设计实施完毕，**尚未验收**）。
+> Implementation 授权：业务所有者于 2026-11-17 在 Design 批准后单独明确批准（AGENTS.md §4.3 HARD STOP 已履行）。
 >
 > **本节是对 §26.12 与 §26.29 的有界修订**：见 §26.41.9。
 
@@ -2682,7 +2682,9 @@ Design §26.15 的**扫码入仓闭环**（`lookup-document` / `draft-receipt` /
      （Requirement `PRC-TRK-05` / `PRC-TRK-AC-04`）；
   7. 幂等键**确定性**静态断言：键由 `receiptId` / `item.id` / `positionKey` 构成，不含随机或时间成分；
   8. 不跟踪物料回归：既有采购入库行为等价；
-  9. 负控：跟踪物料的**采购退货 / 生产领料**仍被拒（残余能力明示，Requirement §31.21.4 第 1 项）。
+  9. 负控：残余写入点对跟踪物料**仍然拒绝** —— 在写入器层断言 `adjustInventory` 与
+     `setInventoryQuantity` 对 LOT / SERIAL 货品仍抛 400（因此 §26.41.9 第 2 项列出的 11 处残余路径
+     仍然拒绝，本节**没有**把它们悄悄放开）；同时 e2e 断言确认环节在身份证据缺失时 fail closed。
 - **变异实验（非空洞证明）**：至少两条独立负控 —— 例如把腿的 `toPosition.lotId` 置空、把估值腿与物理腿
   错位 —— 必须使对应断言**转红**，且生产文件按字节还原。断言「能通过」本身**不**作为证据。
 - **既有套件保持**：`server/v16-p4-purchase-receipts.test.js`、`server/procurement-receiving-returns.test.js`、
@@ -2700,16 +2702,19 @@ Design §26.15 的**扫码入仓闭环**（`lookup-document` / `draft-receipt` /
 
 1. **换算系数边界**：跟踪物料入库要求单据单位与基本单位的换算系数为 1（分配守恒的必然后果）；
    系数 ≠ 1 时以既有 409 fail closed，**不**产生口径不一致的数据。
-2. **其余 8 处 legacy 写入点**（Requirement §31.21.4 第 1 项）仍拒绝跟踪物料：库存调整单冲销、销售退货入库、
-   生产补料、生产领料（两处）、生产退料、生产完工入库、副产品入库。**委外 / 生产出库路径**对跟踪物料的
-   可用性因此仍受限。
+2. **其余 legacy 写入点共 11 处**（Requirement §31.21.4 第 1 项）仍拒绝跟踪物料与仓位仓：
+   `adjustInventory` 8 处（库存调整等单据冲销、销售退货入库、生产补料、生产领料 ×2、生产退料、
+   生产完工入库、副产品入库）+ `setInventoryQuantity` 3 处（期初导入、销售 / 采购退货冲销、生命周期清理）。
+   **已经收敛、不得再列为残余**：采购退货**确认**路径（`server/app.js:7690-7700`）与库存调整单确认路径
+   已使用 canonical 写入器，跟踪物料的采购退货入库**可用**；仍被拒的是其**冲销**。
+   **委外 / 生产出库路径**对跟踪物料的可用性因此仍受限。
 3. **历史无身份库存**不追认、不改写（Requirement §31.21.4 第 2 项）。
 
 **未解决矛盾**（与 Requirement §31.21.6 一一对应，本节不自行决定）：
 
 1. §27.6 声明的 `tracking` 输入对象（`{lotAllocations, serialAllocations}`）在实现中**未落地**；本节按已验收的
    逐分配 position 元组形式承接。该字段的处置属 Inventory 域冻结正文，需业务所有者裁定。
-2. 其余 8 处 legacy 写入点的处置顺序（是否与本节同批收敛）。
+2. 其余 11 处 legacy 写入点的处置顺序（是否与本节同批收敛）。
 3. `PRC-TRK-11` 的委外级联解除属「同源消解」还是「独立缺陷」，须以实施后实测为准。
 4. 历史无批次身份库存是否需要单独的追认 / 修复决策。
 5. **新增（由本节 Design 发现）**：跟踪维度投影 `inventory_lot_balances` 的维护者存在两个 ——

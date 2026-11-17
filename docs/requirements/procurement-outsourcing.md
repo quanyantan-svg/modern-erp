@@ -1328,19 +1328,20 @@ M1-Core §7.5 对 `M1C-G03/G06` 的首期合同保留**数量归属守恒**、�
 | `PRC-DLV-33` | 供应商品类单向门禁、M1-Core G06 被取代断言的重新确认与 G07 固定场景重新冻结三项裁定被登记。 |
 | `PRC-DLV-34` | OUT-22 成品退货的正式延期决策（`MC-REQ-16`）被登记，既有稳定拒绝边界不变。 |
 
-### 31.21 采购入库确认的跟踪物料合同与物理写入器收敛（2026-11-17；`APPROVED`）
+### 31.21 采购入库确认的跟踪物料合同与物理写入器收敛（2026-11-17；`APPROVED` → `IMPLEMENTED`）
 
 > **用途 / Owner / 状态 / 权威关系**：本节固化「批次 / 序列号跟踪物料无法通过采购入库收货」这一阻塞级
 > 缺陷的业务合同、范围边界与未解决矛盾。Owner 为 Procurement & Outsourcing Domain Owner；物理写入器语义与
-> Inventory & Warehouse 共治（裁定见 §31.21.3）。生命周期状态 `APPROVED`（2026-11-17）。
-> 对应 Design 见 `solution.md §26` → `docs/design/procurement-outsourcing.md` §26.41（2026-11-17 同日批准）。
+> Inventory & Warehouse 共治（裁定见 §31.21.3）。生命周期状态 `IMPLEMENTED`（2026-11-17：合同已获批准并按
+> 已批准合同实施，**尚未验收**）。
+> 对应 Design 见 `solution.md §26` → `docs/design/procurement-outsourcing.md` §26.41（2026-11-17 同日批准并实施）。
 > 本节**不取代** §31.1～§31.20 的任何正文；既有域级 Acceptance / Freeze（2026-11-11，50 能力）继续作为
 > 历史时点记录保留。
 >
 > **授权来源**：业务所有者 2026-11-17 复测判定后裁定「补齐跟踪物料入库」并选定「修完再交付」，
 > 明确该处置须走 Requirement → Design → Implementation。本节据此**有界解冻** §31.13.2 `MC-REQ-01`
 > 与 §26.12 对采购入库确认写入路径的既有表述，**仅覆盖本节合同项列出的范围**。
-> Implementation 授权：待本节 Design 批准后由业务所有者单独明确（AGENTS.md §4.3 HARD STOP）。
+> Implementation 授权：业务所有者于 2026-11-17 在 Design 批准后单独明确批准（AGENTS.md §4.3 HARD STOP 已履行）。
 
 #### 31.21.1 事实基础（仓库代码取证 + 客户测试环境实测，2026-11-17）
 
@@ -1391,12 +1392,20 @@ M1-Core §7.5 对 `M1C-G03/G06` 的首期合同保留**数量归属守恒**、�
 
 #### 31.21.4 明确不在本节范围内的事项
 
-1. **其余 legacy 物理写入点的收敛**。生产代码中除采购入库确认外，另有 **8 处** `adjustInventory` 调用点：
-   库存调整单冲销（`server/app.js:6110`）、销售退货入库（`server/app.js:7569`）、生产补料
-   （`server/modules/manufacturing-materials.js:157`）、生产领料（同文件 `:308`）、生产领料
-   （`server/modules/production-workflow.js:116`）、生产退料（同文件 `:134`）、生产完工入库（同文件 `:185`）、
-   副产品入库（同文件 `:315`）。这些路径对跟踪物料**仍然拒绝**，本节**不**修改它们，但**必须**在交付说明中
-   明示为残余能力缺口。
+1. **其余 legacy 物理写入点的收敛**。生产代码中除采购入库确认外，另有 **8 处** `adjustInventory` 调用点与
+   **3 处** `setInventoryQuantity` 调用点（共 11 处），它们按设计拒绝跟踪物料与仓位仓：
+   - `adjustInventory`（增量写入器）：库存调整单等单据冲销（`server/app.js:6110`）、销售退货入库
+     （`server/app.js:7569`）、生产补料（`server/modules/manufacturing-materials.js:157`）、生产领料
+     （同文件 `:308`、`server/modules/production-workflow.js:116`）、生产退料（`production-workflow.js:134`）、
+     生产完工入库（同文件 `:185`）、副产品入库（同文件 `:315`）。
+   - `setInventoryQuantity`（绝对写入器）：期初导入（`server/modules/commercial-golive.js:682`）、
+     销售 / 采购退货冲销（`server/modules/financial-controls.js:428`）、生命周期清理
+     （`server/modules/lifecycle-engine.js:844`）。
+   - **已经收敛、不得再列为残余**：采购退货**确认**路径（`server/app.js:7690-7700`）已使用
+     `resolveOperationalLegs` + `applyOperationalInventoryLegs`，跟踪物料的采购退货入库**可用**；
+     仍被拒的是它的**冲销**（`financial-controls.js:428`）。库存调整单确认路径亦已收敛
+     （`server/modules/inventory-stocktake.js` 经 canonical 写入器）。
+   - 本节**不**修改这 11 处，但**必须**在交付说明中逐项明示为残余能力缺口。
 2. **历史无批次身份库存的数据修复**（客户实例 `UAT-RM02` 1150-150、`UAT-FG02` 200-0）。本节**不追认、不改写**；
    投影与 canonical 库存的历史差额按 `docs/requirements/inventory-warehouse.md` §32.14 `IW-TRACE-04` 的既有口径处理。
 3. **§27.6 `tracking` 输入对象的实现落地**（见 §31.21.6 开放项 1）。
@@ -1421,7 +1430,7 @@ M1-Core §7.5 对 `M1C-G03/G06` 的首期合同保留**数量归属守恒**、�
 
 1. **§27.6 `tracking` 输入对象**：实现落地（在 canonical 写入器中新增多分配输入形态），还是改写 §27.6 使其与
    已验收的逐分配 position 元组形式一致？后者涉及 Inventory 域冻结正文，本节无权单方改写。
-2. **其余 8 处 legacy 写入点的处置顺序**：是否与本节同批收敛（同批则扩大本节范围），还是排入下一轮。
+2. **其余 11 处 legacy 写入点的处置顺序**：是否与本节同批收敛（同批则扩大本节范围），还是排入下一轮。
 3. **委外跟踪物料链路的解除验证**：`PRC-TRK-11` 的解除属「同源消解」还是「独立缺陷」，须以实施后的实测为准，
    不得预先宣称。
 4. **历史无批次身份库存**（`UAT-RM02` 1150-150 等）是否需要单独的追认 / 修复决策 —— 该决策影响

@@ -16,7 +16,7 @@
 import { id } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { HttpError, optionalText } from '../lib/http.js';
-import { adjustInventory } from '../lib/stock.js';
+import { applyOperationalInventoryLegs, resolveOperationalLegs } from '../lib/operational-inventory-legs.js';
 import { getActiveParameters } from './procurement-parameters.js';
 import { setSourceRecognitionPolicy, RECOGNITION_MODES } from './finance-recognition-policy.js';
 import { recognizeFinanceExposure } from './finance-recognition.js';
@@ -276,10 +276,44 @@ export function confirmPurchaseReceiptCore(db, actor, receiptId, { idempotencyKe
       ? Number(item.base_quantity_num) / Number(item.base_quantity_den || 1)
       : Number(item.quantity);
     postTrackedMovement(db, { sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId, sourceItemId: item.id, productId: item.product_id, warehouseId: locked.warehouse_id, quantity: baseQuantity, direction: 'IN', businessDate: locked.receipt_date });
-    const balance = adjustInventory(db, locked.warehouse_id, item.product_id, baseQuantity, now);
-    const transactionId = id();
-    db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,'IN',?,'PURCHASE_RECEIPT',?,?,?,?,?,?)`).run(transactionId, locked.warehouse_id, item.product_id, baseQuantity, balance, receiptId, locked.receipt_no, '采购入库', actor.id, now, locked.receipt_date);
-    receiveSourceValue(db, { businessDate: locked.receipt_date, productId: item.product_id, warehouseId: locked.warehouse_id, quantity: baseQuantity, valueCents: Number(item.amount_cents), movementType: 'PURCHASE_RECEIPT', sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId, sourceItemId: item.id, inventoryTransactionId: transactionId, valuationBasis: 'APPROVED_PO_PRICE' });
+    // 物理写入收敛到唯一 canonical 写入器（Design §26.41 / Inventory Design §27.8）。
+    // 库存腿必须在 postTrackedMovement 之后解析 —— 只有那时批次 / 序列号身份才已确定。
+    // 跟踪维度仍由 traceability 拥有，估值仍由 financial-inventory 拥有，两者都不重复写。
+    const legs = resolveOperationalLegs(db, {
+      warehouseId: locked.warehouse_id,
+      productId: item.product_id,
+      quantity: baseQuantity,
+      allocationRows: db.prepare(`SELECT lot_id, serial_id, planned_lot_code, planned_serial_number, quantity
+        FROM tracked_source_allocations
+        WHERE source_type=? AND source_id=? AND source_item_id=? AND posted=1 AND reversed=0
+        ORDER BY COALESCE(serial_id, lot_id), id`).all('PURCHASE_RECEIPT', receiptId, item.id),
+    });
+    const applied = applyOperationalInventoryLegs(db, {
+      sourceType: 'PURCHASE_RECEIPT',
+      sourceId: receiptId,
+      sourceItemId: item.id,
+      businessDate: locked.receipt_date,
+      legs,
+      actor,
+      idempotencyKeyPrefix: `PURCHASE_RECEIPT:${receiptId}:${item.id}`,
+      sourceNo: locked.receipt_no,
+      remark: '采购入库',
+      direction: 'IN',
+    });
+    if (applied.legs.some((leg) => !leg.transactionId)) throw new HttpError(409, '采购入库库存事务缺失');
+    receiveSourceValue(db, {
+      businessDate: locked.receipt_date,
+      productId: item.product_id,
+      warehouseId: locked.warehouse_id,
+      quantity: baseQuantity,
+      valueCents: Number(item.amount_cents),
+      movementType: 'PURCHASE_RECEIPT',
+      sourceType: 'PURCHASE_RECEIPT',
+      sourceId: receiptId,
+      sourceItemId: item.id,
+      valuationBasis: 'APPROVED_PO_PRICE',
+      legs: applied.legs,
+    });
     inventoryEntries.push({ role: inventoryAccountRole(db, item.product_id), direction: 'DEBIT', amountCents: Number(item.amount_cents), summary: '采购入库 ' + locked.receipt_no });
   }
   db.prepare('UPDATE purchase_receipts SET total_cents=?,status=\'CONFIRMED\', confirmed_at=?, confirmed_by=?, updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, receiptId);
