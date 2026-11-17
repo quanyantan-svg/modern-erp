@@ -6067,8 +6067,10 @@ Acceptance / Capability Freeze / Manual Closure / Release Readiness；
    需确认 **3306 与 3001 未对公网开放**（应用侧它们只监听回环）。
 4. **SSH 口令已在会话中传递**：按建议在部署完成后**轮换**该口令；公钥已装入
    `/home/ubuntu/.ssh/authorized_keys`，后续可只用公钥。
-5. **本地 commit `06d630c` 未推送**：`github/master` 与 `origin`（Gitee）均未更新，
-   等待业务所有者决定。
+5. **部署记录 commit `f01304d` 未推送**；被部署的代码 commit `06d630c` **已由业务所有者
+   推送到 `github/master`**（实测 `git ls-remote github` 返回 `06d630c`）。
+   `origin`（Gitee）仍停在 `a12d127`，落后 2 个提交 —— 该远端早已停用，是否同步由业务所有者决定。
+   部署实例运行的正是 `06d630c`，与 `github/master` 一致。
 6. **`uat_probe` 停用账号仍留在库中**：仓库没有 `DELETE /api/users` 路由（只有 `POST` / `PATCH`），
    只能停用（`active=false`），故该探针账号以**停用态**留存于 `modern_erp.users`。
    如需彻底移除，须由业务所有者授权后直接操作该库。
