@@ -6074,3 +6074,126 @@ Acceptance / Capability Freeze / Manual Closure / Release Readiness；
 6. **`uat_probe` 停用账号仍留在库中**：仓库没有 `DELETE /api/users` 路由（只有 `POST` / `PATCH`），
    只能停用（`active=false`），故该探针账号以**停用态**留存于 `modern_erp.users`。
    如需彻底移除，须由业务所有者授权后直接操作该库。
+## 71. 客户测试环境全业务验收与前端巡检（2026-11-17）
+
+**状态**：`ACCEPTED_WITH_DEFECTS` —— 全业务链路与前端全路由巡检**已完成**；核心业务链路**全部跑通**；
+但检出 **5 类 MySQL 8 方言不兼容缺陷**，导致 5 个界面在客户环境不可用。
+**本节不是 Acceptance 签发**，不签发 Capability Freeze / Manual Closure / Release Readiness。
+
+### 71.1 授权与边界
+
+| 授权 | 内容 |
+|---|---|
+| A | 登录已部署实例（`admin`），用虚构数据完成一轮全业务验收，验证前端功能是否都能用 |
+| 明确未授权 | 修改仓库代码、数据库结构变更、Acceptance / Freeze / Release Readiness 签发 |
+
+**执行边界**：验收全程只调用已部署实例的 HTTP 接口与浏览器，**仓库零改动**
+（验收结束时 `git status` 干净）。造数使用 `UAT-*` 前缀的虚构数据，不触碰 `calculator_db` 与
+`pairbook-web` 的任何资源。
+
+### 71.2 验收范围与结果总览
+
+| 层 | 范围 | 结果 |
+|---|---|---|
+| **业务链路** | 销售、购、委外、制造、计划、库存、会计、平台 共 **8 条端到端链路** | **全部跑通**（含 12 项「被业务规则正确拦截」的负控） |
+| **前端 route 巡检** | 93 条 active route × 5 类 canonical 角色 = **202 个组合** | **202/202 渲染成功**，0 错误态、0 个 4xx/5xx、0 条控制台错误 |
+| **页签巡检** | 库存作业 21 个页签逐个点开 | **18 个正常，3 个坏** |
+| **界面语言** | 巡检命中的全部 4+ 字母 token | **无一处英文散文**，全部是单据编号 / 编码 / 用户名 / 枚举码 |
+| **GET 端点复查** | 各域列表端点 | 大部分 200；**4 个 500、3 个 404**（见 §71.5） |
+
+### 71.3 业务链路逐条结果
+
+| 域 | 链路 | 结果 | 关键产出 |
+|---|---|---|---|
+| Sales & Customer | 订单 → 提交 → 审批 → 发货通知 → 确认 → 出库 → OQC → 确认出库 → 发票 → 过账 → 应收 → 收款核销 | **全通** | 订单 `SO-1794911408881-7511`、AR `AR-SD4911409328`（核销后 SETTLED） |
+| Sales（SEPARATE 模式） | 出库不产 AR，开票过账才产 AR | **全通** | `SALES_DELIVERY` 源 AR = 0、`SALES_INVOICE` 源 AR = 1 |
+| Procurement | 请购 → 审批 → 采购订单 → 审批 → 交货计划 → 收货通知 → 转入库 → IQC → 确认入库 → AP → 账单 → 过账 → 付款核销 | **全通** | PO `c2bc060f`、AP `5ff53773`、付款单 `fe4e1257` |
+| Outsourcing | 委外订单 → 用料快照 → CONFIRM_PLAN → RELEASE → 发料 → 加工费 PO → 完工 → 收货 → IQC → 确认 → 账单 → 过账 | **全通** | 委外单 `c20f8c87`、加工费账单 `SB-PROC-4912013955` |
+| Manufacturing & Quality | 制令单 → 提交 → 审批 → 下达 → 工序计划 → 领料 → 报工 → 工序完工 → 检验 → 生产入库 → 完工 | **全通** | 工单 `MO-MWKL8SE4`，自动生成 3 张系统凭证 |
+| Planning | 方案 → 预测 → MRP 计算 → 计划订单 → 确认 → 释放 → 预留 | **全通** | 计划订单 `6036ca79`、生产指令 `PI-20261117-0002` |
+| Inventory | 调拨 → 确认 → 盘点 → 提交 → 审批 → 状态变更 → 批次 → 序列号 | **全通**（ABC / 条码 / 组装拆卸除外） | 盘点单 `30f89491` |
+| Accounting | 科目 → 凭证模板 → 规则 → 事件 → 生成凭证 → 提交 → 审批 → 总账 / 报表 | **全通** | 凭证 57 张 |
+| Platform | 角色 → 编号规则 → 组织 → SOD 规则 → 工作流模板/版本/发布/绑定 → 通知订阅 | **全通**（生命周期分析除外） | 流程模板 `UAT_WF_57487` |
+
+**负控有效**（说明门禁是真在起作用，不是放水）：生产工单自审批 409、
+销售出库用 `role-sales` 403、盘点自审批 409、未做 IQC 确认入库被质量门禁拦、
+ABC `basis=VALUE` 缺估值快照 409、坏账核销自批 403、重复编号规则 409。
+
+### 71.4 前端全路由巡检（202 个组合）
+
+| 角色 | 可见 route | 渲染成功 | 错误态 | 4xx/5xx | 控制台错误 |
+|---|---|---|---|---|---|
+| admin | 93 / 93 | **93** | 0 | 0 | 0 |
+| sales | 26 / 93 | **26** | 0 | 0 | 0 |
+| reviewer | 29 / 93 | **29** | 0 | 0 | 0 |
+| warehouse | 20 / 93 | **20** | 0 | 0 | 0 |
+| accounting | 34 / 93 | **34** | 0 | 0 | 0 |
+
+**界面语言**：巡检命中 102 个组合含 4+ 字母 token，逐 token 提取核对后确认
+**全部是标识符**（`SO-202611-00023` / `MO-MWKL8SE4` / `UAT-FG01` / `uat_sales` /
+`APPROVAL_SALES_ORDER` / `QCP-UAT-SALES-DELIVERY` 等），**无一处英文散文** ——
+§69 的中英文混用修整在客户实例上确认生效。
+
+### 71.5 检出的缺陷（5 类，均为 MySQL 8 方言不兼容，SQLite 路径正常）
+
+| # | 缺陷 | 证据 | 客户可见影响 |
+|---|---|---|---|
+| **D1** | **运行时自建表用了 SQLite 专有 DDL**：`TEXT NOT NULL DEFAULT '…'` 在 MySQL 8 被拒（`ER_BLOB_CANT_HAVE_DEFAULT`）<br>· `server/lib/inventory-barcode.js:16-17`<br>· `server/modules/inventory-abc-classifications.js:35`<br>· `server/modules/inventory-assembly-disassembly.js:43,52`<br>· `server/modules/inventory-container.js:20` | 实测 500：`/api/inventory/barcode/rules`、`/api/inventory/abc`、`/api/inventory/abc/analysis`、`/api/inventory/assembly-orders`、`/api/inventory/barcode/generated` | **库存作业 3 个页签坏**：组装拆卸**报错误文案**；ABC 与条码**静默降级为「暂无数据」**（前端 `.catch(() => ({...}))` 掩盖了 500，用户以为没数据） |
+| **D2** | **`rowid` 是 SQLite 伪列，MySQL 无此列**：`server/modules/lifecycle-engine.js:144,145,466-467,845` | 实测 500：`/api/lifecycle/analyze`（所有 entityType 100% 复现） | 平台层「生命周期与归档」页**点记录分析时报错 toast**；采购入库 / 销售出货的归档预检同样失败 |
+| **D3** | **`GROUP BY` 与 `ONLY_FULL_GROUP_BY` 冲突**：`server/modules/outsourcing-finance.js:1247` `SELECT b.*, o.order_id … GROUP BY b.id` | 实测 500：`/api/procurement/outsourcing/processing-fee-bills`（`ER_WRONG_FIELD_WITH_GROUP`） | 委外页**加工费账单面板**报错 |
+| **D4** | **批次 / 序列号 / 批号调整没有列表端点**：`server/app.js` 只注册了 POST 与 `/:id` | 实测 404：`/api/inventory-lots`、`/api/inventory-serials`、`/api/inventory-lot-adjustments` | 批次、序列号、批号调整三个页签**没有数据源** |
+| **D5** | **LOT / SERIAL 货品的 `valuation_method` 与 canonical 映射不符**（`server/modules/financial-inventory.js:6` 要求 LOT→`LOT_SPECIFIC_POOL`、SERIAL→`SPECIFIC_SERIAL`），且**无 HTTP 路由可修**（`changeTrackingPolicy` 只改 `tracking_policy` 不改 `valuation_method`，且 `stock>0` 会阻断重设） | 实测：RM02 盘点审批 409「货品追踪策略与财务估值方法不兼容」；`/api/tracking/availability` 返回 `onHandQuantity: 0`（库存落在无批次仓位） | **批次/序列号跟踪的货品无法完成盘点等库存估值动作**；委外发料无法带 lotId |
+
+**根因归并**：D1 / D2 / D3 的共同根因是 **`server/database/mysql-adapter.js` 的
+`translateSqliteSql()` 翻译层不覆盖这三类 SQLite 专有语法**（它已处理 PRAGMA、
+`INSERT OR IGNORE`、`ON CONFLICT`、`datetime('now')` 等）。因此修复点应落在**翻译层**，
+而不是逐模块打补丁 —— 逐模块修会遗漏同类写法（`server/modules/` 与 `server/lib/` 下共
+17 个模块在运行时用 `db.exec` 自建表）。
+
+### 71.6 另有两项「部署配置缺口」（已在实例上补装，但仓库不播种）
+
+| 项 | 现象 | 处置 |
+|---|---|---|
+| `sales_parameters` 表无 SYSTEM 行 | 所有销售订单 409 `SALES_PARAMETER_UNAVAILABLE`（**阻断性**） | 已用 canonical writer `PUT /api/sales/parameters` 补装 SYSTEM 行；**仓库 migration 不播种**，换环境会再犯 |
+| 无 `SALES_DELIVERY` 质量控制点 | OQC 门禁 fail-safe `BLOCKED` | 已用 `POST /api/quality-control-points` 补装 `QCP-UAT-SALES-DELIVERY`（免检）；同样**仓库不播种** |
+
+### 71.7 其它观察（非本轮缺陷，登记备查）
+
+1. `purchase-receipt-engine.js` 用 legacy `adjustInventory(warehouse, product)`，该适配器显式拒绝
+   LOT / SERIAL → **批次 / 序列号货品的采购入库永远无法确认**（应改用同文件已有的
+   `adjustInventoryAtPosition`）。
+2. 库存原生单据 `OTHER_RECEIPT` 只写 `inventory` 仓位、**不写 `inventory_lot_balances`** →
+   无法创建批次库存。
+3. `server/database/mysql-worker.js` 的 `runAllocateSequence` 是「先 UPDATE 递增、再 SELECT」的
+   **非原子**取号；外层事务回滚时计数器**不回退**（实测 8 次并发空单消耗 8 个号）。
+4. 部分写端点的权限码没有覆盖到既有 canonical 角色（`RECEIPT_NOTICE_MANAGE`、
+   `PO_CHANGE_VIEW/MANAGE`、`PURCHASE_ORDERS_SUBMIT`、`IQC_MANAGE`/`IQC_VIEW`），
+   本轮验收由 admin 代做。
+
+### 71.8 结论与建议
+
+- **核心业务链路（销售 / 采购 / 委外 / 制造 / 计划 / 库存基础 / 会计 / 平台配置）全部跑通**，
+  职责分离与 fail-closed 门禁均有效。
+- **前端 93 条 route × 5 角色全部渲染成功，界面全中文**。
+- **但有 5 个界面在 MySQL 8 上不可用**：库存作业的「组装拆卸 / ABC / 条码」3 个页签、
+  平台层「生命周期与归档」的分析动作、委外的「加工费账单」面板；另有批次 / 序列号 3 个页签
+  缺数据源、批次货品的库存估值动作被拒。
+- **建议在把环境交给客户之前修复 D1–D3**（同一翻译层，收益最大），D4 / D5 视客户是否使用
+  批次与序列号跟踪决定优先级。
+
+### 71.9 未解决事项
+
+1. **D1–D5 未修复**（本轮只授权验收，未授权代码修改）。修复需 Requirement → Design → Implementation。
+2. **`sales_parameters` / `quality-control-points` 的播种缺口只在实例上补装**，仓库 migration 不播种。
+3. **canonical 浏览器发布门禁仍未在当前 HEAD 重跑**（本轮用的是自建的 202 组合巡检 +
+   页签级巡检，不等同于该门禁）。
+4. 客户实例当前含 `UAT-*` 虚构数据与 6 个 `uat_*` 角色账号（外加一个停用的 `uat_probe`）；
+   是否清空交由业务所有者决定。
+
+### 71.10 Owner
+
+| 角色 | 承担者 | 说明 |
+|---|---|---|
+| 本轮验收 | 业务所有者（授权）+ 仓库（执行） | 结果如上；本节不是 Acceptance 签发 |
+| D1–D5 修复 | Platform / 各域 Owner + 业务所有者（批准） | 需走 Requirement → Design → Implementation |
+| Acceptance / Freeze / Release Readiness | 业务所有者 | 本轮**未**签发 |
