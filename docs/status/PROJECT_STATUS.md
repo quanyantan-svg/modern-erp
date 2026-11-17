@@ -6254,3 +6254,120 @@ ABC `basis=VALUE` 缺估值快照 409、坏账核销自批 403、重复编号规
 | D1 / D2 / D3 / D5 修复 | Platform（翻译层）+ Inventory & Warehouse（估值语义） | 已实施并实测 |
 | D4 列表端点 | Inventory & Warehouse | **未实施** |
 | Acceptance / Freeze / Release Readiness | 业务所有者 | 本轮**未**签发 |
+
+## 73. D4 跟踪维度投影一致性 + 5 个列表端点 + 平台前提播种（2026-11-17）
+
+**状态**：`IMPLEMENTED` —— §72.3 登记的 D4（批次 / 序列号 / 批号调整 / 容器 四个界面无数据源）
+与 §71.7-2（库存原生单据不写 `inventory_lot_balances`）已实施；§71.6 登记的两项
+「仓库不播种」缺口已由权威迁移闭合。
+本节**不是 Acceptance**，不签发任何 Acceptance / Freeze / Release Readiness。
+
+### 73.1 授权与边界
+
+业务所有者 2026-11-17：「补 D4 —— 批次/序列号跟踪是制造业客户常用功能，这四个界面现在打开是空的。
+下一轮直接做完」+「全做：4+1 端点 + 投影根因 + 形态转换」；
+以及「能不能补 sales_parameters SYSTEM 行与 SALES_DELIVERY 质量控制点，因为后续难免会 drop 库」
++「安全默认：必须检验」。
+
+合同：Requirement §32.14（`IW-TRACE-01..06`）与 §36.21（`PL-SEED-01..05`）于 2026-11-17 `APPROVED`；
+Design §27.59 与 §32.21 同日 `APPROVED`。本节是这两个合同的实施登记。
+
+**本轮未授权**：真实 MySQL 连接、数据库写操作、Acceptance / Freeze 签发、
+push / tag / merge / release / deploy。
+
+### 73.2 已实施
+
+#### 73.2.1 跟踪维度投影由 canonical 位移写入器维护（`IW-TRACE-04`）
+
+| 项 | 内容 |
+|---|---|
+| 根因 | canonical 位移写入器此前只由**部分**路径维护跟踪维度投影（严格路径 `postCanonicalTrackedLeg` 与 legacy `postTrackedMovement`）；**一般路径**（`applyInventoryMutation` 自记 `tracked_inventory_movements`）不写 `inventory_lot_balances` → 客户实例 canonical 650 / 投影 0，批次可用量恒为 0（§71.7-2、F5 / F6） |
+| 修法 | `server/lib/inventory-mutation.js` 的自记分支同时调用 `maintainTrackedDimension`（`server/modules/traceability-quality.js`）；复用既有原语 `changeLotBalance` 与 `transitionSerialForInventoryMovement`，**不新增业务拒绝语义** |
+| 维度归属 | 由货品的 `tracking_policy` 决定 —— 与严格路径 `postCanonicalTrackedLeg` 同一事实来源；外域身份（LOT 货品上的序列号等）不被投影，避免写出无人读取的第二份真相 |
+| 二次迁移 | `server/modules/inventory-native-document.js` 删除其显式 `transitionSerialForInventoryMovement` 调用（否则出库方向会因状态已迁移而误拒） |
+| 未改 | 严格路径（寄售 / 委外）与 `trackingMode:'EXTERNAL'` 的既有维护归属不变；批次守恒与过期 / 冻结守卫的归属不变 |
+
+#### 73.2.2 5 个列表端点与前端页签加载（`IW-TRACE-01` / `02` / `03`）
+
+| 端点 | owner 模块 | 守卫 | 对应页签 |
+|---|---|---|---|
+| `GET /api/inventory-lots` | `server/modules/traceability-quality.js` | `INVENTORY_VIEW` | — |
+| `GET /api/inventory-serials` | `server/modules/traceability-quality.js` | `INVENTORY_VIEW` | — |
+| `GET /api/inventory-lot-adjustments` | `server/modules/inventory-lot-adjustment.js` | `INVENTORY_LOT_ADJUSTMENT_VIEW` | 批号调整 |
+| `GET /api/inventory-form-conversions` | `server/modules/inventory-form-conversion.js` | `INVENTORY_FORM_CONVERSION_VIEW` | 形态转换 |
+| `GET /api/inventory-containers` | `server/modules/inventory-container.js` | `INVENTORY_CONTAINER_VIEW` | 容器 |
+
+- 数量、所在仓库、生命周期取自**同一份**维度事实（`inventory_lot_balances` / `inventory_serials`），
+  与 `listTrackingIdentities` / `trackedAvailability` / `traceIdentity` / 核对接口 / 健康检查同源；
+  **无第二份数量算法**（`IW-TRACE-06`）。
+- 守卫只用既有权限码，与既有写端点的 `..._MANAGE` 成对；未新增权限码、未改 `role_permissions`。
+- `src/lib/inventoryWorkTabs.js`：三个页签的 `reads` 由 `[]` 改为各自的读取端点；
+  页签**集合仍为 21 个**（只改可见性与参照加载）。只持 `INVENTORY_VIEW` 的角色（如 `role-reviewer`）
+  不再看到这三个页签 —— 这正是 `IW-EXPOSURE-05` 的要求。
+- `src/pages/inventory-work.jsx`：三个页签在打开时读取各自列表，保留 loading / error / empty 三态。
+  顺带修复：`InventoryContainers` 的「拆包」动作原本调用了**未定义**的 `load()`（潜在 ReferenceError）。
+
+#### 73.2.3 对齐迁移与平台前提播种（`IW-TRACE-05` / `PL-SEED-01..05`）
+
+| 文件 | 内容 |
+|---|---|
+| `server/migrations/v25-tracked-dimension-alignment.js` | 按 canonical 仓位幂等回填 `inventory_lot_balances`，删除无对应 canonical 仓位的陈旧投影行，纠正序列号**当前位置**；**只写投影**，不造库存、不改写状态机与历史移动证据 |
+| `server/migrations/v25-platform-prerequisite-seeds.js` | `sales_parameters` SYSTEM 行（`PL-SEED-02` 批准取值）+ 两个默认质检点（`inspection_required=1`）的**幂等**播种：只写缺失的行、不覆盖运维取值、归属必须是真实用户、无用户时延后 |
+| 接线 | `server/db.js`（生产 SQLite）、`server/database/mysql-adapter.js`（活体 MySQL）、`scripts/admin/setup-admin.mjs`（管理员创建之后补齐） |
+
+### 73.3 门禁证据
+
+| 门禁 | 结果 |
+|---|---|
+| `pnpm test:fast` | **PASS 775 / 775** |
+| `pnpm test`（FULL） | **PASS 4159 / 4159**（第三次全量复跑；第二次 4158/4159 的唯一失败是 `m6-production-workflow` 既有 fixture 的随机 UUID 碰撞，见 §73.5-4） |
+| `pnpm build` | **PASS** |
+| `git diff --check` | **PASS** |
+| 文档一致性 `--mode current` | **ALL CHECKS PASSED**（N1 / N3–N9；N2 已退役，不参与判定） |
+| 文档一致性 `--mode migration` | **ALL CHECKS PASSED**（C1–C6） |
+| 新增套件 `server/inventory-d4-tracked-dimension-lists.test.js` | **PASS 18 / 18** |
+| 受影响既有套件（route-exposure-parity / inventory-mutation-wave-b / stocktake-wave-c / wave-c-extras / v13-phase6b / domain-race / domain-closure / wave-d-reports / sales-customer-batch-a / reservation-reaction / parameters-closure / wave1-foundation / m6-production-workflow） | **全绿** |
+
+### 73.4 变异实验
+
+每条变异都**临时改动生产代码 → 跑套件 → 确认目标断言转红 → 按字节还原**（sha256 前后一致）。
+
+| # | 变异 | 期望转红的断言 | 结果 |
+|---|---|---|---|
+| ① | 移除 `applyInventoryMutation` 的 `maintainTrackedDimension` 调用 | 投影一致性断言（`IW-TRACE-04`） | **转红**：投影套件 + 端点套件共 4 条失败 |
+| ② | 把 `INVENTORY_LOT_ADJUSTMENT_VIEW` 守卫放宽为 `INVENTORY_VIEW` | 页签登记与后端守卫逐项一致（`IW-TRACE-03` / PL-EXPOSURE-01） | **转红**：`route-exposure-semantic-parity` 的 F4 与 G 两条 |
+| ③ | 把对齐迁移改成「造库存」（插入 canonical 仓位） | canonical 仓位逐行未变（`IW-TRACE-05`） | **转红**：对齐套件失败 |
+
+套件内另带**独立负向对照**：断言自己重新推导一次比较口径（canonical 聚合 vs 投影聚合），
+证明「一致」不是两处恒等于 0 的空洞。
+
+### 73.5 未解决矛盾
+
+1. **播种目标的边界（本轮做出的一处合同解释，需业务所有者确认）**：§36.21.3 门禁 1 命名的目标是
+   「新建 SQLite 生产库（`NODE_ENV=production`，不跑 demo seed）与既有 MySQL 库」。因此播种
+   **只在这两个目标**（以及管理员引导之后）执行；**演示库不播种** —— 演示环境的销售开关与质检策略
+   由演示数据自身决定，播种会覆盖那些已配置的业务取值，与 `PL-SEED-05` 冲突。
+   该边界由首次 FULL 门禁实测证明：演示 fixture 自建 `sales_parameters` SYSTEM 行 →
+   `UNIQUE constraint failed: sales_parameters.scope_key` → 39 条 Sales 套件失败；
+   改为「演示库不播种」后 76 / 76 恢复全绿。
+   **若业务所有者要求演示库也播种**，需先裁定演示环境的销售开关取值，并同步修订演示 fixture。
+2. **真实 MySQL 未取证**：本轮**未授权**真实 MySQL 连接。两个 `v25` 迁移的 MySQL 方言形状只经过
+   离线翻译层与 SQLite 路径取证；活体 MySQL 的幂等重放与回填结果**未实测**。
+3. **序列号位置对齐不处理「在库但无 canonical 仓位」的序列号**：没有 canonical 仓位就没有可回填的
+   来源；生命周期是业务事实，迁移不改写状态机，因此这类行按 fail-safe 保持原状。
+4. **`m6-production-workflow` 既有 fixture 的随机碰撞**：该 fixture 用 UUID 的 4 个十六进制字符拼仓库编码
+   （`WH-M6-xxxx`，65536 种），同一文件内多次调用存在生日碰撞概率。第二次全量门禁命中一次
+   （`UNIQUE constraint failed: warehouses.code`），单独连跑 3 次均 45 / 45 通过，且第一次全量门禁未命中
+   —— 与本轮改动无关，**本轮未修改该文件**。
+5. **canonical 浏览器发布门禁未在当前 HEAD 重跑**（本轮只跑 FAST / FULL / build / 文档双模式）。
+6. §71.7 其余观察（`purchase-receipt-engine` 的 legacy `adjustInventory`、`runAllocateSequence` 非原子）
+   **未处置**。
+
+### 73.6 Owner
+
+| 角色 | 承担者 | 说明 |
+|---|---|---|
+| D4 列表端点与页签加载 | Inventory & Warehouse | 已实施，门禁全绿 |
+| 跟踪维度投影一致性（`IW-TRACE-04` / `05`） | Inventory & Warehouse | 已实施（一般路径维护 + 幂等对齐迁移） |
+| 平台前提播种（`PL-SEED-01..05`） | Platform（播种机制）+ Sales & Customer（参数取值）+ Manufacturing & Quality（质检点默认） | 已实施；**播种目标边界待业务所有者确认**（§73.5-1） |
+| Acceptance / Freeze / Release Readiness | 业务所有者 | 本轮**未**签发 |

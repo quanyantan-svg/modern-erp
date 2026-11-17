@@ -987,3 +987,81 @@ Implementation：已授权（2026-11-17），范围仅限本节验收门禁所�
    新建 LOT 货品的估值方法再次错配。
 
 **Requirement 状态：`APPROVED`（2026-11-17）。Implementation 已实施（部分）。**
+
+### 36.21 生产前提播种合同（`APPROVED`，2026-11-17）
+
+#### 36.21.1 身份与边界
+
+| 项 | 内容 |
+|---|---|
+| 用途 | 闭合 §71.6 / §71.9.2 登记的**播种缺口**：业务前提只存在于客户测试实例的数据库里，仓库不播种，换环境（drop 库重建）必然复发 |
+| Owner | Platform（播种机制与迁移接线）；Sales & Customer（`sales_parameters` 取值语义）；Manufacturing & Quality（质检点默认语义） |
+| 状态 | `APPROVED`（2026-11-17，业务所有者批准）；Design §32.21 同日 `APPROVED`；Implementation 已实施 |
+| 授权来源 | 业务所有者 2026-11-17 指令：「能不能补 sales_parameters SYSTEM 行与 SALES_DELIVERY 质量控制点，因为后续难免会 drop 库」+「安全默认：必须检验」裁定 |
+| 权威来源 | 本文件 `§36.21`；`document.md` §0.1 Platform Domain Requirement 入口 |
+| Supersession | 不改写 §71 的验收结论；不改写 §36.20 的方言修复结论；不改写任何域级 Acceptance / Freeze；**不**放宽任何质量门禁判定 |
+
+#### 36.21.2 合同项
+
+- **`PL-SEED-01`（生产前提必须由仓库播种）**：凡是「缺该配置事实即按合同 fail closed」的业务前提
+  （本轮为 `sales_parameters` 的 SYSTEM 行与质检点默认），必须由**仓库内的权威迁移**在
+  **初始化时**与**既有环境升级时**同时落地。不得只依赖运维在目标实例上手工补装。
+  手工补装只能作为实例级临时处置，不得作为该前提的唯一来源。
+
+  > **实施期边界澄清（2026-11-17，待业务所有者确认）**：本条的「初始化时」按**生产部署**解释 ——
+  > 播种目标是新建 SQLite 生产库、活体 MySQL 库与管理员引导之后；**演示库不播种**，
+  > 因为演示环境的销售开关与质检策略由演示数据自身决定，播种会覆盖那些已配置的业务取值，
+  > 与 `PL-SEED-05` 冲突。依据是 §36.21.3 门禁 1 命名的两个目标即为上述生产目标。
+  > 该边界由全量门禁实测确定（播种应用到演示库时，演示 fixture 自建的
+  > `sales_parameters` SYSTEM 行与之冲突，39 条 Sales 套件失败）。
+  > 若业务所有者要求演示库也播种，需先裁定演示环境的销售开关取值并同步修订演示 fixture。
+- **`PL-SEED-02`（`sales_parameters` SYSTEM 行的取值）**：SYSTEM 行必须存在且 `active=1`，
+  否则销售订单按 `SALES_PARAMETER_UNAVAILABLE` 全量拒绝（§71.6 阻断性缺陷）。
+  其开关取值必须是业务所有者批准的取值。2026-11-17 批准取值（= 客户测试实例实测值）：
+  `sellable_control_enabled=1`、`customer_material_xref_enabled=1`、
+  `sales_group_data_scope_enabled=1`、`delivery_schedule_enabled=1`、
+  `delivery_quantity_control_enabled=1`、`order_change_mode='BOTH'`、
+  `reservation_behavior='DISABLED'`。
+  这些开关是**业务政策**（可售控制 / 客户物料对应 / 销售组数据范围 / 交货计划 / 交货数量 /
+  订单变更模式 / 预留行为），不是技术默认值；因此取值必须由业务所有者批准并登记，
+  不得由实现自行选定。
+- **`PL-SEED-03`（默认质量控制点必须无条件播种，且不得放宽门禁）**：仓库**已经发布**的默认质检点
+  `QCP-IN-GLOBAL`（`PURCHASE_RECEIPT`）与 `QCP-OUT-GLOBAL`（`SALES_DELIVERY`）
+  —— 二者 `scope='GLOBAL'`、`inspection_required=1`、`sampling_mode='FULL'`、`active=1`、
+  `effective_from='2000-01-01'`、`version=1` —— 必须改为**无条件播种**。
+  其插入条件此前绑定「存在 demo 用户 `user-admin`」，生产模式下永不成立，
+  于是生产库的 `quality_control_points` 为空、OQC 门禁退化为 fail-safe `BLOCKED`（§71.6）。
+  **本条不是引入新的质量默认**，而是把仓库已发布、却被错误条件抑制的默认恢复为生效状态：
+  有无该默认行，出库确认**都**要求检验（缺策略即 fail-safe BLOCKED 的判定不变），
+  差别仅在于冻结的策略快照携带真实 `qcp_id` / `qcp_version` 而非 `NULL`。
+  **禁止**播种 `inspection_required=0` 的免检点：免检会实质放宽质量门禁，
+  与 §71.6 实例上的 UAT 免检配置（产品级、UAT 专用）不是同一件事，
+  也不得作为平台默认。§71 的验收结论与 Wave 10 `W10-QCP-R01`
+  「缺策略仍 fail-safe BLOCKED」的结论保持不变。
+- **`PL-SEED-04`（播种不得伪造归属）**：播种行的 `created_by` 必须指向**真实存在**的用户；
+  不得写入不存在的用户 id，不得伪造操作者，不得把 `NULL` 塞进 `NOT NULL` 列。
+  当数据库中尚无任何用户（新建生产库尚未执行管理员引导）时，播种必须**延后**到
+  创建管理员之后，由**同一条权威播种实现**补齐，不得跳过、不得改写 `created_by` 语义。
+- **`PL-SEED-05`（幂等、双路径一致、不得覆盖运维取值）**：播种必须幂等 ——
+  重复执行不产生重复行，且**不覆盖**运维已经通过 canonical writer 配置过的取值
+  （播种是「不存在才写入」，不是「以默认值覆盖」）；SQLite 与 MySQL 两条路径必须由
+  **同一份实现**落地；MySQL 活体迁移路径必须能补齐**既有**库（新库由快照 bootstrap 携带）。
+
+#### 36.21.3 验收门禁
+
+1. 新建 SQLite 生产库（`NODE_ENV=production`，不跑 demo seed）与既有 MySQL 库各自具备
+   `sales_parameters` 的 SYSTEM 行（取值 = `PL-SEED-02`）与两个默认质检点。
+2. 重复执行播种迁移：行数不增、运维改过的取值不被覆盖。
+3. 无任何用户存在时：播种不得写入 `created_by` 不存在的行；创建管理员后同一条播种补齐。
+4. 出库确认门禁语义不变：缺检验仍拒绝（409），不得因播种而放行。
+5. `pnpm test:fast`、`pnpm test`、`pnpm build`、`git diff --check`、两种文档一致性模式。
+
+#### 36.21.4 禁止事项
+
+不得把目标实例的手工补装当成播种的替代品；不得在本节引入免检默认点；
+不得改动 `sales_parameters` 的 fail-closed 规则（`SALES_PARAMETER_UNAVAILABLE`）；
+不得新增权限码或修改 `role_permissions`；不得改写任何域级 Acceptance / Freeze 结论。
+
+**Requirement 状态：`APPROVED`（2026-11-17，业务所有者批准）。Design §32.21：`APPROVED`（同日）。
+Implementation：已实施（2026-11-17），范围仅限本节验收门禁所列的仓库内代码、迁移与测试变更；
+真实 MySQL 连接、数据库写操作、Acceptance / Freeze 签发、发布与部署**未授权**。**

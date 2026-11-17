@@ -159,7 +159,7 @@ import {
   transferOut, transferIn, getInTransit,
 } from './modules/inventory-step-transfer.js';
 import {
-  createContainer, pack as packContainer, inventoryOfContainer, transferContainer, unpackContainer,
+  createContainer, pack as packContainer, inventoryOfContainer, listContainers, transferContainer, unpackContainer,
 } from './modules/inventory-container.js';
 import {
   parseBarcode, createBarcodeRule, createBarcodeBinding, listBarcodeRules,
@@ -200,7 +200,7 @@ import { recognizeFinanceExposure } from './modules/finance-recognition.js';
 import { RECOGNITION_MODES, resolveRecognitionPolicy, setSourceRecognitionPolicy } from './modules/finance-recognition-policy.js';
 import {
   availabilityHandler, createQcpHandler, freezeQualityPolicy, genealogyHandler, holdIdentityHandler, listTrackingIdentitiesHandler,
-  listQcpHandler, postTrackedMovement, reconcileTrackingHandler, saveAllocationsHandler,
+  listLotsHandler, listQcpHandler, listSerialsHandler, postTrackedMovement, reconcileTrackingHandler, saveAllocationsHandler,
   reverseTrackedSource, saveTrackedAllocations, sourceTrackingAllocations, traceHandler, transferTrackedInventory, updateProductTrackingHandler,
 } from './modules/traceability-quality.js';
 import {
@@ -580,8 +580,8 @@ import { getInventoryParametersHandler, updateInventoryParameters } from './modu
 import {
   createStocktake, updateStocktake, submitStocktake, approveStocktake, scanStocktake, listStocktakes,
 } from './modules/inventory-stocktake.js';
-import { createLotAdjustment, confirmLotAdjustment } from './modules/inventory-lot-adjustment.js';
-import { createFormConversion, confirmFormConversion } from './modules/inventory-form-conversion.js';
+import { createLotAdjustment, confirmLotAdjustment, listLotAdjustments } from './modules/inventory-lot-adjustment.js';
+import { createFormConversion, confirmFormConversion, listFormConversions } from './modules/inventory-form-conversion.js';
 import {
   createInventoryTransfer, confirmInventoryTransfer, cancelInventoryTransfer,
   listInventoryTransfers, getInventoryTransfer,
@@ -3755,6 +3755,12 @@ const inventoryQueryFilters = (params) => ({
 
   // INV-18 - lot adjustment
   ownedRouteTable.register({
+    method: 'GET',
+    path: '/api/inventory-lot-adjustments',
+    handler: ({ db, res, actor, url }) => listLotAdjustments(db, res, actor, url),
+    owner: 'server/modules/inventory-lot-adjustment.js',
+  });
+  ownedRouteTable.register({
     method: 'POST',
     path: '/api/inventory-lot-adjustments',
     handler: ({ db, req, res, actor }) => createLotAdjustment(db, req, res, actor),
@@ -3769,6 +3775,12 @@ const inventoryQueryFilters = (params) => ({
 
   // INV-20 - inventory form / attribute conversion
   ownedRouteTable.register({
+    method: 'GET',
+    path: '/api/inventory-form-conversions',
+    handler: ({ db, res, actor, url }) => listFormConversions(db, res, actor, url),
+    owner: 'server/modules/inventory-form-conversion.js',
+  });
+  ownedRouteTable.register({
     method: 'POST',
     path: '/api/inventory-form-conversions',
     handler: ({ db, req, res, actor }) => createFormConversion(db, req, res, actor),
@@ -3779,6 +3791,21 @@ const inventoryQueryFilters = (params) => ({
     path: /^\/api\/inventory-form-conversions\/([^/]+)\/confirm$/,
     handler: ({ db, res, actor, params }) => confirmFormConversion(db, res, actor, params[0]),
     owner: 'server/modules/inventory-form-conversion.js',
+  });
+
+  // D4 — 跟踪身份主档列表（Requirement §32.14 IW-TRACE-01）。
+  // 数量与所在仓库取自既有维度事实，守卫是既有的 INVENTORY_VIEW。
+  ownedRouteTable.register({
+    method: 'GET',
+    path: '/api/inventory-lots',
+    handler: ({ db, res, actor, url }) => listLotsHandler(db, res, actor, url),
+    owner: 'server/modules/traceability-quality.js',
+  });
+  ownedRouteTable.register({
+    method: 'GET',
+    path: '/api/inventory-serials',
+    handler: ({ db, res, actor, url }) => listSerialsHandler(db, res, actor, url),
+    owner: 'server/modules/traceability-quality.js',
   });
 
   // INV-15 - direct transfer. The canonical module owns the document write
@@ -3815,6 +3842,12 @@ const inventoryQueryFilters = (params) => ({
   });
 
   // INV-44 - bounded packing / container core
+  ownedRouteTable.register({
+    method: 'GET',
+    path: '/api/inventory-containers',
+    handler: ({ db, res, actor, url }) => listContainers(db, res, actor, url),
+    owner: 'server/modules/inventory-container.js',
+  });
   ownedRouteTable.register({
     method: 'POST',
     path: '/api/inventory-containers',

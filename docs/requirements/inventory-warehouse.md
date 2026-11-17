@@ -707,4 +707,70 @@ step transfer:
 
 **Requirement 状态：`APPROVED`（2026-11-15，业务所有者批准）。Design §27.58：`APPROVED`（同日批准）。
 Implementation：已授权（2026-11-15），范围仅限本节验收门禁所列的仓库内代码与测试变更；
-真实 MySQL 连接、数据库操作、Acceptance / Freeze 签发、发布与部署**未授权**。**
+真实 MySQL 连接、数据库操作、Acceptance / Freeze 签发、发布与部署**未授权`。**
+
+### 32.14 批次 / 序列号跟踪列表端点与跟踪维度投影一致性修订（D4，`APPROVED`，2026-11-17）
+
+> **有界解冻授权（2026-11-17）**：业务所有者指令「补 D4 —— 批次/序列号跟踪是制造业客户常用功能，
+> 这四个界面现在打开是空的。下一轮直接做完」并追加裁定「全做：4+1 端点 + 投影根因 + 形态转换」。
+> 本节因此**有界解冻** §32.13 登记的页签读取口径与本域的跟踪读模型，
+> 仅覆盖本节合同项列出的范围；既有域级 Acceptance / Freeze（2026-11-13，44/44）继续作为历史时点记录保留。
+
+#### 32.14.1 事实基础（客户测试环境实测，2026-11-17）
+
+| # | 事实 | 证据 |
+|---|---|---|
+| F1 | 批号调整 / 形态转换 / 容器只有写端点与 `/:id` 端点，**没有列表端点** | `server/app.js:3757-3768`、`:3771-3782`、`:3818-3853`；实测 `GET /api/inventory-lot-adjustments` → 404 |
+| F2 | 三个页签的列表**只由自己的新建动作本地塞入**，刷新后不可寻回 | `src/pages/inventory-work.jsx` 的 `InventoryLotAdjustment` / `InventoryFormConversion` / `InventoryContainers`：`useState([])` 且无列表读取 |
+| F3 | 批次 / 序列号主档**没有列表端点**；既有 `GET /api/tracking/identities` 是**身份 + 移动证据**投影（限 100 行），不是主档列表 | `server/modules/traceability-quality.js:569-587` |
+| F4 | canonical 位移写入器**不维护**跟踪维度投影 `inventory_lot_balances`，只有寄售 / 委外严格路径的 `postCanonicalTrackedLeg` 维护 | `server/lib/inventory-mutation.js:397-410`（自记 tracked movement 时只写 `tracked_inventory_movements`）；`server/modules/traceability-quality.js:254-299` |
+| F5 | 客户实例上 canonical 库存 = **650**，投影 = **0**；平台自带健康检查 `TRACKED_DIMENSION_VS_CANONICAL` 差 650 | 实例只读实测：`inventory`（LOT 货品 UAT-RM02，active）合计 650；`inventory_lot_balances` 空；`server/modules/financial-inventory.js:316-330` |
+| F6 | 因投影为空，`listTrackingIdentities` 与 `trackedAvailability` 对**每一个**批次返回数量 0 / 无当前仓库 / 可用量 0 | `server/modules/traceability-quality.js:573-580`、`:592-596` |
+
+**根因归并**：F6 不是「少几个端点」，而是 F4 —— 维度投影由**部分**写入路径维护，
+于是投影与 canonical 仓位长期背离。**只补列表端点会得到「有行但全 0」的假修复**，
+因此本节把投影一致性（`IW-TRACE-04`）与列表端点（`IW-TRACE-01/02`）放在同一轮闭合。
+
+#### 32.14.2 合同项
+
+- **`IW-TRACE-01`（跟踪身份主档列表端点）**：必须提供 `GET /api/inventory-lots` 与
+  `GET /api/inventory-serials`，返回批次 / 序列号主档的 canonical 读模型：
+  身份标识、所属货品、状态、有效期、来源类型、**当前数量与所在仓库**。
+  当前数量必须来自与 `listTrackingIdentities` / `trackedAvailability` **同一份**维度事实
+  （不得出现第二份数量算法）；守卫为既有权限码 `INVENTORY_VIEW`。
+- **`IW-TRACE-02`（单据列表端点与页签加载）**：批号调整 / 形态转换 / 容器必须各有一个列表端点
+  （`GET /api/inventory-lot-adjustments`、`GET /api/inventory-form-conversions`、
+  `GET /api/inventory-containers`），且库存作业工作面的对应页签必须在打开时读取该列表。
+  草稿单刷新后必须可寻回；无权 actor 不得触发该读取（承 `IW-EXPOSURE-02`）。
+- **`IW-TRACE-03`（守卫只许收紧、不得新增权限码）**：单据列表端点必须使用**既有**权限码
+  （`INVENTORY_LOT_ADJUSTMENT_VIEW` / `INVENTORY_FORM_CONVERSION_VIEW` / `INVENTORY_CONTAINER_VIEW`，
+  与既有写端点的 `..._MANAGE` 成对）；不得新增权限码、不得修改 `role_permissions`、
+  不得改动任何角色的权限集合、不得改变 `inventory` route 的 exposure、
+  不得改变 21 个页签的**集合**（只改变可见性与参照加载，承 §32.13.4）。
+- **`IW-TRACE-04`（跟踪维度投影必须由 canonical 位移写入器维护）**：批次维度的当前投影
+  `inventory_lot_balances` 与序列号的当前位置 / 生命周期，必须由**唯一 canonical 位移写入器**
+  （`server/lib/inventory-mutation.js`）在同一次事务内维护；不得由各调用方各自补写，
+  不得出现第二条投影写入路径。维护不得**新增**业务拒绝语义：批次可用量的既有守恒检查
+  与过期 / 冻结守卫的既有归属不变。平台健康检查 `TRACKED_DIMENSION_VS_CANONICAL`
+  与 `GET /api/tracking/reconcile` 的差异必须为 0。
+- **`IW-TRACE-05`（既有差额必须按 canonical 仓位回填，不得造库存）**：既有环境里投影与
+  canonical 仓位的差额必须由一条**幂等**迁移按 canonical 仓位回填；回填只写投影，
+  不得新增或修改任何 canonical 仓位、库存数量、状态机、估值或会计事实，
+  不得改写历史移动证据。
+- **`IW-TRACE-06`（单一口径）**：批次 / 序列号的数量、所在仓库、生命周期在
+  主档列表、追溯视图、可用量、核对接口与健康检查五处必须来自同一份维度事实；
+  任何一处出现「有行但数量恒为 0」即视为未闭合。
+
+#### 32.14.3 验收门禁
+
+1. 五个列表端点返回 2xx；无权 actor 被后端拒绝（403），前端不得先行发起无权读取。
+2. 页签读取登记（`src/lib/inventoryWorkTabs.js`）与后端实际守卫逐项一致；
+   21 个页签集合不变，可见性按登记的读取权限收敛。
+3. 有货场景下批次 / 序列号列表返回**真实数量与所在仓库**（不得恒为 0）；
+   `GET /api/tracking/reconcile` 返回 `ok=true`；`TRACKED_DIMENSION_VS_CANONICAL` 差异 = 0。
+4. 对齐迁移幂等：重复执行后投影与 canonical 仓位差额仍为 0，且 canonical 仓位逐行未变。
+5. `pnpm test:fast`、`pnpm test`、`pnpm build`、`git diff --check`、两种文档一致性模式。
+
+**Requirement 状态：`APPROVED`（2026-11-17，业务所有者批准）。Design §27.59：`APPROVED`（同日）。
+Implementation：已实施（2026-11-17），范围仅限本节验收门禁所列的仓库内代码、迁移、前端与测试变更；
+真实 MySQL 连接、数据库写操作、Acceptance / Freeze 签发、发布与部署**未授权**。**

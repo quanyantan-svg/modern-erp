@@ -913,6 +913,18 @@ export function InventoryLotAdjustment({ user, notify, references }) {
   const [creating, setCreating] = useState(false);
   const [confirming, setConfirming] = useState(null);
   const [documents, setDocuments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError('');
+    api('/api/inventory-lot-adjustments')
+      .then((data) => setDocuments(data.lotAdjustments || []))
+      .catch((e) => { setError(e.message || '批号调整单加载失败'); notify(e.message || '批号调整单加载失败', 'error'); })
+      .finally(() => setLoading(false));
+  }, [notify]);
+  useEffect(() => { void load(); }, [load]);
 
   const confirmLot = async () => {
     try {
@@ -932,7 +944,7 @@ export function InventoryLotAdjustment({ user, notify, references }) {
         description="批号拆分 / 合并 / 重分类；数量必须守恒，不得借批号调整制造或销毁库存。"
         actions={canManage ? <button type="button" className="primary" onClick={() => setCreating(true)}>＋ 新建批号调整</button> : null}
       >
-        <InventoryWorkState loading={false} error="" empty={!documents.length}>
+        <InventoryWorkState loading={loading} error={error} onRetry={load} empty={!documents.length}>
           <div className="inv-work-list">
             {documents.map((row) => (
               <InventoryWorkRow
@@ -1014,6 +1026,18 @@ export function InventoryFormConversion({ user, notify, references }) {
   const [creating, setCreating] = useState(false);
   const [confirming, setConfirming] = useState(null);
   const [documents, setDocuments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError('');
+    api('/api/inventory-form-conversions')
+      .then((data) => setDocuments(data.formConversions || []))
+      .catch((e) => { setError(e.message || '形态转换单加载失败'); notify(e.message || '形态转换单加载失败', 'error'); })
+      .finally(() => setLoading(false));
+  }, [notify]);
+  useEffect(() => { void load(); }, [load]);
 
   const confirmConversion = async () => {
     try {
@@ -1033,7 +1057,7 @@ export function InventoryFormConversion({ user, notify, references }) {
         description="库存形态 / 属性转换：源位置减少与目标位置增加成对发生，库存数量必须守恒。"
         actions={canManage ? <button type="button" className="primary" onClick={() => setCreating(true)}>＋ 新建形态转换</button> : null}
       >
-        <InventoryWorkState loading={false} error="" empty={!documents.length}>
+        <InventoryWorkState loading={loading} error={error} onRetry={load} empty={!documents.length}>
           <div className="inv-work-list">
             {documents.map((row) => (
               <InventoryWorkRow
@@ -1528,6 +1552,18 @@ export function InventoryContainers({ user, notify, references }) {
   const [packing, setPacking] = useState(null);
   const [contents, setContents] = useState(null);
   const [transferTarget, setTransferTarget] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError('');
+    api('/api/inventory-containers')
+      .then((data) => setContainers(data.containers || []))
+      .catch((e) => { setError(e.message || '容器加载失败'); notify(e.message || '容器加载失败', 'error'); })
+      .finally(() => setLoading(false));
+  }, [notify]);
+  useEffect(() => { void load(); }, [load]);
 
   const loadContents = async (containerId) => {
     try {
@@ -1565,7 +1601,7 @@ export function InventoryContainers({ user, notify, references }) {
         description="容器只保存装箱关系，不是第二套库存余额；真实库存仍以规范库存身份为准。"
         actions={canManage ? <button type="button" className="primary" onClick={() => setCreating(true)}>＋ 新建容器</button> : null}
       >
-        <InventoryWorkState loading={false} error="" empty={!containers.length}>
+        <InventoryWorkState loading={loading} error={error} onRetry={load} empty={!containers.length}>
           <div className="inv-work-list">
             {containers.map((row) => (
               <InventoryWorkRow

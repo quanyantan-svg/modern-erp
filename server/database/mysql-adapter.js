@@ -11,6 +11,8 @@ import {
 } from '../migrations/v14-e2-business-date.js';
 import { migrateW11ASelectorSearchKey } from '../migrations/sales-customer-wave11-a-selector-search-key.js';
 import { alignTrackedValuationMethods } from '../migrations/v14-tracked-valuation-alignment.js';
+import { alignTrackedDimensionProjection } from '../migrations/v25-tracked-dimension-alignment.js';
+import { seedPlatformPrerequisites } from '../migrations/v25-platform-prerequisite-seeds.js';
 import {
   MYSQL_RESPONSE_HEADER_BYTES,
   abandonWorkerRequest,
@@ -310,6 +312,14 @@ export function createMySqlDatabase(config, { createSqliteSnapshot, seedDemo = f
     migrateW11ASelectorSearchKey(adapter);
     // 追踪策略与财务估值方法对齐（幂等；与 SQLite 同一权威实现）。
     alignTrackedValuationMethods(adapter);
+    // 跟踪维度投影与 canonical 仓位对齐（幂等；与 SQLite 同一权威实现）。
+    // 新库由快照 bootstrap 携带同一份实现的结果，既有库在这里补齐。
+    alignTrackedDimensionProjection(adapter);
+    // 生产前提播种（幂等；与 SQLite 同一权威实现）。既有库在这里补齐
+    // `sales_parameters` 的 SYSTEM 行与两个默认质检点。
+    // 播种目标是**生产部署**：演示快照（seedDemo）不播种 —— 演示环境的销售
+    // 开关与质检策略由演示数据自身决定，播种会覆盖那些已配置的业务取值。
+    if (!seedDemo) seedPlatformPrerequisites(adapter);
     return adapter;
   } catch (error) {
     adapter.close();

@@ -27,13 +27,15 @@ export const INVENTORY_WORK_TABS = [
   { key: 'owners', label: '所有权', reads: [{ endpoint: '/api/inventory-owner-dimensions', kind: 'any', codes: ['OWNER_DIMENSION_VIEW', 'INVENTORY_PARAMETERS_MANAGE'] }] },
   { key: 'parameters', label: '库存参数', reads: [{ endpoint: '/api/inventory-parameters', kind: 'any', codes: ['INVENTORY_PARAMETERS_VIEW', 'INVENTORY_PARAMETERS_MANAGE'] }] },
   { key: 'stocktake', label: '盘点', reads: [{ endpoint: '/api/inventory-stocktakes', kind: 'all', codes: ['INVENTORY_VIEW'] }] },
-  // 批号调整 / 形态转换 / 容器：打开时不读取任何端点（只提供新建表单），因此对所有 actor 可见。
-  { key: 'lot', label: '批号调整', reads: [] },
-  { key: 'form', label: '形态转换', reads: [] },
+  // 批号调整 / 形态转换 / 容器：打开时读取各自的单据列表（Requirement §32.14
+  // IW-TRACE-02）。守卫是既有的 ..._VIEW 权限码，与写端点的 ..._MANAGE 成对；
+  // 因此只持 INVENTORY_VIEW 的角色（如 role-reviewer）不再看到这三个页签。
+  { key: 'lot', label: '批号调整', reads: [{ endpoint: '/api/inventory-lot-adjustments', kind: 'all', codes: ['INVENTORY_LOT_ADJUSTMENT_VIEW'] }] },
+  { key: 'form', label: '形态转换', reads: [{ endpoint: '/api/inventory-form-conversions', kind: 'all', codes: ['INVENTORY_FORM_CONVERSION_VIEW'] }] },
   { key: 'assembly', label: '组装拆卸', reads: [{ endpoint: '/api/inventory/assembly-orders', kind: 'any', codes: ['INVENTORY_ASSEMBLY_VIEW', 'INVENTORY_ASSEMBLY_MANAGE'] }] },
   { key: 'abc', label: 'ABC', reads: [{ endpoint: '/api/inventory/abc', kind: 'any', codes: ['INVENTORY_ABC_MANAGE', 'INVENTORY_REPORT_VIEW', 'INVENTORY_VIEW'] }] },
   { key: 'barcode', label: '条码', reads: [{ endpoint: '/api/inventory/barcode/rules', kind: 'any', codes: ['INVENTORY_BARCODE_RULE_VIEW', 'INVENTORY_BARCODE_RULE_MANAGE'] }] },
-  { key: 'containers', label: '容器', reads: [] },
+  { key: 'containers', label: '容器', reads: [{ endpoint: '/api/inventory-containers', kind: 'all', codes: ['INVENTORY_CONTAINER_VIEW'] }] },
   { key: 'scan', label: '扫码', reads: [{ endpoint: '/api/inventory/scan/query', kind: 'all', codes: ['INVENTORY_VIEW'] }] },
   { key: 'transfer', label: '调拨', reads: [{ endpoint: '/api/inventory-transfers', kind: 'all', codes: ['INVENTORY_VIEW'] }] },
   { key: 'adjustment', label: '调整', reads: [{ endpoint: '/api/inventory-adjustments', kind: 'all', codes: ['INVENTORY_ADJUSTMENT_MANAGE'] }] },

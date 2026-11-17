@@ -48,6 +48,38 @@ function ensureLot(db, productId, lotCode) {
   return id;
 }
 
+// The canonical read model of the lot adjustment documents (Requirement §32.14
+// `IW-TRACE-02` / `IW-TRACE-03`). The guard is the existing
+// `INVENTORY_LOT_ADJUSTMENT_VIEW`, paired with the write guard
+// `INVENTORY_LOT_ADJUSTMENT_MANAGE` — no new permission code is introduced.
+export function listLotAdjustments(db, res, actor, url) {
+  allow(actor, 'INVENTORY_LOT_ADJUSTMENT_VIEW');
+  ensureTable(db);
+  const clauses = [];
+  const params = [];
+  const status = url?.searchParams?.get('status');
+  if (status) { clauses.push('la.status=?'); params.push(String(status).toUpperCase()); }
+  const adjustmentType = url?.searchParams?.get('adjustmentType');
+  if (adjustmentType) { clauses.push('la.adjustment_type=?'); params.push(String(adjustmentType).toUpperCase()); }
+  const rows = db.prepare(`
+    SELECT la.id, la.doc_no docNo, la.adjustment_type adjustmentType, la.status, la.product_id productId,
+           p.code productCode, p.name productName, la.warehouse_id warehouseId, w.code warehouseCode, w.name warehouseName,
+           la.source_lot_id sourceLotId, la.source_lot_code sourceLotCode,
+           la.target_lot_id targetLotId, la.target_lot_code targetLotCode,
+           la.quantity, la.reason, la.created_at createdAt, la.confirmed_at confirmedAt,
+           creator.display_name creatorName, confirmer.display_name confirmedByName
+      FROM inventory_lot_adjustments la
+      LEFT JOIN products p ON p.id=la.product_id
+      LEFT JOIN warehouses w ON w.id=la.warehouse_id
+      LEFT JOIN users creator ON creator.id=la.creator_id
+      LEFT JOIN users confirmer ON confirmer.id=la.confirmed_by
+      ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
+      ORDER BY la.created_at DESC LIMIT 200`).all(...params);
+  return send(res, 200, {
+    lotAdjustments: rows.map((row) => ({ ...row, quantity: Number(row.quantity) })),
+  });
+}
+
 export async function createLotAdjustment(db, req, res, actor) {
   allow(actor, 'INVENTORY_LOT_ADJUSTMENT_MANAGE');
   const body = await readJson(req);

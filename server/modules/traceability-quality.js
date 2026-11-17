@@ -248,6 +248,39 @@ export function transitionSerialForInventoryMovement(db, {
   return { lifecycleState, currentWarehouseId: null };
 }
 
+// The tracked dimension projection (lot balance / serial position) is a
+// derivative of the canonical inventory positions. Only the canonical writer
+// may maintain it, otherwise the projection and the canonical positions drift
+// apart and every tracking reader reports zero for real stock.
+//
+// The general mutation path records its own tracked movement, so it owns the
+// projection for that movement. The strict paths (consignment, outsourcing)
+// keep their own maintenance inside `postCanonicalTrackedLeg`.
+//
+// Which dimension a position carries is decided by the product's tracking
+// policy — the same single source `postCanonicalTrackedLeg` reads. A position
+// carrying a foreign identity (a lot on a SERIAL product, a serial on a LOT
+// product) is not projected: that dimension row is not the one the product's
+// readers consult, so writing it would create a second, unread truth.
+//
+// The primitives are the existing ones, so no new rejection vocabulary is
+// introduced: `changeLotBalance` keeps its conservation / negative-balance
+// refusal, `transitionSerialForInventoryMovement` keeps its lifecycle and
+// position rules.
+export function maintainTrackedDimension(db, {
+  productId, warehouseId, lotId = null, serialId = null,
+  quantity, direction, sourceType, at = nowIso(),
+}) {
+  const policy = productTracking(db, productId).tracking_policy;
+  const amount = Number(quantity);
+  if (policy === 'LOT' && lotId) {
+    changeLotBalance(db, warehouseId, productId, lotId, direction === 'IN' ? amount : -amount, at);
+  }
+  if (policy === 'SERIAL' && serialId) {
+    transitionSerialForInventoryMovement(db, { serialId, productId, warehouseId, direction, sourceType, at });
+  }
+}
+
 // Transaction-inheriting V21 primitive for callers that already resolved one
 // canonical position partition. It deliberately accepts no client allocation
 // list: LOT/SERIAL identity comes from the validated V21 position itself.
@@ -586,6 +619,102 @@ export function listTrackingIdentities(db, identityType, search = '') {
     ORDER BY latestMovementDate DESC,s.serial_number LIMIT 100`).all(term, term, term);
 }
 
+// ---------------------------------------------------------------------------
+// D4 — 批次 / 序列号主档列表（Requirement §32.14 `IW-TRACE-01` / `IW-TRACE-06`）。
+//
+// 主档列表与 `listTrackingIdentities` / `trackedAvailability` / `traceIdentity`
+// 读**同一份**维度事实：批次余额取自 `inventory_lot_balances`，序列号当前位置与
+// 生命周期取自 `inventory_serials`。这里不出现第二份数量算法。
+// ---------------------------------------------------------------------------
+
+const MASTER_LIST_LIMIT = 200;
+
+function masterListFilters(url) {
+  const params = url?.searchParams;
+  const requested = Number(params?.get('limit'));
+  return {
+    productId: params?.get('productId') || null,
+    warehouseId: params?.get('warehouseId') || null,
+    status: params?.get('status') || null,
+    search: String(params?.get('search') || '').trim(),
+    limit: Number.isFinite(requested) && requested > 0
+      ? Math.min(MASTER_LIST_LIMIT, Math.floor(requested))
+      : MASTER_LIST_LIMIT,
+  };
+}
+
+export function listLots(db, filters = {}) {
+  const { productId, warehouseId, status, search } = filters;
+  const limit = Number.isFinite(Number(filters.limit)) && Number(filters.limit) > 0
+    ? Math.min(MASTER_LIST_LIMIT, Math.floor(Number(filters.limit)))
+    : MASTER_LIST_LIMIT;
+  const clauses = [];
+  const params = [];
+  if (productId) { clauses.push('l.product_id=?'); params.push(productId); }
+  if (status) { clauses.push('l.status=?'); params.push(String(status).toUpperCase()); }
+  if (search) {
+    const term = `%${search}%`;
+    clauses.push('(l.lot_code LIKE ? OR p.code LIKE ? OR p.name LIKE ?)');
+    params.push(term, term, term);
+  }
+  const lots = db.prepare(`
+    SELECT l.id, l.lot_code lotCode, l.product_id productId, p.code productCode, p.name productName,
+           l.status, l.manufacture_date manufactureDate, l.expiry_date expiryDate,
+           l.supplier_lot_reference supplierLotReference, l.created_source_type createdSourceType,
+           l.created_at createdAt
+      FROM inventory_lots l JOIN products p ON p.id=l.product_id
+      ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
+     ORDER BY l.created_at DESC, l.lot_code
+     LIMIT ${limit}`).all(...params);
+  if (!lots.length) return [];
+  // `inventory_lot_balances` is keyed by (warehouse_id, lot_id) — one row per
+  // pair — so no aggregation is needed here.
+  const balances = db.prepare(`
+    SELECT b.lot_id lotId, b.warehouse_id warehouseId, w.code warehouseCode, b.quantity quantity
+      FROM inventory_lot_balances b JOIN warehouses w ON w.id=b.warehouse_id
+     WHERE b.quantity>0${warehouseId ? ' AND b.warehouse_id=?' : ''}`).all(...(warehouseId ? [warehouseId] : []));
+  const byLot = new Map();
+  for (const row of balances) {
+    const entry = byLot.get(row.lotId) || { onHandQuantity: 0, warehouses: [] };
+    entry.onHandQuantity += Number(row.quantity);
+    entry.warehouses.push({ warehouseId: row.warehouseId, warehouseCode: row.warehouseCode, quantity: Number(row.quantity) });
+    byLot.set(row.lotId, entry);
+  }
+  return lots.map((lot) => {
+    const entry = byLot.get(lot.id) || { onHandQuantity: 0, warehouses: [] };
+    return { ...lot, onHandQuantity: entry.onHandQuantity, warehouses: entry.warehouses };
+  });
+}
+
+export function listSerials(db, filters = {}) {
+  const { productId, warehouseId, status, search } = filters;
+  const limit = Number.isFinite(Number(filters.limit)) && Number(filters.limit) > 0
+    ? Math.min(MASTER_LIST_LIMIT, Math.floor(Number(filters.limit)))
+    : MASTER_LIST_LIMIT;
+  const clauses = [];
+  const params = [];
+  if (productId) { clauses.push('s.product_id=?'); params.push(productId); }
+  if (warehouseId) { clauses.push('s.current_warehouse_id=?'); params.push(warehouseId); }
+  if (status) { clauses.push('s.lifecycle_state=?'); params.push(String(status).toUpperCase()); }
+  if (search) {
+    const term = `%${search}%`;
+    clauses.push('(s.serial_number LIKE ? OR p.code LIKE ? OR p.name LIKE ?)');
+    params.push(term, term, term);
+  }
+  return db.prepare(`
+    SELECT s.id, s.serial_number serialNumber, s.product_id productId, p.code productCode, p.name productName,
+           s.lot_id lotId, s.lifecycle_state lifecycleState, s.current_warehouse_id currentWarehouseId,
+           w.code currentWarehouseCode, s.manufacture_date manufactureDate, s.expiry_date expiryDate,
+           s.created_source_type createdSourceType, s.created_at createdAt,
+           CASE WHEN s.lifecycle_state IN ('AVAILABLE','HOLD') THEN 1 ELSE 0 END onHandQuantity
+      FROM inventory_serials s JOIN products p ON p.id=s.product_id
+      LEFT JOIN warehouses w ON w.id=s.current_warehouse_id
+      ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
+     ORDER BY s.created_at DESC, s.serial_number
+     LIMIT ${limit}`).all(...params)
+    .map((row) => ({ ...row, onHandQuantity: Number(row.onHandQuantity) }));
+}
+
 function trackedAvailability(db, productId, warehouseId, businessDate = today()) {
   const product = productTracking(db, productId);
   if (product.tracking_policy === 'LOT') {
@@ -611,6 +740,10 @@ export function reconcileTrackingHandler(db, res, actor) { allow(actor, 'INVENTO
 export function traceHandler(db, res, actor, url) { allowAny(actor, ['INVENTORY_VIEW','PURCHASE_RECEIPTS_VIEW','SALES_DELIVERIES_VIEW','ORDERS_VIEW']); const type = String(url.searchParams.get('type') || '').toUpperCase(); let identityId = url.searchParams.get('id'); const code = url.searchParams.get('code'); if (!identityId && code) { const table = type === 'LOT' ? 'inventory_lots' : 'inventory_serials'; const column = type === 'LOT' ? 'lot_code' : 'serial_number'; identityId = db.prepare(`SELECT id FROM ${table} WHERE ${column}=? AND (? IS NULL OR product_id=?)`).get(code, url.searchParams.get('productId'), url.searchParams.get('productId'))?.id; } return send(res, 200, traceIdentity(db, type, identityId, url.searchParams.get('direction') || 'BACKWARD', url.searchParams.get('includeReversed') === 'true')); }
 export function availabilityHandler(db, res, actor, url) { allow(actor, 'INVENTORY_VIEW'); return send(res, 200, trackedAvailability(db, url.searchParams.get('productId'), url.searchParams.get('warehouseId'), url.searchParams.get('businessDate') || today())); }
 export function listTrackingIdentitiesHandler(db, res, actor, url) { allow(actor, 'INVENTORY_VIEW'); return send(res, 200, { identities: listTrackingIdentities(db, url.searchParams.get('type'), url.searchParams.get('search')) }); }
+// D4 — 批次 / 序列号主档列表端点（Requirement §32.14 IW-TRACE-01）。
+// 守卫是既有的 `INVENTORY_VIEW`，与写端点的权限码集合不重叠也不新增。
+export function listLotsHandler(db, res, actor, url) { allow(actor, 'INVENTORY_VIEW'); return send(res, 200, { lots: listLots(db, masterListFilters(url)) }); }
+export function listSerialsHandler(db, res, actor, url) { allow(actor, 'INVENTORY_VIEW'); return send(res, 200, { serials: listSerials(db, masterListFilters(url)) }); }
 export async function genealogyHandler(db, req, res, actor) { return send(res, 201, allocateGenealogy(db, actor, await readJson(req))); }
 
 export const TRACKING_POLICIES = POLICIES;

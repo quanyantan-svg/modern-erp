@@ -20,6 +20,8 @@ import { migrateV13Phase6BTraceabilityQuality } from './migrations/v13-phase6b-t
 import { migrateV13Phase6CManufacturingExecution } from './migrations/v13-phase6c-manufacturing-execution.js';
 import { migrateV13Phase6DFinancialInventory } from './migrations/v13-phase6d-financial-inventory.js';
 import { alignTrackedValuationMethods } from './migrations/v14-tracked-valuation-alignment.js';
+import { alignTrackedDimensionProjection } from './migrations/v25-tracked-dimension-alignment.js';
+import { seedPlatformPrerequisites } from './migrations/v25-platform-prerequisite-seeds.js';
 import { migrateV13Phase6ECommercialGoLive } from './migrations/v13-phase6e-commercial-golive.js';
 import { migrateV13Phase7cPerformance } from './migrations/v13-phase7c-performance.js';
 import { migrateR4PurchaseSourceCardinality } from './migrations/r4-purchase-source-cardinality.js';
@@ -742,6 +744,18 @@ function initializeSqliteDatabase(db, filename) {
   migratePlatformDomainSchema(db);
   // R-02 — coordination-only anchors for the canonical cross-domain period guard.
   migratePeriodControlSchema(db);
+  // 跟踪维度投影与 canonical 仓位对齐（Requirement §32.14 IW-TRACE-05）。
+  // 它必须排在 migrateInventoryPositionSchema 之后 —— canonical 仓位上的
+  // lot_id / serial_id 身份正是在那一步补齐的，对齐读的就是那些身份。
+  // 幂等：已对齐时 inspect 直接判定为已达成，不写任何行。
+  alignTrackedDimensionProjection(db);
+  // 生产前提播种（Requirement §36.21 PL-SEED-01）。
+  // 目标是**生产环境**：新建 SQLite 生产库、活体 MySQL 库、以及管理员引导之后
+  // （§36.21.3 门禁 1 命名的正是「新建 SQLite 生产库（NODE_ENV=production，
+  // 不跑 demo seed）」与「既有 MySQL 库」）。
+  // 演示库**不播种**：演示环境的销售开关与质检策略由演示数据自身决定，播种会
+  // 覆盖那些已配置的业务取值 —— 而 PL-SEED-05 要求播种不得覆盖已有取值。
+  if (!shouldSeedDemoData()) seedPlatformPrerequisites(db);
   // W11-A U3 — the demo seed runs after the additive search key migration, so
   // the demo customers write their derived search keys in the insert itself
   // and a repeated initialization never breaks an existing customer.

@@ -27,7 +27,8 @@
 //   - never echoes the password to stdout / stderr
 //   - never writes the password to disk
 
-import { createDatabase, hashPassword } from '../../server/db.js';
+import { createDatabase, hashPassword, shouldSeedDemoData } from '../../server/db.js';
+import { seedPlatformPrerequisites } from '../../server/migrations/v25-platform-prerequisite-seeds.js';
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -123,7 +124,12 @@ export function setupAdmin({
       VALUES(?, ?, ?, ?, ?, ?, 1, ?)
     `).run(userId, user, displayName, passwordHash.hash, passwordHash.salt, role.id, nowIso);
 
-    return { success: true, username: user, userId, roleId: role.id };
+    // PL-SEED-04 —— 生产前提的播种延后到管理员创建之后，由**同一条权威播种
+    // 实现**补齐（初始化时库里还没有任何用户，播种不得伪造归属）。
+    // 播种目标是生产部署；演示环境（demo seed 开启）不播种。
+    const seed = shouldSeedDemoData() ? null : seedPlatformPrerequisites(db);
+
+    return { success: true, username: user, userId, roleId: role.id, seeded: seed?.state ?? null };
   } catch (e) {
     return { success: false, error: `创建失败: ${e.message}` };
   } finally {

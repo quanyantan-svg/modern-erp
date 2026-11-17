@@ -39,6 +39,35 @@ function ensureTable(db) {
   `);
 }
 
+// The canonical read model of the packing containers (Requirement §32.14
+// `IW-TRACE-02` / `IW-TRACE-03`). The guard is the existing
+// `INVENTORY_CONTAINER_VIEW`, paired with the write guard
+// `INVENTORY_CONTAINER_MANAGE`.
+export function listContainers(db, res, actor, url) {
+  allow(actor, 'INVENTORY_CONTAINER_VIEW');
+  ensureTable(db);
+  const clauses = [];
+  const params = [];
+  const status = url?.searchParams?.get('status');
+  if (status) { clauses.push('c.status=?'); params.push(String(status).toUpperCase()); }
+  const warehouseId = url?.searchParams?.get('warehouseId');
+  if (warehouseId) { clauses.push('c.warehouse_id=?'); params.push(warehouseId); }
+  const rows = db.prepare(`
+    SELECT c.id, c.container_no containerNo, c.container_type containerType, c.status,
+           c.warehouse_id warehouseId, w.code warehouseCode, w.name warehouseName,
+           c.parent_container_id parentContainerId, c.created_at createdAt,
+           creator.display_name creatorName,
+           (SELECT COUNT(*) FROM inventory_container_items ci WHERE ci.container_id=c.id) memberCount
+      FROM inventory_containers c
+      LEFT JOIN warehouses w ON w.id=c.warehouse_id
+      LEFT JOIN users creator ON creator.id=c.created_by
+      ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
+      ORDER BY c.created_at DESC LIMIT 200`).all(...params);
+  return send(res, 200, {
+    containers: rows.map((row) => ({ ...row, memberCount: Number(row.memberCount) })),
+  });
+}
+
 export async function createContainer(db, req, res, actor) {
   allow(actor, 'INVENTORY_CONTAINER_MANAGE');
   const body = await readJson(req);

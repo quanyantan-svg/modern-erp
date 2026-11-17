@@ -35,6 +35,35 @@ function ensureTable(db) {
   `);
 }
 
+// The canonical read model of the form conversion documents (Requirement
+// §32.14 `IW-TRACE-02` / `IW-TRACE-03`). The guard is the existing
+// `INVENTORY_FORM_CONVERSION_VIEW`, paired with the write guard
+// `INVENTORY_FORM_CONVERSION_MANAGE`.
+export function listFormConversions(db, res, actor, url) {
+  allow(actor, 'INVENTORY_FORM_CONVERSION_VIEW');
+  ensureTable(db);
+  const clauses = [];
+  const params = [];
+  const status = url?.searchParams?.get('status');
+  if (status) { clauses.push('fc.status=?'); params.push(String(status).toUpperCase()); }
+  const rows = db.prepare(`
+    SELECT fc.id, fc.doc_no docNo, fc.status, fc.product_id productId, p.code productCode, p.name productName,
+           fc.warehouse_id warehouseId, w.code warehouseCode, w.name warehouseName,
+           fc.quantity, fc.from_form fromForm, fc.to_form toForm, fc.reason, fc.business_date businessDate,
+           fc.created_at createdAt, fc.confirmed_at confirmedAt,
+           creator.display_name creatorName, confirmer.display_name confirmedByName
+      FROM inventory_form_conversions fc
+      LEFT JOIN products p ON p.id=fc.product_id
+      LEFT JOIN warehouses w ON w.id=fc.warehouse_id
+      LEFT JOIN users creator ON creator.id=fc.creator_id
+      LEFT JOIN users confirmer ON confirmer.id=fc.confirmed_by
+      ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
+      ORDER BY fc.created_at DESC LIMIT 200`).all(...params);
+  return send(res, 200, {
+    formConversions: rows.map((row) => ({ ...row, quantity: Number(row.quantity) })),
+  });
+}
+
 export async function createFormConversion(db, req, res, actor) {
   allow(actor, 'INVENTORY_FORM_CONVERSION_MANAGE');
   const body = await readJson(req);

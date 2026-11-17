@@ -38,7 +38,7 @@ import { HttpError } from './http.js';
 import { canonicalPositionSnapshot, computePositionKey, normalizeOwnerType, parseCanonicalPositionSnapshot, validateOwner, validateStockStatus, validateBin } from './inventory-position.js';
 import { issueSourceValue } from '../modules/financial-inventory.js';
 import { guardPeriodAction } from '../modules/period-control.js';
-import { postCanonicalTrackedLeg } from '../modules/traceability-quality.js';
+import { postCanonicalTrackedLeg, maintainTrackedDimension } from '../modules/traceability-quality.js';
 
 const MOVEMENT_KINDS = new Set([
   'IN', 'OUT', 'MOVE', 'OWNER_CHANGE', 'STATUS_CHANGE',
@@ -406,6 +406,19 @@ export function applyInventoryMutation(input) {
         });
       } else if (input.trackingMode !== 'EXTERNAL') {
         m.trackedMovementId = writeTrackedMovement(db, input, m.position, m.direction, businessDate, input.movementKind, m.transactionId);
+        // This path recorded the tracked movement itself, so it also owns the
+        // tracked dimension projection for that movement (Requirement §32.14
+        // IW-TRACE-04). The strict paths keep their own maintenance inside
+        // `postCanonicalTrackedLeg` and never reach this branch.
+        maintainTrackedDimension(db, {
+          productId: m.position.productId,
+          warehouseId: m.position.warehouseId,
+          lotId: m.position.lotId,
+          serialId: m.position.serialId,
+          quantity: input.quantity,
+          direction: m.direction,
+          sourceType: input.sourceType,
+        });
       }
     }
 

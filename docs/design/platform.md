@@ -1988,3 +1988,78 @@ Requirement §36.20：`APPROVED`（2026-11-17）；本节 Design：`APPROVED`（
 Implementation：**已实施**（`PL-DDL-01`、`PL-DDL-02`、`PL-GROUP-01`、`PL-VALUATION-01`、
 `PL-VALUATION-02`、`PL-EMPTY-01`）；**`PL-DDL-01` 之外的 §36.19 D4（批次 / 序列号 /
 批号调整 / 容器 的列表端点）尚未实施**。
+
+### 32.21 生产前提播种设计（`APPROVED`，2026-11-17）
+
+#### 32.21.1 改动清单
+
+| 文件 | 改动 |
+|---|---|
+| `server/migrations/v25-platform-prerequisite-seeds.js`（新增） | `seedPlatformPrerequisites(db)`：`sales_parameters` SYSTEM 行 + 两个默认质检点的**幂等**播种（仅在缺失时写入） |
+| `server/db.js` | 在 late-migration 区块内、demo seed **之前**调用 `seedPlatformPrerequisites(db)`；**仅在生产部署（不跑 demo seed）执行**（见 §32.21.2 第 6 点） |
+| `server/database/mysql-adapter.js` | 活体迁移路径调用同一个 `seedPlatformPrerequisites(adapter)`（既有 MySQL 库补齐；新库由快照 bootstrap 携带同一份实现的结果）；同样仅在非演示部署执行 |
+| `scripts/admin/setup-admin.mjs` | 创建管理员之后调用同一个 `seedPlatformPrerequisites(db)`，补齐「尚无任何用户」时无法归属的质检点行（演示部署不调用） |
+
+#### 32.21.2 播种实现口径
+
+1. **只写缺失的行**：播种前先读目标行是否存在；存在即**跳过**（不覆盖运维通过
+   `PUT /api/sales/parameters` / `POST /api/quality-control-points` 配置过的取值）。
+   因此重复执行不产生重复行、也不回退运维决定（`PL-SEED-05`）。
+2. **`sales_parameters` SYSTEM 行**：写入 `PL-SEED-02` 批准的取值，
+   `scope_key='SYSTEM'`、`scope_type='SYSTEM'`、`document_type=NULL`、`active=1`，
+   `created_by` / `updated_by` 写入**真实存在**的用户 id（见第 3 点）。
+   该表的 `created_by` / `updated_by` 允许 `NULL`，但播种**不**写 `NULL`：
+   能解析到用户就写真实 id，解析不到就不写该行（延后到管理员创建之后）。
+3. **质检点默认**：`QCP-IN-GLOBAL` / `QCP-OUT-GLOBAL` 的字段值**逐字沿用**仓库已发布的
+   默认行（`v13-phase6b-traceability-quality.js:217-222`），只把「插入条件依赖 demo 用户」
+   改为「无条件」：
+   - `scope='GLOBAL'`、`product_id=NULL`、`inspection_required=1`、`sampling_mode='FULL'`、
+     `sampling_value=NULL`、`active=1`、`effective_from='2000-01-01'`、`effective_to=NULL`、
+     `version=1`、`remarks` 沿用原文、`created_by` 指向真实用户。
+   - `quality_control_points.created_by` 是 `NOT NULL REFERENCES users(id)`，
+     因此**播种前必须先解析真实用户**：取库内最早的管理员用户（`role_permissions` 关联的
+     `role-admin`），没有则取最早的用户；**一个用户都没有时跳过质检点播种**
+     （`PL-SEED-04`），由 `setup-admin` 在创建管理员后用同一实现补齐。
+   - 原 `v13-phase6b` 迁移里的条件插入**保留不动**（历史库重放时仍幂等），
+     新播种用 `INSERT OR IGNORE`（MySQL 侧译为 `INSERT IGNORE`）保证与旧行不冲突。
+4. **方言**：播种只用 `SELECT` + `INSERT OR IGNORE ... VALUES`，
+   不使用 `WHERE EXISTS(...) SELECT` 形态，避免依赖 SQL 翻译层的子查询形状；
+   时间戳用 ISO 字符串参数，不用 `datetime('now')`。
+5. **单一定义**：SQLite 与 MySQL 两条路径调用**同一个**导出函数，不各写一份。
+6. **播种目标边界**：播种只作用于**生产部署** —— 新建 SQLite 生产库、活体 MySQL 库，
+   以及管理员引导之后。**演示库不播种**：演示环境的销售开关与质检策略由演示数据自身决定，
+   播种会覆盖那些已配置的业务取值，与第 1 点（只写缺失的行、不覆盖运维取值）冲突。
+   本边界由全量门禁实测确定：演示 fixture 自建 `sales_parameters` SYSTEM 行时，
+   播种写入的行与之冲突（`UNIQUE constraint failed: sales_parameters.scope_key`），
+   39 条 Sales 套件失败；改为「演示库不播种」后全部恢复。
+   该边界与 §36.21.3 门禁 1 命名的目标（「新建 SQLite **生产库**（`NODE_ENV=production`，
+   不跑 demo seed）与既有 MySQL 库」）一致。
+
+#### 32.21.3 门禁语义不变
+
+- `sales_parameters` 的 fail-closed 规则（无 active SYSTEM 行 → `SALES_PARAMETER_UNAVAILABLE`）
+  **不改**：播种只是把「缺失的前提」补成「已存在的配置事实」，不是把失败规则改成成功规则。
+- 质检门禁判定**不改**：默认质检点 `inspection_required=1`，
+  有无该行，出库确认都要求检验（缺检验仍 409）。
+
+#### 32.21.4 回滚
+
+播种只新增行、不改既有行；回滚 = 删除这两类种子行（`scope_key='SYSTEM'` 的 `sales_parameters`
+行与 `code IN ('QCP-IN-GLOBAL','QCP-OUT-GLOBAL')` 的质检点行）。
+运维已改过取值的行**不在回滚范围**（播种不覆盖它们，回滚也不得覆盖）。
+
+#### 32.21.5 验证与变异实验
+
+1. 新建 SQLite 生产库（不跑 demo seed）：`sales_parameters` 有 SYSTEM 行、
+   `quality_control_points` 有两个默认行且 `inspection_required=1`。
+2. 既有 MySQL 库执行同一播种后同样成立（真实 MySQL 连接**未授权**，本轮只在
+   离线方言层与 SQLite 路径取证）。
+3. 幂等：播种执行两次，行数与取值不变。
+4. 无用户库：播种不写质检点行；`setup-admin` 之后同一实现补齐。
+5. 变异实验：把 `inspection_required` 改成 0 → 出库确认门禁被放宽 → 必须被守卫捕获；
+   把播种的「存在即跳过」改成「无条件覆盖」→ 运维取值被回退 → 必须被守卫捕获。
+
+#### 32.21.6 Design 状态
+
+Requirement §36.21：`APPROVED`（2026-11-17）；本节 Design：`APPROVED`（同日）。
+Implementation：**已实施**（`PL-SEED-01..05`）。

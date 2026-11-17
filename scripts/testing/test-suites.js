@@ -444,6 +444,12 @@ const FULL = [
   // ----- V21 Inventory & Warehouse Domain Closure — Wave C extras (lot adjustment + form conversion) -----
   'server/inventory-wave-c-extras.test.js',
 
+  // ----- D4 跟踪维度投影一致性 + 5 个列表端点 + 平台前提播种 -----
+  // Requirement §32.14（IW-TRACE-01..06）/ §36.21（PL-SEED-01..05）。
+  // 每个用例都创建一次性临时 SQLite 并驱动真实写入器、真实端点处理器与真实
+  // 迁移，因此不属于 FAST 的「无数据库」判据，登记在 FULL。
+  'server/inventory-d4-tracked-dimension-lists.test.js',
+
   // ----- B3120 Planning Domain Capability Closure -----
   'server/planning-domain-closure.test.js',
   // ----- B3120 Planning Domain Closure — remediation round (2026-11-12) -----

@@ -2136,3 +2136,116 @@ Requirement §32.13：`APPROVED`（2026-11-15）；本节 Design：`APPROVED`（
 Implementation：**已授权**（范围仅限本节所列仓库内代码与测试）。
 
 **未授权**：真实 MySQL 连接、数据库破坏性操作、Acceptance / Freeze 签发、push / tag / merge / release / deploy。
+
+### 27.59 D4 批次 / 序列号跟踪列表端点与跟踪维度投影一致性设计（`APPROVED`，2026-11-17）
+
+#### 27.59.1 改动清单
+
+| 文件 | 改动 |
+|---|---|
+| `server/modules/traceability-quality.js` | 新增 `listLots(db, filters)` / `listSerials(db, filters)`（主档读模型，数量取自既有维度事实）；新增 `maintainTrackedDimension(db, …)`（canonical 位移写入器的投影维护入口） |
+| `server/modules/inventory-lot-adjustment.js` | 新增 `listLotAdjustments(db, filters)`（单据读模型） |
+| `server/modules/inventory-form-conversion.js` | 新增 `listFormConversions(db, filters)`（单据读模型） |
+| `server/modules/inventory-container.js` | 新增 `listContainers(db, filters)`（单据读模型） |
+| `server/app.js` | `ownedRouteTable` 注册 5 个 `GET` 端点（各自 owner 模块） |
+| `server/lib/inventory-mutation.js` | 自记 tracked movement 的分支同时维护跟踪维度投影 |
+| `server/modules/inventory-native-document.js` | 删除其显式 `transitionSerialForInventoryMovement` 调用（改由 canonical 位移写入器维护，避免二次状态迁移） |
+| `server/migrations/v25-tracked-dimension-alignment.js`（新增） | 幂等对齐：按 canonical 仓位回填 `inventory_lot_balances`，并清除无对应仓位的陈旧投影行 |
+| `server/db.js` / `server/database/mysql-adapter.js` | 双路径接线该对齐迁移 |
+| `src/lib/inventoryWorkTabs.js` | 登记三个页签的读取端点与既有权限码 |
+| `src/pages/inventory-work.jsx` | 批号调整 / 形态转换 / 容器三个页签在打开时加载各自列表 |
+
+#### 27.59.2 端点、守卫与 owner
+
+| 端点 | owner 模块 | 守卫 | 读模型 |
+|---|---|---|---|
+| `GET /api/inventory-lots` | `server/modules/traceability-quality.js` | `INVENTORY_VIEW` | 批次主档：身份、货品、状态、有效期、来源、当前数量、所在仓库 |
+| `GET /api/inventory-serials` | `server/modules/traceability-quality.js` | `INVENTORY_VIEW` | 序列号主档：身份、货品、生命周期状态、当前仓库、有效期 |
+| `GET /api/inventory-lot-adjustments` | `server/modules/inventory-lot-adjustment.js` | `INVENTORY_LOT_ADJUSTMENT_VIEW` | 批号调整单：单号、类型、状态、货品、仓库、数量、原因、创建 / 确认人与时间 |
+| `GET /api/inventory-form-conversions` | `server/modules/inventory-form-conversion.js` | `INVENTORY_FORM_CONVERSION_VIEW` | 形态转换单：单号、类型、状态、货品、仓库、数量、原因 |
+| `GET /api/inventory-containers` | `server/modules/inventory-container.js` | `INVENTORY_CONTAINER_VIEW` | 容器：容器号、类型、状态、仓库、成员数、父容器 |
+
+- 守卫**只用既有权限码**（`INVENTORY_VIEW` 与三个 `..._VIEW`），与既有写端点的
+  `..._MANAGE` 成对；不新增权限码、不改 `role_permissions`、不改任何角色的权限集合。
+- 批次 / 序列号主档的数量**必须**取自既有维度事实（`inventory_lot_balances` /
+  `inventory_serials`），与 `listTrackingIdentities` / `trackedAvailability` /
+  `traceIdentity` 同源；不得出现第二份数量算法（`IW-TRACE-06`）。
+- 单据列表沿用既有单据读模型风格（`listNativeDocuments` 的形态）：
+  可选过滤（状态 / 类型）、按创建时间倒序、限量返回、附创建 / 确认人显示名。
+
+#### 27.59.3 跟踪维度投影的维护点
+
+**不变量**：canonical 仓位（`inventory`）里带批次 / 序列号身份的数量，
+必须与批次维度投影（`inventory_lot_balances`）和序列号当前位置 / 生命周期一致。
+
+| 路径 | 跟踪移动证据 | 投影维护者（改后） |
+|---|---|---|
+| 寄售（`trackingMode=CONSIGNMENT_STRICT`） | `postCanonicalTrackedLeg` | `postCanonicalTrackedLeg`（不变） |
+| 委外（`trackingMode=EXTERNAL`） | 委外模块调用 `postCanonicalTrackedLeg` | 同上（不变） |
+| 一般路径（其余） | `applyInventoryMutation` 自记 `tracked_inventory_movements` | **`applyInventoryMutation`（本轮新增）** |
+
+- 维护调用既有原语：`changeLotBalance`（批次余额，守恒 + 负数拒绝）与
+  `transitionSerialForInventoryMovement`（序列号生命周期与当前位置）。
+  **不新增业务拒绝语义**：一般路径下的 `changeLotBalance` 负数检查在投影与 canonical
+  仓位一致时恒不触发（投影按 `(仓库, 批次)` 聚合，恒 ≥ 单仓位数量），
+  其拒绝码与拒绝文案沿用既有实现。
+- 序列号状态迁移只做一次：一般路径的 `inventory-native-document.js` 原有显式调用**删除**，
+  避免同一次移动被迁移两次（出库方向会因状态已迁移而误拒）。
+- 序列号生命周期取值仍由业务语义决定（`SALES_DELIVERY` → `DELIVERED`、
+  含 `SCRAP` → `SCRAPPED`、其余 → `CONSUMED`），不在本轮改动。
+
+#### 27.59.4 对齐迁移
+
+- 只写投影，不动 canonical 仓位：按 `inventory`（`active=1`）的
+  `(warehouse_id, product_id, lot_id)` 聚合回填 `inventory_lot_balances.quantity`，
+  并删除无对应 canonical 仓位的陈旧投影行。
+- 幂等：重复执行结果相同；不新增 / 修改任何 canonical 仓位、库存数量、状态机、
+  估值或会计事实，不改写历史移动证据。
+- 接线：`server/db.js`（SQLite 初始化路径）与 `server/database/mysql-adapter.js`
+  （活体 MySQL 路径）调用**同一份**实现。
+
+#### 27.59.5 前端页签登记与加载
+
+- `src/lib/inventoryWorkTabs.js`：把「批号调整」「形态转换」「容器」三个页签的
+  `reads` 从 `[]` 改为各自的读取端点与既有权限码（`kind: 'all'` +
+  `..._VIEW` 码）。页签**集合**不变（21 个），只改变可见性与参照加载（承 §32.13.4）。
+  可见性后果：`role-warehouse`（持三个 `..._VIEW`）三页签照常可见；
+  只持 `INVENTORY_VIEW` 的角色（如 `role-reviewer`）不再看到这三个页签 ——
+  这正是 `IW-EXPOSURE-05`「页签不得暴露无权能力」的要求。
+- `src/pages/inventory-work.jsx`：三个页签组件在打开时读取自己的列表；
+  保留既有 `InventoryWorkState` 的 loading / error / empty 三态；
+  新建成功后的本地追加仍保留（与列表刷新不冲突）。
+
+#### 27.59.6 事务、审计、错误行为
+
+- 五个列表端点为**只读**，不写库、不写审计；无权时按既有 `allow` / `allowAny` 语义 403。
+- 投影维护与对齐迁移都在既有事务边界内完成；失败即回滚，失败副作用为零。
+- 端点错误一律显式抛出（不静默返回空集合）：未知过滤参数不改变语义，
+  非法过滤值按既有单据读模型的形态处理。
+
+#### 27.59.7 回滚
+
+- 端点与前端登记可整体回退（删路由 + 回退页签登记与加载）。
+- 投影维护回退后，投影将重新只由严格路径维护（回到本轮前的行为），
+  对齐迁移留下的投影行**保留**（它们是 canonical 仓位的派生值，不是有害残留）。
+- 播种（§32.21）与本节互不依赖，可分别回滚。
+
+#### 27.59.8 验证与变异实验
+
+1. 端点合同测试：5 个端点的 2xx / 403、读模型字段、过滤与限量。
+2. 投影一致性测试：一般路径（原生其他入库 / 出库）写入带批次的货品后，
+   `inventory_lot_balances` 与 `inventory` 聚合一致；
+   `GET /api/tracking/reconcile` 返回 `ok=true`；
+   `systemHealth` 的 `TRACKED_DIMENSION_VS_CANONICAL` 差异为 0。
+3. 对齐迁移幂等测试：重复执行后差额仍为 0，canonical 仓位逐行未变。
+4. 前端登记测试：页签 `reads` 与后端实际守卫逐项一致；三页签在有权角色下加载列表、
+   在无权角色下不发请求。
+5. 变异实验：① 去掉投影维护 → 一致性断言必须转红；② 把守卫放宽为 `INVENTORY_VIEW` →
+   页签登记一致性断言必须转红；③ 把对齐迁移改成「造库存」→ canonical 仓位未变断言必须转红。
+
+#### 27.59.9 Design 状态
+
+Requirement §32.14：`APPROVED`（2026-11-17）；本节 Design：`APPROVED`（同日）。
+Implementation：**已实施**（`IW-TRACE-01..06`）。
+
+**未授权**：真实 MySQL 连接、数据库写操作、Acceptance / Freeze 签发、push / tag / merge / release / deploy。
