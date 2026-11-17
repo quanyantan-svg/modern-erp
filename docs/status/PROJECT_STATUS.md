@@ -6454,3 +6454,81 @@ push / tag / merge / release / deploy。
 | 本次部署与目标环境验证 | 仓库（执行）+ 业务所有者（授权） | 已执行并实测；**不是 Acceptance** |
 | 残余跟踪维度差额的处置 | Inventory & Warehouse + 业务所有者 | 待裁定（§74.5-1） |
 | 推送 / tag / release | 业务所有者 | 本轮**未**执行 |
+
+## 75. 采购入库确认的跟踪物料支持与物理写入器收敛（2026-11-17）
+
+### 75.1 授权与边界
+
+- 业务所有者 2026-11-17 复测判定后裁定「补齐跟踪物料入库」并选定「修完再交付」，明确该处置须走
+  Requirement → Design → Implementation。
+- 本轮执行 **AUDIT → REQUIREMENT → DESIGN**（AGENTS.md §4.0 连续阶段授权）；**Design 完成后 HARD STOP**，
+  Implementation **未授权**，须业务所有者单独批准。
+- 未 push / tag / merge / release；未签发 Acceptance / Freeze / Release Readiness；未连接真实 MySQL、
+  未执行数据库写操作、未部署。
+
+### 75.2 AUDIT 结论（Coverage / Gap）
+
+| 面 | 结论 | 依据 |
+|---|---|---|
+| 采购入库确认对不跟踪物料 | `COVERED` | `purchase-receipt-engine.js:279` → `:282` 全通 |
+| 采购入库确认对跟踪物料 | **`SEMANTIC_MISMATCH`** | 服务端 400 拒绝，而界面已提供批次分配输入（F12） |
+| 跟踪身份主档与批次余额写入 | `COVERED`（当前随事务回滚而不可达） | `postTrackedMovement` 已在该路径（`:278`） |
+| 身份级估值（按批次 / 序列号池） | `COVERED`（同上） | `receiveSourceValue` 已按 allocation 比例拆分（`financial-inventory.js:135-145`） |
+| 物理数量写入 | **`SEMANTIC_MISMATCH`** | 仍走 legacy 写入器，违反 Design §27.8 / §27.43.1 §A / §C |
+| canonical 写入器承接能力 | `COVERED` | `SOURCE_TYPES` 已登记 `'PURCHASE_RECEIPT'`（`inventory-mutation.js:49`） |
+| 失败零副作用 | `COVERED` | 确认在 `transaction(db, …)` 内（`app.js:7023`） |
+| 委外发料 409 | 派生物（**非独立缺陷**） | 根因是跟踪物料拿不到采购价估值（F10） |
+| 其余 8 处 legacy 写入点 | `PARTIAL` | 库存调整冲销 / 销售退货 / 生产补料 / 生产领料 ×2 / 生产退料 / 完工入库 / 副产品入库仍拒绝跟踪物料；**本轮不收敛**，登记为残余能力缺口 |
+| §27.6 `tracking` 输入对象 | `SEMANTIC_MISMATCH`（文档 vs 实现） | Design 声明该字段，实现未落地；已验收的 SALES_RETURN 用逐分配 position 元组 |
+| §26.12 / §26.29 采购域 Design | **合同冲突** | 「不重写 inventory mutation」与 §27.8 唯一入口条款直接矛盾 |
+| `PROJECT_STATUS` §71.7-1 的处置建议 | **建议本身错误** | 建议改用 `adjustInventoryAtPosition`，该函数直接写 `inventory`，违反 §27.8 |
+| 既有测试 | `PARTIAL` | 无任何测试断言跟踪物料**不得**经采购入库收货（无需反转断言）；也无正向覆盖 |
+
+### 75.3 已完成的合同阶段
+
+| 文档 | 章节 | 状态 |
+|---|---|---|
+| `docs/requirements/procurement-outsourcing.md` | §31.21 采购入库确认的跟踪物料合同与物理写入器收敛 | `APPROVED`（2026-11-17） |
+| `docs/design/procurement-outsourcing.md` | §26.41 采购入库确认的跟踪物料支持与物理写入器收敛 | `APPROVED`（2026-11-17） |
+| `docs/design/procurement-outsourcing.md` | §26.12 / §26.29 的既有表述 | **有界修订并取代**（见 §26.41.9） |
+| `document.md` / `solution.md` | 采购域导航 | 已同步（并补登记此前遗漏的 §31.19 / §31.20 / §26.39 / §26.40） |
+
+Requirement 条款 `PRC-TRK-01..11` 与验收条件 `PRC-TRK-AC-01..08`；Design 含模块改动清单、调用与数据流、
+事务 / 幂等 / 并发 / 错误行为、状态机 / RBAC / 审计 / 会计口径、无 schema 变更与双路径、兼容与回滚、
+测试与变异实验计划、已知边界与未解决矛盾。
+
+### 75.4 门禁证据
+
+| 门禁 | 结果 |
+|---|---|
+| `node scripts/docs/check-doc-consistency.mjs --mode current` | **ALL CHECKS PASSED**（N1、N3–N9 PASS；N2 `RETIRED`） |
+| `node scripts/docs/check-doc-consistency.mjs --mode migration` | **ALL CHECKS PASSED**（C1–C6） |
+| `git diff --check` | PASS |
+| Implementation 相关门禁（`pnpm test:fast` / `pnpm test` / `pnpm build`） | **未运行** —— Implementation 未授权，本轮零代码改动 |
+
+### 75.5 未解决矛盾
+
+1. §27.6 声明的 `tracking` 输入对象未落地：实现多分配输入形态，还是改写 §27.6 使其与已验收的逐分配
+   position 元组形式一致？（Inventory 域冻结正文，须业务所有者裁定）
+2. 其余 8 处 legacy 写入点是否与本节同批收敛。
+3. `PRC-TRK-11` 的委外级联解除属「同源消解」还是「独立缺陷」，须以实施后实测为准。
+4. 历史无批次身份库存（`UAT-RM02` 差额 500、`UAT-FG02` 差额 200）是否需要单独的追认 / 修复决策。
+5. **Design 新发现**：跟踪维度投影 `inventory_lot_balances` 有两个维护者 —— `postTrackedMovement`（按分配
+   原数量）与 canonical 写入器的 `maintainTrackedDimension`（按写入数量）；单据单位与基本单位换算系数 ≠ 1
+   时两者口径不同。本轮不改写任一维护者，登记待裁定。
+
+### 75.6 Owner
+
+| 角色 | 承担者 | 说明 |
+|---|---|---|
+| AUDIT / Requirement / Design | 仓库（执行） | 已完成并落盘 |
+| Implementation | 业务所有者 | **未授权**，等待批准 |
+| §75.5-1（§27.6 字段） | Inventory & Warehouse + 业务所有者 | 待裁定 |
+| §75.5-2（其余 8 处写入点） | Procurement & Manufacturing + 业务所有者 | 待裁定 |
+| 推送 / tag / release / 部署 | 业务所有者 | 本轮**未**执行 |
+
+### 75.7 下一阶段 / 暂停点
+
+停在 **Design 完成**，按 AGENTS.md §4.3 HARD STOP。Implementation 获批后按 §26.41.3 的改动清单实施，
+并按 §26.41.8 跑 focused + 全量门禁 + 变异实验，再经授权部署到客户测试环境复跑批次链路
+（入库 → 委外发料 → 委外收货 → 加工费过账）。
