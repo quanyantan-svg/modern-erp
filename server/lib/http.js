@@ -106,7 +106,7 @@ export async function readJson(req) {
   }
   if (!chunks.length) return {};
   const contentType = String(req.headers['content-type'] || '').toLowerCase();
-  if (!contentType.startsWith('application/json')) throw new HttpError(415, '请求内容类型必须为 application/json');
+  if (!contentType.startsWith('application/json')) throw new HttpError(415, '请求内容类型必须为「application/json」');
   try {
     const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new HttpError(400, 'JSON 请求体必须为对象');
@@ -144,11 +144,11 @@ export async function readMultipart(req, { limitBytes = 0, allowedTypes = null }
       ? configured : 10 * 1024 * 1024);
   const contentType = String(req.headers['content-type'] || '');
   if (!contentType.toLowerCase().startsWith('multipart/form-data')) {
-    throw new HttpError(415, '请求内容类型必须为 multipart/form-data');
+    throw new HttpError(415, '请求内容类型必须为「multipart/form-data」');
   }
   const boundaryMatch = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType);
   const boundary = boundaryMatch ? String(boundaryMatch[1] || boundaryMatch[2] || '').trim() : '';
-  if (!boundary) throw new HttpError(400, 'multipart 请求缺少 boundary');
+  if (!boundary) throw new HttpError(400, '「multipart」 请求缺少 「boundary」');
 
   const chunks = [];
   let size = 0;
@@ -158,7 +158,7 @@ export async function readMultipart(req, { limitBytes = 0, allowedTypes = null }
     chunks.push(chunk);
   }
   const buffer = Buffer.concat(chunks);
-  if (!buffer.length) throw new HttpError(400, 'multipart 请求体为空');
+  if (!buffer.length) throw new HttpError(400, '「multipart」 请求体为空');
 
   const delimiter = Buffer.from(`--${boundary}`);
   const fields = {};
@@ -193,7 +193,7 @@ export async function readMultipart(req, { limitBytes = 0, allowedTypes = null }
     }
     cursor = next;
   }
-  if (!file) throw new HttpError(400, 'multipart 请求缺少文件部分');
+  if (!file) throw new HttpError(400, '「multipart」 请求缺少文件部分');
   if (allowedTypes && !allowedTypes.includes(String(file.contentType || ''))) {
     throw new HttpError(415, '附件类型不在允许清单内');
   }
@@ -264,7 +264,7 @@ export function setSecurityHeaders(res) {
 }
 
 export function serveStatic(res, pathname, distDir) {
-  if (!distDir || !existsSync(distDir)) throw new HttpError(404, '前端尚未构建，请先运行 pnpm build');
+  if (!distDir || !existsSync(distDir)) throw new HttpError(404, '前端尚未构建，请先运行 「pnpm」 「build」');
   const requested = pathname === '/' ? 'index.html' : pathname.slice(1);
   const root = resolve(distDir);
   let file = resolve(root, requested);

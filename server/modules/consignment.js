@@ -16,12 +16,12 @@ const now = () => new Date().toISOString();
 const hash = (value) => createHash('sha256').update(String(value)).digest('hex');
 const qty = (value, label = 'quantityMicros') => {
   const number = Number(value);
-  if (!Number.isSafeInteger(number) || number <= 0) throw new HttpError(422, `${label} must be a positive safe integer`);
+  if (!Number.isSafeInteger(number) || number <= 0) throw new HttpError(422, `${label}必须是大于 0 的安全整数`);
   return number;
 };
 const ver = (value) => {
   const number = Number(value);
-  if (!Number.isSafeInteger(number) || number < 1) throw new HttpError(422, 'expectedVersion must be a positive integer');
+  if (!Number.isSafeInteger(number) || number < 1) throw new HttpError(422, '「expectedVersion」必须是正整数');
   return number;
 };
 const requireRead = (actor) => { allowAny(actor, ['SALES_VIEW', 'SALES_MANAGE']); requireSalesPermission(actor, 'CONSIGNMENT_VIEW'); };
@@ -36,7 +36,7 @@ function scope(db, actor, row, write = false) {
 
 function documentRow(db, id, actor, forUpdate = false) {
   const row = db.prepare(`SELECT * FROM consignment_commercial_documents WHERE id=?${forUpdate ? lock(db) : ''}`).get(id);
-  if (!row) throw new HttpError(404, 'Consignment document not found');
+  if (!row) throw new HttpError(404, '寄售单据不存在');
   scope(db, actor, row, forUpdate);
   return row;
 }
@@ -45,13 +45,13 @@ function lineRow(db, id, actor, forUpdate = false) {
   const row = db.prepare(`SELECT l.*,d.customer_id,d.sales_group_id,d.source_warehouse_id,d.business_date,d.currency_code,d.status document_status,d.document_no
     FROM consignment_commercial_lines l JOIN consignment_commercial_documents d ON d.id=l.document_id
     WHERE l.id=?${forUpdate ? lock(db) : ''}`).get(id);
-  if (!row) throw new HttpError(404, 'Consignment line not found');
+  if (!row) throw new HttpError(404, '寄售单据行不存在');
   scope(db, actor, row, forUpdate);
   return row;
 }
 
 function referenceNotFound() {
-  return new HttpError(404, 'Consignment reference context not found', { code: 'CONSIGNMENT_REFERENCE_CONTEXT_NOT_FOUND' });
+  return new HttpError(404, '寄售引用上下文不存在', { code: 'CONSIGNMENT_REFERENCE_CONTEXT_NOT_FOUND' });
 }
 
 function referenceDocumentRow(db, id, actor) {
@@ -82,19 +82,19 @@ function returnWarehouseCandidates(db) {
 }
 
 function lockReturnDestination(db, warehouseId, binId) {
-  if (!warehouseId) throw new HttpError(409, 'Return destination is required', { code: 'CONSIGNMENT_RETURN_DESTINATION_REQUIRED' });
+  if (!warehouseId) throw new HttpError(409, '必须指定退货目的地', { code: 'CONSIGNMENT_RETURN_DESTINATION_REQUIRED' });
   const warehouse = db.prepare(`SELECT id,active,bin_enabled,is_supplier_wip FROM warehouses WHERE id=?${lock(db)}`).get(warehouseId);
   if (!warehouse?.active || Number(warehouse.is_supplier_wip || 0) !== 0) {
-    throw new HttpError(409, 'Return destination is invalid', { code: 'CONSIGNMENT_RETURN_DESTINATION_INVALID' });
+    throw new HttpError(409, '退货目的地无效', { code: 'CONSIGNMENT_RETURN_DESTINATION_INVALID' });
   }
   if (Number(warehouse.bin_enabled) === 0) {
-    if (binId) throw new HttpError(409, 'Return destination bin is invalid', { code: 'CONSIGNMENT_RETURN_DESTINATION_BIN_INVALID' });
+    if (binId) throw new HttpError(409, '退货目的地仓位无效', { code: 'CONSIGNMENT_RETURN_DESTINATION_BIN_INVALID' });
     return { warehouse, binId: null };
   }
-  if (!binId) throw new HttpError(409, 'Return destination bin is required', { code: 'CONSIGNMENT_RETURN_DESTINATION_BIN_REQUIRED' });
+  if (!binId) throw new HttpError(409, '必须指定退货目的地仓位', { code: 'CONSIGNMENT_RETURN_DESTINATION_BIN_REQUIRED' });
   const bin = db.prepare(`SELECT id,warehouse_id,active FROM warehouse_bins WHERE id=?${lock(db)}`).get(binId);
   if (!bin?.active || bin.warehouse_id !== warehouse.id) {
-    throw new HttpError(409, 'Return destination bin is invalid', { code: 'CONSIGNMENT_RETURN_DESTINATION_BIN_INVALID' });
+    throw new HttpError(409, '退货目的地仓位无效', { code: 'CONSIGNMENT_RETURN_DESTINATION_BIN_INVALID' });
   }
   return { warehouse, binId: bin.id };
 }
@@ -102,13 +102,13 @@ function lockReturnDestination(db, warehouseId, binId) {
 function activeLocation(db, locationId, customerId, businessDate, forUpdate = false) {
   const row = db.prepare(`SELECT * FROM consignment_commodity_locations WHERE id=?${forUpdate ? lock(db) : ''}`).get(locationId);
   if (!row || row.customer_id !== customerId || !row.active || row.effective_from > businessDate || (row.effective_to && row.effective_to < businessDate)) {
-    throw new HttpError(409, 'Consignment location is not effective', { code: 'CONSIGNMENT_LOCATION_NOT_EFFECTIVE' });
+    throw new HttpError(409, '寄售地点未生效', { code: 'CONSIGNMENT_LOCATION_NOT_EFFECTIVE' });
   }
   const warehouse = db.prepare(`SELECT id,active,bin_enabled FROM warehouses WHERE id=?${forUpdate ? lock(db) : ''}`).get(row.physical_warehouse_id);
-  if (!warehouse?.active) throw new HttpError(409, 'Mapped warehouse is inactive', { code: 'CONSIGNMENT_LOCATION_MAPPING_INVALID' });
-  if (Number(warehouse.bin_enabled) === 1 && !row.physical_bin_id) throw new HttpError(409, 'Mapped bin is required', { code: 'CONSIGNMENT_LOCATION_MAPPING_INVALID' });
+  if (!warehouse?.active) throw new HttpError(409, '映射的仓库已停用', { code: 'CONSIGNMENT_LOCATION_MAPPING_INVALID' });
+  if (Number(warehouse.bin_enabled) === 1 && !row.physical_bin_id) throw new HttpError(409, '必须指定映射仓位', { code: 'CONSIGNMENT_LOCATION_MAPPING_INVALID' });
   if (row.physical_bin_id && !db.prepare(`SELECT 1 FROM warehouse_bins WHERE id=? AND warehouse_id=? AND active=1${forUpdate ? lock(db) : ''}`).get(row.physical_bin_id, warehouse.id)) {
-    throw new HttpError(409, 'Mapped bin is invalid', { code: 'CONSIGNMENT_LOCATION_MAPPING_INVALID' });
+    throw new HttpError(409, '映射仓位无效', { code: 'CONSIGNMENT_LOCATION_MAPPING_INVALID' });
   }
   return row;
 }
@@ -117,7 +117,7 @@ function lineAmount(totalCents, consumedMicros, nextMicros, capacityMicros) {
   const before = BigInt(totalCents) * BigInt(consumedMicros) / BigInt(capacityMicros);
   const after = BigInt(totalCents) * BigInt(consumedMicros + nextMicros) / BigInt(capacityMicros);
   const amount = Number(after - before);
-  if (!Number.isSafeInteger(amount) || amount < 0) throw new HttpError(409, 'Consignment amount is unsafe');
+  if (!Number.isSafeInteger(amount) || amount < 0) throw new HttpError(409, '寄售金额超出安全整数范围');
   return amount;
 }
 
@@ -126,7 +126,7 @@ function lineAmount(totalCents, consumedMicros, nextMicros, capacityMicros) {
 // approved sales-order line, and it must be exactly representable as an integer
 // number of cents per base unit; anything else is CONSIGNMENT_COMMERCIAL_BASIS_UNREPRESENTABLE.
 function unrepresentable(reason) {
-  return new HttpError(409, 'Sales-order commercial basis cannot be represented by consignment', {
+  return new HttpError(409, '销售订单的商务基准无法用寄售方式表示', {
     code: 'CONSIGNMENT_COMMERCIAL_BASIS_UNREPRESENTABLE', reason,
   });
 }
@@ -152,9 +152,9 @@ export function assertSoBackedConsignmentBasis(db, {
   const source = db.prepare(`SELECT i.*,o.customer_id,o.status order_status,o.order_no,o.sales_group_id
     FROM sales_order_items i JOIN sales_orders o ON o.id=i.order_id
     WHERE i.id=?${forUpdate ? lock(db) : ''}`).get(salesOrderItemId);
-  if (!source) throw new HttpError(409, 'Consignment sales-order source is invalid', { code: 'CONSIGNMENT_SALES_ORDER_SOURCE_INVALID' });
+  if (!source) throw new HttpError(409, '寄售销售订单来源无效', { code: 'CONSIGNMENT_SALES_ORDER_SOURCE_INVALID' });
   if (source.product_id !== productId || source.customer_id !== customerId || source.order_status !== 'APPROVED') {
-    throw new HttpError(409, 'Consignment sales-order source is invalid', { code: 'CONSIGNMENT_SALES_ORDER_SOURCE_INVALID' });
+    throw new HttpError(409, '寄售销售订单来源无效', { code: 'CONSIGNMENT_SALES_ORDER_SOURCE_INVALID' });
   }
 
   const orderedMicros = baseMicrosOf(source);
@@ -174,7 +174,7 @@ export function assertSoBackedConsignmentBasis(db, {
   if (scaled % orderedMicros !== 0n) throw unrepresentable('NET_UNIT_PRICE_NOT_INTEGER_CENTS');
   const authoritativeUnitPriceCents = Number(scaled / orderedMicros);
   if (unitPriceCents !== authoritativeUnitPriceCents) {
-    throw new HttpError(409, 'Consignment unit price does not match the approved sales-order net unit price', {
+    throw new HttpError(409, '寄售单价与已批准销售订单的净单价不一致', {
       code: 'CONSIGNMENT_SALES_ORDER_BASIS_MISMATCH', salesOrderItemId, authoritativeUnitPriceCents, requestedUnitPriceCents: unitPriceCents,
     });
   }
@@ -182,7 +182,7 @@ export function assertSoBackedConsignmentBasis(db, {
   const usage = db.prepare(`SELECT COALESCE(SUM(consigned_qty_micros),0) qty,COALESCE(SUM(settled_amount_cents+returned_amount_cents),0) amount
     FROM consignment_commercial_lines WHERE sales_order_item_id=?`).get(salesOrderItemId);
   if (BigInt(usage.qty) + BigInt(quantityMicros) > orderedMicros) {
-    throw new HttpError(409, 'Consignment exceeds the remaining approved sales-order source capacity', {
+    throw new HttpError(409, '寄售数量超出销售订单来源的剩余可用量', {
       code: 'CONSIGNMENT_SOURCE_CAPACITY_EXCEEDED', orderedMicros: Number(orderedMicros), alreadyConsignedMicros: Number(usage.qty),
     });
   }
@@ -217,7 +217,7 @@ function strictValueMove(db, mutation, input, policy) {
     movementType: partitionMovementType(input, 'OUT'), sourceType: input.sourceType, sourceId: input.sourceId,
     sourceItemId: input.sourceItemId, inventoryTransactionId: out.transactionId,
   });
-  if (issued.valuationMethod === 'LEGACY_UNVALUED') throw new HttpError(409, 'Consignment valuation cannot be legacy-unvalued', { code: 'CONSIGNMENT_VALUATION_REQUIRED' });
+  if (issued.valuationMethod === 'LEGACY_UNVALUED') throw new HttpError(409, '寄售估值不能沿用未估值的历史数据', { code: 'CONSIGNMENT_VALUATION_REQUIRED' });
   if (policy === 'OUT') return { issued, valueCents: -issued.valueDeltaCents };
   const received = receiveValue(db, {
     businessDate: input.businessDate, ...snapshotPosition(input.to), quantity: input.quantity,
@@ -225,7 +225,7 @@ function strictValueMove(db, mutation, input, policy) {
     movementType: partitionMovementType(input, 'IN'), sourceType: input.sourceType, sourceId: input.sourceId,
     sourceItemId: input.sourceItemId, inventoryTransactionId: into.transactionId,
   });
-  if (issued.valueDeltaCents + received.valueDeltaCents !== 0) throw new HttpError(409, 'Consignment value-neutral movement is not conserved');
+  if (issued.valueDeltaCents + received.valueDeltaCents !== 0) throw new HttpError(409, '寄售价值中性移动未守恒');
   return { issued, received, valueCents: -issued.valueDeltaCents };
 }
 
@@ -247,11 +247,11 @@ function runPartitionMutation(db, actor, input) {
 
 export function resolveConsignmentHandoffEvidence(db, lineId) {
   const line = db.prepare('SELECT * FROM consignment_commercial_lines WHERE id=?').get(lineId);
-  if (!line?.handoff_movement_group_id) throw new HttpError(409, 'Handoff evidence is unavailable', { code: 'CONSIGNMENT_HANDOFF_EVIDENCE_UNAVAILABLE' });
+  if (!line?.handoff_movement_group_id) throw new HttpError(409, '交接证据不可用', { code: 'CONSIGNMENT_HANDOFF_EVIDENCE_UNAVAILABLE' });
   const handoffs = db.prepare(`SELECT * FROM inventory_mutation_log
     WHERE source_type='CONSIGNMENT_HANDOFF' AND source_item_id=? AND movement_group_id=?
     ORDER BY business_date,id`).all(lineId, line.handoff_movement_group_id);
-  if (!handoffs.length) throw new HttpError(409, 'Handoff evidence is unavailable', { code: 'CONSIGNMENT_HANDOFF_EVIDENCE_UNAVAILABLE' });
+  if (!handoffs.length) throw new HttpError(409, '交接证据不可用', { code: 'CONSIGNMENT_HANDOFF_EVIDENCE_UNAVAILABLE' });
   const consumed = db.prepare(`SELECT from_position_key,SUM(quantity) quantity FROM inventory_mutation_log
     WHERE source_type IN ('CONSIGNMENT_SETTLEMENT','CONSIGNMENT_RETURN') AND source_item_id=?
     GROUP BY from_position_key`).all(lineId);
@@ -265,7 +265,7 @@ export function resolveConsignmentHandoffEvidence(db, lineId) {
   const buckets = new Map();
   for (const row of handoffs) {
     if (Number(row.evidence_schema_version) !== 1 || !row.to_position_identity_json || !row.in_inventory_transaction_id) {
-      throw new HttpError(409, 'Handoff evidence is incomplete', { code: 'CONSIGNMENT_HANDOFF_EVIDENCE_INVALID' });
+      throw new HttpError(409, '交接证据不完整', { code: 'CONSIGNMENT_HANDOFF_EVIDENCE_INVALID' });
     }
     const position = parseCanonicalPositionSnapshot(row.to_position_identity_json);
     const handedOffMicros = Math.round(Number(row.quantity) * 1_000_000);
@@ -287,9 +287,9 @@ export function resolveConsignmentHandoffEvidence(db, lineId) {
         || Math.round(-Number(valueOut.quantity) * 1_000_000) !== handedOffMicros
         || Math.round(Number(valueIn.quantity) * 1_000_000) !== handedOffMicros
         || Number(valueOut.value) + Number(valueIn.value) !== 0) {
-      throw new HttpError(409, 'Handoff transaction/tracking/valuation graph is invalid', { code: 'CONSIGNMENT_HANDOFF_EVIDENCE_INVALID' });
+      throw new HttpError(409, '交接的交易、跟踪与估值关系图无效', { code: 'CONSIGNMENT_HANDOFF_EVIDENCE_INVALID' });
     }
-    if (!Number.isSafeInteger(handedOffMicros) || handedOffMicros <= 0) throw new HttpError(409, 'Handoff partition capacity is invalid', { code: 'CONSIGNMENT_HANDOFF_EVIDENCE_INVALID' });
+    if (!Number.isSafeInteger(handedOffMicros) || handedOffMicros <= 0) throw new HttpError(409, '交接分摊容量无效', { code: 'CONSIGNMENT_HANDOFF_EVIDENCE_INVALID' });
     const existing = buckets.get(position.positionKey);
     if (existing) {
       existing.handedOffMicros += handedOffMicros;
@@ -306,7 +306,7 @@ export function resolveConsignmentHandoffEvidence(db, lineId) {
 
   return [...buckets.values()].map((bucket) => {
     const remainingMicros = bucket.handedOffMicros - (consumedByKey.get(bucket.positionKey) || 0);
-    if (!Number.isSafeInteger(bucket.handedOffMicros) || remainingMicros < 0) throw new HttpError(409, 'Handoff partition capacity is invalid', { code: 'CONSIGNMENT_HANDOFF_EVIDENCE_INVALID' });
+    if (!Number.isSafeInteger(bucket.handedOffMicros) || remainingMicros < 0) throw new HttpError(409, '交接分摊容量无效', { code: 'CONSIGNMENT_HANDOFF_EVIDENCE_INVALID' });
     return {
       positionKey: bucket.positionKey, mutationId: bucket.mutationId, mutationIds: bucket.mutationIds,
       movementGroupId: bucket.movementGroupId, position: bucket.position,
@@ -321,9 +321,9 @@ function selectPartitions(db, line, quantityMicros, serialIds = []) {
   let candidates = evidence.filter((row) => row.remainingMicros > 0);
   if (product?.tracking_policy === 'SERIAL') {
     const requested = new Set(serialIds.map(String));
-    if (requested.size * 1_000_000 !== quantityMicros) throw new HttpError(409, 'Exact serial allocation is required', { code: 'CONSIGNMENT_SERIAL_EVIDENCE_REQUIRED' });
+    if (requested.size * 1_000_000 !== quantityMicros) throw new HttpError(409, '必须精确分配序列号', { code: 'CONSIGNMENT_SERIAL_EVIDENCE_REQUIRED' });
     candidates = candidates.filter((row) => requested.has(row.position.serialId));
-    if (candidates.length !== requested.size) throw new HttpError(409, 'Serial entitlement is unavailable', { code: 'CONSIGNMENT_SERIAL_EVIDENCE_REQUIRED' });
+    if (candidates.length !== requested.size) throw new HttpError(409, '序列号可用额度不可用', { code: 'CONSIGNMENT_SERIAL_EVIDENCE_REQUIRED' });
   }
   let remaining = quantityMicros;
   const selected = [];
@@ -333,7 +333,7 @@ function selectPartitions(db, line, quantityMicros, serialIds = []) {
     selected.push({ ...partition, takeMicros: take });
     remaining -= take;
   }
-  if (remaining !== 0) throw new HttpError(409, 'Consignment partition entitlement is insufficient', { code: 'CONSIGNMENT_PARTITION_CAPACITY_EXCEEDED' });
+  if (remaining !== 0) throw new HttpError(409, '寄售分摊可用额度不足', { code: 'CONSIGNMENT_PARTITION_CAPACITY_EXCEEDED' });
   return selected;
 }
 
@@ -346,15 +346,15 @@ function refreshDocumentState(db, documentId) {
 }
 
 export function createConsignmentLocationCommand(db, input, actor, key) {
-  requireWrite(actor); if (!key) throw new HttpError(422, 'Idempotency-Key is required');
+  requireWrite(actor); if (!key) throw new HttpError(422, '必须提供「Idempotency-Key」请求头');
   const businessDate = normalizeBusinessDate(input.effectiveFrom, 'effectiveFrom');
   const scopeId = `${input.customerId}:${String(input.locationCode || '').trim()}`;
   const fingerprint = requestFingerprint(input); const replay = idempotencyReplay(db, 'CONSIGNMENT_LOCATION_CREATE', scopeId, key, fingerprint);
   if (replay) return { ...replay, replayed: true };
   let result; transaction(db, () => {
     const warehouse = db.prepare('SELECT active,bin_enabled FROM warehouses WHERE id=?').get(input.physicalWarehouseId);
-    if (!warehouse?.active || (Number(warehouse.bin_enabled) === 1 && !input.physicalBinId)) throw new HttpError(409, 'Physical warehouse/bin mapping is invalid');
-    if (input.physicalBinId && !db.prepare('SELECT 1 FROM warehouse_bins WHERE id=? AND warehouse_id=? AND active=1').get(input.physicalBinId, input.physicalWarehouseId)) throw new HttpError(409, 'Physical bin mapping is invalid');
+    if (!warehouse?.active || (Number(warehouse.bin_enabled) === 1 && !input.physicalBinId)) throw new HttpError(409, '物理仓库与仓位映射无效');
+    if (input.physicalBinId && !db.prepare('SELECT 1 FROM warehouse_bins WHERE id=? AND warehouse_id=? AND active=1').get(input.physicalBinId, input.physicalWarehouseId)) throw new HttpError(409, '物理仓位映射无效');
     const id = randomUUID(); const stamp = now();
     db.prepare(`INSERT INTO consignment_commodity_locations(id,location_code,customer_id,name,address_text,physical_warehouse_id,physical_bin_id,active,effective_from,effective_to,version,created_at,updated_at,created_by,updated_by)
       VALUES(?,?,?,?,?,?,?,1,?,NULL,1,?,?,?,?)`).run(id, String(input.locationCode || '').trim(), input.customerId, String(input.name || '').trim(), String(input.addressText || ''), input.physicalWarehouseId, input.physicalBinId || null, businessDate, stamp, stamp, actor.id, actor.id);
@@ -365,13 +365,13 @@ export function createConsignmentLocationCommand(db, input, actor, key) {
 }
 
 export function createConsignmentDocumentCommand(db, input, actor, key) {
-  requireWrite(actor); if (!key) throw new HttpError(422, 'Idempotency-Key is required');
+  requireWrite(actor); if (!key) throw new HttpError(422, '必须提供「Idempotency-Key」请求头');
   const businessDate = normalizeBusinessDate(input.businessDate, 'businessDate');
-  if (input.currencyCode !== 'CNY') throw new HttpError(409, 'Only CNY consignment is supported', { code: 'CONSIGNMENT_CURRENCY_UNSUPPORTED' });
+  if (input.currencyCode !== 'CNY') throw new HttpError(409, '寄售业务目前仅支持人民币', { code: 'CONSIGNMENT_CURRENCY_UNSUPPORTED' });
   const fingerprint = requestFingerprint(input); const replay = idempotencyReplay(db, 'CONSIGNMENT_CREATE', input.customerId, key, fingerprint); if (replay) return { ...replay, replayed: true };
   let result;
   transaction(db, () => {
-    if (!Array.isArray(input.lines) || !input.lines.length) throw new HttpError(422, 'At least one line is required');
+    if (!Array.isArray(input.lines) || !input.lines.length) throw new HttpError(422, '至少需要一行明细');
     const id = randomUUID(); const stamp = now(); const no = `CS-${Date.now().toString(36).toUpperCase()}-${id.slice(0, 6).toUpperCase()}`;
     db.prepare(`INSERT INTO consignment_commercial_documents(id,document_no,customer_id,sales_group_id,source_warehouse_id,instruction_date,business_date,currency_code,status,version,created_at,updated_at,created_by,updated_by)
       VALUES(?,?,?,?,?,?,?,?, 'DRAFT',1,?,?,?,?)`).run(id, no, input.customerId, input.salesGroupId || null, input.sourceWarehouseId, businessDate, businessDate, 'CNY', stamp, stamp, actor.id, actor.id);
@@ -380,13 +380,13 @@ export function createConsignmentDocumentCommand(db, input, actor, key) {
       VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?,?,?)`);
     input.lines.forEach((raw, index) => {
       const quantity = qty(raw.consignedQtyMicros); const price = Number(raw.unitPriceCents);
-      if (!Number.isSafeInteger(price) || price < 0) throw new HttpError(422, 'unitPriceCents is invalid');
+      if (!Number.isSafeInteger(price) || price < 0) throw new HttpError(422, '「unitPriceCents」无效');
       activeLocation(db, raw.consignmentCommodityLocationId, input.customerId, businessDate);
       const product = db.prepare('SELECT id,tracking_policy,base_uom_code FROM products WHERE id=? AND active=1').get(raw.productId);
-      if (!product) throw new HttpError(409, 'Product is unavailable');
+      if (!product) throw new HttpError(409, '产品不可用');
       const classification = db.prepare('SELECT sales_enabled,service_classification,active FROM product_commercial_classification WHERE product_id=?').get(product.id);
       if (!classification || !classification.active || !classification.sales_enabled || classification.service_classification) {
-        throw new HttpError(409, 'Consignment requires an active physical sales classification', { code: 'CONSIGNMENT_PRODUCT_CLASSIFICATION_INVALID' });
+        throw new HttpError(409, '寄售要求产品启用实物销售分类', { code: 'CONSIGNMENT_PRODUCT_CLASSIFICATION_INVALID' });
       }
       if (raw.salesOrderItemId) {
         assertSoBackedConsignmentBasis(db, {
@@ -394,10 +394,10 @@ export function createConsignmentDocumentCommand(db, input, actor, key) {
           quantityMicros: quantity, unitPriceCents: price, forUpdate: true,
         });
       }
-      if (product.tracking_policy === 'SERIAL' && quantity % 1_000_000 !== 0) throw new HttpError(409, 'Serial quantity must be integral');
+      if (product.tracking_policy === 'SERIAL' && quantity % 1_000_000 !== 0) throw new HttpError(409, '序列号数量必须为整数');
       const lotId = raw.lotId || null;
-      if (product.tracking_policy === 'LOT' && (!lotId || !db.prepare('SELECT 1 FROM inventory_lots WHERE id=? AND product_id=?').get(lotId, product.id))) throw new HttpError(409, 'Canonical LOT id is required');
-      if (product.tracking_policy !== 'LOT' && lotId) throw new HttpError(409, 'LOT is not legal for this product');
+      if (product.tracking_policy === 'LOT' && (!lotId || !db.prepare('SELECT 1 FROM inventory_lots WHERE id=? AND product_id=?').get(lotId, product.id))) throw new HttpError(409, '必须提供标准批次（LOT）ID');
+      if (product.tracking_policy !== 'LOT' && lotId) throw new HttpError(409, '该批次（LOT）不适用于本产品');
       insert.run(randomUUID(), id, index + 1, raw.salesOrderItemId || null, product.id, raw.consignmentCommodityLocationId, lotId, lotId || '', quantity, price, stamp, stamp, actor.id, actor.id);
     });
     audit(db, actor.id, 'CREATE', 'CONSIGNMENT_DOCUMENT', id, no);
@@ -407,35 +407,35 @@ export function createConsignmentDocumentCommand(db, input, actor, key) {
 }
 
 export function instructConsignmentCommand(db, documentId, input, actor, key) {
-  requireWrite(actor); if (!key) throw new HttpError(422, 'Idempotency-Key is required');
+  requireWrite(actor); if (!key) throw new HttpError(422, '必须提供「Idempotency-Key」请求头');
   const expected = ver(input.expectedVersion); const businessDate = normalizeBusinessDate(input.businessDate, 'businessDate');
   const fingerprint = requestFingerprint(input); const replay = idempotencyReplay(db, 'CONSIGNMENT_HANDOFF', documentId, key, fingerprint); if (replay) return { ...replay, replayed: true };
   let result;
   transaction(db, () => {
     requireWrite(actor);
     const doc = documentRow(db, documentId, actor, true);
-    if (doc.status !== 'DRAFT' || Number(doc.version) !== expected) throw new HttpError(409, 'Consignment document state/version conflict');
+    if (doc.status !== 'DRAFT' || Number(doc.version) !== expected) throw new HttpError(409, '寄售单据状态或版本冲突，请刷新后重试');
     const lines = db.prepare(`SELECT * FROM consignment_commercial_lines WHERE document_id=? ORDER BY id${lock(db)}`).all(documentId);
     const allocations = Array.isArray(input.allocations) ? input.allocations : [];
     for (const line of lines) {
       const rows = allocations.filter((row) => row.lineId === line.id);
-      if (rows.reduce((sum, row) => sum + qty(row.quantityMicros), 0) !== Number(line.consigned_qty_micros)) throw new HttpError(409, 'Handoff allocation is not conserved');
+      if (rows.reduce((sum, row) => sum + qty(row.quantityMicros), 0) !== Number(line.consigned_qty_micros)) throw new HttpError(409, '交接分配未守恒');
       const location = activeLocation(db, line.consignment_commodity_location_id, doc.customer_id, businessDate, true);
       const group = `CH:${line.id}:${hash(key).slice(0, 32)}`;
       const sourceWarehouse = db.prepare(`SELECT id,active,bin_enabled FROM warehouses WHERE id=?${lock(db)}`).get(doc.source_warehouse_id);
-      if (!sourceWarehouse?.active) throw new HttpError(409, 'Consignment source warehouse is inactive', { code: 'CONSIGNMENT_SOURCE_WAREHOUSE_INVALID' });
+      if (!sourceWarehouse?.active) throw new HttpError(409, '寄售来源仓库已停用', { code: 'CONSIGNMENT_SOURCE_WAREHOUSE_INVALID' });
       rows.forEach((row, index) => {
         const from = { ...row.fromPosition, productId: line.product_id, ownerType: 'ENTERPRISE', ownerId: null, stockStatus: 'AVAILABLE', lotId: line.lot_code_key || row.fromPosition?.lotId || null, serialId: row.serialId || row.fromPosition?.serialId || null };
         // The physical MOVE must start inside the warehouse the commercial document
         // declared, at a bin that really belongs to it. Verified before V21 runs.
-        if (from.warehouseId !== doc.source_warehouse_id) throw new HttpError(409, 'Handoff source position is outside the declared consignment source warehouse', { code: 'CONSIGNMENT_SOURCE_WAREHOUSE_MISMATCH', expectedWarehouseId: doc.source_warehouse_id, actualWarehouseId: from.warehouseId ?? null });
+        if (from.warehouseId !== doc.source_warehouse_id) throw new HttpError(409, '交接来源仓位不在申报的寄售来源仓库内', { code: 'CONSIGNMENT_SOURCE_WAREHOUSE_MISMATCH', expectedWarehouseId: doc.source_warehouse_id, actualWarehouseId: from.warehouseId ?? null });
         if (Number(sourceWarehouse.bin_enabled) === 0 && from.binId) {
-          throw new HttpError(409, 'Handoff source bin is invalid for a warehouse without bins', { code: 'CONSIGNMENT_SOURCE_BIN_INVALID' });
+          throw new HttpError(409, '来源仓库未启用仓位管理，指定仓位无效', { code: 'CONSIGNMENT_SOURCE_BIN_INVALID' });
         }
         if (from.binId && !db.prepare(`SELECT 1 FROM warehouse_bins WHERE id=? AND warehouse_id=? AND active=1${lock(db)}`).get(from.binId, from.warehouseId)) {
-          throw new HttpError(409, 'Handoff source bin is invalid for the declared source warehouse', { code: 'CONSIGNMENT_SOURCE_BIN_INVALID' });
+          throw new HttpError(409, '交接来源仓位与申报的来源仓库不匹配', { code: 'CONSIGNMENT_SOURCE_BIN_INVALID' });
         }
-        if (Number(sourceWarehouse.bin_enabled) === 1 && !from.binId) throw new HttpError(409, 'Handoff source bin is required for a bin-enabled source warehouse', { code: 'CONSIGNMENT_SOURCE_BIN_REQUIRED' });
+        if (Number(sourceWarehouse.bin_enabled) === 1 && !from.binId) throw new HttpError(409, '来源仓库启用了仓位管理，必须指定交接来源仓位', { code: 'CONSIGNMENT_SOURCE_BIN_REQUIRED' });
         const to = { ...from, warehouseId: location.physical_warehouse_id, binId: location.physical_bin_id || null };
         runPartitionMutation(db, actor, { sourceType: 'CONSIGNMENT_HANDOFF', sourceId: documentId, sourceItemId: line.id, sourceNo: doc.document_no,
           quantityMicros: qty(row.quantityMicros), from, to, businessDate, movementGroupId: group,
@@ -451,16 +451,16 @@ export function instructConsignmentCommand(db, documentId, input, actor, key) {
 }
 
 export function settleConsignmentLineCommand(db, lineId, input, actor, key) {
-  requireWrite(actor); if (!key) throw new HttpError(422, 'Idempotency-Key is required');
+  requireWrite(actor); if (!key) throw new HttpError(422, '必须提供「Idempotency-Key」请求头');
   const quantity = qty(input.quantityMicros); const expected = ver(input.expectedVersion); const businessDate = normalizeBusinessDate(input.businessDate, 'businessDate');
   const eventId = `CS:${lineId}:${hash(key)}`; const fingerprint = requestFingerprint(input);
   const replay = idempotencyReplay(db, 'CONSIGNMENT_SETTLEMENT', lineId, key, fingerprint); if (replay) return { ...replay, replayed: true };
   let result;
   transaction(db, () => {
     const line = lineRow(db, lineId, actor, true);
-    if (!['INSTRUCTED','PARTIAL_SETTLED'].includes(line.document_status) || Number(line.version) !== expected) throw new HttpError(409, 'Consignment line state/version conflict');
+    if (!['INSTRUCTED','PARTIAL_SETTLED'].includes(line.document_status) || Number(line.version) !== expected) throw new HttpError(409, '寄售单据行状态或版本冲突，请刷新后重试');
     const remaining = Number(line.consigned_qty_micros) - Number(line.settled_qty_micros) - Number(line.returned_qty_micros);
-    if (quantity > remaining) throw new HttpError(409, 'Consignment commercial capacity exceeded', { code: 'CONSIGNMENT_CAPACITY_EXCEEDED' });
+    if (quantity > remaining) throw new HttpError(409, '超出寄售商务容量上限', { code: 'CONSIGNMENT_CAPACITY_EXCEEDED' });
     const partitions = selectPartitions(db, line, quantity, input.serialIds || []);
     const totalCents = Number(BigInt(line.unit_price_cents) * BigInt(line.consigned_qty_micros) / 1_000_000n);
     const eventCents = lineAmount(totalCents, Number(line.settled_qty_micros) + Number(line.returned_qty_micros), quantity, Number(line.consigned_qty_micros));
@@ -468,7 +468,7 @@ export function settleConsignmentLineCommand(db, lineId, input, actor, key) {
     // event. Refuse before any commercial, inventory, tracking, valuation, Finance or
     // audit effect exists, so nothing may be issued out of consigned stock for free.
     if (!Number.isSafeInteger(eventCents) || eventCents <= 0) {
-      throw new HttpError(409, 'Consignment settlement amount must be a positive integer number of cents', {
+      throw new HttpError(409, '寄售结算金额必须是大于 0 的整数分', {
         code: 'CONSIGNMENT_SETTLEMENT_AMOUNT_NOT_POSITIVE', lineId, quantityMicros: quantity, amountCents: eventCents,
       });
     }
@@ -484,7 +484,7 @@ export function settleConsignmentLineCommand(db, lineId, input, actor, key) {
       if (!mutation.replayed) { cogs += mutation.valuation.valueCents; inventoryCredits.push({ role: inventoryAccountRole(db, line.product_id), direction: 'CREDIT', amountCents: mutation.valuation.valueCents }); }
       allocatedMicros = nextMicros; allocatedCents = nextCents;
     });
-    if (allocatedMicros !== quantity || allocatedCents !== eventCents) throw new HttpError(409, 'Settlement allocation is not conserved');
+    if (allocatedMicros !== quantity || allocatedCents !== eventCents) throw new HttpError(409, '结算分配未守恒');
     if (cogs) createSystemVoucher(db, { sourceType: 'CONSIGNMENT_SETTLEMENT_COGS', sourceId: eventId, businessDate, actorId: actor.id,
       entries: [{ role: 'COGS', direction: 'DEBIT', amountCents: cogs }, ...inventoryCredits] });
     // §35.18.7 — Finance receives the same immutable event identity as the V21 mutation.
@@ -503,7 +503,7 @@ const finance = recognizeFinanceExposure(db, { side: 'AR', amountCents: eventCen
 }
 
 export function returnConsignmentLineCommand(db, lineId, input, actor, key) {
-  requireWrite(actor); if (!key) throw new HttpError(422, 'Idempotency-Key is required');
+  requireWrite(actor); if (!key) throw new HttpError(422, '必须提供「Idempotency-Key」请求头');
   const quantity = qty(input.quantityMicros); const expected = ver(input.expectedVersion); const businessDate = normalizeBusinessDate(input.businessDate, 'businessDate');
   const sourceId = `CR:${lineId}:${hash(key)}`; const fingerprint = requestFingerprint(input);
   const replay = idempotencyReplay(db, 'CONSIGNMENT_RETURN', lineId, key, fingerprint); if (replay) return { ...replay, replayed: true };
@@ -511,9 +511,9 @@ export function returnConsignmentLineCommand(db, lineId, input, actor, key) {
   transaction(db, () => {
     requireWrite(actor);
     const line = lineRow(db, lineId, actor, true);
-    if (!['INSTRUCTED','PARTIAL_SETTLED'].includes(line.document_status) || Number(line.version) !== expected) throw new HttpError(409, 'Consignment line state/version conflict');
+    if (!['INSTRUCTED','PARTIAL_SETTLED'].includes(line.document_status) || Number(line.version) !== expected) throw new HttpError(409, '寄售单据行状态或版本冲突，请刷新后重试');
     const remaining = Number(line.consigned_qty_micros) - Number(line.settled_qty_micros) - Number(line.returned_qty_micros);
-    if (quantity > remaining) throw new HttpError(409, 'Consignment commercial capacity exceeded', { code: 'CONSIGNMENT_CAPACITY_EXCEEDED' });
+    if (quantity > remaining) throw new HttpError(409, '超出寄售商务容量上限', { code: 'CONSIGNMENT_CAPACITY_EXCEEDED' });
     const destination = lockReturnDestination(db, input.destinationWarehouseId, input.destinationBinId || null);
     const partitions = selectPartitions(db, line, quantity, input.serialIds || []);
     const totalCents = Number(BigInt(line.unit_price_cents) * BigInt(line.consigned_qty_micros) / 1_000_000n);
@@ -530,7 +530,7 @@ export function returnConsignmentLineCommand(db, lineId, input, actor, key) {
         valuationPolicy: 'RETURN_VALUE_NEUTRAL_V1', commercialAmountCents: partCents });
       allocatedMicros = nextMicros; allocatedCents = nextCents;
     });
-    if (allocatedMicros !== quantity || allocatedCents !== returnCents) throw new HttpError(409, 'Return allocation is not conserved');
+    if (allocatedMicros !== quantity || allocatedCents !== returnCents) throw new HttpError(409, '退货分配未守恒');
     db.prepare('UPDATE consignment_commercial_lines SET returned_qty_micros=returned_qty_micros+?,returned_amount_cents=returned_amount_cents+?,version=version+1,updated_at=?,updated_by=? WHERE id=?')
       .run(quantity, returnCents, now(), actor.id, line.id);
     refreshDocumentState(db, line.document_id); audit(db, actor.id, 'RETURN', 'CONSIGNMENT_LINE', line.id, `qty=${quantity}`);
@@ -540,22 +540,22 @@ export function returnConsignmentLineCommand(db, lineId, input, actor, key) {
 }
 
 export function cancelConsignmentDocumentCommand(db, documentId, expectedVersion, actor, key) {
-  requireWrite(actor); if (!key) throw new HttpError(422, 'Idempotency-Key is required'); const expected = ver(expectedVersion);
+  requireWrite(actor); if (!key) throw new HttpError(422, '必须提供「Idempotency-Key」请求头'); const expected = ver(expectedVersion);
   const fingerprint = requestFingerprint({ expectedVersion: expected }); const replay = idempotencyReplay(db, 'CONSIGNMENT_CANCEL', documentId, key, fingerprint); if (replay) return { ...replay, replayed: true };
   let result; transaction(db, () => { const doc = documentRow(db, documentId, actor, true);
-    if (doc.status !== 'DRAFT' || Number(doc.version) !== expected || db.prepare('SELECT 1 FROM consignment_commercial_lines WHERE document_id=? AND handoff_movement_group_id IS NOT NULL').get(documentId)) throw new HttpError(409, 'Only an untouched DRAFT may be cancelled');
+    if (doc.status !== 'DRAFT' || Number(doc.version) !== expected || db.prepare('SELECT 1 FROM consignment_commercial_lines WHERE document_id=? AND handoff_movement_group_id IS NOT NULL').get(documentId)) throw new HttpError(409, '只有未被处理的草稿单据可以取消');
     const stamp = now(); db.prepare("UPDATE consignment_commercial_documents SET status='CANCELLED',cancelled_at=?,cancelled_by=?,version=version+1,updated_at=?,updated_by=? WHERE id=?").run(stamp, actor.id, stamp, actor.id, documentId);
     audit(db, actor.id, 'CANCEL', 'CONSIGNMENT_DOCUMENT', documentId, ''); result = { id: documentId, status: 'CANCELLED' }; saveIdempotency(db, 'CONSIGNMENT_CANCEL', documentId, key, fingerprint, result);
   }); return result;
 }
 
 export function updateConsignmentLocationCommand(db, locationId, input, actor, key) {
-  requireWrite(actor); if (!key) throw new HttpError(422, 'Idempotency-Key is required'); const expected = ver(input.expectedVersion);
+  requireWrite(actor); if (!key) throw new HttpError(422, '必须提供「Idempotency-Key」请求头'); const expected = ver(input.expectedVersion);
   const fingerprint = requestFingerprint(input); const replay = idempotencyReplay(db, 'CONSIGNMENT_LOCATION_UPDATE', locationId, key, fingerprint); if (replay) return { ...replay, replayed: true };
   let result;
   transaction(db, () => {
     const row = db.prepare(`SELECT * FROM consignment_commodity_locations WHERE id=?${lock(db)}`).get(locationId);
-    if (!row || Number(row.version) !== expected) throw new HttpError(409, 'Consignment location version conflict');
+    if (!row || Number(row.version) !== expected) throw new HttpError(409, '寄售地点版本冲突，请刷新后重试');
     const nextWarehouse = input.physicalWarehouseId || row.physical_warehouse_id;
     const nextBin = input.physicalBinId === undefined ? row.physical_bin_id : input.physicalBinId || null;
     const nextActive = input.active === undefined ? Number(row.active) : input.active ? 1 : 0;
@@ -563,11 +563,11 @@ export function updateConsignmentLocationCommand(db, locationId, input, actor, k
     if (mappingChanges && db.prepare(`SELECT 1 FROM consignment_commercial_lines l
       WHERE l.consignment_commodity_location_id=? AND l.handoff_movement_group_id IS NOT NULL
         AND l.consigned_qty_micros-l.settled_qty_micros-l.returned_qty_micros>0 LIMIT 1`).get(locationId)) {
-      throw new HttpError(409, 'Location mapping has outstanding consigned inventory', { code: 'CONSIGNMENT_LOCATION_HAS_OUTSTANDING_STOCK' });
+      throw new HttpError(409, '该地点映射下仍有未清理的寄售库存', { code: 'CONSIGNMENT_LOCATION_HAS_OUTSTANDING_STOCK' });
     }
     const warehouse = db.prepare('SELECT active,bin_enabled FROM warehouses WHERE id=?').get(nextWarehouse);
-    if (!warehouse?.active || (Number(warehouse.bin_enabled) === 1 && !nextBin)) throw new HttpError(409, 'Physical warehouse/bin mapping is invalid');
-    if (nextBin && !db.prepare('SELECT 1 FROM warehouse_bins WHERE id=? AND warehouse_id=? AND active=1').get(nextBin, nextWarehouse)) throw new HttpError(409, 'Physical bin mapping is invalid');
+    if (!warehouse?.active || (Number(warehouse.bin_enabled) === 1 && !nextBin)) throw new HttpError(409, '物理仓库与仓位映射无效');
+    if (nextBin && !db.prepare('SELECT 1 FROM warehouse_bins WHERE id=? AND warehouse_id=? AND active=1').get(nextBin, nextWarehouse)) throw new HttpError(409, '物理仓位映射无效');
     db.prepare(`UPDATE consignment_commodity_locations SET name=?,address_text=?,physical_warehouse_id=?,physical_bin_id=?,active=?,effective_to=?,version=version+1,updated_at=?,updated_by=? WHERE id=?`)
       .run(input.name === undefined ? row.name : String(input.name).trim(), input.addressText === undefined ? row.address_text : String(input.addressText), nextWarehouse, nextBin, nextActive, input.effectiveTo === undefined ? row.effective_to : input.effectiveTo || null, now(), actor.id, locationId);
     audit(db, actor.id, nextActive ? 'UPDATE' : 'DEACTIVATE', 'CONSIGNMENT_LOCATION', locationId, '');
@@ -577,12 +577,12 @@ export function updateConsignmentLocationCommand(db, locationId, input, actor, k
 }
 
 export function updateConsignmentDocumentCommand(db, documentId, input, actor, key) {
-  requireWrite(actor); if (!key) throw new HttpError(422, 'Idempotency-Key is required'); const expected = ver(input.expectedVersion);
+  requireWrite(actor); if (!key) throw new HttpError(422, '必须提供「Idempotency-Key」请求头'); const expected = ver(input.expectedVersion);
   const fingerprint = requestFingerprint(input); const replay = idempotencyReplay(db, 'CONSIGNMENT_DOCUMENT_UPDATE', documentId, key, fingerprint); if (replay) return { ...replay, replayed: true };
   let result;
   transaction(db, () => {
     const row = documentRow(db, documentId, actor, true);
-    if (row.status !== 'DRAFT' || Number(row.version) !== expected) throw new HttpError(409, 'Only the current DRAFT document may be edited');
+    if (row.status !== 'DRAFT' || Number(row.version) !== expected) throw new HttpError(409, '只有当前版本的草稿单据可以编辑');
     const businessDate = input.businessDate === undefined ? row.business_date : normalizeBusinessDate(input.businessDate, 'businessDate');
     const instructionDate = input.instructionDate === undefined ? row.instruction_date : normalizeBusinessDate(input.instructionDate, 'instructionDate');
     db.prepare('UPDATE consignment_commercial_documents SET business_date=?,instruction_date=?,version=version+1,updated_at=?,updated_by=? WHERE id=?')
@@ -599,11 +599,11 @@ export function getConsignmentRemaining(db, res, actor, id) { requireRead(actor)
 export function getConsignmentHandoffPositionReferences(db, res, actor, documentId) {
   requireWrite(actor);
   const document = referenceDocumentRow(db, documentId, actor);
-  if (document.status !== 'DRAFT') throw new HttpError(409, 'Consignment document cannot be handed off', { code: 'CONSIGNMENT_REFERENCE_STATE_CONFLICT' });
+  if (document.status !== 'DRAFT') throw new HttpError(409, '该寄售单据当前不可交接', { code: 'CONSIGNMENT_REFERENCE_STATE_CONFLICT' });
   const warehouse = db.prepare('SELECT id,code,name,active,bin_enabled FROM warehouses WHERE id=?').get(document.source_warehouse_id);
-  if (!warehouse?.active) throw new HttpError(409, 'Consignment source warehouse is invalid', { code: 'CONSIGNMENT_SOURCE_WAREHOUSE_INVALID' });
+  if (!warehouse?.active) throw new HttpError(409, '寄售来源仓库无效', { code: 'CONSIGNMENT_SOURCE_WAREHOUSE_INVALID' });
   const projected = projectWarehouseReference(db, warehouse);
-  if (projected.binEnabled && projected.bins.length === 0) throw new HttpError(409, 'Active source bins are unavailable', { code: 'CONSIGNMENT_REFERENCE_BINS_UNAVAILABLE' });
+  if (projected.binEnabled && projected.bins.length === 0) throw new HttpError(409, '可用的来源仓位不可用', { code: 'CONSIGNMENT_REFERENCE_BINS_UNAVAILABLE' });
   return send(res, 200, {
     purpose: 'HANDOFF',
     context: { documentId: document.id, documentVersion: Number(document.version), documentStatus: document.status },
@@ -618,12 +618,12 @@ export function getConsignmentReturnPositionReferences(db, res, actor, documentI
   if (!line) throw referenceNotFound();
   const remaining = Number(line.consigned_qty_micros) - Number(line.settled_qty_micros) - Number(line.returned_qty_micros);
   if (!['INSTRUCTED', 'PARTIAL_SETTLED'].includes(document.status) || remaining <= 0) {
-    throw new HttpError(409, 'Consignment line cannot be returned', { code: 'CONSIGNMENT_REFERENCE_STATE_CONFLICT' });
+    throw new HttpError(409, '该寄售行不可退货', { code: 'CONSIGNMENT_REFERENCE_STATE_CONFLICT' });
   }
   const evidence = resolveConsignmentHandoffEvidence(db, line.id);
-  if (!evidence.some((row) => row.remainingMicros > 0)) throw new HttpError(409, 'Handoff evidence has no remaining entitlement', { code: 'CONSIGNMENT_HANDOFF_EVIDENCE_UNAVAILABLE' });
+  if (!evidence.some((row) => row.remainingMicros > 0)) throw new HttpError(409, '交接证据已无可用额度', { code: 'CONSIGNMENT_HANDOFF_EVIDENCE_UNAVAILABLE' });
   const warehouses = returnWarehouseCandidates(db);
-  if (!warehouses.length) throw new HttpError(409, 'Return destinations are unavailable', { code: 'CONSIGNMENT_RETURN_DESTINATION_UNAVAILABLE' });
+  if (!warehouses.length) throw new HttpError(409, '退货目的地不可用', { code: 'CONSIGNMENT_RETURN_DESTINATION_UNAVAILABLE' });
   return send(res, 200, {
     purpose: 'RETURN',
     context: {

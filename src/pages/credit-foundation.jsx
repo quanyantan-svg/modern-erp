@@ -60,7 +60,7 @@ function Parameters({ user }) {
     finally { setSaving(false); }
   };
   return <section className="card" aria-label="credit-parameters">
-    <h2>信用参数</h2><p className="muted">参数按业务日期保存版本；新版本不会覆盖历史值。布尔值 false 是显式停用，不等于缺失配置。</p>
+    <h2>信用参数</h2><p className="muted">参数按业务日期保存版本；新版本不会覆盖历史值。布尔值「false」是显式停用，不等于缺失配置。</p>
     {manageable ? <CreateForm onSave={save} saving={saving} label="新增版本">
       <label><span>参数代码</span><input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} /></label>
       <label><span>布尔值</span><select value={String(form.valueBool)} onChange={(e) => setForm({ ...form, valueBool: e.target.value === 'true' })}><option value="false">否</option><option value="true">是</option></select></label>
@@ -86,8 +86,8 @@ function Rules({ user }) {
   return <section className="card" aria-label="credit-rules"><h2>信用检查规则</h2><p className="muted">Wave 9 仅配置规则，不会启用销售订单或出货信用阻断。</p>
     {manageable ? <CreateForm onSave={save} saving={saving} label="新增规则版本">
       <label><span>规则代码</span><input value={form.ruleCode} onChange={(e) => setForm({ ...form, ruleCode: e.target.value })} placeholder="STANDARD_BLOCK" /></label>
-      <label><span>业务阶段</span><select value={form.businessStage} onChange={(e) => setForm({ ...form, businessStage: e.target.value })}><option>SO_SUBMIT</option><option>SO_APPROVE</option><option>SALES_DELIVERY_CONFIRM</option></select></label>
-      <label><span>控制强度</span><select value={form.controlStrength} onChange={(e) => setForm({ ...form, controlStrength: e.target.value })}><option>BLOCK</option><option>WARNING</option></select></label>
+      <label><span>业务阶段</span><select value={form.businessStage} onChange={(e) => setForm({ ...form, businessStage: e.target.value })}><option value="SO_SUBMIT">销售订单提交</option><option value="SO_APPROVE">销售订单审批</option><option value="SALES_DELIVERY_CONFIRM">销售出货确认</option></select></label>
+      <label><span>控制强度</span><select value={form.controlStrength} onChange={(e) => setForm({ ...form, controlStrength: e.target.value })}><option value="BLOCK">阻断</option><option value="WARNING">告警</option></select></label>
       <label><span>生效日期</span><input type="date" value={form.effectiveFrom} onChange={(e) => setForm({ ...form, effectiveFrom: e.target.value })} /></label>
     </CreateForm> : <ReadOnlyNotice />}
     <Feedback value={feedback} />{data.error && <div className="flash flash-error">{data.error}</div>}
@@ -127,7 +127,7 @@ function Profiles({ user }) {
 export default function CreditFoundation({ user }) {
   const [tab, setTab] = useState('profiles');
   const readable = canRead(user);
-  return <main className="page-stack"><header className="page-header"><div><p className="eyebrow">Sales & Customer · Wave 9</p><h1>信用管理基础</h1><p>维护信用参数、检查规则与有效期信用档案。当前阶段不会对销售订单或出货执行信用拦截。</p></div></header>
+  return <main className="page-stack"><header className="page-header"><div><p className="eyebrow">销售与客户 · Wave 9</p><h1>信用管理基础</h1><p>维护信用参数、检查规则与有效期信用档案。当前阶段不会对销售订单或出货执行信用拦截。</p></div></header>
     {readable ? <>
       <nav className="segmented" aria-label="信用管理基础导航">{[['profiles','信用档案'],['parameters','信用参数'],['rules','检查规则']].map(([key,label]) => <button type="button" key={key} onClick={() => setTab(key)} className={tab === key ? 'active' : ''}>{label}</button>)}</nav>
       {tab === 'profiles' && <Profiles user={user} />}{tab === 'parameters' && <Parameters user={user} />}{tab === 'rules' && <Rules user={user} />}

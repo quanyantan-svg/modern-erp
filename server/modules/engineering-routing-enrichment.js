@@ -104,7 +104,7 @@ export async function updateRoutingEnrichment(db, req, res, actor, routingId) {
           ? null
           : String(item.topology).toUpperCase();
         if (topology !== null && !OPERATION_TOPOLOGIES.has(topology)) {
-          throw new HttpError(400, '工序 topology 必须是 LINEAR / PARALLEL / SPLIT / MERGE / ALTERNATE');
+          throw new HttpError(400, '工序 「topology」 必须是 LINEAR / PARALLEL / SPLIT / MERGE / ALTERNATE');
         }
         db.prepare(`UPDATE product_routing_operations
           SET operation_id=?, control_code_id=?, activity_id=?, resource_id=?, equipment_id=?,

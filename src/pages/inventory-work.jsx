@@ -221,9 +221,9 @@ const INSTANT_FILTER_KEYS = [
 ];
 
 const OWNER_TYPE_OPTIONS = [
-  { value: 'ENTERPRISE', label: 'ENTERPRISE · 企业自有' },
-  { value: 'SUPPLIER', label: 'SUPPLIER · 供应商（VMI）' },
-  { value: 'CUSTOMER', label: 'CUSTOMER · 客户（受托料）' },
+  { value: 'ENTERPRISE', label: '企业自有' },
+  { value: 'SUPPLIER', label: '供应商（VMI）' },
+  { value: 'CUSTOMER', label: '客户（受托料）' },
 ];
 
 export function InventoryInstantQuery({ user, notify, references }) {
@@ -646,19 +646,19 @@ export function InventoryParameters({ user, notify }) {
               label="负库存策略"
               value={draft.negativeStockPolicy}
               onChange={(v) => setDraft({ ...draft, negativeStockPolicy: v })}
-              options={[{ value: 'BLOCK', label: 'BLOCK · 禁止负库存' }, { value: 'ALLOW', label: 'ALLOW · 允许负库存' }, { value: 'WARNING', label: 'WARNING · 仅告警' }]}
+              options={[{ value: 'BLOCK', label: '禁止负库存' }, { value: 'ALLOW', label: '允许负库存' }, { value: 'WARNING', label: '仅告警' }]}
             />
             <InventoryWorkSelect
               label="批次默认状态"
               value={draft.lotDefaultStatus}
               onChange={(v) => setDraft({ ...draft, lotDefaultStatus: v })}
-              options={[{ value: 'AVAILABLE', label: 'AVAILABLE' }, { value: 'INSPECTION', label: 'INSPECTION' }, { value: 'QUARANTINE', label: 'QUARANTINE' }, { value: 'HOLD', label: 'HOLD' }, { value: 'BLOCKED', label: 'BLOCKED' }]}
+              options={[{ value: 'AVAILABLE', label: '可用' }, { value: 'INSPECTION', label: '检验中' }, { value: 'QUARANTINE', label: '隔离' }, { value: 'HOLD', label: '已冻结' }, { value: 'BLOCKED', label: '已阻断' }]}
             />
             <InventoryWorkSelect
               label="序列号默认状态"
               value={draft.serialDefaultStatus}
               onChange={(v) => setDraft({ ...draft, serialDefaultStatus: v })}
-              options={[{ value: 'AVAILABLE', label: 'AVAILABLE' }, { value: 'INSPECTION', label: 'INSPECTION' }, { value: 'QUARANTINE', label: 'QUARANTINE' }, { value: 'HOLD', label: 'HOLD' }, { value: 'BLOCKED', label: 'BLOCKED' }]}
+              options={[{ value: 'AVAILABLE', label: '可用' }, { value: 'INSPECTION', label: '检验中' }, { value: 'QUARANTINE', label: '隔离' }, { value: 'HOLD', label: '已冻结' }, { value: 'BLOCKED', label: '已阻断' }]}
             />
             <InventoryWorkInput label="盘点冲突窗口（天）" type="number" min="0" max="365" value={draft.stocktakeWindowDays} onChange={(v) => setDraft({ ...draft, stocktakeWindowDays: v })} />
             <InventoryWorkFacts facts={[
@@ -874,9 +874,9 @@ function InventoryStocktakeEditor({ warehouses, products, stockStatuses, bins, n
       <div className="inv-work-form-grid">
         <InventoryWorkSelect label="仓库" required value={form.warehouseId} onChange={(v) => setForm({ ...form, warehouseId: v })} options={warehouseOptions(warehouses)} />
         <InventoryWorkInput label="业务日期" type="date" required value={form.businessDate} onChange={(v) => setForm({ ...form, businessDate: v })} />
-        <InventoryWorkSelect label="盘点类型" value={form.checkKind} onChange={(v) => setForm({ ...form, checkKind: v })} options={[{ value: 'REGULAR', label: 'REGULAR · 定期盘点' }, { value: 'CYCLE', label: 'CYCLE · 周期盘点' }]} />
-        <InventoryWorkSelect label="盘点范围策略" value={form.scopeStrategy} onChange={(v) => setForm({ ...form, scopeStrategy: v })} options={[{ value: 'ALL', label: 'ALL · 全量' }, { value: 'ABC', label: 'ABC · 按 ABC 分类' }, { value: 'CYCLE', label: 'CYCLE · 按周期策略' }]} />
-        <InventoryWorkInput label="ABC 分类范围" value={form.abcClassification} onChange={(v) => setForm({ ...form, abcClassification: v })} placeholder="例如 A" />
+        <InventoryWorkSelect label="盘点类型" value={form.checkKind} onChange={(v) => setForm({ ...form, checkKind: v })} options={[{ value: 'REGULAR', label: '定期盘点' }, { value: 'CYCLE', label: '周期盘点' }]} />
+        <InventoryWorkSelect label="盘点范围策略" value={form.scopeStrategy} onChange={(v) => setForm({ ...form, scopeStrategy: v })} options={[{ value: 'ALL', label: '全量' }, { value: 'ABC', label: '按 ABC 分类' }, { value: 'CYCLE', label: '按周期策略' }]} />
+        <InventoryWorkInput label="ABC 分类范围" value={form.abcClassification} onChange={(v) => setForm({ ...form, abcClassification: v })} placeholder="例如「A」" />
         <InventoryWorkInput label="周期策略键" value={form.cyclePeriodKey} onChange={(v) => setForm({ ...form, cyclePeriodKey: v })} placeholder="例如 2026-11" />
       </div>
       <section className="inv-work-subsection">
@@ -993,7 +993,7 @@ function InventoryLotAdjustmentEditor({ warehouses, products, notify, onClose, o
   return (
     <InventoryWorkEditorShell title="新建批号调整" onSubmit={save} submitLabel="创建草稿">
       <div className="inv-work-form-grid">
-        <InventoryWorkSelect label="调整类型" value={form.adjustmentType} onChange={(v) => setForm({ ...form, adjustmentType: v })} options={[{ value: 'SPLIT', label: 'SPLIT · 拆分' }, { value: 'MERGE', label: 'MERGE · 合并' }, { value: 'RECLASS', label: 'RECLASS · 重分类' }]} />
+        <InventoryWorkSelect label="调整类型" value={form.adjustmentType} onChange={(v) => setForm({ ...form, adjustmentType: v })} options={[{ value: 'SPLIT', label: '拆分' }, { value: 'MERGE', label: '合并' }, { value: 'RECLASS', label: '重分类' }]} />
         <InventoryWorkSelect label="货品" required value={form.productId} onChange={(v) => setForm({ ...form, productId: v })} options={productOptions(products)} />
         <InventoryWorkSelect label="仓库" required value={form.warehouseId} onChange={(v) => setForm({ ...form, warehouseId: v })} options={warehouseOptions(warehouses)} />
         <InventoryWorkInput label="来源批号" required value={form.sourceLotCode} onChange={(v) => setForm({ ...form, sourceLotCode: v })} />
@@ -1327,12 +1327,12 @@ function InventoryAbcClassifyEditor({ warehouses, notify, onClose, onSaved }) {
   return (
     <InventoryWorkEditorShell title="执行 ABC 分类" onSubmit={save} submitLabel="开始分类">
       <div className="inv-work-form-grid">
-        <InventoryWorkSelect label="分类基础" value={form.basis} onChange={(v) => setForm({ ...form, basis: v })} options={[{ value: 'USAGE', label: 'USAGE · 按真实出库用量' }, { value: 'VALUE', label: 'VALUE · 按财务估值快照' }]} />
+        <InventoryWorkSelect label="分类基础" value={form.basis} onChange={(v) => setForm({ ...form, basis: v })} options={[{ value: 'USAGE', label: '按真实出库用量' }, { value: 'VALUE', label: '按财务估值快照' }]} />
         <InventoryWorkInput label="生效日期" type="date" required value={form.effectiveFrom} onChange={(v) => setForm({ ...form, effectiveFrom: v })} />
         <InventoryWorkSelect label="仓库" value={form.warehouseId} onChange={(v) => setForm({ ...form, warehouseId: v })} options={warehouseOptions(warehouses)} placeholder="全部仓库" />
-        <InventoryWorkInput label="财务估值快照 ID" value={form.financeValuationSnapshotId} onChange={(v) => setForm({ ...form, financeValuationSnapshotId: v })} placeholder="basis=VALUE 时必填" />
+        <InventoryWorkInput label="财务估值快照 ID" value={form.financeValuationSnapshotId} onChange={(v) => setForm({ ...form, financeValuationSnapshotId: v })} placeholder="「basis=VALUE」时必填" />
       </div>
-      <InlineAlert tone="info">basis=VALUE 必须引用财务域签发的估值快照；库存域不复制估值引擎。</InlineAlert>
+      <InlineAlert tone="info">「basis=VALUE」必须引用财务域签发的估值快照；库存域不复制估值引擎。</InlineAlert>
     </InventoryWorkEditorShell>
   );
 }
@@ -1465,7 +1465,7 @@ function InventoryBarcodeRuleEditor({ notify, onClose, onSaved }) {
     <Modal title="新增条码规则" onClose={onClose}>
       <form className="inv-work-form" onSubmit={save}>
         <InventoryWorkInput label="规则编码" required value={form.code} onChange={(v) => setForm({ ...form, code: v })} placeholder="例如 PRD-PRODUCT" />
-        <InventoryWorkInput label="解析模式" required value={form.pattern} onChange={(v) => setForm({ ...form, pattern: v })} placeholder="例如 PRD-{code}" />
+        <InventoryWorkInput label="解析模式" required value={form.pattern} onChange={(v) => setForm({ ...form, pattern: v })} placeholder="例如「PRD-{code}」" />
         <InventoryWorkTextarea label="字段定义（JSON）" value={form.fields} onChange={(v) => setForm({ ...form, fields: v })} />
         <FormActions onClose={onClose} saveText="创建规则" />
       </form>
@@ -1497,12 +1497,12 @@ function InventoryBarcodeGenerateEditor({ products, warehouses, notify, onClose,
           value={form.entityType}
           onChange={(v) => setForm({ ...form, entityType: v, entityId: '' })}
           options={[
-            { value: 'product', label: 'product · 货品' },
-            { value: 'warehouse', label: 'warehouse · 仓库' },
-            { value: 'bin', label: 'bin · 仓位' },
-            { value: 'lot', label: 'lot · 批号' },
-            { value: 'serial', label: 'serial · 序列号' },
-            { value: 'container', label: 'container · 包装容器' },
+            { value: 'product', label: '货品' },
+            { value: 'warehouse', label: '仓库' },
+            { value: 'bin', label: '仓位' },
+            { value: 'lot', label: '批号' },
+            { value: 'serial', label: '序列号' },
+            { value: 'container', label: '包装容器' },
           ]}
         />
         {options.length > 0 ? (
@@ -1655,7 +1655,7 @@ function InventoryContainerEditor({ warehouses, notify, onClose, onSaved }) {
     <Modal title="新建包装容器" onClose={onClose}>
       <form className="inv-work-form" onSubmit={save}>
         <InventoryWorkInput label="容器编号" required value={form.containerNo} onChange={(v) => setForm({ ...form, containerNo: v })} placeholder="例如 CTR-0001" />
-        <InventoryWorkSelect label="容器类型" value={form.containerType} onChange={(v) => setForm({ ...form, containerType: v })} options={[{ value: 'BOX', label: 'BOX · 箱' }, { value: 'PALLET', label: 'PALLET · 托盘' }, { value: 'CARTON', label: 'CARTON · 纸箱' }]} />
+        <InventoryWorkSelect label="容器类型" value={form.containerType} onChange={(v) => setForm({ ...form, containerType: v })} options={[{ value: 'BOX', label: '箱' }, { value: 'PALLET', label: '托盘' }, { value: 'CARTON', label: '纸箱' }]} />
         <InventoryWorkSelect label="所属仓库" required value={form.warehouseId} onChange={(v) => setForm({ ...form, warehouseId: v })} options={warehouseOptions(warehouses)} />
         <FormActions onClose={onClose} saveText="创建容器" />
       </form>
@@ -1764,7 +1764,7 @@ export function InventoryScan({ user, notify, references }) {
             <span>条码</span>
             <input value={barcode} onChange={(e) => setBarcode(e.target.value)} placeholder="扫描或输入条码，例如 PRD-P-001" />
           </label>
-          <InventoryWorkSelect label="扫描来源" value={source} onChange={setSource} options={[{ value: 'SCAN', label: 'SCAN · 通用扫描' }, { value: 'STOCKTAKE', label: 'STOCKTAKE · 盘点扫描' }, { value: 'INBOUND', label: 'INBOUND · 入库扫描' }, { value: 'OUTBOUND', label: 'OUTBOUND · 出库扫描' }]} />
+          <InventoryWorkSelect label="扫描来源" value={source} onChange={setSource} options={[{ value: 'SCAN', label: '通用扫描' }, { value: 'STOCKTAKE', label: '盘点扫描' }, { value: 'INBOUND', label: '入库扫描' }, { value: 'OUTBOUND', label: '出库扫描' }]} />
           <button type="submit" className="primary" disabled={busy}>解析条码</button>
         </form>
         <div className="inv-work-tools">
@@ -2177,7 +2177,7 @@ export function InventoryNativeDocuments({ user, notify, references }) {
   return (
     <InventoryWorkSection
       title="其他入库 / 其他出库 / 受托料"
-      description="库存原生单据：不伪装成采购收货或销售出库；受托料以 CUSTOMER 所有权登记在企业仓库。"
+      description="库存原生单据：不伪装成采购收货或销售出库；受托料以客户所有权登记在企业仓库。"
       actions={canManage ? <button type="button" className="primary" onClick={() => setCreating(true)}>＋ 新建库存单据</button> : null}
     >
       <InventoryWorkState loading={loading} error={error} onRetry={load} empty={!documents.length}>
@@ -2588,7 +2588,7 @@ export function InventoryReports({ user, notify }) {
   return (
     <InventoryWorkSection
       title="库存报表"
-      description="台账、库龄、呆滞与预警全部读取 canonical 库存事实。"
+      description="台账、库龄、呆滞与预警全部读取权威库存事实。"
       actions={<button type="button" className="secondary" onClick={load}>刷新</button>}
     >
       <InventoryWorkState loading={loading} error={error} onRetry={load} empty={false}>

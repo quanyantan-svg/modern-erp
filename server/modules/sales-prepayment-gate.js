@@ -173,7 +173,7 @@ function assertPermittedGateRow(row, { stage, salesOrderId, requiredCents }) {
     });
   }
   if (row.gate_decision === 'BLOCK') {
-    throw new HttpError(409, `预付门 ${stage} 未通过：当前 eligible 为 0`, {
+    throw new HttpError(409, `预付门 ${stage} 未通过：当前 「eligible」 为 0`, {
       code: 'SALES_PREPAYMENT_GATE_BLOCKED',
       stage,
       salesOrderId,
@@ -224,7 +224,7 @@ export function authorizeSalesPrepaymentGateForMutation(db, {
   actorId,
   mutationKey,
 }) {
-  if (!GATE_STAGES.includes(stage)) throw new HttpError(400, 'stage 仅支持 PLANNING_RELEASE / RESERVATION / DELIVERY');
+  if (!GATE_STAGES.includes(stage)) throw new HttpError(400, '「stage」 仅支持 PLANNING_RELEASE / RESERVATION / DELIVERY');
   const asOf = businessDate || now().slice(0, 10);
   const requirement = lookupRequirementForOrder(db, { salesOrderId, asOf });
   if (!requirement) return { state: 'NOT_REQUIRED', stage, salesOrderId };
@@ -302,7 +302,7 @@ export function authorizeSalesPrepaymentGateWithPlan(db, plan, {
   stage = 'DELIVERY', actorId, mutationKey, afterParentLock = null,
 } = {}) {
   if (!plan?.salesOrderId || !actorId || !mutationKey) throw new HttpError(400, '预付款门计划上下文不完整');
-  if (!GATE_STAGES.includes(stage)) throw new HttpError(400, 'stage 无效');
+  if (!GATE_STAGES.includes(stage)) throw new HttpError(400, '「stage」 无效');
   // SC01 `reservation_behavior` — the RESERVATION stage is the only stage
   // that starts a reservation, and it is entered ONLY by the Sales
   // reservation intent writer (server/modules/sales-reservation-intent.js).
@@ -461,7 +461,7 @@ export async function updatePrepaymentRequirement(db, req, res, actor, id) {
 export async function evaluateSalesPrepaymentGate(db, req, res, actor, salesOrderId, stage) {
   allow(actor, 'SALES_MANAGE');
   if (!salesOrderId) throw new HttpError(400, 'salesOrderId 必填');
-  if (!GATE_STAGES.includes(stage)) throw new HttpError(400, 'stage 仅支持 PLANNING_RELEASE / RESERVATION / DELIVERY');
+  if (!GATE_STAGES.includes(stage)) throw new HttpError(400, '「stage」 仅支持 PLANNING_RELEASE / RESERVATION / DELIVERY');
   const body = await readJson(req);
   // solution.md §37.2 phase 0 — unlocked discovery, no business-object lock. `asOf`
   // is bound ONCE so the period check, requirement lookup, parent discovery and the

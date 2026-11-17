@@ -97,9 +97,9 @@ test('P8 route inventory: every disabled route is one of the frozen four', () =>
 
 // ----- 2. Eight canonical launcher groups -----
 
-test('P8 launcher: eight canonical business groups present in order', () => {
+test('P8 launcher: nine canonical domain groups present in order', () => {
   const keys = MOBILE_APPLICATION_GROUPS.filter((g) => g.kind === 'domain').map((g) => g.key);
-  assert.deepEqual(keys, ['master-engineering','sales-customer','planning','procurement-outsourcing','manufacturing-quality','inventory-warehouse','finance-operations','accounting-analytics']);
+  assert.deepEqual(keys, ['master-engineering','sales-customer','planning','procurement-outsourcing','manufacturing-quality','inventory-warehouse','finance-operations','accounting-analytics','platform']);
 });
 
 test('P8 launcher: every launcher tile references a legitimate enabled route', () => {

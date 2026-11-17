@@ -48,14 +48,21 @@ describe('P3 global design system', () => {
     assert.doesNotMatch(shell, /通讯录|敬请期待|云翼/);
   });
 
-  test('launcher has canonical eight-domain names and permission filtering remains external', () => {
+  // 2026-11-17 起分组标题由 domainMetadata 的中文 navigationLabel 单源派生
+  // （Requirement §36.19 PL-NAVI-03 / PL-NAVI-04）；registry 不再硬编码第二份域名。
+  // 原断言锁定的是「八个英文域名的分组标题」，那是 commit c77616b（2026-10-06）
+  // 引入的历史状态，本节**显式修订**而非删除。
+  test('launcher derives nine Chinese group labels from the canonical domain taxonomy', () => {
     // V1.7 P0: launcher groups are now owned by applicationRegistry.js;
     // applicationMetadata.js is a compatibility projection. Permission
     // filtering continues to live in the registry, not in the projection.
     const registry = read('src', 'navigation', 'applicationRegistry.js');
-    for (const label of ['Master & Engineering', 'Sales & Customer', 'Planning', 'Procurement & Outsourcing', 'Manufacturing & Quality', 'Inventory & Warehouse', 'Finance Operations', 'Accounting & Analytics']) {
-      assert.match(registry, new RegExp(`launcherGroup\\('[^']+','${label}'`));
+    const domainMetadata = read('src', 'navigation', 'domainMetadata.js');
+    for (const label of ['主数据与工程', '销售与客户', '计划', '采购与委外', '制造与质量', '库存与仓储', '财务运营', '会计与分析', '系统设置']) {
+      assert.match(domainMetadata, new RegExp(`navigationLabel: '${label}'`));
     }
+    assert.match(registry, /DOMAIN_BY_KEY\[key\]\.navigationLabel/);
+    assert.equal((registry.match(/launcherGroup\(/g) || []).length, 9);
     assert.doesNotMatch(metadata, /permission\s*:/);
   });
 

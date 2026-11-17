@@ -41,13 +41,30 @@ test('Domain Alignment keeps 93 active and 2 disabled routes after the Platform 
   }
 });
 
-test('Business Launcher is exactly eight non-empty canonical groups and excludes Platform', () => {
-  assert.deepEqual(APPLICATION_LAUNCHER_GROUPS.map((group) => group.key), BUSINESS_DOMAIN_KEYS);
+// 本断言于 2026-11-17 被 Requirement §36.19 PL-NAVI-01 **显式修订**（不是删除）。
+// 原断言锁定了 commit c77616b（2026-10-06）删除 `utility-system`（系统设置）分组后
+// 「启动器只有八个业务域、Platform 不得进入启动器」这一历史决定 —— 正是该决定让
+// admin 在界面上无法到达「用户与权限 → 用户管理 → 新增用户」。
+// 修订后：九个域各有一个分组；Platform 的 11 条 route 中，底部页签承载的 3 条
+// （业务审批 / 通知中心 / 我的流程任务）不重复进入启动器，其余 8 条进入「系统设置」。
+test('Business Launcher is exactly nine non-empty canonical groups including Platform', () => {
+  assert.deepEqual(APPLICATION_LAUNCHER_GROUPS.map((group) => group.key), [...BUSINESS_DOMAIN_KEYS, PLATFORM_DOMAIN.key]);
   assert.ok(APPLICATION_LAUNCHER_GROUPS.every((group) => group.kind === 'domain' && group.items.length > 0));
   const activeKeys = new Set(ACTIVE_APPLICATION_ROUTES.map((route) => route.key));
   for (const entry of APPLICATION_LAUNCHER_GROUPS.flatMap((group) => group.items)) assert.ok(activeKeys.has(entry.routeKey), entry.key);
   const platformRoutes = new Set(ACTIVE_APPLICATION_ROUTES.filter((route) => route.domain === PLATFORM_DOMAIN.key).map((route) => route.key));
-  for (const entry of APPLICATION_LAUNCHER_GROUPS.flatMap((group) => group.items)) assert.equal(platformRoutes.has(entry.routeKey), false, entry.key);
+  const tabCarried = new Set(['approvals', 'notifications', 'workflow-tasks']);
+  const platformEntries = APPLICATION_LAUNCHER_GROUPS
+    .filter((group) => group.key === PLATFORM_DOMAIN.key)
+    .flatMap((group) => group.items);
+  assert.deepEqual(
+    platformEntries.map((entry) => entry.routeKey).sort(),
+    [...platformRoutes].filter((key) => !tabCarried.has(key)).sort(),
+    '系统设置分组必须覆盖 Platform 域除底部页签承载之外的全部 route',
+  );
+  for (const entry of APPLICATION_LAUNCHER_GROUPS.flatMap((group) => group.items)) {
+    if (platformRoutes.has(entry.routeKey)) assert.equal(entry.group, PLATFORM_DOMAIN.key, entry.key);
+  }
 });
 
 test('Finance Operations launcher is exactly the six approved primary workstreams', () => {

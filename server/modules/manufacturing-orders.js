@@ -68,7 +68,7 @@ function snapshotProductionOrder(db, orderId, productId, bomId, quantity, routin
     if (chosenBom.product_id !== productId) throw new HttpError(409, 'BOM 与生产产品不匹配');
     if (chosenBom.status !== 'ACTIVE') throw new HttpError(409, 'BOM 未启用');
   } else if (bomId) {
-    throw new HttpError(409, 'BOM does not satisfy the approved effective self-make contract');
+    throw new HttpError(409, 'BOM 不满足已批准的生效自制合同');
   } else if (effective) {
     chosenBom = effective;
   } else {
@@ -87,7 +87,7 @@ function snapshotProductionOrder(db, orderId, productId, bomId, quantity, routin
   const routing = routingId
     ? db.prepare("SELECT * FROM product_routings WHERE id=? AND product_id=? AND status='ACTIVE'").get(routingId, productId)
     : db.prepare("SELECT * FROM product_routings WHERE product_id=? AND status='ACTIVE'").get(productId);
-  if (routingId && !routing) throw new HttpError(409, 'Routing is inactive, missing, or belongs to another product');
+  if (routingId && !routing) throw new HttpError(409, '工艺路线已停用、不存在，或属于其他产品');
   db.prepare('UPDATE production_orders SET bom_id=?,bom_version_snapshot=?,routing_id_snapshot=?,routing_version_snapshot=?,updated_at=? WHERE id=?')
     .run(chosenBom.id, chosenBom.version || '', routing?.id || null, routing?.version || '', new Date().toISOString(), orderId);
   if (routing && !db.prepare('SELECT 1 FROM production_order_routing_snapshots WHERE production_order_id=?').get(orderId)) {

@@ -100,8 +100,8 @@ describe('Wave 8 V21 evidence and Consignment closure', () => {
     const position = buildCanonicalPosition(db, { productId: 'w8-p', warehouseId: 'w8-source', ownerType: 'ENTERPRISE', ownerId: null, stockStatus: 'AVAILABLE' });
     const json = canonicalPositionSnapshot(position);
     assert.deepEqual(parseCanonicalPositionSnapshot(json), JSON.parse(json));
-    assert.throws(() => parseCanonicalPositionSnapshot(json.replace(position.positionKey, '0'.repeat(64))), /hash mismatch/);
-    assert.throws(() => parseCanonicalPositionSnapshot(json.replace('{', '{"extra":1,')), /shape mismatch/);
+    assert.throws(() => parseCanonicalPositionSnapshot(json.replace(position.positionKey, '0'.repeat(64))), /历史仓位证据哈希不一致/);
+    assert.throws(() => parseCanonicalPositionSnapshot(json.replace('{', '{"extra":1,')), /历史仓位证据结构不一致/);
   });
 
   test('Consignment handoff persists exact immutable evidence, replay is exact, and settle/return consume historical partitions', () => {

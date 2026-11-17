@@ -55,7 +55,7 @@ export async function transferOut(db, req, res, actor) {
   const body = await readJson(req);
   assertAllowedFields(body, ['sourceTransferId','productId','quantity','fromWarehouseId','toWarehouseId','businessDate']);
   const quantity = Number(body.quantity);
-  if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, 'quantity must be positive');
+  if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, '数量必须大于 0');
   const transferId = String(body.sourceTransferId);
   const now = nowIso();
   const businessDate = body.businessDate || now.slice(0, 10);
@@ -100,19 +100,19 @@ export async function transferIn(db, req, res, actor) {
   const body = await readJson(req);
   assertAllowedFields(body, ['sourceTransferId','productId','quantity','fromWarehouseId','toWarehouseId','businessDate']);
   const quantity = Number(body.quantity);
-  if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, 'quantity must be positive');
+  if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, '数量必须大于 0');
   const transferId = String(body.sourceTransferId);
   const now = nowIso();
   const businessDate = body.businessDate || now.slice(0, 10);
   transaction(db, () => {
     ensureTable(db);
     const stepRow = getStepRow(db, transferId, body.productId, body.fromWarehouseId, body.toWarehouseId);
-    if (!stepRow) throw new HttpError(404, 'No step transfer row; issue transferOut first');
+    if (!stepRow) throw new HttpError(404, '未找到分步调拨记录，请先执行调出');
     const inTransit = computeInTransit(stepRow);
     if (quantity > inTransit) {
-      throw new HttpError(409, `In-transit insufficient: available=${inTransit}, requested=${quantity}`, {
+      throw new HttpError(409, `在途库存不足：可用 ${inTransit}，需求 ${quantity}`, {
         code: 'IN_TRANSIT_INSUFFICIENT',
-        resolution: 'Reduce receive quantity or perform additional Transfer Out',
+        resolution: '请减少收货数量，或追加一笔调出',
       });
     }
     const stepItemId = stepRow.id;
@@ -151,9 +151,9 @@ export function cancelRemaining(db, res, actor, sourceTransferId, productId, fro
   transaction(db, () => {
     ensureTable(db);
     const stepRow = getStepRow(db, sourceTransferId, productId, fromWh, toWh);
-    if (!stepRow) throw new HttpError(404, 'Step transfer not found');
+    if (!stepRow) throw new HttpError(404, '分步调拨单不存在');
     const inTransit = computeInTransit(stepRow);
-    if (inTransit <= 0) throw new HttpError(409, 'No in-transit remaining to cancel');
+    if (inTransit <= 0) throw new HttpError(409, '没有可取消的在途数量');
     db.prepare(`UPDATE inventory_step_transfer_in_transit SET cancelled_qty=cancelled_qty+?, status='CLOSED', closed_at=? WHERE id=?`).run(inTransit, now, stepRow.id);
     audit(db, actor.id, 'STEP_CANCEL', 'INVENTORY_STEP_TRANSFER', stepRow.id, `Cancel remaining ${inTransit} ${productId}`);
   });
@@ -163,15 +163,15 @@ export function cancelRemaining(db, res, actor, sourceTransferId, productId, fro
 export function returnToSource(db, res, actor, sourceTransferId, productId, fromWh, toWh, quantity, businessDate) {
   allow(actor, 'INVENTORY_TRANSFER_CONFIRM');
   const q = Number(quantity);
-  if (!Number.isFinite(q) || q <= 0) throw new HttpError(400, 'quantity must be positive');
+  if (!Number.isFinite(q) || q <= 0) throw new HttpError(400, '数量必须大于 0');
   const now = nowIso();
   const bizDate = businessDate || now.slice(0, 10);
   transaction(db, () => {
     ensureTable(db);
     const stepRow = getStepRow(db, sourceTransferId, productId, fromWh, toWh);
-    if (!stepRow) throw new HttpError(404, 'Step transfer not found');
+    if (!stepRow) throw new HttpError(404, '分步调拨单不存在');
     const inTransit = computeInTransit(stepRow);
-    if (q > inTransit) throw new HttpError(409, `In-transit insufficient for return-to-source: ${inTransit} < ${q}`);
+    if (q > inTransit) throw new HttpError(409, `在途库存不足以退回来源仓：${inTransit} < ${q}`);
     applyInventoryMutation({
       db,
       sourceType: 'INVENTORY_STEP_TRANSFER_IN',

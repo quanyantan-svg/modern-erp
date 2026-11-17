@@ -16,7 +16,7 @@ const VALID_STATUS = new Set(['OPEN', 'PARTIAL', 'SETTLED', 'REVERSED']);
 
 export function listDueSchedules(db, res, actor, side, openItemId) {
   allow(actor, side === 'AR' ? 'FINANCE_AR_VIEW' : 'FINANCE_AP_VIEW');
-  if (!VALID_SIDE.has(side)) throw new HttpError(400, 'side 必须是 AR 或 AP');
+  if (!VALID_SIDE.has(side)) throw new HttpError(400, '「side」 必须是 AR 或 AP');
   const rows = db.prepare(
     `SELECT id, side, open_item_id, sequence, due_date, scheduled_amount_cents,
             settled_amount_cents, status, created_at
@@ -30,19 +30,19 @@ export function listDueSchedules(db, res, actor, side, openItemId) {
 export async function upsertDueSchedules(db, req, res, actor) {
   const body = await readJson(req);
   const side = requiredText(body.side, 'side', 4);
-  if (!VALID_SIDE.has(side)) throw new HttpError(400, 'side 必须是 AR 或 AP');
+  if (!VALID_SIDE.has(side)) throw new HttpError(400, '「side」 必须是 AR 或 AP');
   allow(actor, side === 'AR' ? 'FINANCE_AR_VIEW' : 'FINANCE_AP_VIEW');
   const openItemId = requiredText(body.openItemId, 'openItemId', 64);
   assertOpenItemSide(db, side, openItemId);
 
   const lines = Array.isArray(body.lines) ? body.lines : [];
-  if (!lines.length) throw new HttpError(400, '请提供至少一条 due schedule line');
+  if (!lines.length) throw new HttpError(400, '请提供至少一条 「due」 「schedule」 「line」');
 
   let contractTotal = 0;
   const normalized = lines.map((l, idx) => {
     const sequence = (l.sequence === undefined || l.sequence === null) ? (idx + 1) : Number(l.sequence);
     if (!Number.isSafeInteger(sequence) || sequence < 1) {
-      throw new HttpError(400, `第 ${idx + 1} 行的 sequence 必须为正整数`);
+      throw new HttpError(400, `第 ${idx + 1} 行的 「sequence」 必须为正整数`);
     }
     const dueDate = requiredText(l.dueDate, `第 ${idx + 1} 行 dueDate`, 16);
     const scheduledCents = Number(l.scheduledAmountCents);
@@ -51,7 +51,7 @@ export async function upsertDueSchedules(db, req, res, actor) {
     }
     const status = optionalText(l.status ?? 'OPEN', 16);
     if (!VALID_STATUS.has(status)) {
-      throw new HttpError(400, `第 ${idx + 1} 行的 status 非法`);
+      throw new HttpError(400, `第 ${idx + 1} 行的 「status」 非法`);
     }
     contractTotal += scheduledCents;
     return { sequence, dueDate, scheduledCents, status };
@@ -61,7 +61,7 @@ export async function upsertDueSchedules(db, req, res, actor) {
   const headerTable = side === 'AR' ? 'account_receivables' : 'account_payables';
   const originalCents = db.prepare(`SELECT amount_cents FROM ${headerTable} WHERE id=?`).get(openItemId)?.amount_cents;
   if (typeof originalCents !== 'number') {
-    throw new HttpError(404, 'open item 不存在');
+    throw new HttpError(404, '「open」 「item」 不存在');
   }
   if (contractTotal !== originalCents) {
     throw new HttpError(400, `SUM(scheduled_amount_cents) 必须等于原币金额 ${originalCents}`);
@@ -93,7 +93,7 @@ export async function upsertDueSchedules(db, req, res, actor) {
 export function assertOpenItemSide(db, side, openItemId) {
   const table = side === 'AR' ? 'account_receivables' : 'account_payables';
   const row = db.prepare(`SELECT id FROM ${table} WHERE id=?`).get(openItemId);
-  if (!row) throw new HttpError(404, 'open item 不存在或 side 不匹配');
+  if (!row) throw new HttpError(404, '「open」 「item」 不存在或 「side」 不匹配');
 }
 
 function runInTransaction(db, fn) {

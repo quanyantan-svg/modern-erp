@@ -27,7 +27,7 @@ export function FinanceInvoices({ notify }) {
   const postedPurchase = purchase.filter((row) => row.status === 'POSTED');
   return <BusinessPageShell className="finance-hub finance-invoice-hub" width="rail">
     <BusinessPageHeader title="发票管理" context="销售发票、采购发票与来源业务的统一工作入口" secondaryActions={<BusinessAction onClick={load}>刷新</BusinessAction>}/>
-    <section className="finance-hero" aria-label="发票概览"><div><span>INVOICE CONTROL</span><h2>从业务来源到正式应收应付</h2><p>保留来源、确认模式、贷记状态与最终 open item 的完整追溯。</p></div><div className="finance-hero__metric"><strong>{sales.length + purchase.length}</strong><span>当前发票 / 账单</span></div></section>
+    <section className="finance-hero" aria-label="发票概览"><div><span>发票管控</span><h2>从业务来源到正式应收应付</h2><p>保留来源、确认模式、贷记状态与最终未核销条目的完整追溯。</p></div><div className="finance-hero__metric"><strong>{sales.length + purchase.length}</strong><span>当前发票 / 账单</span></div></section>
     <div className="finance-summary-grid"><SummaryCard label="已过账销售发票" value={postedSales.length} detail={money(postedSales.reduce((sum, row) => sum + Number(row.gross_cents || 0), 0))}/><SummaryCard label="已过账供应商账单" value={postedPurchase.length} detail={money(postedPurchase.reduce((sum, row) => sum + Number(row.gross_cents || 0), 0))}/></div>
     <div className="finance-workstream-grid">
       <AppLink className="finance-workstream" page="sales-invoices"><small>应收侧</small><strong>销售发票</strong><span>开票、过账、贷记与来源追溯</span><b>进入工作台 →</b></AppLink>
@@ -85,7 +85,7 @@ export function FinanceTreasury({ user, notify }) {
   }[tab] || [];
   return <BusinessPageShell className="finance-hub finance-treasury-hub" width="rail">
     <BusinessPageHeader title="资金管理" context="结算账户、资金流水、票据、付款申请、银行对账与资金关账" secondaryActions={<BusinessAction onClick={load}>刷新</BusinessAction>}/>
-    <section className="finance-hero finance-hero--treasury"><div><span>TREASURY CONTROL</span><h2>每一笔资金变动都可追溯</h2><p>余额是 canonical movement 的派生结果；审批不等于资金执行。</p></div><div className="finance-hero__metric"><strong>{money(totalBalance)}</strong><span>{data.accounts.length} 个结算账户</span></div></section>
+    <section className="finance-hero finance-hero--treasury"><div><span>资金管控</span><h2>每一笔资金变动都可追溯</h2><p>余额是权威资金流水的派生结果；审批不等于资金执行。</p></div><div className="finance-hero__metric"><strong>{money(totalBalance)}</strong><span>{data.accounts.length} 个结算账户</span></div></section>
     <SegmentedControl label="资金工作区" options={TREASURY_TABS} value={tab} onChange={setTab}/>
     {tab === 'bank' && !data.statements.length && <InlineAlert tone="info" title="尚无银行对账单">通过银行流水导入建立只读银行事实，再与资金流水匹配。</InlineAlert>}
     {loading ? <Skeleton lines={4}/> : body.length ? <RecordList className="finance-record-grid">{body}</RecordList> : <EmptyState title="当前工作区暂无记录" description="数据建立后会在此形成可追溯列表。"/>}

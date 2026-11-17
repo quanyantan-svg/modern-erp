@@ -136,16 +136,16 @@ function salesInvoiceRecognitionSources(db, invoiceId) {
   const serviceOrderItems = lines.filter((line) => Number(line.service_classification) === 1 && Number(line.classification_active) === 1)
     .map((line) => line.sales_order_item_id);
   if (new Set(serviceOrderItems).size !== serviceOrderItems.length) {
-    throw new HttpError(409, 'An invoice may contain only one service item per sales-order line', { code: 'SERVICE_INVOICE_ITEM_SOURCE_AMBIGUOUS' });
+    throw new HttpError(409, '每条销售订单行在发票中最多只能对应一个服务明细', { code: 'SERVICE_INVOICE_ITEM_SOURCE_AMBIGUOUS' });
   }
   return lines.flatMap((line) => {
     if (Number(line.service_classification) === 1 && Number(line.classification_active) === 1) {
-      if (!line.sales_order_item_id || Number(line.base_quantity_den) <= 0) throw new HttpError(409, 'Service invoice source is incomplete', { code: 'SERVICE_INVOICE_SOURCE_UNAVAILABLE' });
+      if (!line.sales_order_item_id || Number(line.base_quantity_den) <= 0) throw new HttpError(409, '服务发票来源不完整', { code: 'SERVICE_INVOICE_SOURCE_UNAVAILABLE' });
       const numerator = BigInt(line.base_quantity_num) * 1_000_000n;
       const denominator = BigInt(line.base_quantity_den);
-      if (numerator % denominator !== 0n) throw new HttpError(409, 'Service invoice quantity is not representable in micros', { code: 'SERVICE_QUANTITY_NOT_REPRESENTABLE' });
+      if (numerator % denominator !== 0n) throw new HttpError(409, '服务发票数量无法用微单位表示', { code: 'SERVICE_QUANTITY_NOT_REPRESENTABLE' });
       const requiredMicrosBig = numerator / denominator;
-      if (requiredMicrosBig <= 0n || requiredMicrosBig > BigInt(Number.MAX_SAFE_INTEGER)) throw new HttpError(409, 'Service invoice quantity is unsafe', { code: 'SERVICE_QUANTITY_NOT_REPRESENTABLE' });
+      if (requiredMicrosBig <= 0n || requiredMicrosBig > BigInt(Number.MAX_SAFE_INTEGER)) throw new HttpError(409, '服务发票数量超出安全整数范围', { code: 'SERVICE_QUANTITY_NOT_REPRESENTABLE' });
       const requiredMicros = Number(requiredMicrosBig);
       const fulfillments = db.prepare(`SELECT f.*,a.amount_cents open_amount_authority
         FROM service_fulfillments f LEFT JOIN account_receivables a
@@ -159,7 +159,7 @@ function salesInvoiceRecognitionSources(db, invoiceId) {
       for (const fulfillment of fulfillments) {
         if (remaining <= 0) break;
         if (Number(fulfillment.recognition_amount_cents) === 0) continue;
-        if (fulfillment.open_amount_authority == null) throw new HttpError(409, 'Service fulfillment FINAL AR is missing', { code: 'SERVICE_INVOICE_SOURCE_UNAVAILABLE' });
+        if (fulfillment.open_amount_authority == null) throw new HttpError(409, '服务履约缺少 FINAL 应收单', { code: 'SERVICE_INVOICE_SOURCE_UNAVAILABLE' });
         const used = db.prepare(`SELECT COALESCE(SUM(l.invoiced_quantity),0) quantity
           FROM finance_invoice_source_links l JOIN sales_invoices i ON i.id=l.invoice_id
           WHERE l.source_type='SERVICE_FULFILLMENT' AND l.source_id=? AND i.status='POSTED' AND i.id<>?`).get(fulfillment.id, invoiceId);
@@ -176,7 +176,7 @@ function salesInvoiceRecognitionSources(db, invoiceId) {
         remaining -= quantity; allocatedMicros = nextMicros; allocatedCents = nextCents;
       }
       if (remaining !== 0 || allocatedMicros !== requiredMicros || allocatedCents !== Number(line.gross_cents)) {
-        throw new HttpError(409, 'Service invoice allocation is not conserved', { code: 'SERVICE_INVOICE_ALLOCATION_NOT_CONSERVED' });
+        throw new HttpError(409, '服务发票分配未守恒', { code: 'SERVICE_INVOICE_ALLOCATION_NOT_CONSERVED' });
       }
       return allocations;
     }
@@ -193,11 +193,11 @@ function assertPostedServiceLinkEvidence(db, invoiceId) {
   const actual = db.prepare(`SELECT * FROM finance_invoice_source_links
     WHERE invoice_id=? AND invoice_side='SALES_INVOICE' AND source_type='SERVICE_FULFILLMENT'
     ORDER BY source_id,source_line_id`).all(invoiceId);
-  if (actual.length !== expected.length) throw new HttpError(409, 'Posted invoice service-link evidence is incomplete', { code: 'FINANCE_INVOICE_SOURCE_LINK_EVIDENCE_MISMATCH' });
+  if (actual.length !== expected.length) throw new HttpError(409, '已过账发票的服务关联证据不完整', { code: 'FINANCE_INVOICE_SOURCE_LINK_EVIDENCE_MISMATCH' });
   for (const source of expected) {
     const row = actual.find((candidate) => candidate.source_id === source.sourceId && candidate.source_line_id === source.sourceLineId);
     if (!row || Number(row.invoiced_quantity) !== source.invoicedQuantity || Number(row.invoiced_amount_cents) !== source.invoicedAmountCents) {
-      throw new HttpError(409, 'Posted invoice service-link evidence does not match', { code: 'FINANCE_INVOICE_SOURCE_LINK_EVIDENCE_MISMATCH' });
+      throw new HttpError(409, '已过账发票的服务关联证据不匹配', { code: 'FINANCE_INVOICE_SOURCE_LINK_EVIDENCE_MISMATCH' });
     }
   }
 }
@@ -232,7 +232,7 @@ export function postSalesInvoice(db, invoiceId, actorId) {
     guardPeriodAction(db, { actionCode: 'FINANCE_AR_INVOICE', businessDate: invoice.invoice_date }); const lines = db.prepare('SELECT * FROM sales_invoice_items WHERE invoice_id=?').all(invoiceId);
     const containsService = db.prepare(`SELECT 1 FROM sales_invoice_items i JOIN product_commercial_classification c ON c.product_id=i.product_id
       WHERE i.invoice_id=? AND c.service_classification=1 AND c.active=1 LIMIT 1`).get(invoiceId);
-    if (containsService && invoice.tax_mode !== 'NO_TAX') throw new HttpError(409, 'Taxed service invoices are not supported', { code: 'SERVICE_INVOICE_TAX_MODE_UNSUPPORTED' });
+    if (containsService && invoice.tax_mode !== 'NO_TAX') throw new HttpError(409, '暂不支持含税服务发票', { code: 'SERVICE_INVOICE_TAX_MODE_UNSUPPORTED' });
     for (const line of lines) {
       const delivered = db.prepare('SELECT quantity FROM sales_delivery_items WHERE id=?').get(line.delivery_item_id)?.quantity;
       const posted = db.prepare(`SELECT COALESCE(SUM(i.base_quantity_num*1.0/i.base_quantity_den),0) n FROM sales_invoice_items i JOIN sales_invoices h ON h.id=i.invoice_id WHERE i.delivery_item_id=? AND h.status='POSTED' AND h.id<>?`).get(line.delivery_item_id, invoiceId).n;
@@ -335,7 +335,7 @@ function serviceCreditTargets(db, invoiceId, requestedCents, currentCreditId) {
     const open = db.prepare(`SELECT * FROM account_receivables WHERE source_type='SERVICE_FULFILLMENT' AND source_id=? AND item_kind='FINAL'${lockRows}`).get(link.source_id);
     const linkedCents = Number(link.linked_cents);
     if (!fulfillment || !open || !Number.isSafeInteger(linkedCents) || linkedCents <= 0) {
-      throw new HttpError(409, 'Service Credit allocation evidence is incomplete', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
+      throw new HttpError(409, '服务信用分配证据不完整', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
     }
     capacities.push({ id: open.id, linkedCents, creditedCents: 0 });
   }
@@ -346,31 +346,31 @@ function serviceCreditTargets(db, invoiceId, requestedCents, currentCreditId) {
     const seen = new Set(); let confirmedTotal = 0;
     for (const adjustment of adjustments) {
       if (seen.has(adjustment.source_id) || !byOpen.has(adjustment.target_open_item_id)) {
-        throw new HttpError(409, 'Service Credit allocation evidence is inconsistent', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
+        throw new HttpError(409, '服务信用分配证据不一致', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
       }
       seen.add(adjustment.source_id);
       if (adjustment.status === 'CONFIRMED') {
         const amount = Number(adjustment.amount_cents);
-        if (!Number.isSafeInteger(amount) || amount <= 0) throw new HttpError(409, 'Service Credit allocation evidence is inconsistent', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
+        if (!Number.isSafeInteger(amount) || amount <= 0) throw new HttpError(409, '服务信用分配证据不一致', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
         byOpen.get(adjustment.target_open_item_id).creditedCents += amount; confirmedTotal += amount;
       }
     }
-    if (confirmedTotal !== Number(note.gross_cents)) throw new HttpError(409, 'Service Credit allocation evidence is inconsistent', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
+    if (confirmedTotal !== Number(note.gross_cents)) throw new HttpError(409, '服务信用分配证据不一致', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
   }
   const remaining = capacities.map((entry) => ({ ...entry, available: entry.linkedCents - entry.creditedCents }));
   const basis = remaining.reduce((sum, entry) => sum + entry.available, 0);
   if (remaining.some((entry) => !Number.isSafeInteger(entry.available) || entry.available < 0) || basis < requestedCents) {
-    throw new HttpError(409, 'Service Credit allocation exceeds invoice source capacity', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
+    throw new HttpError(409, '服务信用分配超出发票来源容量', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
   }
   let priorBasis = 0; let allocated = 0;
   const targets = remaining.map((entry, index) => {
     priorBasis += entry.available;
     const cumulative = index === remaining.length - 1 ? requestedCents : Number(BigInt(requestedCents) * BigInt(priorBasis) / BigInt(basis));
     const amount = cumulative - allocated; allocated = cumulative;
-    if (amount < 0 || amount > entry.available) throw new HttpError(409, 'Service Credit allocation is not conserved', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
+    if (amount < 0 || amount > entry.available) throw new HttpError(409, '服务信用分配未守恒', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
     return { id: entry.id, amount };
   }).filter((entry) => entry.amount > 0);
-  if (allocated !== requestedCents) throw new HttpError(409, 'Service Credit allocation is not conserved', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
+  if (allocated !== requestedCents) throw new HttpError(409, '服务信用分配未守恒', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
   return targets;
 }
 
@@ -404,7 +404,7 @@ export function createCommercialCreditNote(db, input) {
     const serviceTargets = sales ? serviceCreditTargets(db, header.id, gross, id) : null;
     let targets = serviceTargets || (header.open_item_id ? [{ id: header.open_item_id }] : db.prepare(`SELECT id FROM ${openItemTable} WHERE source_type=? AND source_id=?`).all(sales ? 'SALES_INVOICE' : 'SUPPLIER_BILL', header.id));
     if (!targets.length) targets = db.prepare(`SELECT DISTINCT o.id FROM finance_invoice_source_links l JOIN ${openItemTable} o ON o.source_type=l.source_type AND o.source_id=l.source_id WHERE l.invoice_id=? AND l.invoice_side=? ORDER BY o.id`).all(header.id, sales ? 'SALES_INVOICE' : 'SUPPLIER_BILL');
-    if (!targets.length) throw new HttpError(409, '发票未关联可贷记的最终 open item');
+    if (!targets.length) throw new HttpError(409, '发票未关联可贷记的最终未结项');
     let unapplied = gross;
     for (let index = 0; index < targets.length && unapplied > 0; index += 1) {
       const snapshot = openItemSnapshot(db, input.side, targets[index].id);
@@ -414,7 +414,7 @@ export function createCommercialCreditNote(db, input) {
       applyCreditAdjustment(db, { side: input.side, adjustmentType, sourceType: sales ? 'SALES_CREDIT_NOTE' : 'SUPPLIER_CREDIT_NOTE', sourceId: targets.length === 1 ? id : `${id}:${index + 1}`, sourceNo: no, targetOpenItemId: targets[index].id, partyId: sales ? header.customer_id : header.supplier_id, businessDate: input.creditDate, amountCents: amount, actorId: input.actorId, createdAt: now });
       unapplied -= amount;
     }
-    if (unapplied > 0) throw new HttpError(409, '贷记金额超过关联 open item 可用余额');
+    if (unapplied > 0) throw new HttpError(409, '贷记金额超过关联未结项的可用余额');
     const credited = Number(header.credited_amount_cents || 0) + gross;
     db.prepare(`UPDATE ${sales ? 'sales_invoices' : 'supplier_bills'} SET credited_amount_cents=?,remaining_creditable_amount_cents=?,credit_state=? WHERE id=?`)
       .run(credited, Number(header.gross_cents) - credited, credited === Number(header.gross_cents) ? 'FULL' : 'PARTIAL', header.id);
@@ -460,7 +460,7 @@ export function discoverCreditReversalPlan(db, noteId) {
 
 export function reverseCommercialCreditNote(db, input) {
   const key = String(input.idempotencyKey || '').trim();
-  if (!key) throw new HttpError(422, 'Idempotency-Key 必填');
+  if (!key) throw new HttpError(422, '必须提供「Idempotency-Key」请求头');
   const reason = String(input.reason || '').trim();
   if (!reason) throw new HttpError(400, '撤销原因必填');
   const reversalDate = normalizeBusinessDate(input.reversalDate, '撤销日期');

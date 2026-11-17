@@ -22,6 +22,16 @@ export const BUSINESS_CONFLICT_COPY = Object.freeze({
 
 const TECHNICAL_ERROR = /(?:SQLITE|FOREIGN KEY|UNIQUE constraint|NOT NULL constraint|SQL syntax|database exception|stack trace|NetworkError|Failed to fetch|HTTP\s*[45]\d\d|\b(?:undefined|NaN|Infinity)\b)/i;
 
+// Requirement §36.19 PL-LANG-03：最终用户界面只呈现中文。服务端消息若**完全不含中文**
+// 且含有 ASCII 字母，说明它是一段未经中文化的英文消息，不得原样透出。
+// 含中文的消息照常透传（其中的领域缩写与「」包裹的标识符是允许的）。
+const HAS_CJK = /[㐀-鿿]/;
+
+function isNonChineseMessage(value) {
+  const text = String(value || '');
+  return Boolean(text) && !HAS_CJK.test(text) && /[A-Za-z]/.test(text);
+}
+
 export function roleDisplayName(user = {}) {
   return ROLE_DISPLAY_NAME[user.roleId] || ROLE_DISPLAY_NAME[user.roleCode] || user.roleName || '业务用户';
 }
@@ -34,6 +44,7 @@ export function safeErrorMessage({ status, code, serverMessage, network = false 
   if (status === 404) return '内容不存在或已被删除';
   if (status >= 500) return '暂时无法完成，请稍后重试';
   if (TECHNICAL_ERROR.test(String(serverMessage || ''))) return status === 409 ? '当前内容与已有业务冲突，请检查后重试' : '暂时无法完成，请稍后重试';
+  if (isNonChineseMessage(serverMessage)) return '操作未完成，请稍后重试';
   if (serverMessage) return serverMessage;
   if (status === 400) return '请检查填写内容';
   if (status === 409) return '当前状态已发生变化，请刷新后重试';
@@ -99,7 +110,8 @@ export function classifyApiError(error) {
   const code = error.code || (error.details && error.details.code) || '';
   const serverMessage = error.message;
   const requestId = error.requestId;
-  const resolution = error.resolution || (error.details && error.details.resolution) || undefined;
+  const rawResolution = error.resolution || (error.details && error.details.resolution) || undefined;
+  const resolution = isNonChineseMessage(rawResolution) ? undefined : rawResolution;
   const category = categoryForStatus(status, code);
   return {
     category,

@@ -109,7 +109,7 @@ function Indicators({ user }) {
         <label><span>指标代码</span><input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="IND_A" /></label>
         <label><span>指标名称</span><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
         <label><span>指标类型</span><select value={form.indicatorKind} onChange={(e) => setKind(e.target.value)}><option value="QUALITATIVE">定性</option><option value="QUANTITATIVE">定量</option></select></label>
-        <label><span>最大分值（milli）</span><input type="number" value={form.maxScoreMilli} onChange={(e) => setForm({ ...form, maxScoreMilli: Number(e.target.value) })} /></label>
+        <label><span>最大分值（毫分）</span><input type="number" value={form.maxScoreMilli} onChange={(e) => setForm({ ...form, maxScoreMilli: Number(e.target.value) })} /></label>
         <label><span>说明</span><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
         <label><span>生效日期</span><input type="date" value={form.effectiveFrom} onChange={(e) => setForm({ ...form, effectiveFrom: e.target.value })} /></label>
       </div>
@@ -122,7 +122,7 @@ function Indicators({ user }) {
       : <div className="detail-grid">{data.rows.map((row) => <article className="mini-card" key={row.id}>
         <strong>{row.name || row.code}</strong>
         <div>{row.code} · {KIND_LABELS[row.indicatorKind] || row.indicatorKind}</div>
-        <div>满分 {milli(row.maxScoreMilli)} milli</div>
+        <div>满分 {milli(row.maxScoreMilli)} 毫分</div>
         <small>{row.effectiveFrom} → {row.effectiveTo || '长期'} · {row.status}</small>
       </article>)}</div>}
   </section>;
@@ -170,8 +170,8 @@ function Schemes({ user }) {
       </div>
       {form.gradeBoundaries.map((band, index) => <div className="form-row" key={`band-${index}`}>
         <label><span>等级</span><input value={band.grade} onChange={(e) => setBand(index, { grade: e.target.value })} /></label>
-        <label><span>区间下限（milli）</span><input type="number" value={band.minScoreMilli} onChange={(e) => setBand(index, { minScoreMilli: Number(e.target.value) })} /></label>
-        <label><span>区间上限（milli）</span><input type="number" value={band.maxScoreMilli} onChange={(e) => setBand(index, { maxScoreMilli: Number(e.target.value) })} /></label>
+        <label><span>区间下限（毫分）</span><input type="number" value={band.minScoreMilli} onChange={(e) => setBand(index, { minScoreMilli: Number(e.target.value) })} /></label>
+        <label><span>区间上限（毫分）</span><input type="number" value={band.maxScoreMilli} onChange={(e) => setBand(index, { maxScoreMilli: Number(e.target.value) })} /></label>
       </div>)}
       <div className="form-row">
         <button type="button" onClick={() => setForm((previous) => ({
@@ -244,7 +244,7 @@ function Models({ user }) {
         <label><span>生效日期</span><input type="date" value={form.effectiveFrom} onChange={(e) => setForm({ ...form, effectiveFrom: e.target.value })} /></label>
       </div>
       {indicators.rows.map((indicator) => <div className="form-row" key={indicator.id}>
-        <label><span>{indicator.name || indicator.code} 权重（milli）</span><input type="number" value={weights[indicator.id] ?? ''} onChange={(e) => setWeights({ ...weights, [indicator.id]: Number(e.target.value) })} /></label>
+        <label><span>{indicator.name || indicator.code} 权重（毫分）</span><input type="number" value={weights[indicator.id] ?? ''} onChange={(e) => setWeights({ ...weights, [indicator.id]: Number(e.target.value) })} /></label>
       </div>)}
       <p className="muted">权重合计 {weightTotal} / 10000</p>
       <button type="button" className="primary" onClick={save} disabled={saving || !form.code || !form.name || !form.schemeId}>新增模型版本</button>
@@ -371,8 +371,8 @@ function SheetDetail({ user, sheetId, onChanged, onClose }) {
     <Feedback value={feedback} />
 
     {result ? <div className="detail-grid" aria-label="credit-evaluation-result">
-      <div><span>总分</span><strong>{milli(result.totalScoreMilli)} milli（{points(result.totalScoreMilli)} 分）</strong></div>
-      <div><span>满分</span><strong>{milli(result.maxScoreMilli)} milli（{points(result.maxScoreMilli)} 分）</strong></div>
+      <div><span>总分</span><strong>{milli(result.totalScoreMilli)} 毫分（{points(result.totalScoreMilli)} 分）</strong></div>
+      <div><span>满分</span><strong>{milli(result.maxScoreMilli)} 毫分（{points(result.maxScoreMilli)} 分）</strong></div>
       <div><span>等级</span><strong>{result.ratingGrade}</strong></div>
       <div><span>已应用</span><strong>{result.appliedToProfileId ? '是' : '否'}</strong></div>
     </div> : null}
@@ -480,7 +480,7 @@ export function CreditEvaluation({ user }) {
 
   if (!readable) return <main className="page-stack" data-testid="credit-evaluation-page">
     <header className="page-header"><div>
-      <p className="eyebrow">Sales & Customer · Wave 11</p>
+      <p className="eyebrow">销售与客户 · Wave 11</p>
       <h1>信用评估</h1>
     </div></header>
     <section className="card" aria-label="credit-evaluation-denied">
@@ -490,7 +490,7 @@ export function CreditEvaluation({ user }) {
 
   return <main className="page-stack" data-testid="credit-evaluation-page">
     <header className="page-header"><div>
-      <p className="eyebrow">Sales & Customer · Wave 11</p>
+      <p className="eyebrow">销售与客户 · Wave 11</p>
       <h1>信用评估</h1>
       <p>指标、等级方案与评分模型按生效日期版本化。评分表在创建时固定目标，由有界评分人集合逐人提交，终评后生成唯一聚合结果。</p>
     </div></header>

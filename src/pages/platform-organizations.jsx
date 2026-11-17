@@ -57,7 +57,7 @@ export default function PlatformOrganizations({ user, notify }) {
     <BusinessPageShell className="platform-ops" width="rail" data-testid="platform-organizations-page">
       <header className="platform-ops__hero">
         <div>
-          <span>ORGANIZATION REGISTRY</span>
+          <span>组织注册表</span>
           <h2>组织与作用域</h2>
         </div>
         <p>维护法人实体与业务单元的组织树，并把作用域绑定到组织；库存与财务口径看法人实体，销售与采购执行看业务单元。</p>

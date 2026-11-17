@@ -179,13 +179,13 @@ function effectiveCommercialEvidence(db, order, before, after) {
   if (!Number.isSafeInteger(sourceMicros) || sourceMicros <= 0
     || !Number.isSafeInteger(sourceGrossCents) || sourceGrossCents < 0
     || !Number.isSafeInteger(sourceLineDiscountCents) || sourceLineDiscountCents < 0) {
-    throw new HttpError(409, 'Invalid source values in sales-order-change evidence', { code: 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT' });
+    throw new HttpError(409, '销售订单变更证据中的来源值无效', { code: 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT' });
   }
   const effectiveGrossCents = scaleHalfUp(sourceGrossCents, Number(after.quantityMicros), sourceMicros);
   const effectiveLineDiscountCents = scaleHalfUp(sourceLineDiscountCents, Number(after.quantityMicros), sourceMicros);
   const effectiveHeaderAllocationCents = effectiveGrossCents - effectiveLineDiscountCents - Number(after.amountCents);
   if (![effectiveGrossCents, effectiveLineDiscountCents, effectiveHeaderAllocationCents].every(Number.isSafeInteger)
-    || effectiveHeaderAllocationCents < 0) throw new HttpError(409, 'Invalid LINE/HEADER evidence for sales-order change', { code: 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT' });
+    || effectiveHeaderAllocationCents < 0) throw new HttpError(409, '销售订单变更的行或表头证据无效', { code: 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT' });
   return { contractVersion: 'SO_CHANGE_COMMERCIAL_EVIDENCE_V1', baseEffectiveVersion: Number(order.effective_version),
     targetEffectiveVersion: Number(order.effective_version) + 1, quantityMicros: Number(after.quantityMicros),
     documentUomCode: before?.document_uom_code || after.documentUomCode, unitPriceCents: Number(after.unitPriceCents),
@@ -302,7 +302,7 @@ function insertChange(db, { order, actor, path, body, initialState, requestKey }
 
 export async function createDirectSalesOrderChange(db, req, res, actor, orderId) {
   requireSalesPermission(actor, 'SALES_ORDER_CHANGE_DIRECT_REQUEST'); const body = await readJson(req);
-  const key = String(req.headers['idempotency-key'] || '').trim(); if (!key) throw new HttpError(422, 'Idempotency-Key 必填');
+  const key = String(req.headers['idempotency-key'] || '').trim(); if (!key) throw new HttpError(422, '「Idempotency-Key」 必填');
   const fingerprint = requestFingerprint(body); const replay = idempotencyReplay(db, 'SALES_ORDER_CHANGE_REQUEST', orderId, key, fingerprint);
   if (replay) return send(res, 200, { ...replay, replayed: true }); let result;
   transaction(db, () => { const order = orderForChange(db, orderId, actor, true); result = insertChange(db, { order, actor, path: 'CONTROLLED_DIRECT', body, initialState: 'SUBMITTED', requestKey: key });
@@ -540,7 +540,7 @@ export async function salesOrderChangeAction(db, req, res, actor, changeId, acti
       const stamp = NOW(); db.prepare("UPDATE sales_order_changes SET state='SUBMITTED',updated_at=? WHERE id=?").run(stamp, changeId);
       db.prepare(`INSERT INTO approval_requests(id,source_type,source_id,source_no,status,requester_id,submitted_at,created_at) VALUES(?,'SALES_ORDER_CHANGE',?,?,'PENDING',?,?,?)`).run(id(), changeId, change.change_no, actor.id, stamp, stamp);
       audit(db, actor.id, 'SUBMIT', 'SALES_ORDER_CHANGE', changeId, ''); result = { id: changeId, state: 'SUBMITTED' };
-    } else if (action === 'approve') { requireSalesPermission(actor, 'SALES_ORDER_CHANGE_APPROVE'); const key = String(req.headers['idempotency-key'] || '').trim(); if (!key) throw new HttpError(422, 'Idempotency-Key 必填'); result = applySalesOrderChange(db, changeId, Number(change.base_effective_version), key, actor);
+    } else if (action === 'approve') { requireSalesPermission(actor, 'SALES_ORDER_CHANGE_APPROVE'); const key = String(req.headers['idempotency-key'] || '').trim(); if (!key) throw new HttpError(422, '「Idempotency-Key」 必填'); result = applySalesOrderChange(db, changeId, Number(change.base_effective_version), key, actor);
     } else if (action === 'reject') { requireSalesPermission(actor, 'SALES_ORDER_CHANGE_APPROVE'); if (change.state !== 'SUBMITTED' || change.requested_by === actor.id) throw new HttpError(409, '变更单不可驳回'); const reason = String(body.reason || '').trim(); if (!reason) throw new HttpError(422, '驳回原因必填');
       releaseChangeAuthorizationOccupancy(db, order, changeId, actor);
       db.prepare("UPDATE sales_order_changes SET state='REJECTED',approver_id=?,approved_at=?,updated_at=? WHERE id=?").run(actor.id, NOW(), NOW(), changeId); db.prepare("UPDATE approval_requests SET status='REJECTED',reviewer_id=?,reviewed_at=?,rejection_reason=? WHERE source_type='SALES_ORDER_CHANGE' AND source_id=? AND status='PENDING'").run(actor.id, NOW(), reason, changeId); audit(db, actor.id, 'REJECT', 'SALES_ORDER_CHANGE', changeId, reason); result = { id: changeId, state: 'REJECTED' };

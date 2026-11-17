@@ -15,7 +15,7 @@ const lock = (db) => db.dialect === 'mysql' ? ' FOR UPDATE' : '';
 const now = () => new Date().toISOString();
 const micros = (value, label = '数量') => {
   const number = Number(value);
-  if (!Number.isSafeInteger(number) || number <= 0) throw new HttpError(422, `${label}必须为正整数 micros`);
+  if (!Number.isSafeInteger(number) || number <= 0) throw new HttpError(422, `${label}必须为正整数 「micros」`);
   return number;
 };
 const version = (value) => {
@@ -94,7 +94,7 @@ export function getServiceFulfillmentRow(db, actor, fulfillmentId, { write = fal
 
 export function createServiceFulfillmentCommand(db, input, actor, key) {
   requireWrite(actor);
-  if (!key) throw new HttpError(422, 'Idempotency-Key 必填');
+  if (!key) throw new HttpError(422, '「Idempotency-Key」 必填');
   const qty = micros(input.confirmationQtyMicros);
   const businessDate = normalizeBusinessDate(input.businessDate, '业务日期');
   const fingerprint = requestFingerprint({ salesOrderItemId: input.salesOrderItemId, confirmationQtyMicros: qty, businessDate });
@@ -123,14 +123,14 @@ export function createServiceFulfillmentCommand(db, input, actor, key) {
 
 export function cancelServiceFulfillmentCommand(db, fulfillmentId, expectedVersion, actor, key) {
   requireWrite(actor); const expected = version(expectedVersion);
-  if (!key) throw new HttpError(422, 'Idempotency-Key 必填');
+  if (!key) throw new HttpError(422, '「Idempotency-Key」 必填');
   const fingerprint = requestFingerprint({ action: 'CANCEL', expectedVersion: expected });
   const replay = idempotencyReplay(db, 'SERVICE_FULFILLMENT_CANCEL', fulfillmentId, key, fingerprint);
   if (replay) return { ...replay, replayed: true };
   let result;
   transaction(db, () => {
     const row = getServiceFulfillmentRow(db, actor, fulfillmentId, { write: true, forUpdate: true });
-    if (row.confirmation_state === 'CONFIRMED') throw new HttpError(409, 'Confirmed service fulfillment is immutable', { code: 'SERVICE_FULFILLMENT_CONFIRMED_IMMUTABLE' });
+    if (row.confirmation_state === 'CONFIRMED') throw new HttpError(409, '已确认的服务履约单不可修改', { code: 'SERVICE_FULFILLMENT_CONFIRMED_IMMUTABLE' });
     if (row.confirmation_state !== 'PENDING') throw new HttpError(409, '只有待确认服务履约可以取消', { code: 'SERVICE_FULFILLMENT_STATE_CONFLICT' });
     if (Number(row.version) !== expected) throw new HttpError(409, '服务履约版本已变化', { code: 'SERVICE_FULFILLMENT_VERSION_CONFLICT' });
     const stamp = now();
@@ -145,7 +145,7 @@ export function cancelServiceFulfillmentCommand(db, fulfillmentId, expectedVersi
 
 export function confirmServiceFulfillmentCommand(db, fulfillmentId, expectedVersion, actor, key) {
   requireWrite(actor); const expected = version(expectedVersion);
-  if (!key) throw new HttpError(422, 'Idempotency-Key 必填');
+  if (!key) throw new HttpError(422, '「Idempotency-Key」 必填');
   const discovery = db.prepare('SELECT sales_order_id,business_date FROM service_fulfillments WHERE id=?').get(fulfillmentId);
   if (!discovery) throw new HttpError(404, '服务履约不存在');
   const initialGatePlan = discoverSalesPrepaymentGatePlan(db, discovery.sales_order_id, discovery.business_date);

@@ -150,8 +150,8 @@ export function BomBatchMaintenance({ boms, onChanged, notify, canManage }) {
   };
 
   return <section className="bom-batch">
-    <header><strong>批量维护（Preview → Apply）</strong></header>
-    <p className="business-action__help">选择修改类型与目标 → 生成预览 → 明确 Apply 才落库。</p>
+    <header><strong>批量维护（预览 → 应用）</strong></header>
+    <p className="business-action__help">选择修改类型与目标 → 生成预览 → 明确「应用」才落库。</p>
     <fieldset className="bom-batch-targets">
       <legend>目标 BOM</legend>
       {boms.map((bom) => (
@@ -194,12 +194,12 @@ export function BomBatchMaintenance({ boms, onChanged, notify, canManage }) {
       </article>
     ))}
     <BusinessActionBar>
-      <button type="button" className="secondary" disabled={!changes.length || !filter.productIds.length} onClick={runPreview}>Preview</button>
+      <button type="button" className="secondary" disabled={!changes.length || !filter.productIds.length} onClick={runPreview}>预览</button>
       {preview && canManage && <ConfirmAction
         title="确认应用 BOM 批量维护？"
         message={`将按当前预览修改 ${preview.previewCount || 0} 个 BOM。此操作会写入工程变更审计。`}
-        buttonLabel="Apply（确认应用）"
-        confirmLabel="确认 Apply"
+        buttonLabel="应用（确认应用）"
+        confirmLabel="确认应用"
         onConfirm={runApply} />}
     </BusinessActionBar>
     {error && <p className="engineering-form-result engineering-form-result--fail">{error}</p>}

@@ -205,7 +205,7 @@ export async function generateBarcode(db, req, res, actor) {
   const rawType = String(body.entityType ?? '').trim().toLowerCase();
   const entityType = ENTITY_TYPES[rawType];
   if (!entityType) {
-    throw new HttpError(400, 'entityType 必须为 product / warehouse / bin / lot / serial / container');
+    throw new HttpError(400, 'entityType 必须为 「product」 / 「warehouse」 / 「bin」 / 「lot」 / 「serial」 / 「container」');
   }
   const entityId = String(body.entityId ?? '').trim();
   if (!entityId) throw new HttpError(400, 'entityId 必填');
@@ -404,10 +404,10 @@ export async function renderBarcodeLabel(db, req, res, actor) {
   const body = await readJson(req);
   assertAllowedFields(body, ['barcode', 'template']);
   const barcode = String(body.barcode ?? '').trim();
-  if (!barcode) throw new HttpError(400, 'barcode 必填');
+  if (!barcode) throw new HttpError(400, '「barcode」 必填');
   const template = String(body.template ?? 'LABEL').trim().toUpperCase();
   if (!['A4', 'LABEL'].includes(template)) {
-    throw new HttpError(400, 'template 必须为 A4 或 LABEL');
+    throw new HttpError(400, '「template」 必须为 A4 或 LABEL');
   }
 
   ensureTable(db);

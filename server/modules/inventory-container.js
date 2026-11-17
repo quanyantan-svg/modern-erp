@@ -57,7 +57,7 @@ export function pack(db, res, actor, containerId, items) {
   allow(actor, 'INVENTORY_CONTAINER_MANAGE');
   const container = db.prepare(`SELECT * FROM inventory_containers WHERE id=?`).get(containerId);
   if (!container) throw new HttpError(404, '容器不存在');
-  if (container.status !== 'OPEN') throw new HttpError(409, `容器状态 ${container.status} 不可 pack`);
+  if (container.status !== 'OPEN') throw new HttpError(409, `容器状态 ${container.status} 不可 「pack」`);
   const now = nowIso();
   transaction(db, () => {
     ensureTable(db);
@@ -87,7 +87,7 @@ export function unpackContainer(db, res, actor, containerId) {
   allow(actor, 'INVENTORY_CONTAINER_MANAGE');
   const container = db.prepare(`SELECT * FROM inventory_containers WHERE id=?`).get(containerId);
   if (!container) throw new HttpError(404, '容器不存在');
-  if (container.status !== 'OPEN') throw new HttpError(409, `容器状态 ${container.status} 不可 unpack`);
+  if (container.status !== 'OPEN') throw new HttpError(409, `容器状态 ${container.status} 不可 「unpack」`);
   transaction(db, () => {
     ensureTable(db);
     const items = db.prepare('SELECT id FROM inventory_container_items WHERE container_id=?').all(containerId);
@@ -103,7 +103,7 @@ export function transferContainer(db, res, actor, containerId, toWarehouseId) {
   allow(actor, 'INVENTORY_CONTAINER_MANAGE');
   const container = db.prepare(`SELECT * FROM inventory_containers WHERE id=?`).get(containerId);
   if (!container) throw new HttpError(404, '容器不存在');
-  if (container.status !== 'OPEN') throw new HttpError(409, `容器状态 ${container.status} 不可 transfer`);
+  if (container.status !== 'OPEN') throw new HttpError(409, `容器状态 ${container.status} 不可 「transfer」`);
   const items = db.prepare(`SELECT * FROM inventory_container_items WHERE container_id=?`).all(containerId);
   transaction(db, () => {
     for (const item of items) {

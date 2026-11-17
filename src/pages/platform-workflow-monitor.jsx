@@ -57,7 +57,7 @@ export default function PlatformWorkflowMonitor({ user, notify }) {
     <BusinessPageShell className="platform-ops" width="rail" data-testid="platform-workflow-monitor-page">
       <header className="platform-ops__hero">
         <div>
-          <span>WORKFLOW MONITOR</span>
+          <span>流程监控</span>
           <h2>流程监控</h2>
         </div>
         <p>查看流程实例的节点、任务与事件轨迹，并执行暂停、恢复、终止与重新部署。</p>

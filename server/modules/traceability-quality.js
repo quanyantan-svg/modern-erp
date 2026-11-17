@@ -232,7 +232,7 @@ export function transitionSerialForInventoryMovement(db, {
       .run(warehouseId, at, serialId);
     return { lifecycleState: 'AVAILABLE', currentWarehouseId: warehouseId };
   }
-  if (direction !== 'OUT') throw new HttpError(400, `不支持的 SERIAL movement direction: ${direction}`);
+  if (direction !== 'OUT') throw new HttpError(400, `不支持的序列号移动方向：${direction}`);
   if (serial.lifecycle_state !== 'AVAILABLE' || serial.current_warehouse_id !== warehouseId) {
     throw trackingError(409, 'SERIAL_NOT_AVAILABLE', '序列号不在指定仓库或当前不可用', '刷新序列号列表并选择当前仓库中的可用序列号');
   }
@@ -258,18 +258,18 @@ export function postCanonicalTrackedLeg(db, {
   if (strictOutsourcing) assertM15ReadyForOutsourcingTracking(db);
   let identityKey = '';
   if (product.tracking_policy === 'LOT') {
-    if (!lotId || serialId) throw trackingError(409, 'TRACKING_POLICY_MISMATCH', 'LOT position evidence is incomplete', 'Select an exact LOT partition');
+    if (!lotId || serialId) throw trackingError(409, 'TRACKING_POLICY_MISMATCH', '批次仓位证据不完整', '请选择精确的批次分区');
     const lot = db.prepare('SELECT * FROM inventory_lots WHERE id=?').get(lotId);
-    if (!lot || lot.product_id !== productId) throw trackingError(409, 'LOT_NOT_AVAILABLE', 'LOT does not match product', 'Refresh LOT availability');
+    if (!lot || lot.product_id !== productId) throw trackingError(409, 'LOT_NOT_AVAILABLE', '批次与产品不匹配', '请刷新批次可用性');
     if (direction === 'OUT') assertAvailableLot(lot, businessDate);
     identityKey = `LOT:${lotId}`;
     changeLotBalance(db, warehouseId, productId, lotId, direction === 'IN' ? qty : -qty, at);
   } else if (product.tracking_policy === 'SERIAL') {
-    if (!serialId || lotId || qty !== 1) throw trackingError(409, 'TRACKING_POLICY_MISMATCH', 'SERIAL position must identify exactly one serial', 'Use one mutation per serial');
+    if (!serialId || lotId || qty !== 1) throw trackingError(409, 'TRACKING_POLICY_MISMATCH', '序列号仓位必须且只能对应一个序列号', '每个序列号请单独发起一次变更');
     transitionSerialForInventoryMovement(db, { serialId, productId, warehouseId, direction, sourceType, at });
     identityKey = `SERIAL:${serialId}`;
   } else if (lotId || serialId) {
-    throw trackingError(409, 'TRACKING_POLICY_MISMATCH', 'Untracked product cannot carry LOT/SERIAL identity', 'Remove tracking identity');
+    throw trackingError(409, 'TRACKING_POLICY_MISMATCH', '未启用跟踪的产品不能承载批次或序列号身份', '请移除跟踪身份');
   } else {
     identityKey = 'NONE';
   }

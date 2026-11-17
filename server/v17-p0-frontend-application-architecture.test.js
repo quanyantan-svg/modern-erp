@@ -79,7 +79,8 @@ test('P0-A registry preserves V1.6 rollout classification and application groups
     assert.equal(route.applicationGroup, route.launcherEntries[0]?.group || 'contextual', `${route.key} application group`);
   }
   assert.equal(applicationRouteFor('orders').applicationGroup, 'sales-customer');
-  assert.equal(applicationRouteFor('users').applicationGroup, 'contextual');
+  // 2026-11-17：用户与权限进入「系统设置」启动器分组（Requirement §36.19 PL-NAVI-01）。
+  assert.equal(applicationRouteFor('users').applicationGroup, 'platform');
   assert.equal(applicationRouteFor('iqc').applicationGroup, 'contextual');
 });
 

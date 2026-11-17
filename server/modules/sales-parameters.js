@@ -15,7 +15,7 @@ function normalizeScope(scopeType, documentType) {
   if (type === 'SYSTEM') return { scopeType: type, documentType: null, scopeKey: 'SYSTEM' };
   const document = String(documentType || '').trim().toUpperCase();
   if (type !== 'DOCUMENT_TYPE' || !SALES_DOCUMENT_TYPES.includes(document)) {
-    throw new HttpError(400, 'Sales 参数范围必须为 SYSTEM 或受支持的 DOCUMENT_TYPE');
+    throw new HttpError(400, '「Sales」 参数范围必须为 SYSTEM 或受支持的 DOCUMENT_TYPE');
   }
   return { scopeType: type, documentType: document, scopeKey: `DOCUMENT_TYPE:${document}` };
 }
@@ -96,11 +96,11 @@ export async function upsertSalesParameters(db, req, res, actor) {
 
 export function resolveSalesParameters(db, documentType) {
   const document = documentType ? String(documentType).trim().toUpperCase() : null;
-  if (document && !SALES_DOCUMENT_TYPES.includes(document)) throw new HttpError(409, 'Sales 单据类型未注册', { code: 'SALES_PARAMETER_INVALID_DOCUMENT_TYPE' });
+  if (document && !SALES_DOCUMENT_TYPES.includes(document)) throw new HttpError(409, '「Sales」 单据类型未注册', { code: 'SALES_PARAMETER_INVALID_DOCUMENT_TYPE' });
   const exact = document && db.prepare("SELECT * FROM sales_parameters WHERE scope_key=? AND active=1").get(`DOCUMENT_TYPE:${document}`);
   const system = db.prepare("SELECT * FROM sales_parameters WHERE scope_key='SYSTEM' AND active=1").get();
   const resolved = exact || system;
-  if (!resolved) throw new HttpError(409, 'Sales 系统参数缺失或未启用', { code: 'SALES_PARAMETER_UNAVAILABLE' });
+  if (!resolved) throw new HttpError(409, '「Sales」 系统参数缺失或未启用', { code: 'SALES_PARAMETER_UNAVAILABLE' });
   return present(resolved);
 }
 
@@ -151,7 +151,7 @@ export function resolveSalesParameters(db, documentType) {
 export function resolveSalesParametersIfConfigured(db, documentType) {
   const document = documentType ? String(documentType).trim().toUpperCase() : null;
   if (document && !SALES_DOCUMENT_TYPES.includes(document)) {
-    throw new HttpError(409, 'Sales 单据类型未注册', { code: 'SALES_PARAMETER_INVALID_DOCUMENT_TYPE' });
+    throw new HttpError(409, '「Sales」 单据类型未注册', { code: 'SALES_PARAMETER_INVALID_DOCUMENT_TYPE' });
   }
   const exact = document
     ? db.prepare("SELECT * FROM sales_parameters WHERE scope_key=? AND active=1").get(`DOCUMENT_TYPE:${document}`)

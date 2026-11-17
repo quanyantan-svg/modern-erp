@@ -7,19 +7,22 @@ import { PRIMARY_DOMAINS } from '../src/navigation/presentationMetadata.js';
 
 const read = (path) => readFileSync(resolve(path), 'utf8');
 
-test('D2 application workspace exposes the eight canonical business domains', () => {
+// 2026-11-17：分组标题改为中文单源派生并新增 Platform「系统设置」分组
+  // （Requirement §36.19 PL-NAVI-01 / PL-NAVI-03），本断言**显式修订**而非删除。
+  test('D2 application workspace exposes the nine canonical domain groups', () => {
   const domains = MOBILE_APPLICATION_GROUPS.filter((group) => group.kind === 'domain');
   assert.deepEqual(
     domains.map(({ key, label }) => [key, label]),
     [
-      ['master-engineering', 'Master & Engineering'],
-      ['sales-customer', 'Sales & Customer'],
-      ['planning', 'Planning'],
-      ['procurement-outsourcing', 'Procurement & Outsourcing'],
-      ['manufacturing-quality', 'Manufacturing & Quality'],
-      ['inventory-warehouse', 'Inventory & Warehouse'],
-      ['finance-operations', 'Finance Operations'],
-      ['accounting-analytics', 'Accounting & Analytics'],
+      ['master-engineering', '主数据与工程'],
+      ['sales-customer', '销售与客户'],
+      ['planning', '计划'],
+      ['procurement-outsourcing', '采购与委外'],
+      ['manufacturing-quality', '制造与质量'],
+      ['inventory-warehouse', '库存与仓储'],
+      ['finance-operations', '财务运营'],
+      ['accounting-analytics', '会计与分析'],
+      ['platform', '系统设置'],
     ]
   );
   assert.equal(PRIMARY_DOMAINS.length, 8);

@@ -53,7 +53,7 @@ function normalizeInstallments(raw) {
   const lines = raw.map((item, index) => {
     const sequence = (item.sequence === undefined || item.sequence === null) ? (index + 1) : Number(item.sequence);
     if (!Number.isSafeInteger(sequence) || sequence < 1) {
-      throw new HttpError(400, `\u7b2c ${index + 1} \u884c\u7684 sequence \u5fc5\u987b\u4e3a\u6b63\u6574\u6570`);
+      throw new HttpError(400, `\u7b2c ${index + 1} \u884c\u7684 「sequence」 \u5fc5\u987b\u4e3a\u6b63\u6574\u6570`);
     }
     const dueOffsetDays = Number(item.dueOffsetDays ?? item.due_offset_days ?? 0);
     if (!Number.isSafeInteger(dueOffsetDays) || dueOffsetDays < 0 || dueOffsetDays > 3650) {
@@ -66,7 +66,7 @@ function normalizeInstallments(raw) {
     return { sequence, dueOffsetDays, ratioBps };
   });
   const sequences = new Set(lines.map((line) => line.sequence));
-  if (sequences.size !== lines.length) throw new HttpError(400, '\u5206\u671f\u7684 sequence \u4e0d\u5f97\u91cd\u590d');
+  if (sequences.size !== lines.length) throw new HttpError(400, '\u5206\u671f\u7684 「sequence」 \u4e0d\u5f97\u91cd\u590d');
   return lines.sort((left, right) => left.sequence - right.sequence);
 }
 

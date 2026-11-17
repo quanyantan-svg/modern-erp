@@ -24,6 +24,7 @@ const launcherIconNames = [
   'iqc','oqc','notifications','boms','routings','forecasts',
   'mrpRuns','materialPlan','mrp','planningDocuments','productionOrders','inventoryScrap','inventoryPeriod','salesDiscount',
   'purchaseDiscount','users','cleanup','traceability',
+  'organizations','numbering','sodRules','workflowDesigner','workflowBindings','workflowMonitor','sourcingPricing',
 ];
 const ic = Object.fromEntries(launcherIconNames.map((name) => [name, <ProductIcon key={name} name={name} size={24}/>]));
 

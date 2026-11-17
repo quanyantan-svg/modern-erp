@@ -141,7 +141,7 @@ export async function closeBusiness(db, req, res, actor, closeType) {
     const axis = closeType === 'AR' ? PERIOD_AXES.FINANCE_AR : closeType === 'AP' ? PERIOD_AXES.FINANCE_AP : PERIOD_AXES.FINANCE_TREASURY;
     lockPeriodAxes(db, [axis, PERIOD_AXES.LEGAL_ACCOUNTING]);
     const row = db.prepare('SELECT closed_through_date FROM finance_business_close_state WHERE close_type=?').get(closeType);
-    if (!row) throw new HttpError(500, `business-close anchor missing for ${closeType}`);
+    if (!row) throw new HttpError(500, `结账锚点缺失：${closeType}`);
     if (row.closed_through_date && row.closed_through_date >= closedThroughDate) {
       throw new HttpError(409, `${closeType} 已结账至 ${row.closed_through_date}，不可回退`);
     }

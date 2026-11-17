@@ -68,15 +68,15 @@ const today = () => new Date().toISOString().slice(0, 10);
 
 const DOCUMENT_TYPES = ['SALES_ORDER', 'SALES_QUOTATION', 'DELIVERY_NOTICE'];
 const ORDER_CHANGE_MODES = [
-  { value: 'DISABLED', label: 'DISABLED — 两条 APPROVED 订单变更路径均拒绝' },
-  { value: 'CONTROLLED_DIRECT', label: 'CONTROLLED_DIRECT — 仅受控直接入口' },
-  { value: 'CONTROLLED_DOCUMENT', label: 'CONTROLLED_DOCUMENT — 仅正式变更单入口' },
-  { value: 'BOTH', label: 'BOTH — 两条入口均开放（各自权限与审批合同不变）' },
+  { value: 'DISABLED', label: '两条已批准的订单变更路径均拒绝' },
+  { value: 'CONTROLLED_DIRECT', label: '仅受控直接入口' },
+  { value: 'CONTROLLED_DOCUMENT', label: '仅正式变更单入口' },
+  { value: 'BOTH', label: '两条入口均开放（各自权限与审批合同不变）' },
 ];
 const RESERVATION_BEHAVIORS = [
-  { value: 'DISABLED', label: 'DISABLED — 不发起预留' },
-  { value: 'INVENTORY_LOCK', label: 'INVENTORY_LOCK — 库存锁定' },
-  { value: 'MANUAL_RESERVATION', label: 'MANUAL_RESERVATION — 手工预留' },
+  { value: 'DISABLED', label: '不发起预留' },
+  { value: 'INVENTORY_LOCK', label: '库存锁定' },
+  { value: 'MANUAL_RESERVATION', label: '手工预留' },
   { value: 'ON_HAND_RESERVATION', label: 'ON_HAND_RESERVATION — 在库量预留' },
   { value: 'EXPECTED_SUPPLY_RESERVATION', label: 'EXPECTED_SUPPLY_RESERVATION — 预计供给预留' },
 ];
@@ -245,7 +245,7 @@ function ParameterEditor({ value, onClose, onSaved, notify }) {
               <option value="false">停用</option>
             </SelectField>
           </FormRow>
-          <FormRow label="销售组数据范围" hint="TRUE 按登录→销售员→业务日期隔离；FALSE 不解释为全员可见">
+          <FormRow label="销售组数据范围" hint="启用后按登录→销售员→业务日期隔离；停用不解释为全员可见">
             <SelectField value={form.salesGroupDataScopeEnabled ? 'true' : 'false'} onChange={(event) => setForm({ ...form, salesGroupDataScopeEnabled: event.target.value === 'true' })}>
               <option value="true">启用</option>
               <option value="false">停用</option>
@@ -268,7 +268,7 @@ function ParameterEditor({ value, onClose, onSaved, notify }) {
               {ORDER_CHANGE_MODES.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
             </SelectField>
           </FormRow>
-          <FormRow label="预留行为" required hint="DISABLED 时订单行不得发起预留">
+          <FormRow label="预留行为" required hint="停用时订单行不得发起预留">
             <SelectField required value={form.reservationBehavior} onChange={(event) => setForm({ ...form, reservationBehavior: event.target.value })}>
               {RESERVATION_BEHAVIORS.map((behavior) => <option key={behavior.value} value={behavior.value}>{behavior.label}</option>)}
             </SelectField>
@@ -315,7 +315,7 @@ function ParameterDetail({ parameter, user, notify, onBack, onEdit }) {
       <DetailSection title="生效规则">
         <p className="muted">
           先读取精确生效的单据类型级行；存在时该行整体覆盖系统级行，否则使用唯一系统级行。
-          缺少系统级行或单据类型非法时后端 fail closed。
+          缺少系统级行或单据类型非法时后端拒绝写入。
         </p>
       </DetailSection>
       {can(user, 'SALES_PARAMETERS_MANAGE') && (
@@ -386,7 +386,7 @@ export function SalesParameters({ user, notify }) {
         : parameters.loading
           ? <BusinessState kind="LOADING" />
           : !parameters.rows.length
-            ? <BusinessState kind="EMPTY" title="暂无销售参数" description="系统级参数缺失时后端 fail closed，请先新建系统级参数行。" />
+            ? <BusinessState kind="EMPTY" title="暂无销售参数" description="系统级参数缺失时后端拒绝写入，请先新建系统级参数行。" />
             : (
               <RecordList>
                 {parameters.rows.map((row) => (
@@ -656,10 +656,10 @@ function SellableRuleEditor({ value, onClose, onSaved, notify, references }) {
               {SCOPE_DIMENSIONS.map((dimension) => <option key={dimension.value} value={dimension.value}>{dimension.label}</option>)}
             </SelectField>
           </FormRow>
-          <FormRow label="效果" required hint="DENY 优先于 ALLOW；参数关闭只停用对应规则族">
+          <FormRow label="效果" required hint="拒绝优先于允许；参数关闭只停用对应规则族">
             <SelectField required value={form.effect} onChange={(event) => setForm({ ...form, effect: event.target.value })}>
-              <option value="ALLOW">ALLOW — 允许</option>
-              <option value="DENY">DENY — 拒绝</option>
+              <option value="ALLOW">允许</option>
+              <option value="DENY">拒绝</option>
             </SelectField>
           </FormRow>
           {needsCustomer && (
@@ -733,7 +733,7 @@ export function SellableScopeRules({ user, notify }) {
     <BusinessPageShell className="sales-sellable-list" data-testid="sellable-scope-rules-page" width="rail">
       <BusinessPageHeader
         title="可销范围规则"
-        context="SC07 · 客户 / 销售员 / 物料三个维度的 ALLOW / DENY"
+        context="SC07 · 客户 / 销售员 / 物料三个维度的允许 / 拒绝"
         primaryAction={can(user, 'SALES_COMMERCIAL_MANAGE')
           ? <PrimaryButton type="button" onClick={() => setEditor({})}>新建规则</PrimaryButton>
           : null}
@@ -843,10 +843,10 @@ function ClassificationEditor({ value, products, onClose, onSaved, notify }) {
               <option value="false">禁售</option>
             </SelectField>
           </FormRow>
-          <FormRow label="销售单位" hint="留空表示沿用 Master canonical 基本单位">
+          <FormRow label="销售单位" hint="留空表示沿用主数据权威基本单位">
             <TextField value={form.salesUomCode} onChange={(event) => setForm({ ...form, salesUomCode: event.target.value.toUpperCase() })} />
           </FormRow>
-          <FormRow label="计价单位" hint="缺少 canonical conversion 时后端拒绝">
+          <FormRow label="计价单位" hint="缺少权威换算时后端拒绝">
             <TextField value={form.pricingUomCode} onChange={(event) => setForm({ ...form, pricingUomCode: event.target.value.toUpperCase() })} />
           </FormRow>
           <FormRow label="超交容差（基点）" required hint="10000 基点 = 100%">
@@ -909,7 +909,7 @@ export function ProductClassifications({ user, notify }) {
         : classifications.loading
           ? <BusinessState kind="LOADING" />
           : !classifications.rows.length
-            ? <BusinessState kind="EMPTY" title="暂无产品商业分类" description="未分类物料在新的报价 / 订单写入时 fail closed，历史只读显示为未分类。" />
+            ? <BusinessState kind="EMPTY" title="暂无产品商业分类" description="未分类物料在新的报价 / 订单写入时拒绝写入，历史只读显示为未分类。" />
             : (
               <RecordList>
                 {classifications.rows.map((row) => (
@@ -1088,7 +1088,7 @@ export function PriceOverrideAuthorizations({ user, notify }) {
                 {references.products.map((product) => <option key={product.id} value={product.id}>{product.code} · {product.name}</option>)}
               </SelectField>
             </FormRow>
-            <FormRow label="单位" hint="留空使用物料 canonical 基本单位">
+            <FormRow label="单位" hint="留空使用物料权威基本单位">
               <TextField value={form.uomCode} onChange={(event) => setForm({ ...form, uomCode: event.target.value.toUpperCase() })} />
             </FormRow>
             <FormRow label="数量" required>

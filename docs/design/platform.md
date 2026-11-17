@@ -1709,3 +1709,241 @@ Requirement §36.18：`APPROVED`（2026-11-15）；本节 Design：`APPROVED`（
 Implementation：**已授权**（范围仅限 §32.18.2 所列仓库内文件与 §32.18.8 的门禁）。
 
 **未授权**：真实 MySQL 连接、数据库破坏性操作、Acceptance / Freeze 签发、push / tag / merge / release / deploy。
+### 32.19 导航分组完整性与界面语言一致性通用设计（`APPROVED`，2026-11-17）
+
+> **授权来源**：业务所有者 2026-11-17 指令「admin 缺少了系统设置 → 用户与权限 → 用户管理 → 新增用户，
+> 无法新增用户；前后端还存在中英文混用的情况，请做一次修整」。
+> 该指令一次性授权 AUDIT → REQUIREMENT → DESIGN → IMPLEMENTATION 的连续执行（AGENTS.md §4.0）；
+> **未**授权 push / tag / merge / release / deploy、数据库操作、真实 MySQL campaign 与任何
+> Acceptance / Freeze / Release Readiness 签发。
+
+#### 32.19.1 设计边界
+
+| 项 | 内容 |
+|---|---|
+| 上游合同 | Requirement §36.19（`PL-NAVI-01..06`、`PL-LANG-01..07`） |
+| Owner | Platform（`src/navigation/applicationRegistry.js` + 启动器 / 文案语言合同） |
+| 本设计**不做** | 不改任何 route key、权限码、角色种子、API 合同、schema、单据状态机、金额语义；不改 `details.code`；不新增业务功能 |
+| 本设计**做** | ① 启动器补齐 9 个域分组并把分组标题单源化为中文；② 补齐 11 条不可达 route 的入口；③ 前后端 303 条用户可见英文中文化；④ 两个可复跑守卫 |
+
+#### 32.19.2 改动文件清单
+
+| 文件 | 改动 |
+|---|---|
+| `src/navigation/applicationRegistry.js` | 启动器分组标签改为从 `domainMetadata.js` 的 `navigationLabel` 派生；新增 `platform` 分组（8 条）；恢复 `quality-control-points` / `product-costs` / `cost-rates` 三条被 `c77616b` 删掉的既有条目 |
+| `src/components/icons.jsx` | 新增 7 个图标条目（`organizations` / `numbering` / `sodRules` / `workflowDesigner` / `workflowBindings` / `workflowMonitor` / `sourcingPricing`） |
+| `src/App.jsx` | `launcherIconNames` 补齐新图标名 |
+| `src/lib/copy.js` | `safeErrorMessage` 增加「非中文服务端消息」兜底分支 |
+| `src/pages/**`（25 个文件） | 131 条用户可见英文中文化 |
+| `server/**`（21 个文件） | 172 条用户可见英文错误消息中文化 |
+| `scripts/qa/verify-navigation-reachability.mjs` | **新增**：导航可达性守卫入口 |
+| `scripts/qa/verify-ui-language.mjs` | **新增**：界面语言守卫入口 |
+| `server/navigation-reachability.test.js` | **新增**：导航守卫的 FULL 套件包装 |
+| `server/ui-language.test.js` | **新增**：语言守卫的 FULL 套件包装 |
+| `server/mobile-application-launcher.test.js` | **改写**两处被本节修订的历史断言（见 §32.19.6） |
+| `docs/operations/deployment.md` | 新增腾讯云轻量服务器 + MySQL 8 部署执行清单 |
+| `scripts/testing/test-suites.js` | 登记两个新 suite 到 FULL |
+
+#### 32.19.3 启动器分组模型
+
+**分组标签单源化。** `launcherGroup(key, label, kind, module, items)` 的 `label` 参数删除，
+改为在 `APPLICATION_LAUNCHER_GROUPS` 构造后统一从 `DOMAIN_BY_KEY[group.key].navigationLabel` 派生：
+
+```js
+export const APPLICATION_LAUNCHER_GROUPS = Object.freeze([
+  launcherGroup('master-engineering', 'domain', 'master', [...]),
+  ...
+]);
+```
+
+`DOMAIN_BY_KEY` 来自 `src/navigation/domainMetadata.js`，其 `navigationLabel` 已是中文
+（`主数据与工程` / `销售与客户` / `计划` / `采购与委外` / `制造与质量` / `库存与仓储` /
+`财务运营` / `会计与分析` / `系统设置`）。英文 `label` 字段保留在 `domainMetadata.js`
+作为领域标识符（`BUSINESS_DOMAINS` / `PLATFORM_DOMAIN` 的 `label`），**不再进入用户界面**。
+
+**九个分组的最终条目。**
+
+| 分组 key | 标题 | 条目 |
+|---|---|---|
+| `master-engineering` | 主数据与工程 | 货品资料、工程基础资料、BOM、制品工序标准、替代料与可配置 BOM、工程变更 |
+| `sales-customer` | 销售与客户 | 客户资料、销售报价、销售订单、销售出货、销售退货、信用额度与例外 |
+| `planning` | 计划 | 计划员工作台、计划预测、MRP、计划订单、生产指令、采购指令 |
+| `procurement-outsourcing` | 采购与委外 | 供应商资料、寻源与定价、请购单、采购订单、采购收货、采购退货、委外加工 |
+| `manufacturing-quality` | 制造与质量 | 制令单、用料出库、生产质量、生产入库、生产扫码、质量配置、**质量规则**（恢复） |
+| `inventory-warehouse` | 库存与仓储 | 仓库资料、库存作业与主数据、存货报废、存货月结、库存异动、批次 / 序列号 |
+| `finance-operations` | 财务运营 | 应收、收款、应付、付款、发票、资金 |
+| `accounting-analytics` | 会计与分析 | 业务总览、会计凭证、固定资产、会计事件台账、业务财务对账、报表平台、经营会计、存货核算、销售统计、销售未出货、采购统计、采购未交货、库存异动、**标准成本**（恢复）、**成本费率**（恢复） |
+| `platform` | **系统设置**（新增） | **用户与权限**、组织与作用域、编号规则、职责分离规则、生命周期与归档、流程设计、流程绑定、流程监控 |
+
+**Platform 分组的 8 条与「底部页签」的三条的关系。** Platform 域共 11 条 active route：
+`approvals`（业务审批）、`notifications`（通知中心）、`workflow-tasks`（我的流程任务）
+由底部页签承载，**不重复**进入启动器；其余 8 条进入「系统设置」分组。
+因此 Platform 域 11 条 route **全部**有可达入口，且没有重复入口。
+
+**权限可见性不变。** 分组条目只决定「入口出现在哪个分组」，**不改变** route 的 exposure 权限集合。
+`buildMobileApplicationGroups` 继续以 `visibleNav`（按 exposure 过滤）∩ 分组条目求交集，
+无权限的角色**看不到**这些 tile。`platform` 分组的 8 条所需的权限码
+（`USERS_MANAGE` / `ROLES_MANAGE` / `ORGANIZATIONS_VIEW` / `ORGANIZATIONS_MANAGE` /
+`NUMBERING_VIEW` / `NUMBERING_MANAGE` / `SOD_RULES_VIEW` / `SOD_RULES_MANAGE` /
+`LIFECYCLE_VIEW` / `LIFECYCLE_MANAGE` / `WORKFLOW_VIEW` / `WORKFLOW_MANAGE` /
+`WORKFLOW_INSTANCE_VIEW` / `WORKFLOW_CONTROL` / `WORKFLOW_REDEPLOY`）在真实种子库里
+**只有 `role-admin` 持有**，因此该分组对 admin 可见、对其余四类 canonical 角色不可见 ——
+这是既有权限事实，**本设计不改种子**。
+
+**分组类型。** `platform` 分组的 `kind` 取 `'domain'`（与其他 8 组同级、可见展开），
+**不取** `'utility'`：utility 分组在 `MobileLauncher` 里渲染为折叠的 `<details>`，
+会把管理员最需要的「用户与权限」藏起来，与本次修整目标相反。
+
+#### 32.19.4 导航可达性守卫
+
+**入口。** `node scripts/qa/verify-navigation-reachability.mjs`，只读、不连数据库、不写仓库。
+
+**模块形态。** 守卫同时导出 `collectNavigationReport()` / `navigationFailures()`，
+回归测试**直接 import** 而不是在测试进程里 `execFileSync` 拉起子进程。
+原因：FULL 门禁有 477+ 个套件并行执行，额外拉起的子进程会让 esbuild/Vite 那一批
+前端套件以 `0xC0000102` 崩溃（单独跑却全绿 —— 典型的负载型假失败）。
+`verify-ui-language.mjs` 同构，导出 `collectLanguageFindings()`。
+
+**判定模型（四路径）**，对 93 条 active route 逐条计算：
+
+| 路径 | 判定来源 |
+|---|---|
+| ① launcher | route key 出现在 `APPLICATION_LAUNCHER_GROUPS` 某个分组的条目里 |
+| ② tab | route key 属于 `notifications` / `approvals` / `dashboard` / `workflow-tasks`（`MobileShell` 的 5 个页签中承载 route 的 4 个） |
+| ③ parent | route 的 `parentRoute` 字段非空 |
+| ④ link | `src/pages/**` 与 `src/components/**` 中的**导航构造**里出现该 route key 的精确字面量 |
+
+路径 ④ 的导航构造判据（确定性、非宽匹配）：
+`navigateToPage(` / `navigate(` / `hrefFor(` / `canNavigate(` / `page:` / `page=` /
+`routeKey:` / `src/pages/business-overview.jsx` 的 `step()` 第三参数。
+**刻意排除**「页面上出现过这个字符串」这类宽判据 —— 例如 `StatusChip domain="lifecycle"`
+中的 `lifecycle` 是状态展示域、不是导航目标，必须被排除。
+
+**输出三张零结果清单**（任一非空即退出码 1）：
+
+1. `UNREACHABLE_ROUTES` —— 四路径全落空的 active route；
+2. `MISSING_DOMAIN_GROUPS` —— `DOMAIN_DEFINITIONS` 中没有启动器分组的域；
+3. `NON_CHINESE_GROUP_LABELS` —— 标题含 ASCII 字母的分组。
+
+**「仅直达 URL」登记清单。** 守卫内置 `DIRECT_URL_ONLY_ROUTES` 数组，当前为**空**；
+确需保留的 route 必须登记 `routeKey` + `reason`，且该 route 必须**同时**命中路径 ④
+（登记一个没有真实链接来源的 route 即失败）。这条规则保证「不可达」永远不是沉默的。
+
+**负控。** 守卫必须对下列三种变更转红：① 删除 `platform` 分组；
+② 把某个分组标题改回英文；③ 把某个 route 的启动器条目删除使其四路径全落空。
+
+#### 32.19.5 界面语言守卫
+
+**入口。** `node scripts/qa/verify-ui-language.mjs`，只读。
+与 §32.19.4 的导航守卫同构：导出 `collectLanguageFindings()`，测试直接 import。
+
+**扫描对象与判据。**
+
+| 目标 | 判据 |
+|---|---|
+| 前端 `src/**` | JSX 文本节点、`label` / `title` / `placeholder` / `aria-label` / `subtitle` / `description` / `summary` / `emptyText` / `help` 等**用户可见**属性、`notify()` 与 toast 的消息字面量 |
+| 后端 `server/**` | `HttpError(status, '…')` 的消息、`send(res, 4xx|5xx, { error: '…' } / { message: '…' } / { details: { resolution: '…' } })` 的消息 |
+
+命中「含 3 个及以上连续 ASCII 字母、且该串不是白名单条目」的候选即失败，输出
+`file:line` + 原文 + 命中原因，供逐条修整。
+
+**白名单（显式枚举，不使用通配）。** 领域专名与缩写（`MRP` / `BOM` / `WIP` / `IQC` / `OQC` /
+`GRNI` / `LOT` / `SERIAL` / `UOM` / `ABC` / `GL` / `AR` / `AP` / `COGS` / `SKU` / `OEM` /
+`FIFO` / `LIFO` / `JSON` / `CSV` / `PDF` / `HTML` / `SQL` / `API` / `ID` / `Code`）；
+内部批次与条目编号（`Wave N` / `SC01` / `M&Q` / `PL` / `IW` / `PRC-xx` / `PL-xx`）；
+产品名 `Modern ERP`；机器可读标识符（权限码、route key、枚举**取值**、表名列名、
+`details.code` / `details.reason`、`data-testid`、CSS 类名、MIME 类型）。
+
+**枚举取值的处理。** 提交值保持英文不变，**展示文本**改为中文（Requirement `PL-LANG-05`）。
+例：`<option value="LINE">LINE</option>` 改为 `<option value="LINE">行</option>`；
+`GRANT` / `CONSUME` / `RELEASE` 改为 `授予` / `消费` / `释放`。
+
+**前端兜底（`PL-LANG-03`）。** `src/lib/copy.js` 的 `safeErrorMessage` 在既有分支之后追加一条：
+
+```js
+// 非中文的服务端消息不得原样透出（Requirement §36.19 PL-LANG-03）。
+if (serverMessage && !/[㐀-鿿]/.test(serverMessage) && /[A-Za-z]/.test(serverMessage)) {
+  return '操作未完成，请稍后重试';
+}
+```
+
+判据是「消息**完全不含中文**」而不是「含有任意 ASCII 字母」：中文句子里的
+`quantityMicros` / `LOT` 等领域标识符**允许保留**，只有整段英文才被拦下。
+该分支**位于**既有 401 / 403 / 404 / 5xx / `BUSINESS_CONFLICT_COPY` / `TECHNICAL_ERROR`
+分支**之后**，因此既有中文映射与错误码分类**完全不变**；纯中文消息原样返回。
+`classifyApiError` 的 `resolution` 走同一判据。
+
+**后端改写口径。** 只改**用户可见的消息文本**；`details.code` / `details.reason` /
+`audit` 的 action / entity type / SQL 与字段名**一律不动**。
+`scripts/qa/verify-error-code-coupling.mjs` 必须保持 PASS。
+`Wave6 Option A:` / `Gate-B` / `Gate-C` 这类内部里程碑前缀在中文文案中**删除**。
+
+**中文消息内的字段名标注。** 守卫对「中文句子里的散文型字段名」（`quantity`、`status`、
+`direction` …）要求用中文书名号「」标注，以便与领域专名和枚举值区分：
+`「quantity」必须为正数`。全大写枚举值（`NULL` / `AR` / `AP` / `PROVISIONAL`）
+**不包裹** —— 它们是用户需要原样引用的机器值，包裹既难读又会破坏既有测试的正则断言。
+里程碑代号整体包裹（`「Phase 6D」`），使既有断言 `/Phase 6D/` 仍然成立。
+
+#### 32.19.6 被修订的历史断言
+
+以下断言与本节冲突，必须**显式改写**并保留原意（**不得删除**）。它们锁定的正是
+commit `c77616b`（2026-10-06）引入的历史状态：启动器只有 8 个业务域、标题是英文域名、
+Platform 不得进入启动器。
+
+| 文件 | 原断言 | 改写后 | 依据 |
+|---|---|---|---|
+| `server/mobile-application-launcher.test.js` | 「defines the eight canonical business domains」（8 个**英文** label） | 9 个分组的 key + **中文** label（`DOMAIN_BY_KEY[...].navigationLabel`） | `PL-NAVI-01` / `PL-NAVI-03` / `PL-NAVI-04` |
+| `server/mobile-application-launcher.test.js` | 「does not expose Platform or legacy utility groups as business domains」 | 改为：不存在 `'utility'` **kind** 的分组；**存在** `platform` **kind = `'domain'`** 的分组，且其条目集合与 Platform 域 active route 集合一致（扣除底部页签承载的 3 条） | `PL-NAVI-01` |
+| `server/v17-domain-alignment.test.js` | 「Business Launcher is exactly eight non-empty canonical groups and excludes Platform」 | 九个分组；Platform 分组条目 == Platform 域 active route 扣除底部页签 3 条 | `PL-NAVI-01` |
+| `server/v17-p0-frontend-application-architecture.test.js` | `applicationRouteFor('users').applicationGroup === 'contextual'` | `=== 'platform'` | `PL-NAVI-01` |
+| `server/p3-ui-design-system.test.js` | 「launcher has canonical eight-domain names」 | 断言 9 个中文 `navigationLabel` 存在于 `domainMetadata.js`，且 registry 从 `DOMAIN_BY_KEY` 派生 | `PL-NAVI-03` / `PL-NAVI-04` |
+| `server/p1-material-plan.test.js` | `assertContains(launcherSource, "'planning','Planning'")` | 改为断言分组签名 `launcherGroup('planning','domain','planning'` | `PL-NAVI-03` |
+| `server/v15-d2-four-prototypes.test.js` | 「D2 application workspace exposes the eight canonical business domains」 | 九个分组 + 中文 label（`PRIMARY_DOMAINS.length` 仍为 8，因为 `PRIMARY_DOMAINS` 不含 Platform） | `PL-NAVI-01` / `PL-NAVI-03` |
+| `server/v16-p1-mobile-enterprise-foundation.test.js` | 「mobile metadata exposes exactly eight canonical business groups」；「Platform routes stay outside business launcher groups」 | 九个域分组 + 中文标题；Platform 入口按「底部页签承载 3 条 / 系统设置 8 条」拆分断言 | `PL-NAVI-01` / `PL-NAVI-03` |
+| `server/v16-p8-flow-consistency.test.js` | 「P8 launcher: eight canonical business groups present in order」 | 九个域分组，顺序末尾追加 `platform` | `PL-NAVI-01` |
+| `server/v16-sitewide-rollout.test.js` | 「eight canonical business groups remain in order」；「Platform stays outside the business launcher」 | 九个域分组；「no utility-kind launcher group exists」 | `PL-NAVI-01` |
+| `server/v16-p2-sales-order-list.test.js` | 断言 registry 含 8 个**英文**分组名 | 断言 registry 含 9 个**中文**分组名 | `PL-NAVI-01` / `PL-NAVI-03` |
+| `server/v16-p11-mobile-enterprise-visual-refinement.test.js` | 「preserves the eight canonical domain groups and explicit module identities」 | 九个域分组 + 中文标题 | `PL-NAVI-01` / `PL-NAVI-03` |
+| `server/v12-core-pages-ui.test.js` | 8 个**英文**分组名 | 9 个**中文**分组名 | `PL-NAVI-01` / `PL-NAVI-03` |
+| `server/sales-customer-wave6-functional.test.js` | `assert.match(error, /Replacement Fulfillment/)` | `assert.match(error, /补货履行/)` —— 中文业务术语 | `PL-LANG-02` |
+
+其余断言（角色 route 矩阵、禁用 route 不出现、`iqc` / `oqc` / `material-requirements-plan`
+不作为主 tile、`quality-control-points` 非 admin 角色不可见、CRM 扩展项已移除）
+**保持不变且必须继续通过**。
+
+#### 32.19.7 测试计划与变异实验
+
+| 层级 | 内容 |
+|---|---|
+| focused | `node --test server/navigation-reachability.test.js server/ui-language.test.js` |
+| FAST | `pnpm test:fast`（两个新 suite 登记在 FULL，FAST ⊂ FULL 自动覆盖） |
+| FULL | `pnpm test` |
+| HEAVY | `pnpm test:heavy` |
+| build | `pnpm build` |
+| 浏览器 | `node scripts/acceptance/release-browser-readiness.mjs`（5 角色 × 4 档宽度 × 93 route） |
+| 文档 | `node scripts/docs/check-doc-consistency.mjs`（current / migration 两模式） |
+
+**变异实验（非空洞证明）**：至少三条 ——
+① 从 `APPLICATION_LAUNCHER_GROUPS` 删除 `platform` 分组 → 导航守卫必须转红；
+② 把 `master-engineering` 分组标题改回 `Master & Engineering` → 导航守卫必须转红；
+③ 在任一用户可见文案（如 `src/pages/master-data.jsx` 的按钮文案）写入一句英文 →
+语言守卫必须转红；④ 把某条后端 `HttpError` 的消息改回英文 → 语言守卫必须转红。
+
+#### 32.19.8 兼容性与回滚
+
+**兼容性**：不改变任何 route key、route 数量（93）、权限码、角色种子、API 合同、
+schema、单据状态机、金额与估值语义、既有 release tag。启动器**新增**条目（不替换既有条目），
+唯一被改动的是分组标题文案（英文 → 中文）与被恢复的 3 条既有条目。
+
+**回滚**：本节改动集中在前端与守卫脚本，**不涉及数据库 schema、不涉及 migration**，
+回滚即 `git revert` 对应 commit；回滚后「系统设置」分组与 3 条被恢复条目一并消失，
+系统回到本节实施前的形态（其中「用户与权限」不可达的状态同时被恢复 —— 这是已知代价，
+故回滚不得作为长期状态）。
+
+#### 32.19.9 Design 状态
+
+Requirement §36.19：`APPROVED`（2026-11-17）；本节 Design：`APPROVED`（同日）；
+Implementation：**已授权**（范围仅限 §32.19.2 所列仓库内文件与 §32.19.7 的门禁）。
+
+**未授权**：腾讯云部署与任何远程写操作、数据库操作、真实 MySQL campaign、
+Acceptance / Freeze / Release Readiness 签发、push / tag / merge / release。

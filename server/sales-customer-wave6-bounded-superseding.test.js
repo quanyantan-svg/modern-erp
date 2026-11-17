@@ -192,7 +192,7 @@ describe('Wave 6 §30.31 Bounded superseding — LOT/SERIAL + Option C idempoten
     const created = await createReturn({ productId: 'p-serial', quantity: 1, trackingAllocations: [{ serialId: 'serial-b', quantity: 1 }] });
     const response = await confirmReturn(created.id, 'serial-miss-c');
     assert.equal(response.status, 409);
-    assert.match((await response.json()).error, /eligible outbound|provenance/);
+    assert.match((await response.json()).error, /合格出库来源|来源证据/);
   });
 
   test('SERIAL duplicate restoration → second reverse 409 (R2 no duplicate)', async () => {
@@ -240,7 +240,7 @@ describe('Wave 6 §30.31 Bounded superseding — LOT/SERIAL + Option C idempoten
     const created = await createReturn({ productId: 'p-serial', quantity: 1, trackingAllocations: [{ serialId: 'serial-b', quantity: 1 }] });
     const response = await confirmReturn(created.id, 'serial-lc-c');
     assert.equal(response.status, 409);
-    assert.match((await response.json()).error, /lifecycle|provenance|returnable/);
+    assert.match((await response.json()).error, /生命周期|来源证据|可退/);
   });
 
   // ---------------- Legacy ambiguity ----------------

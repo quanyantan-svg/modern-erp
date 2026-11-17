@@ -504,7 +504,7 @@ async function reverseDiscount(db, req, res, actor, side, discountId, generateVo
     guardPeriodAction(db, { actionCode: financeActionCode(side), businessDate: reversalDate });
     let credit;
     try { credit = reverseCreditAdjustment(db, side, sourceType, discountId, actor.id, reversalDate, reason); }
-    catch (error) { throw new HttpError(409, error.message); }
+    catch (error) { throw new HttpError(409, '折让冲销失败，请刷新后重试'); }
     const originalVoucher = db.prepare('SELECT id FROM accounting_vouchers WHERE source_type=? AND source_id=?').get(sourceType, discountId);
     if (!originalVoucher) throw new HttpError(409, '折让原始凭证不存在');
     const entries = db.prepare('SELECT subject_id subjectId,direction,amount_cents amountCents,summary FROM accounting_entries WHERE voucher_id=?').all(originalVoucher.id)

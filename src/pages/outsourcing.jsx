@@ -618,11 +618,11 @@ function SnapshotSheet({ notify, orderId, bomId, productId, onClose, onDone }) {
   return (
     <DetailSheet title="建立用料清单快照" onClose={onClose}>
       <InlineAlert tone="info">
-        快照逐行取自已批准的 OUTSOURCE BOM；每行必须绑定一个企业来源仓。快照形成后订单才能确认计划。
+        快照逐行取自已批准的委外 BOM；每行必须绑定一个企业来源仓。快照形成后订单才能确认计划。
       </InlineAlert>
       <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {error ? <InlineAlert tone="danger" title="提交未完成">{error}</InlineAlert> : null}
-        {!bom ? <Empty title="没有可用的已批准 OUTSOURCE BOM" text="订单必须先绑定业务日期上已批准且生效的委外 BOM" /> : null}
+        {!bom ? <Empty title="没有可用的已批准委外 BOM" text="订单必须先绑定业务日期上已批准且生效的委外 BOM" /> : null}
         {items.map((item) => (
           <FormRow key={item.productId} label={`用料 ${item.productId}（每单位 ${fmtNumber(item.quantity)}）`} required>
             <SelectField
@@ -798,9 +798,9 @@ function CreateOrderSheet({ user, notify, onClose, onCreated }) {
             ))}
           </SelectField>
         </FormRow>
-        <FormRow label="OUTSOURCE BOM" hint="只列出业务日期上已批准且生效的委外 BOM">
-          <SelectField aria-label="OUTSOURCE BOM" value={form.bomId} onChange={(event) => setForm({ ...form, bomId: event.target.value })} disabled={Boolean(form.planningHandoffId)}>
-            <option value="">请选择已批准 OUTSOURCE BOM</option>
+        <FormRow label="委外 BOM" hint="只列出业务日期上已批准且生效的委外 BOM">
+          <SelectField aria-label="委外 BOM" value={form.bomId} onChange={(event) => setForm({ ...form, bomId: event.target.value })} disabled={Boolean(form.planningHandoffId)}>
+            <option value="">请选择已批准委外 BOM</option>
             {productBoms.map((option) => (
               <option key={option.id} value={option.id}>
                 {option.productName} · v{option.version} · 生效 {fmtDate(option.effectiveFrom)}
@@ -1171,7 +1171,7 @@ function QualityWorkspace({ user, notify, navigation, focus }) {
 
   return (
     <>
-      <BusinessPageHeader title="委外待检来源" context="canonical IQC 的委外收货来源" />
+      <BusinessPageHeader title="委外待检来源" context="权威 IQC 的委外收货来源" />
       {error ? <InlineAlert tone="danger" title="操作未完成">{error}</InlineAlert> : null}
       {!candidates.length && !error ? <Empty title="暂无待检委外收货" text="收货岗录入待检收货后会出现在这里" /> : null}
       <CompactRecordList data-testid="outsourcing-inspection-candidates">

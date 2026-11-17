@@ -210,22 +210,22 @@ const MAX_LIMIT = 200;
 
 function normalizeType(value) {
   if (typeof value !== 'string') {
-    throw new HttpError(400, 'type 必须是字符串', { code: 'VALIDATION' });
+    throw new HttpError(400, '「type」 必须是字符串', { code: 'VALIDATION' });
   }
   const upper = value.trim().toUpperCase();
   if (!ENTITY_REGISTRY[upper]) {
-    throw new HttpError(400, 'type 不是受支持的实体类型', { code: 'VALIDATION' });
+    throw new HttpError(400, '「type」 不是受支持的实体类型', { code: 'VALIDATION' });
   }
   return upper;
 }
 
 function normalizeUsage(value) {
   if (typeof value !== 'string') {
-    throw new HttpError(400, 'usage 必须是字符串', { code: 'VALIDATION' });
+    throw new HttpError(400, '「usage」 必须是字符串', { code: 'VALIDATION' });
   }
   const upper = value.trim().toUpperCase();
   if (!USAGE_PERMISSIONS[upper]) {
-    throw new HttpError(400, 'usage 不是受支持的报告用途', {
+    throw new HttpError(400, '「usage」 不是受支持的报告用途', {
       code: 'BUSINESS_ENTITY_USAGE_UNSUPPORTED',
       resolution: '本查询仅服务 REPORT_SALES / REPORT_PURCHASE / REPORT_INVENTORY 三种报告筛选',
     });
@@ -249,7 +249,7 @@ function normalizeLimit(value) {
   if (value === undefined || value === null || value === '') return DEFAULT_LIMIT;
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 1) {
-    throw new HttpError(400, 'limit 必须为正整数', { code: 'VALIDATION' });
+    throw new HttpError(400, '「limit」 必须为正整数', { code: 'VALIDATION' });
   }
   return Math.min(parsed, MAX_LIMIT);
 }
@@ -272,7 +272,7 @@ export function searchBusinessEntities(db, res, actor, url) {
   const type = normalizeType(url.searchParams.get('type'));
   const usage = normalizeUsage(url.searchParams.get('usage'));
   if (!USAGE_ENTITY_TYPES[usage].includes(type)) {
-    throw new HttpError(400, 'type 不适用于当前报告用途', {
+    throw new HttpError(400, '「type」 不适用于当前报告用途', {
       code: 'BUSINESS_ENTITY_TYPE_UNSUPPORTED',
       resolution: '销售报表仅查找客户，采购报表仅查找供应商，库存报表仅查找产品或仓库',
     });

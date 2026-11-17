@@ -26,14 +26,14 @@ export async function postCounterpartyTransfer(db, req, res, actor) {
   allow(actor, 'FINANCE_TRANSFER_MANAGE');
   const body = await readJson(req);
   const side = requiredText(body.side, 'side', 4);
-  if (!['AR', 'AP'].includes(side)) throw new HttpError(400, 'side 必须为 AR/AP');
+  if (!['AR', 'AP'].includes(side)) throw new HttpError(400, '「side」 必须为 AR/AP');
   const sourcePartyId = requiredText(body.sourcePartyId, 'sourcePartyId', 64);
   const targetPartyId = requiredText(body.targetPartyId, 'targetPartyId', 64);
   const businessDate = requiredText(body.businessDate, 'businessDate', 16);
   const reason = requiredText(body.reason, 'reason', 256);
   const lines = Array.isArray(body.lines) ? body.lines : [];
-  if (!lines.length) throw new HttpError(400, '请提供至少一条 transfer line');
-  if (sourcePartyId === targetPartyId) throw new HttpError(400, 'source / target party 必须不同');
+  if (!lines.length) throw new HttpError(400, '请提供至少一条 「transfer」 「line」');
+  if (sourcePartyId === targetPartyId) throw new HttpError(400, '「source」 / 「target」 「party」 必须不同');
 
   const now = new Date().toISOString();
   const transferId = id();
@@ -62,11 +62,11 @@ export async function postCounterpartyTransfer(db, req, res, actor) {
       // verify source open item exists and not mutated in place
       const headerTable = side === 'AR' ? 'account_receivables' : 'account_payables';
       const openItem = db.prepare(`SELECT id, ${side === 'AR' ? 'customer_id' : 'supplier_id'} AS party_id, open_amount_cents FROM ${headerTable} WHERE id=?`).get(openItemId);
-      if (!openItem) throw new HttpError(404, 'source open item 不存在');
+      if (!openItem) throw new HttpError(404, '「source」 「open」 「item」 不存在');
       if (openItem.party_id !== sourcePartyId) {
-        throw new HttpError(409, 'source open item 不属于 source party');
+        throw new HttpError(409, '「source」 「open」 「item」 不属于 「source」 「party」');
       }
-      if (amount > openItem.open_amount_cents) throw new HttpError(409, 'transfer amount 超过 open item remaining');
+      if (amount > openItem.open_amount_cents) throw new HttpError(409, '「transfer」 「amount」 超过 「open」 「item」 「remaining」');
       insertLine.run(id(), transferId, side, openItemId, amount);
       openItems.push({ openItemId, amount });
       totalCents += amount;

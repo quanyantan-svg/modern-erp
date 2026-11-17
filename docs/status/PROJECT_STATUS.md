@@ -5854,3 +5854,133 @@ Design [`docs/design/inventory-warehouse.md` §27.58](../design/inventory-wareho
 | 库存报表端点缺失守卫 | Inventory & Warehouse（Owner）+ 业务所有者（守卫口径裁定） | 见 §68.7 第 1 条；本轮未处置 |
 | Migration 风险工作包 | Platform（Owner）+ 业务所有者（批准） | §36.17 / §32.17 仍 `PENDING_APPROVAL`；本轮未实施 |
 | 发布 / 数据库 / 真实 MySQL 证据 | 业务所有者 | 本轮未授权、未执行 |
+## 69. 导航分组完整性与界面语言修整轮次（2026-11-17）
+
+**状态**：`IMPLEMENTED` —— AUDIT → REQUIREMENT → DESIGN → IMPLEMENTATION 已按 AGENTS.md §4.0
+连续执行完毕并本地验证；**本节不是 Acceptance**，不签发任何 Acceptance / Capability Freeze /
+Manual Closure / Release Readiness，也不改写任何已签发的域级结论。
+
+### 69.1 授权与边界
+
+| 授权 | 内容 | 本轮结果 |
+|---|---|---|
+| A | 修复「admin 缺少 系统设置 → 用户与权限 → 用户管理 → 新增用户」 | 已完成 |
+| A | 前后端中英文混用做一次全量修整 | 已完成 |
+| A | 阶段授权：Requirement → Design → Implementation 连续执行（AGENTS.md §4.0） | 已执行 |
+| A | 「系统设置」分组取 8 条配置类入口 | 已实施 |
+| A | 腾讯云部署**单独授权**，本轮只交付部署执行清单 | 清单已交付（§10），**未连接任何服务器** |
+| 明确未授权 | push / tag / merge / release / deploy、数据库操作、真实 MySQL campaign、Acceptance / Freeze / Release Readiness 签发 | 本轮**全部未执行** |
+
+### 69.2 审计结论：两个用户报告的缺陷同源于一次重构
+
+| 事实 | 取证 |
+|---|---|
+| admin 权限正常 | 真实种子库 266 项权限，含 `USERS_MANAGE` / `ROLES_MANAGE` |
+| 后端正常 | `POST /api/users`（admin）返回 **201** |
+| 页面正常 | `#users` 页面的「新增用户」按钮存在且可见 |
+| **启动器没有「系统设置」** | 实测启动器只有 **8** 个分组；`v16-launcher-tile-users` 不存在；页面文本无「系统设置」 |
+| 回归来源 | commit `c77616b`（2026-10-06，「refactor: 收敛ERP八域与平台架构」）**删除** `utility-system`（系统设置，含 `users`）分组，把分组标题由中文改为英文域名，并在同一提交内新增断言把「Platform 不得进入启动器」锁成不变量 |
+| 2026-11-13 Platform 域闭合新增的 9 条 Platform route | **从未**获得任何启动器条目 |
+| 路由可达性缺口 | 93 条 active route 中 **11 条**在最终用户界面上没有任何入口（10 条四路径全落空 + `users` 只出现在工作台快捷入口候选表第 13 位而只保留前 6 位） |
+| 界面语言缺口 | 前端 **131** 条 + 后端 **172** 条用户可见英文；后端英文经 `server/lib/http.js` 的 `serializeError` → 响应体 `message` → `src/lib/copy.js` 的 `return serverMessage` **原样透出** |
+
+### 69.3 合同
+
+- **Requirement** [`docs/requirements/platform.md` §36.19](../requirements/platform.md)：
+  `PL-NAVI-01..06`（域分组完整性、route 可达性、分组名单源、分组标题语言、入口与权限一致、守卫可复跑）
+  + `PL-LANG-01..07`（用户可见文案中文、后端消息中文、前端兜底、领域专名白名单、枚举展示、守卫、守卫不得自我豁免）。
+- **Design** [`docs/design/platform.md` §32.19](../design/platform.md)。
+
+### 69.4 实施内容
+
+| 文件 | 改动 |
+|---|---|
+| `src/navigation/applicationRegistry.js` | 新增 `platform` 启动器分组（8 条）；分组标题改为从 `domainMetadata.js` 的 `navigationLabel` 单源派生（消除第二份硬编码英文域名）；恢复被 `c77616b` 删掉的 `quality-control-points` / `product-costs` / `cost-rates` 三条既有条目 |
+| `src/components/icons.jsx`、`src/App.jsx` | 新增 7 个图标条目与启动器图标名 |
+| `src/lib/copy.js` | `safeErrorMessage` 增加「服务端消息完全不含中文」兜底；`classifyApiError` 的 `resolution` 同步兜底 |
+| `src/pages/**`（25 个文件） | 131 条用户可见英文中文化 |
+| `server/**`（57 个文件） | 172 条英文错误消息中文化 + 145 处「中文消息内嵌字段名」按「」包裹 |
+| `scripts/qa/verify-navigation-reachability.mjs` | **新增**：导航可达性守卫（导出 `collectNavigationReport()`，CLI 与测试同源） |
+| `scripts/qa/verify-ui-language.mjs` | **新增**：界面语言守卫（导出 `collectLanguageFindings()`） |
+| `server/navigation-reachability.test.js`、`server/ui-language.test.js` | **新增**：两个守卫的 FULL 套件包装（**直接 import**，不拉子进程） |
+| 13 个既有 suite | **显式改写**被本轮修订的历史断言（见 §69.5），未删除 |
+| `docs/operations/deployment.md` §10 | **新增**：腾讯云轻量应用服务器 + MySQL 8 部署执行清单 |
+
+**未改**：任何 route key、权限码、角色种子、API 合同、schema、单据状态机、金额与估值语义、
+`details.code` / `details.reason` 等机器可读码、既有 release tag。
+
+### 69.5 被修订的历史断言（显式修订，非删除）
+
+| 文件 | 原断言 | 修订依据 |
+|---|---|---|
+| `server/mobile-application-launcher.test.js` | 「defines the eight canonical business domains」（8 个**英文** label） | `PL-NAVI-01` / `PL-NAVI-03` / `PL-NAVI-04` |
+| `server/mobile-application-launcher.test.js` | 「does not expose Platform or legacy utility groups as business domains」 | `PL-NAVI-01`：该断言锁定的正是 `c77616b` 引入的缺失 |
+| `server/v17-domain-alignment.test.js` | 「Business Launcher is exactly eight non-empty canonical groups and excludes Platform」 | 同上 |
+| `server/v17-p0-frontend-application-architecture.test.js` | `applicationRouteFor('users').applicationGroup === 'contextual'` | 同上（现为 `platform`） |
+| `server/p3-ui-design-system.test.js` | 「launcher has canonical eight-domain names」 | `PL-NAVI-03` / `PL-NAVI-04` |
+| `server/p1-material-plan.test.js` | `assertContains(launcherSource, "'planning','Planning'")` | `PL-NAVI-03`（改为断言分组签名） |
+| `server/v15-d2-four-prototypes.test.js` | 「D2 application workspace exposes the eight canonical business domains」 | `PL-NAVI-01` / `PL-NAVI-03` |
+| `server/v16-p1-mobile-enterprise-foundation.test.js` | 「mobile metadata exposes exactly eight canonical business groups」；「Platform routes stay outside business launcher groups」 | `PL-NAVI-01` / `PL-NAVI-03` |
+| `server/v16-p8-flow-consistency.test.js` | 「P8 launcher: eight canonical business groups present in order」 | `PL-NAVI-01` |
+| `server/v16-sitewide-rollout.test.js` | 「eight canonical business groups remain in order」；「Platform stays outside the business launcher」 | `PL-NAVI-01` |
+| `server/v16-p2-sales-order-list.test.js` | 断言 registry 含 8 个**英文**分组名 | `PL-NAVI-01` / `PL-NAVI-03` |
+| `server/v16-p11-mobile-enterprise-visual-refinement.test.js` | 「preserves the eight canonical domain groups…」 | `PL-NAVI-01` / `PL-NAVI-03` |
+| `server/v12-core-pages-ui.test.js` | 8 个**英文**分组名 | `PL-NAVI-01` / `PL-NAVI-03` |
+| `server/sales-customer-wave6-functional.test.js` | `assert.match(error, /Replacement Fulfillment/)` | `PL-LANG-02`（改为中文业务术语 `/补货履行/`） |
+
+### 69.6 守卫与变异实验
+
+| 守卫 | 结论 |
+|---|---|
+| `node scripts/qa/verify-navigation-reachability.mjs` | **PASS** —— 不可达 route 0 / 缺分组域 0 / 非中文分组标题 0；启动器覆盖 51 → **62** |
+| `node scripts/qa/verify-ui-language.mjs` | **PASS** —— 用户可见英文残留 **0** |
+| `node scripts/qa/verify-error-code-coupling.mjs` | **PASS** —— 未登记耦合 0 / 死引用 0 |
+| `node scripts/qa/verify-route-parity.mjs` | **PASS** —— 650 个调用点 / 517 个唯一 method+path，未匹配 0 |
+| `node scripts/qa/verify-acceptance-records.mjs` | **PASS** |
+
+**变异实验（证明断言承重、非空洞）**：四条变异全部被守卫捕获（退出码非 0）——
+① 删除 `platform` 分组；② 把分组标题改回英文；③ 前端写入一句英文文案；④ 后端 `HttpError` 消息改回英文。
+④ 首次未转红，**暴露了守卫的 `HttpError` 消息提取 bug（逗号未跳过）**；修复后转红。
+
+### 69.7 门禁证据
+
+| 门禁 | 结果 |
+|---|---|
+| `pnpm test:fast` | **PASS 775 / 775** |
+| `pnpm test`（FULL） | **PASS 4141 / 4141**（537 suites，退出码 0；基线 4134） |
+| `pnpm test:heavy` | **PASS 68 / 68** |
+| `pnpm build` | **PASS**（`built in 4.45s`） |
+| `git diff --check` | **PASS**（无空白错误） |
+| 文档一致性 current / migration 两模式 | **ALL CHECKS PASSED**（current：N1、N3–N9 全通过、N2 `RETIRED`；migration：C1–C6 全通过） |
+| 浏览器实测（admin，启动器 + 用户与权限页，390 px） | **PASS** —— 9 个中文分组、「系统设置」含「用户与权限」、「新增用户」按钮可见、浏览器错误 **0** |
+
+### 69.8 未解决矛盾
+
+1. **canonical 浏览器发布门禁未在本轮重跑**（`node scripts/acceptance/release-browser-readiness.mjs`，
+   5 角色 × 4 档宽度 × 93 route，单次 50–70 分钟）。本轮以**定点浏览器实测**覆盖了受影响面
+   （admin 启动器与用户与权限页），但**不得**据此宣称该门禁在当前 HEAD 通过 —— 引用旧记录前必须回到当前代码核验。
+2. **腾讯云目标环境尚未验证**：§10 的执行清单**从未在任何真实腾讯云主机上执行过**，
+   preflight 证据（TLS 证书链、安全组、备份异机副本、恢复演练、回滚演练）全部为空。
+   按 `PL-RI-05`，当前只能标记 `PARTIAL`。
+3. **本轮不改变任何已签发的域级 Acceptance / Capability Freeze**；九域 Release Readiness 与
+   Manual Capability Closure 仍未签发。
+4. **`outsourcing-finance.js` 的 `BACKFLUSH_INSUFFICIENT_SUPPLY: 行 ${m.id}`** 这类
+   「机器码直接进消息」的文案由已批准 Design 明确指定，本轮**未改**（改它会偏离已批准合同），
+   需要一次独立裁定。
+5. **写路径授权未审计**（继承自 §68.7 第 6 条）：本轮只闭合导航可达性与界面语言，
+   写入口的 `allow()` 审计仍是盲区。
+6. **本轮改动面达 105 个已跟踪文件 + 4 个新增文件**（其中 57 个后端文件、25 个前端页面）。
+   每处改动都是文案或导航分组，**未**触及业务规则、状态机、审批语义与金额语义；
+   但改动面本身需要在 Acceptance 时由业务所有者逐域复核。
+7. **FULL 门禁存在一条与本轮无关的既有 flaky**：`server/mysql-out001-gate-infrastructure.test.js`
+   的「Windows taskkill confirms both parent and grandchild exit…」。它在并行负载下偶发失败、
+   单独运行恒通过（49/49），且与本轮改动无交集。**本轮最后一次 FULL 复跑为 4141/4141 全绿**，
+   但该 flaky 未被处置，引用本轮 FULL 结果时必须知道这一点。
+
+### 69.9 Owner
+
+| 角色 | 承担者 | 说明 |
+|---|---|---|
+| 导航分组与界面语言合同 | Platform（Owner）+ 业务所有者（批准、授权实施） | §36.19 / §32.19 已 `APPROVED`，Implementation 已实施 |
+| 腾讯云部署执行清单 | Operations + 业务所有者 | §10 已交付；**目标环境验证与部署授权未取得** |
+| Acceptance / Freeze / Release Readiness | 业务所有者 | 本轮**未**签发 |

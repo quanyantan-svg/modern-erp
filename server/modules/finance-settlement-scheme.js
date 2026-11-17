@@ -22,7 +22,7 @@ export async function upsertSettlementScheme(db, req, res, actor) {
   allow(actor, 'FINANCE_RECOGNITION_POLICY_MANAGE');
   const body = await readJson(req);
   const side = requiredText(body.side, 'side', 4);
-  if (!VALID_SIDE.has(side)) throw new HttpError(400, 'side 必须是 AR 或 AP');
+  if (!VALID_SIDE.has(side)) throw new HttpError(400, '「side」 必须是 AR 或 AP');
   const schemeCode = requiredText(body.schemeCode, 'schemeCode', 64);
   const name = optionalText(body.name ?? '', 128);
   const matchMethod = optionalText(body.matchMethod ?? 'AUTO', 16);

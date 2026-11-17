@@ -34,7 +34,7 @@ export function requestFingerprint(value) {
 }
 
 export function idempotencyReplay(db, operationType, documentId, key, fingerprint) {
-  if (!key) throw new HttpError(400, '关键过账操作必须提供 Idempotency-Key');
+  if (!key) throw new HttpError(400, '关键过账操作必须提供 「Idempotency-Key」');
   let lockName;
   if (db?.dialect === 'mysql') {
     lockName = `erp-idem-${createHash('sha256').update(`${operationType}\u001f${documentId}\u001f${key}`).digest('hex').slice(0, 48)}`;
@@ -146,7 +146,7 @@ export async function applyUnappliedBalance(db, req, res, actor) {
   const body = await readJson(req);
   const side = String(body.side || '').toUpperCase();
   allow(actor, side === 'AR' ? 'COLLECTION_MANAGE' : 'PAYMENT_MANAGE');
-  if (!['AR', 'AP'].includes(side)) throw new HttpError(400, 'side 仅支持 AR/AP');
+  if (!['AR', 'AP'].includes(side)) throw new HttpError(400, '「side」 仅支持 AR/AP');
   const balance = loadBalance(db, body.balanceId, body.creditId);
   const expectedBalanceSide = side === 'AR' ? 'CUSTOMER' : 'SUPPLIER';
   if (balance.side !== expectedBalanceSide) throw new HttpError(409, '余额方向与目标项目不匹配');
@@ -262,7 +262,7 @@ export async function reverseRefund(db, req, res, actor, refundId, generateVouch
 
 export async function createWriteOff(db, req, res, actor) {
   allow(actor, 'VOUCHER_SUBMIT'); const body = await readJson(req); const side = String(body.side || '').toUpperCase();
-  if (!['AR', 'AP'].includes(side)) throw new HttpError(400, 'side 仅支持 AR/AP');
+  if (!['AR', 'AP'].includes(side)) throw new HttpError(400, '「side」 仅支持 AR/AP');
   const snap = openItemSnapshot(db, side, body.openItemId); if (!snap || snap.row.item_class !== 'SOURCE') throw new HttpError(404, '权威应收/应付不存在');
   if (snap.row.item_kind !== 'FINAL' || snap.row.conversion_state !== 'OPEN') throw new HttpError(409, '暂估或已转换项目不能创建核销单');
   const amount = cents(body.amountCents); if (amount > snap.openCents) throw new HttpError(409, '核销金额超过当前未结余额');

@@ -90,7 +90,7 @@ function findAppliedAuthorizationLine(db, authorizationId) {
 // enforced as a guard against releasing an already-applied authorization.
 function releasePriceOverrideAuthorizationConsumption(db, authorizationId, actor, options) {
   if (!options || typeof options.expectedOwner !== 'string' || options.expectedOwner.length === 0) {
-    throw new HttpError(500, 'release() requires an explicit expectedOwner', { code: 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_REQUIRED' });
+    throw new HttpError(500, '必须显式指定「expectedOwner」', { code: 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_REQUIRED' });
   }
   const { expectedOwner } = options;
   const row = readPriceOverrideAuthorizationConsumption(db, authorizationId);
@@ -110,7 +110,7 @@ function releasePriceOverrideAuthorizationConsumption(db, authorizationId, actor
 
 function assertPriceOverrideAuthorizationReserved(db, authorizationId, options) {
   if (!options || typeof options.expectedOwner !== 'string' || options.expectedOwner.length === 0) {
-    throw new HttpError(500, 'assertReserved() requires an explicit expectedOwner', { code: 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_REQUIRED' });
+    throw new HttpError(500, '必须显式指定「expectedOwner」', { code: 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_REQUIRED' });
   }
   const { expectedOwner } = options;
   const row = readPriceOverrideAuthorizationConsumption(db, authorizationId);
@@ -256,7 +256,7 @@ export function validatePriceSnapshot(db, snapshot, expected) {
       || detail?.materialId !== authorization.materialId || detail?.uomCode !== authorization.uomCode
       || Number(detail?.quantityMicros) !== Number(authorization.quantityMicros)
       || hash(detail?.priceSnapshot) !== authorization.authorizedPriceSnapshotHash) {
-      throw new HttpError(409, 'Price override authorization linkage is invalid', { code: 'PRICE_OVERRIDE_AUTHORIZATION_INVALID' });
+      throw new HttpError(409, '价格调整授权关联无效', { code: 'PRICE_OVERRIDE_AUTHORIZATION_INVALID' });
     }
   }
   return snapshot;
@@ -280,11 +280,11 @@ function validateDiscountSnapshot(snapshot, expected) {
   const headerAllocation = safe(snapshot.headerAllocationCents, 'header allocation');
   const final = safe(snapshot.finalAmountCents, 'discount final');
   if (lineDiscount > gross || headerAllocation > gross - lineDiscount || gross - lineDiscount - headerAllocation !== final) {
-    throw new HttpError(409, 'Discount snapshot arithmetic is inconsistent', { code: 'DISCOUNT_SNAPSHOT_MISMATCH' });
+    throw new HttpError(409, '折扣快照的金额计算不一致', { code: 'DISCOUNT_SNAPSHOT_MISMATCH' });
   }
   if (expected.giftLine) {
     if (lineDiscount !== gross || headerAllocation !== 0 || final !== 0) {
-      throw new HttpError(409, 'Gift-line discount evidence is inconsistent', { code: 'DISCOUNT_SNAPSHOT_MISMATCH' });
+      throw new HttpError(409, '赠品行折扣证据不一致', { code: 'DISCOUNT_SNAPSHOT_MISMATCH' });
     }
   } else if (!expected.allowEvidenceProjection) {
     const evidence = snapshot.evidence;
@@ -293,7 +293,7 @@ function validateDiscountSnapshot(snapshot, expected) {
       && Number(evidence.headerAllocationCentsByLine?.[lineId]) === headerAllocation
       && Number(evidence.finalLineCentsByLine?.[lineId]) === final
       && (!expected.pricingEvidenceFingerprint || evidence.pricingEvidenceByLine?.[lineId]?.fingerprint === expected.pricingEvidenceFingerprint));
-    if (!matched) throw new HttpError(409, 'Discount snapshot does not match authoritative resolver evidence', { code: 'DISCOUNT_SNAPSHOT_MISMATCH' });
+    if (!matched) throw new HttpError(409, '折扣快照与权威解析证据不一致', { code: 'DISCOUNT_SNAPSHOT_MISMATCH' });
   }
   return snapshot;
 }
@@ -479,7 +479,7 @@ export function createSalesOrderCanonical(db, { body, actor, quotationLines = nu
 export async function createSalesOrder(db, req, res, actor, { requireIdempotencyKey = true } = {}) {
   requireSalesPermission(actor, 'ORDERS_CREATE');
   const body = await readJson(req); const key = String(req.headers['idempotency-key'] || '').trim();
-  if (requireIdempotencyKey && !key) throw new HttpError(422, 'Idempotency-Key 必填');
+  if (requireIdempotencyKey && !key) throw new HttpError(422, '「Idempotency-Key」 必填');
   const fingerprint = requestFingerprint(body);
   const replay = key ? idempotencyReplay(db, 'SALES_ORDER_CREATE', actor.id, key, fingerprint) : null;
   if (replay) return send(res, 200, { ...replay, replayed: true });
@@ -898,7 +898,7 @@ export async function salesOrderAction(db, req, res, actor, orderId, action, { r
   else if (action === 'reject') requireSalesPermission(actor, 'ORDERS_REJECT');
   else if (action === 'close' || action === 'cancel') requireSalesPermission(actor, 'SALES_MANAGE');
   else throw new HttpError(400, '无效订单动作');
-  const body = await readJson(req); const key = String(req.headers['idempotency-key'] || '').trim(); if (requireIdempotencyKey && !key) throw new HttpError(422, 'Idempotency-Key 必填');
+  const body = await readJson(req); const key = String(req.headers['idempotency-key'] || '').trim(); if (requireIdempotencyKey && !key) throw new HttpError(422, '「Idempotency-Key」 必填');
   const operation = `SALES_ORDER_${action.toUpperCase()}`; const fingerprint = requestFingerprint({ action, body });
   const replay = key ? idempotencyReplay(db, operation, orderId, key, fingerprint) : null; if (replay) return send(res, 200, { ...replay, replayed: true });
   if (action === 'submit') return submitSalesOrder(db, res, actor, orderId, body, key, operation, fingerprint);

@@ -109,7 +109,7 @@ export function adjustInventoryAtPosition(db, input) {
   if (!['ENTERPRISE', 'SUPPLIER', 'CUSTOMER'].includes(ot)) {
     throw new HttpError(400, `adjustInventoryAtPosition: 不支持的 ownerType ${ownerType}`);
   }
-  if (ot === 'ENTERPRISE' && ownerId) throw new HttpError(400, 'ENTERPRISE owner 的 owner_id 必须为 NULL');
+  if (ot === 'ENTERPRISE' && ownerId) throw new HttpError(400, 'ENTERPRISE 「owner」 的 owner_id 必须为 NULL');
   const positionKey = computePositionKey({
     productId, warehouseId, binId, ownerType: ot, ownerId,
     stockStatus, lotId, serialId,

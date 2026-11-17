@@ -421,7 +421,7 @@ export async function saveProductCommercialClassification(db, req, res, actor) {
         || Number(existing.active) !== nextActive;
       if (classificationChanges && db.prepare(`SELECT 1 FROM service_fulfillments
         WHERE product_id=? AND confirmation_state IN ('PENDING','CONFIRMED') LIMIT 1`).get(productId)) {
-        throw new HttpError(409, 'Service classification has protected fulfillment obligations', { code: 'SERVICE_CLASSIFICATION_PROTECTED' });
+        throw new HttpError(409, '该服务分类存在受保护的履约义务，不能变更', { code: 'SERVICE_CLASSIFICATION_PROTECTED' });
       }
       targetId = existing.id;
       db.prepare(`UPDATE product_commercial_classification SET sales_enabled=?,sales_uom_code=?,pricing_uom_code=?,default_upper_delivery_tolerance_bps=?,default_lower_delivery_tolerance_bps=?,service_classification=?,service_kind=?,active=?,updated_at=?,updated_by=? WHERE id=?`)

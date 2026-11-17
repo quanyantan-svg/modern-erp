@@ -75,7 +75,7 @@ export default function PlatformSodRules({ user, notify }) {
     <BusinessPageShell className="platform-ops" width="rail" data-testid="platform-sod-rules-page">
       <header className="platform-ops__hero">
         <div>
-          <span>SEPARATION OF DUTIES</span>
+          <span>职责分离</span>
           <h2>职责分离规则</h2>
         </div>
         <p>为审批族配置职责分离约束、处置方式与升级角色；规则变更全部留痕。</p>
@@ -383,7 +383,7 @@ function RuleEditorSheet({ editor, creatable, families, canManage, notify, onClo
             <input
               value={form.escalateToRole}
               onChange={(event) => setForm({ ...form, escalateToRole: event.target.value.toUpperCase() })}
-              placeholder="REVIEWER"
+              placeholder="例如「REVIEWER」"
             />
           </FormRow>
         )}

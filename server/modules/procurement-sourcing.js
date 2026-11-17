@@ -258,10 +258,10 @@ export async function overrideSourceEntry(db, req, res, actor) {
   const effectiveFrom = requiredText(body.effectiveFrom, '生效开始日期', 10);
   const effectiveTo = requiredText(body.effectiveTo, '生效结束日期', 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(effectiveTo)) {
-    throw new HttpError(400, 'override 日期区间格式应为 YYYY-MM-DD');
+    throw new HttpError(400, '「override」 日期区间格式应为 YYYY-MM-DD');
   }
   if (effectiveTo < effectiveFrom) {
-    throw new HttpError(400, 'override 结束日期不能早于开始日期', { code: 'SOURCE_OVERRIDE_WINDOW_INVALID' });
+    throw new HttpError(400, '「override」 结束日期不能早于开始日期', { code: 'SOURCE_OVERRIDE_WINDOW_INVALID' });
   }
   if (!db.prepare('SELECT id FROM suppliers WHERE id=?').get(supplierId)) throw new HttpError(409, '供应商不存在');
   if (!db.prepare('SELECT id FROM products WHERE id=?').get(productId)) throw new HttpError(409, '产品不存在');
@@ -275,7 +275,7 @@ export async function overrideSourceEntry(db, req, res, actor) {
         AND NOT (effective_to < ? OR effective_from > ?)`)
       .all(supplierId, productId, sourceType, effectiveFrom, effectiveTo);
     if (overlapping.length) {
-      throw new HttpError(409, '该供应商 / 货品 / 货源类型在所选日期区间已有生效的 override', { code: 'SOURCE_OVERRIDE_OVERLAP' });
+      throw new HttpError(409, '该供应商 / 货品 / 货源类型在所选日期区间已有生效的 「override」', { code: 'SOURCE_OVERRIDE_OVERLAP' });
     }
     db.prepare(`INSERT INTO source_list_overrides(
         id,supplier_id,product_id,source_type,effective_from,effective_to,reason,status,created_by,created_at)

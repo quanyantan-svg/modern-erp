@@ -166,7 +166,7 @@ function rejectReceiptConfirm(db, actor, receiptId, error) {
  */
 function refreshOutsourcingCostEvidence(db, receiptId, calculatedAt = new Date().toISOString()) {
   const receipt = db.prepare('SELECT * FROM outsourcing_receipts WHERE id=?').get(receiptId);
-  if (!receipt) throw new HttpError(404, 'Outsourcing receipt not found');
+  if (!receipt) throw new HttpError(404, '委外收货单不存在');
   const billed = db.prepare(`SELECT
     COALESCE(SUM(sbi.base_quantity_num*1.0/sbi.base_quantity_den),0) billed_quantity,
     COALESCE(SUM(sbi.gross_cents),0) actual_cents
@@ -239,7 +239,7 @@ export async function confirmOutsourcingReceipt(db, req, res, actor, receiptId) 
   const body = await readJson(req);
   assertAllowedFields(body, ['materialIdentities']);
   const idempotencyKey = String(req.headers['idempotency-key'] || '').trim();
-  if (!idempotencyKey) throw new HttpError(400, 'Idempotency-Key 必填');
+  if (!idempotencyKey) throw new HttpError(400, '「Idempotency-Key」 必填');
   const operation = 'OUTSOURCING_RECEIPT_CONFIRM';
   const fingerprint = requestFingerprint(body);
   // 精确重放只返回已记录的真实结果；同键异内容是 409 业务门禁拒绝。
@@ -248,7 +248,7 @@ export async function confirmOutsourcingReceipt(db, req, res, actor, receiptId) 
     replay = idempotencyReplay(db, operation, receiptId, idempotencyKey, fingerprint);
   } catch (error) {
     if (error?.status !== 409) throw error;
-    const conflict = new HttpError(409, error.message, { code: 'OUTSOURCING_RECEIPT_IDEMPOTENCY_CONFLICT' });
+    const conflict = new HttpError(409, '委外收货确认失败，请刷新后重试', { code: 'OUTSOURCING_RECEIPT_IDEMPOTENCY_CONFLICT' });
     throw rejectReceiptConfirm(db, actor, receiptId, conflict);
   }
   if (replay) return send(res, 200, { ...replay, replayed: true });
@@ -257,7 +257,7 @@ export async function confirmOutsourcingReceipt(db, req, res, actor, receiptId) 
   // 已生效收货只接受原 Idempotency-Key 的精确重放；换 Key 重复确认是 409 拒绝。
   if (receipt.business_status === 'EFFECTED') {
     throw rejectReceiptConfirm(db, actor, receiptId,
-      new HttpError(409, '已生效收货必须使用原 Idempotency-Key 重放', { code: 'OUTSOURCING_RECEIPT_ALREADY_EFFECTED' }));
+      new HttpError(409, '已生效收货必须使用原 「Idempotency-Key」 重放', { code: 'OUTSOURCING_RECEIPT_ALREADY_EFFECTED' }));
   }
   if (receipt.business_status !== 'PENDING_INSPECTION') {
     throw rejectReceiptConfirm(db, actor, receiptId, new HttpError(409, '只有待检收货可以生效'));
@@ -287,7 +287,7 @@ export async function confirmOutsourcingReceipt(db, req, res, actor, receiptId) 
     // 并发第二请求进入本事务时状态已被另一请求改变：不得静默返回并由外层
     // 报告成功，必须明确失败（MC-REQ-05 / MC-REQ-09）。
     if (lockedReceipt.business_status === 'EFFECTED') {
-      throw new HttpError(409, '已生效收货必须使用原 Idempotency-Key 重放', { code: 'OUTSOURCING_RECEIPT_ALREADY_EFFECTED' });
+      throw new HttpError(409, '已生效收货必须使用原 「Idempotency-Key」 重放', { code: 'OUTSOURCING_RECEIPT_ALREADY_EFFECTED' });
     }
     if (lockedReceipt.business_status !== 'PENDING_INSPECTION') throw new HttpError(409, '只有待检收货可以生效');
     const lockedOrder = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(lockedReceipt.order_id);
@@ -317,7 +317,7 @@ export async function confirmOutsourcingReceipt(db, req, res, actor, receiptId) 
     try {
       assertQualityGate(db, 'IQC', receiptId, 'OUTSOURCING_RECEIPT');
     } catch (error) {
-      throw new HttpError(409, error.message, { code: 'OUTSOURCING_QUALITY_GATE_NOT_PASSED' });
+      throw new HttpError(409, '委外收货质检未通过', { code: 'OUTSOURCING_QUALITY_GATE_NOT_PASSED' });
     }
     const materials = db.prepare('SELECT * FROM outsourcing_material_list WHERE order_id=? ORDER BY id').all(lockedOrder.id);
     // OUT-21 backflush: per-material line cumulative formula
@@ -439,7 +439,7 @@ export async function createProcessingFeeBill(db, req, res, actor) {
         WHERE sbi.source_outsourcing_receipt_item_id=? AND sb.status IN ('DRAFT','WAITING_MATCH','POSTED')`).get(item.id).q);
       const remainingBillable = eligibleQty - existingReserved;
       if (Number(line.quantity) > remainingBillable + 1e-9) {
-        throw new HttpError(409, `Billable quantity exceeded: 剩余可计费 ${remainingBillable}`);
+        throw new HttpError(409, `可计费数量已超出：剩余可计费 ${remainingBillable}`);
       }
       // C-P01：金额确认发生在**收货生效时**，不在账单草稿时。
       //
@@ -718,7 +718,7 @@ export async function reverseProcessingFeeBill(db, req, res, actor, billId) {
   const items = Array.isArray(body.items) ? body.items : [];
   if (!items.length) throw new HttpError(400, '请选择需要红冲的账单明细');
   const idempotencyKey = String(body.idempotencyKey || req.headers['idempotency-key'] || '').trim();
-  if (!idempotencyKey) throw new HttpError(400, 'Idempotency-Key 必填');
+  if (!idempotencyKey) throw new HttpError(400, '「Idempotency-Key」 必填');
   const operation = 'OUTSOURCING_PROCESSING_FEE_REVERSAL';
   const fingerprint = requestFingerprint({ billId, items, reason, businessDate: body.businessDate || null });
   let replay = null;
@@ -726,7 +726,7 @@ export async function reverseProcessingFeeBill(db, req, res, actor, billId) {
     replay = idempotencyReplay(db, operation, billId, idempotencyKey, fingerprint);
   } catch (error) {
     if (error?.status !== 409) throw error;
-    throw new HttpError(409, error.message, { code: 'OUTSOURCING_PROCESSING_FEE_IDEMPOTENCY_CONFLICT' });
+    throw new HttpError(409, '加工费红冲失败，请刷新后重试', { code: 'OUTSOURCING_PROCESSING_FEE_IDEMPOTENCY_CONFLICT' });
   }
   if (replay) return send(res, 200, { ...replay, replayed: true });
 
@@ -786,7 +786,7 @@ export async function reverseProcessingFeeBill(db, req, res, actor, billId) {
         // AP 侧：与原金额反向的贷项调整（canonical applyCreditAdjustment）。
         const openItems = db.prepare(`SELECT id FROM account_payables WHERE source_type='SUPPLIER_BILL' AND source_id=?`).all(billId);
         if (!openItems.length) {
-          throw new HttpError(409, '加工费账单缺少可红冲的应付 open item', { code: OUTSOURCING_PROCESSING_FEE_CODES.NOT_POSTED });
+          throw new HttpError(409, '加工费账单缺少可红冲的应付 「open」 「item」', { code: OUTSOURCING_PROCESSING_FEE_CODES.NOT_POSTED });
         }
         let unapplied = amountCents;
         for (const openItem of openItems) {
@@ -804,7 +804,7 @@ export async function reverseProcessingFeeBill(db, req, res, actor, billId) {
           unapplied -= available;
         }
         if (unapplied > 0) {
-          throw new HttpError(409, '红冲金额超过应付 open item 可用余额', { code: OUTSOURCING_PROCESSING_FEE_CODES.REVERSAL_EXCEEDS });
+          throw new HttpError(409, '红冲金额超过应付 「open」 「item」 可用余额', { code: OUTSOURCING_PROCESSING_FEE_CODES.REVERSAL_EXCEEDS });
         }
         db.prepare(`INSERT INTO outsourcing_processing_fee_reversals(
           id,reversal_no,supplier_bill_id,supplier_bill_item_id,outsourcing_receipt_id,outsourcing_receipt_item_id,
@@ -1033,7 +1033,7 @@ export async function createWipTransfer(db, req, res, actor) {
       replay = idempotencyReplay(db, WIP_TRANSFER_OPERATION, sourceOrderId, idempotencyKey, fingerprint);
     } catch (error) {
       if (error?.status !== 409) throw error;
-      throw new HttpError(409, error.message, { code: 'OUTSOURCING_WIP_TRANSFER_IDEMPOTENCY_CONFLICT' });
+      throw new HttpError(409, '在途数量转移失败，请刷新后重试', { code: 'OUTSOURCING_WIP_TRANSFER_IDEMPOTENCY_CONFLICT' });
     }
     // 精确重放只返回已记录的真实结果，不新增转移、身份、数量或成功审计。
     if (replay) return send(res, 201, { ...replay, replayed: true });

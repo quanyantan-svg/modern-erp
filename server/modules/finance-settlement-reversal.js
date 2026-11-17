@@ -29,7 +29,7 @@ export async function postSettlementReversal(db, req, res, actor) {
   const businessDate = requiredText(body.businessDate, 'businessDate', 16);
   const reason = requiredText(body.reason, 'reason', 256);
   const components = Array.isArray(body.components) ? body.components : [];
-  if (!components.length) throw new HttpError(400, '请提供至少一条 component');
+  if (!components.length) throw new HttpError(400, '请提供至少一条 「component」');
 
   const now = new Date().toISOString();
   const reversalId = id();

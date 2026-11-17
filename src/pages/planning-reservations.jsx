@@ -71,7 +71,7 @@ export default function PlanningReservations({ user, notify }) {
 
   return <BusinessPageShell className="planning-closure planning-reservations" width="rail">
     <header className="planning-hero">
-      <div><span>PLANNING RESERVATION</span><h2>计划预留</h2></div>
+      <div><span>计划预留</span><h2>计划预留</h2></div>
       <p>建立强预留保护关键供应；弱预留由 MRP 自动生成；预留可双向追溯。</p>
     </header>
 

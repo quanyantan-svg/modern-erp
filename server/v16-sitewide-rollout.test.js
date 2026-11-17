@@ -73,13 +73,15 @@ describe('V1.6 site-wide rollout source contract', () => {
     assert.doesNotMatch(app, /['"](?:system-health|commercial-go-live)['"]\s*:/);
   });
 
-  test('eight canonical business groups remain in order', () => {
+  // 2026-11-17：Platform 取得「系统设置」启动器分组（Requirement §36.19 PL-NAVI-01），
+  // 本断言**显式修订**而非删除 —— 原断言锁定的正是 commit c77616b 引入的缺失。
+  test('nine canonical domain groups remain in order', () => {
     assert.deepEqual(MOBILE_APPLICATION_GROUPS.filter((group) => group.kind === 'domain').map((group) => group.key), [
-      'master-engineering','sales-customer','planning','procurement-outsourcing','manufacturing-quality','inventory-warehouse','finance-operations','accounting-analytics',
+      'master-engineering','sales-customer','planning','procurement-outsourcing','manufacturing-quality','inventory-warehouse','finance-operations','accounting-analytics','platform',
     ]);
   });
 
-  test('Platform stays outside the business launcher', () => {
+  test('no utility-kind launcher group exists', () => {
     assert.deepEqual(MOBILE_APPLICATION_GROUPS.filter((group) => group.kind === 'utility').map((group) => group.key), []);
   });
 

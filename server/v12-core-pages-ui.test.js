@@ -22,12 +22,24 @@ describe('V1.2 core page migration', () => {
     // launcher group because its only tiles were the Project /
     // CRM extension routes.
     const registry = read('src', 'navigation', 'applicationRegistry.js');
+    // 2026-11-17：分组标题改为从 domainMetadata 的中文 navigationLabel 单源派生
+    // （Requirement §36.19 PL-NAVI-03），因此标题断言移到 domainMetadata，
+    // registry 只断言分组键与 kind。
+    const domainMetadata = read('src', 'navigation', 'domainMetadata.js');
     for (const label of [
-      'Master & Engineering', 'Sales & Customer', 'Planning', 'Procurement & Outsourcing',
-      'Manufacturing & Quality', 'Inventory & Warehouse', 'Finance Operations', 'Accounting & Analytics',
+      '主数据与工程', '销售与客户', '计划', '采购与委外',
+      '制造与质量', '库存与仓储', '财务运营', '会计与分析', '系统设置',
     ]) {
-      assert.match(registry, new RegExp(`launcherGroup\\('[^']+','${label}'`));
+      assert.match(domainMetadata, new RegExp(`navigationLabel: '${label}'`));
     }
+    for (const key of [
+      'master-engineering', 'sales-customer', 'planning', 'procurement-outsourcing',
+      'manufacturing-quality', 'inventory-warehouse', 'finance-operations',
+      'accounting-analytics', 'platform',
+    ]) {
+      assert.match(registry, new RegExp(`launcherGroup\\('${key}','domain'`));
+    }
+    assert.match(registry, /DOMAIN_BY_KEY\[key\]\.navigationLabel/);
     assert.doesNotMatch(registry, /launcherGroup\('utility-extension',/);
   });
 

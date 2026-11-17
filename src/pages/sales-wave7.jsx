@@ -157,12 +157,12 @@ export function PrepaymentGates({ query = {} } = {}) {
   return (
     <section className="card" aria-label="prepayment-gates">
       <h2>预付款门</h2>
-      <p className="muted">销售预付款门负责读取 Finance 端预付款余额，按 PLANNING_RELEASE / RESERVATION / DELIVERY 三个阶段评估订单是否能继续推进。所有评估都在同一事务内持有 Finance 父级结算余额锁，避免并发通过陈旧余额放行。</p>
+      <p className="muted">销售预付款门负责读取财务端预付款余额，按 PLANNING_RELEASE / RESERVATION / DELIVERY 三个阶段评估订单是否能继续推进。所有评估都在同一事务内持有财务父级结算余额锁，避免并发通过陈旧余额放行。</p>
 
       <div className="form-row">
         <label>
           <span>销售订单</span>
-          <input value={salesOrderId} onChange={(e) => setSalesOrderId(e.target.value)} placeholder="so-id" />
+          <input value={salesOrderId} onChange={(e) => setSalesOrderId(e.target.value)} placeholder="销售订单 ID" />
         </label>
         <label>
           <span>预付款要求 (分)</span>
@@ -343,24 +343,24 @@ export function ReservationIntents({ query = {} } = {}) {
   return (
     <section className="card" aria-label="reservation-intents">
       <h2>预留意图</h2>
-      <p className="muted">销售仅持有预留意图。库存锁定事实由 Inventory 维护，预备量与有限供给由 Planning 维护。EXPECTED 模式必须提供真实有限容量，缺省时拒绝放行。</p>
+      <p className="muted">销售仅持有预留意图。库存锁定事实由库存域维护，预备量与有限供给由计划域维护。预计供给模式必须提供真实有限容量，缺省时拒绝放行。</p>
 
       <div className="form-row">
         <label>
           <span>销售订单</span>
-          <input value={salesOrderId} onChange={(e) => setSalesOrderId(e.target.value)} placeholder="so-id" />
+          <input value={salesOrderId} onChange={(e) => setSalesOrderId(e.target.value)} placeholder="销售订单 ID" />
         </label>
         <label>
           <span>订单行 (可选)</span>
-          <input value={salesOrderItemId} onChange={(e) => setSalesOrderItemId(e.target.value)} placeholder="soi-id" />
+          <input value={salesOrderItemId} onChange={(e) => setSalesOrderItemId(e.target.value)} placeholder="订单行 ID" />
         </label>
         <label>
           <span>产品</span>
-          <input value={productId} onChange={(e) => setProductId(e.target.value)} placeholder="product-id" />
+          <input value={productId} onChange={(e) => setProductId(e.target.value)} placeholder="货品 ID" />
         </label>
         <label>
           <span>仓库</span>
-          <input value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)} placeholder="wh-id (可选)" />
+          <input value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)} placeholder="仓库 ID（可选）" />
         </label>
         <label>
           <span>预留模式</span>
@@ -382,10 +382,10 @@ export function ReservationIntents({ query = {} } = {}) {
           <label>
             <span>预计量来源类型</span>
             <select value={expectedSupplySourceType} onChange={(e) => setExpectedSupplySourceType(e.target.value)}>
-              <option value="PLANNED_ORDER">PLANNED_ORDER</option>
-              <option value="PURCHASE_ORDER">PURCHASE_ORDER</option>
-              <option value="PRODUCTION_ORDER">PRODUCTION_ORDER</option>
-              <option value="EXPECTED">EXPECTED</option>
+              <option value="PLANNED_ORDER">计划订单</option>
+              <option value="PURCHASE_ORDER">采购订单</option>
+              <option value="PRODUCTION_ORDER">生产订单</option>
+              <option value="EXPECTED">预计</option>
             </select>
           </label>
           <label>
@@ -404,13 +404,13 @@ export function ReservationIntents({ query = {} } = {}) {
         <label>
           <span>释放/消费事件</span>
           <select value={consumerEvent} onChange={(e) => setConsumerEvent(e.target.value)}>
-            <option value="MANUAL">MANUAL</option>
-            <option value="SO_CHANGED">SO_CHANGED</option>
-            <option value="SO_CANCELLED">SO_CANCELLED</option>
-            <option value="SO_CLOSED">SO_CLOSED</option>
-            <option value="DELIVERY_CONFIRMED">DELIVERY_CONFIRMED</option>
-            <option value="RETURNED">RETURNED</option>
-            <option value="REPLACEMENT">REPLACEMENT</option>
+            <option value="MANUAL">手工</option>
+            <option value="SO_CHANGED">订单变更</option>
+            <option value="SO_CANCELLED">订单取消</option>
+            <option value="SO_CLOSED">订单关闭</option>
+            <option value="DELIVERY_CONFIRMED">出货确认</option>
+            <option value="RETURNED">已退货</option>
+            <option value="REPLACEMENT">替换</option>
           </select>
         </label>
         <label>
@@ -462,13 +462,13 @@ export function ReservationIntents({ query = {} } = {}) {
                 <td data-label="动作">
                   <div className="action-stack">
                     {['REQUESTED', 'NONE'].includes(row.intentState) && (
-                      <button type="button" disabled={busy} onClick={() => act(row.id, 'grant')}>GRANT</button>
+                      <button type="button" disabled={busy} onClick={() => act(row.id, 'grant')}>授予</button>
                     )}
                     {row.intentState === 'GRANTED' && (
-                      <button type="button" disabled={busy} onClick={() => act(row.id, 'consume')}>CONSUME</button>
+                      <button type="button" disabled={busy} onClick={() => act(row.id, 'consume')}>消费</button>
                     )}
                     {['REQUESTED', 'GRANTED'].includes(row.intentState) && (
-                      <button type="button" disabled={busy} onClick={() => act(row.id, 'release')}>RELEASE</button>
+                      <button type="button" disabled={busy} onClick={() => act(row.id, 'release')}>释放</button>
                     )}
                   </div>
                 </td>

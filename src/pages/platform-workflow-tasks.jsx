@@ -54,7 +54,7 @@ export default function PlatformWorkflowTasks({ user, notify }) {
     <BusinessPageShell className="platform-ops" width="rail" data-testid="platform-workflow-tasks-page">
       <header className="platform-ops__hero">
         <div>
-          <span>WORKFLOW TASKS</span>
+          <span>流程任务</span>
           <h2>我的流程任务</h2>
         </div>
         <p>只显示分配给当前用户的流程任务；徽标独立于业务审批中心的待办计数。</p>
@@ -147,7 +147,7 @@ function TaskActionSheet({ task, canAct, notify, onClose, onChanged }) {
           </select>
         </FormRow>
         {(action === 'TRANSFER' || action === 'ADD_SIGN') && (
-          <FormRow label="接收人 id" required>
+          <FormRow label="接收人 ID" required>
             <input value={assigneeId} onChange={(event) => setAssigneeId(event.target.value)}/>
           </FormRow>
         )}

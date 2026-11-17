@@ -53,10 +53,10 @@ export async function createLotAdjustment(db, req, res, actor) {
   const body = await readJson(req);
   assertAllowedFields(body, ['adjustmentType','productId','warehouseId','sourceLotCode','targetLotCode','quantity','reason']);
   if (!['SPLIT', 'MERGE', 'RECLASS'].includes(body.adjustmentType)) {
-    throw new HttpError(400, 'adjustmentType must be SPLIT/MERGE/RECLASS');
+    throw new HttpError(400, '调整类型必须是「SPLIT」「MERGE」或「RECLASS」');
   }
   const quantity = Number(body.quantity);
-  if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, 'quantity must be positive');
+  if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, '数量必须大于 0');
   const id = genId();
   const docNo = `LA-${Date.now().toString().slice(-10)}-${Math.floor(Math.random()*90+10)}`;
   const now = nowIso();
@@ -74,8 +74,8 @@ export async function createLotAdjustment(db, req, res, actor) {
 export function confirmLotAdjustment(db, res, actor, docId) {
   allow(actor, 'INVENTORY_LOT_ADJUSTMENT_MANAGE');
   const doc = db.prepare(`SELECT * FROM inventory_lot_adjustments WHERE id=?`).get(docId);
-  if (!doc) throw new HttpError(404, 'Lot adjustment not found');
-  if (doc.status !== 'DRAFT') throw new HttpError(409, `Status ${doc.status} not confirmable`);
+  if (!doc) throw new HttpError(404, '批次调整单不存在');
+  if (doc.status !== 'DRAFT') throw new HttpError(409, `状态为 ${doc.status}，无法确认`);
   const now = nowIso();
   // Compute source and target lot identities
   const sourceLotId = doc.source_lot_code ? ensureLot(db, doc.product_id, doc.source_lot_code) : null;

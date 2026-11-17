@@ -91,11 +91,11 @@ function buildOrderFilters(url) {
   const supplierId = url.searchParams.get('supplierId') || null;
   const status = url.searchParams.get('status') || null;
   if (status && !['DRAFT', 'SUBMITTED', 'APPROVED', 'REJECTED'].includes(status)) {
-    throw new HttpError(400, 'status 不是有效订单状态');
+    throw new HttpError(400, '「status」 不是有效订单状态');
   }
   const includeFulfilledValue = url.searchParams.get('includeFulfilled');
   if (includeFulfilledValue && !['true', 'false'].includes(includeFulfilledValue)) {
-    throw new HttpError(400, 'includeFulfilled 必须为 true 或 false');
+    throw new HttpError(400, 'includeFulfilled 必须为 「true」 或 「false」');
   }
   const asOfDate = parseDateParam(url.searchParams.get('asOfDate'), '截至日期') || new Date().toISOString().slice(0, 10);
   return { dateFrom, dateTo, customerId, supplierId, status, includeFulfilled: includeFulfilledValue === 'true', asOfDate };
@@ -110,7 +110,7 @@ function buildInventoryFilters(url) {
   const direction = url.searchParams.get('direction') || null;
   const sourceType = url.searchParams.get('sourceType') || null;
   if (direction && !['IN', 'OUT'].includes(direction)) {
-    throw new HttpError(400, 'direction 必须为 IN 或 OUT');
+    throw new HttpError(400, '「direction」 必须为 IN 或 OUT');
   }
   return { dateFrom, dateTo, productId, warehouseId, direction, sourceType };
 }
@@ -697,7 +697,7 @@ function readSalesSubReport(url) {
   const report = String(url.searchParams.get('report') || '').trim();
   if (!report) return null;
   if (!SALES_SUB_REPORTS.includes(report)) {
-    throw new HttpError(400, 'report 不是受支持的报表视图', {
+    throw new HttpError(400, '「report」 不是受支持的报表视图', {
       code: 'UNSUPPORTED_REPORT_VIEW',
       resolution: `可用视图：${SALES_SUB_REPORTS.join(' / ')}`,
     });
@@ -746,7 +746,7 @@ export function getSalesRanking(db, res, actor, url) {
   const filters = buildOrderFilters(url);
   const dimension = String(url.searchParams.get('dimension') || '').trim();
   if (!SALES_RANKING_DIMENSIONS.includes(dimension)) {
-    throw new HttpError(400, 'dimension 不是受支持的排行维度', {
+    throw new HttpError(400, '「dimension」 不是受支持的排行维度', {
       code: 'UNSUPPORTED_RANKING_DIMENSION',
       resolution: `可用维度：${SALES_RANKING_DIMENSIONS.join(' / ')}`,
     });
@@ -1121,7 +1121,7 @@ export function getInventoryMovements(db, res, actor, url) {
 function readExportFormat(url) {
   const format = String(url.searchParams.get('format') || 'csv').trim().toLowerCase();
   if (format !== 'csv') {
-    throw new HttpError(400, 'format 仅支持 csv', { code: 'VALIDATION' });
+    throw new HttpError(400, '「format」 仅支持 「csv」', { code: 'VALIDATION' });
   }
   return format;
 }
@@ -1289,7 +1289,7 @@ function exportSalesRankingReport(db, res, actor, url) {
   const echo = buildFilterEcho(db, filters);
   const dimension = String(url.searchParams.get('dimension') || '').trim();
   if (!SALES_RANKING_DIMENSIONS.includes(dimension)) {
-    throw new HttpError(400, 'dimension 不是受支持的排行维度', {
+    throw new HttpError(400, '「dimension」 不是受支持的排行维度', {
       code: 'UNSUPPORTED_RANKING_DIMENSION',
       resolution: `可用维度：${SALES_RANKING_DIMENSIONS.join(' / ')}`,
     });

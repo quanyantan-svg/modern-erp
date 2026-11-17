@@ -1,6 +1,6 @@
 // Canonical frontend application registry.
 // Route, access, presentation, launcher and screen definitions live here only.
-import { BUSINESS_DOMAINS, DESKTOP_GROUP_ORDER } from './domainMetadata.js';
+import { BUSINESS_DOMAINS, DESKTOP_GROUP_ORDER, DOMAIN_BY_KEY } from './domainMetadata.js';
 
 export const PRIMARY_DOMAINS = BUSINESS_DOMAINS;
 
@@ -320,8 +320,11 @@ const toApplicationRoute = (item) => Object.freeze({
 
 const BASE_APPLICATION_ROUTES = [...ACTIVE_ROUTE_DEFINITIONS, ...DISABLED_ROUTE_DEFINITIONS].map(toApplicationRoute);
 
-const launcherGroup = (key, label, kind, module, items) => Object.freeze({
-  key, label, kind, module,
+// The group label is derived from the canonical domain taxonomy so the
+// launcher never keeps a second copy of the domain names (Requirement §36.19
+// PL-NAVI-03). English domain labels stay in domainMetadata.js as identifiers.
+const launcherGroup = (key, kind, module, items) => Object.freeze({
+  key, label: DOMAIN_BY_KEY[key].navigationLabel, kind, module,
   items: Object.freeze(items.map(([routeKey, itemLabel, iconKey, extra = {}], order) => Object.freeze({
     key: extra.key || (extra.reportKey ? `${routeKey}:${extra.reportKey}` : routeKey), routeKey, group: key,
     label: itemLabel, iconKey, order, target: extra.target || null, reportKey: extra.reportKey || null,
@@ -330,14 +333,14 @@ const launcherGroup = (key, label, kind, module, items) => Object.freeze({
 });
 
 export const APPLICATION_LAUNCHER_GROUPS = Object.freeze([
-  launcherGroup('master-engineering','Master & Engineering','domain','master', [['products','货品资料','products'],['engineering-reference','工程基础资料','engineeringReference'],['boms','BOM','boms'],['product-routings','制品工序标准','routings'],['engineering-substitute','替代料与可配置 BOM','substitute'],['engineering-change','工程变更','engineeringChange']]),
-  launcherGroup('sales-customer','Sales & Customer','domain','sales', [['customers','客户资料','customers'],['quotations','销售报价','orders'],['orders','销售订单','orders'],['sales-deliveries','销售出货','salesDeliveries'],['returns','销售退货','returns',{key:'returns:sales',target:{documentType:'SALES_RETURN'}}],['credit-query','信用额度与例外','reports']]),
-  launcherGroup('planning','Planning','domain','planning', [['planner-workbench','计划员工作台','dashboard'],['forecasts','计划预测','forecasts'],['mrp-runs','MRP','mrpRuns'],['planned-orders','计划订单','mrpRuns'],['production-instructions','生产指令','planningDocuments'],['purchase-instructions','采购指令','planningDocuments']]),
-  launcherGroup('procurement-outsourcing','Procurement & Outsourcing','domain','purchasing', [['suppliers','供应商资料','suppliers'],['sourcing-pricing','寻源与定价','sourcingPricing'],['purchase-requisitions','请购单','planningDocuments'],['purchase-orders','采购订单','purchaseOrders'],['purchase-receipts','采购收货','purchaseReceipts'],['returns','采购退货','returns',{key:'returns:purchase',target:{documentType:'PURCHASE_RETURN'}}],['outsourcing','委外加工','outsourcing']]),
-  launcherGroup('manufacturing-quality','Manufacturing & Quality','domain','production', [['production-orders','制令单','productionOrders'],['material-issues','用料出库','salesDeliveries'],['production-quality','生产质量','iqc'],['production-receipts','生产入库','purchaseReceipts'],['production-scan','生产扫码','traceability'],['quality-configuration','质量配置','iqc']]),
-  launcherGroup('inventory-warehouse','Inventory & Warehouse','domain','inventory', [['warehouses','仓库资料','warehouses'],['inventory','库存作业与主数据','inventory'],['inventory-scraps','存货报废','inventoryScrap'],['inventory-month-end','存货月结','inventoryPeriod'],['inventory-transactions','库存异动','inventoryTransactions'],['traceability','批次 / 序列号','traceability']]),
-  launcherGroup('finance-operations','Finance Operations','domain','finance', [['accounts-receivable','应收','accountsReceivable'],['payment-collections','收款','paymentCollections'],['accounts-payable','应付','accountsPayable'],['payment-disbursements','付款','paymentDisbursements'],['finance-invoices','发票','accounting'],['finance-treasury','资金','bankAccounts']]),
-  launcherGroup('accounting-analytics','Accounting & Analytics','domain','analytics', [
+  launcherGroup('master-engineering','domain','master', [['products','货品资料','products'],['engineering-reference','工程基础资料','engineeringReference'],['boms','BOM','boms'],['product-routings','制品工序标准','routings'],['engineering-substitute','替代料与可配置 BOM','substitute'],['engineering-change','工程变更','engineeringChange']]),
+  launcherGroup('sales-customer','domain','sales', [['customers','客户资料','customers'],['quotations','销售报价','orders'],['orders','销售订单','orders'],['sales-deliveries','销售出货','salesDeliveries'],['returns','销售退货','returns',{key:'returns:sales',target:{documentType:'SALES_RETURN'}}],['credit-query','信用额度与例外','reports']]),
+  launcherGroup('planning','domain','planning', [['planner-workbench','计划员工作台','dashboard'],['forecasts','计划预测','forecasts'],['mrp-runs','MRP','mrpRuns'],['planned-orders','计划订单','mrpRuns'],['production-instructions','生产指令','planningDocuments'],['purchase-instructions','采购指令','planningDocuments']]),
+  launcherGroup('procurement-outsourcing','domain','purchasing', [['suppliers','供应商资料','suppliers'],['sourcing-pricing','寻源与定价','sourcingPricing'],['purchase-requisitions','请购单','planningDocuments'],['purchase-orders','采购订单','purchaseOrders'],['purchase-receipts','采购收货','purchaseReceipts'],['returns','采购退货','returns',{key:'returns:purchase',target:{documentType:'PURCHASE_RETURN'}}],['outsourcing','委外加工','outsourcing']]),
+  launcherGroup('manufacturing-quality','domain','production', [['production-orders','制令单','productionOrders'],['material-issues','用料出库','salesDeliveries'],['production-quality','生产质量','iqc'],['production-receipts','生产入库','purchaseReceipts'],['production-scan','生产扫码','traceability'],['quality-configuration','质量配置','iqc'],['quality-control-points','质量规则','iqc']]),
+  launcherGroup('inventory-warehouse','domain','inventory', [['warehouses','仓库资料','warehouses'],['inventory','库存作业与主数据','inventory'],['inventory-scraps','存货报废','inventoryScrap'],['inventory-month-end','存货月结','inventoryPeriod'],['inventory-transactions','库存异动','inventoryTransactions'],['traceability','批次 / 序列号','traceability']]),
+  launcherGroup('finance-operations','domain','finance', [['accounts-receivable','应收','accountsReceivable'],['payment-collections','收款','paymentCollections'],['accounts-payable','应付','accountsPayable'],['payment-disbursements','付款','paymentDisbursements'],['finance-invoices','发票','accounting'],['finance-treasury','资金','bankAccounts']]),
+  launcherGroup('accounting-analytics','domain','analytics', [
     ['business-overview','业务总览','overview'],
     ['accounting','会计凭证','accounting'],
     ['fixed-assets','固定资产','fixedAssets'],
@@ -351,6 +354,20 @@ export const APPLICATION_LAUNCHER_GROUPS = Object.freeze([
     ['decision-reports','采购统计','reports',{reportKey:'purchase-summary',formalLabel:'采购统计分析表'}],
     ['decision-reports','采购未交货','reports',{reportKey:'purchase-outstanding',formalLabel:'采购未交货反应表'}],
     ['decision-reports','库存异动','reports',{reportKey:'inventory-movements',formalLabel:'存货异动明细表'}],
+    ['product-costs','标准成本','costAccounting'],
+    ['cost-rates','成本费率','costAccounting'],
+  ]),
+  // Platform（系统设置）。业务审批 / 通知中心 / 我的流程任务由底部页签承载，
+  // 此处只登记其余 8 条配置类入口（Requirement §36.19 PL-NAVI-01）。
+  launcherGroup('platform','domain','platform', [
+    ['users','用户与权限','users'],
+    ['organizations','组织与作用域','organizations'],
+    ['numbering','编号规则','numbering'],
+    ['sod-rules','职责分离规则','sodRules'],
+    ['lifecycle','生命周期与归档','cleanup'],
+    ['workflow-designer','流程设计','workflowDesigner'],
+    ['workflow-bindings','流程绑定','workflowBindings'],
+    ['workflow-monitor','流程监控','workflowMonitor'],
   ]),
 ]);
 

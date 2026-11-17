@@ -223,9 +223,10 @@ describe('V1.6 P2 — sales order LIST contracts', () => {
       assert.match(mobileShell, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
     assert.doesNotMatch(mobileShell, /key:\s*'cloud'/);
-    // Eight canonical business launcher groups.
+    // Nine canonical domain launcher groups（2026-11-17 起标题为中文单源派生，
+    // 新增 Platform「系统设置」；Requirement §36.19 PL-NAVI-01 / PL-NAVI-03）。
     const applicationMetadata = readSrc('navigation/applicationRegistry.js');
-    for (const group of ['Master & Engineering','Sales & Customer','Planning','Procurement & Outsourcing','Manufacturing & Quality','Inventory & Warehouse','Finance Operations','Accounting & Analytics']) {
+    for (const group of ['主数据与工程','销售与客户','计划','采购与委外','制造与质量','库存与仓储','财务运营','会计与分析','系统设置']) {
       assert.match(applicationMetadata, new RegExp(group));
     }
     // Workspace sections.

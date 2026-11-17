@@ -150,7 +150,7 @@ function conversionLine(db, line, quantityMicros, businessDate) {
 
 export async function convertSalesQuotation(db, req, res, actor, quotationId) {
   requireSalesPermission(actor, 'ORDERS_CREATE'); const body = await readJson(req);
-  const key = String(req.headers['idempotency-key'] || '').trim(); if (!key) throw new HttpError(422, 'Idempotency-Key 必填');
+  const key = String(req.headers['idempotency-key'] || '').trim(); if (!key) throw new HttpError(422, '「Idempotency-Key」 必填');
   const fingerprint = requestFingerprint(body); const replay = idempotencyReplay(db, 'QUOTATION_CONVERT', quotationId, key, fingerprint);
   if (replay) return send(res, 200, { ...replay, replayed: true });
   let result;

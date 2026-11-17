@@ -20,7 +20,7 @@ export function getOrCreateInitialization(db) {
 
 export function openInitialization(db, actor) {
   const init = getOrCreateInitialization(db);
-  if (init.status !== 'NOT_STARTED') throw new HttpError(409, `Initialization 状态为 ${init.status}`);
+  if (init.status !== 'NOT_STARTED') throw new HttpError(409, `初始化状态为 ${init.status}`);
   const now = nowIso();
   transaction(db, () => {
     db.prepare(`UPDATE inventory_initialization SET status='OPEN', opened_by=?, opened_at=?, enabled_at=? WHERE id=?`).run(actor.id, now, now, init.id);
@@ -32,7 +32,7 @@ export function openInitialization(db, actor) {
 
 export function closeInitialization(db, actor) {
   const init = getOrCreateInitialization(db);
-  if (init.status !== 'OPEN') throw new HttpError(409, `Initialization 状态为 ${init.status}`);
+  if (init.status !== 'OPEN') throw new HttpError(409, `初始化状态为 ${init.status}`);
   const now = nowIso();
   transaction(db, () => {
     db.prepare(`UPDATE inventory_initialization SET status='CLOSED', closed_by=?, closed_at=? WHERE id=?`).run(actor.id, now, init.id);
@@ -43,7 +43,7 @@ export function closeInitialization(db, actor) {
 
 export function reopenInitialization(db, actor, reason) {
   const init = getOrCreateInitialization(db);
-  if (init.status !== 'CLOSED') throw new HttpError(409, `Initialization 状态为 ${init.status}`);
+  if (init.status !== 'CLOSED') throw new HttpError(409, `初始化状态为 ${init.status}`);
   if (!reason || String(reason).trim() === '') throw new HttpError(400, '重开原因必填');
   const now = nowIso();
   transaction(db, () => {
@@ -58,7 +58,7 @@ export async function createOpeningDocument(db, req, res, actor) {
   const body = await readJson(req);
   assertAllowedFields(body, ['businessDate','items','notes']);
   const init = getOrCreateInitialization(db);
-  if (init.status !== 'OPEN') throw new HttpError(409, `Initialization 状态 ${init.status} 不可录入期初`);
+  if (init.status !== 'OPEN') throw new HttpError(409, `初始化状态 ${init.status}，不可录入期初`);
   if (!Array.isArray(body.items) || body.items.length === 0) throw new HttpError(400, '请至少添加一行期初');
   const docId = genId();
   const docNo = `OPEN-${Date.now().toString().slice(-10)}-${Math.floor(Math.random()*90+10)}`;
@@ -99,7 +99,7 @@ export async function createOpeningDocument(db, req, res, actor) {
 export function confirmOpeningDocument(db, res, actor, docId) {
   allow(actor, 'INVENTORY_OPENING_MANAGE');
   const init = getOrCreateInitialization(db);
-  if (init.status !== 'OPEN') throw new HttpError(409, `Initialization 状态 ${init.status} 不可确认期初`);
+  if (init.status !== 'OPEN') throw new HttpError(409, `初始化状态 ${init.status}，不可确认期初`);
   const doc = db.prepare(`SELECT * FROM opening_inventory_documents WHERE id=?`).get(docId);
   if (!doc) throw new HttpError(404, '期初单据不存在');
   if (doc.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以确认');

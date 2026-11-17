@@ -72,13 +72,13 @@ export default function SourcingPricingPage({ user, notify }) {
     <BusinessPageShell>
       <BusinessPageHeader
         title="寻源与定价"
-        context="Source List · Quota · Sourcing · Price List · Pricing UOM · Pricing Discount · Price Adjustment"
+        context="货源清单 · 配额 · 寻源 · 价格清单 · 计价单位 · 定价折扣 · 价格调整"
         secondaryActions={
           <select value={tab} onChange={(e) => setTab(e.target.value)}>
-            <option value="source">Source List</option>
-            <option value="quota">Quota</option>
-            <option value="price">Price List</option>
-            <option value="discount">Pricing Discount</option>
+            <option value="source">货源清单</option>
+            <option value="quota">配额</option>
+            <option value="price">价格清单</option>
+            <option value="discount">定价折扣</option>
             <option value="preview">取价预览</option>
           </select>
         }
@@ -220,7 +220,7 @@ function PricingEditor({ value, notify, onClose, onSaved }) {
           </>
         )}
         {value.kind === 'price' && (
-          <label>计价单位<input required value={form.pricingUomCode} placeholder="例如 EA / BOX" onChange={(e) => setForm({ ...form, pricingUomCode: e.target.value })}/></label>
+          <label>计价单位<input required value={form.pricingUomCode} placeholder="例如「EA」/「BOX」" onChange={(e) => setForm({ ...form, pricingUomCode: e.target.value })}/></label>
         )}
         {value.kind === 'discount' && (
           <>
@@ -364,7 +364,7 @@ function SourceOverridePanel({ canManage, notify, onChanged }) {
       setForm({ ...form, reason: '' });
       await load();
       if (onChanged) onChanged();
-      notify('货源 override 已登记');
+      notify('货源覆盖已登记');
     } catch (err) {
       setError(err.message || '登记失败');
     } finally {
@@ -374,7 +374,7 @@ function SourceOverridePanel({ canManage, notify, onChanged }) {
 
   return (
     <BusinessContentSection
-      title="货源 override"
+      title="货源覆盖"
       description="在指定日期区间内放行一个供应商 / 货品 / 货源类型；区间之外不放行，也不改写货源主数据"
     >
       {error ? <InlineAlert tone="danger" title="操作未完成">{error}</InlineAlert> : null}
@@ -384,7 +384,7 @@ function SourceOverridePanel({ canManage, notify, onChanged }) {
             <label>
               <span>供应商</span>
               <input
-                aria-label="override 供应商"
+                aria-label="覆盖供应商"
                 value={form.supplierId}
                 onChange={(event) => setForm({ ...form, supplierId: event.target.value })}
               />
@@ -392,7 +392,7 @@ function SourceOverridePanel({ canManage, notify, onChanged }) {
             <label>
               <span>货品</span>
               <input
-                aria-label="override 货品"
+                aria-label="覆盖货品"
                 value={form.productId}
                 onChange={(event) => setForm({ ...form, productId: event.target.value })}
               />
@@ -400,7 +400,7 @@ function SourceOverridePanel({ canManage, notify, onChanged }) {
             <label>
               <span>货源类型</span>
               <select
-                aria-label="override 货源类型"
+                aria-label="覆盖货源类型"
                 value={form.sourceType}
                 onChange={(event) => setForm({ ...form, sourceType: event.target.value })}
               >
@@ -411,7 +411,7 @@ function SourceOverridePanel({ canManage, notify, onChanged }) {
             <label>
               <span>生效开始</span>
               <input
-                aria-label="override 生效开始"
+                aria-label="覆盖生效开始"
                 type="date"
                 value={form.effectiveFrom}
                 onChange={(event) => setForm({ ...form, effectiveFrom: event.target.value })}
@@ -420,7 +420,7 @@ function SourceOverridePanel({ canManage, notify, onChanged }) {
             <label>
               <span>生效结束</span>
               <input
-                aria-label="override 生效结束"
+                aria-label="覆盖生效结束"
                 type="date"
                 value={form.effectiveTo}
                 onChange={(event) => setForm({ ...form, effectiveTo: event.target.value })}
@@ -429,13 +429,13 @@ function SourceOverridePanel({ canManage, notify, onChanged }) {
             <label>
               <span>原因</span>
               <input
-                aria-label="override 原因"
+                aria-label="覆盖原因"
                 value={form.reason}
                 onChange={(event) => setForm({ ...form, reason: event.target.value })}
               />
             </label>
           </div>
-          <BusinessAction hierarchy="primary" type="submit" disabled={busy}>登记 override</BusinessAction>
+          <BusinessAction hierarchy="primary" type="submit" disabled={busy}>登记覆盖</BusinessAction>
         </form>
       ) : null}
       <CompactRecordList data-testid="sourcing-override-list">
@@ -451,7 +451,7 @@ function SourceOverridePanel({ canManage, notify, onChanged }) {
           />
         ))}
       </CompactRecordList>
-      {!overrides.length ? <Empty title="暂无 override" text="没有有效货源时，可按有界区间登记一次有原因的放行。" /> : null}
+      {!overrides.length ? <Empty title="暂无覆盖" text="没有有效货源时，可按有界区间登记一次有原因的放行。" /> : null}
     </BusinessContentSection>
   );
 }

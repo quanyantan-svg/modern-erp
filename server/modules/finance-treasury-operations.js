@@ -82,7 +82,7 @@ export function listNotes(db, res, actor, url) {
 export async function createNote(db, req, res, actor) {
   allow(actor, 'FINANCE_NOTES_MANAGE'); const body = await readJson(req);
   const direction = requiredText(body.direction, 'direction', 16).toUpperCase();
-  if (!['RECEIVABLE', 'PAYABLE'].includes(direction)) throw new HttpError(400, 'direction 必须为 RECEIVABLE/PAYABLE');
+  if (!['RECEIVABLE', 'PAYABLE'].includes(direction)) throw new HttpError(400, '「direction」 必须为 RECEIVABLE/PAYABLE');
   const id = randomUUID(); const now = stamp(); const noteNo = body.noteNo || number(direction === 'RECEIVABLE' ? 'NR' : 'NP');
   db.prepare(`INSERT INTO finance_notes(id,note_no,direction,face_amount_cents,issue_date,due_date,drawer_name,payee_name,bank_name,holder_id,status,creator_id,created_at,updated_at)
     VALUES(?,?,?,?,?,?,?,?,?,?,'REGISTERED',?,?,?)`).run(id, noteNo, direction, positiveCents(body.faceAmountCents, 'faceAmountCents'), requiredText(body.issueDate, 'issueDate', 16), requiredText(body.dueDate, 'dueDate', 16), optionalText(body.drawerName ?? '', 128), optionalText(body.payeeName ?? '', 128), optionalText(body.bankName ?? '', 128), body.holderId || null, actor.id, now, now);
@@ -94,7 +94,7 @@ export async function actOnNote(db, req, res, actor, noteId, action) {
   allow(actor, 'FINANCE_NOTES_MANAGE'); const body = await readJson(req);
   const transitions = { hold: ['REGISTERED', 'HELD'], endorse: ['HELD', 'ENDORSED'], discount: ['HELD', 'DISCOUNTED'], cancel: ['REGISTERED', 'CANCELLED'] };
   if (action !== 'settle') {
-    const transition = transitions[action]; if (!transition) throw new HttpError(400, 'note action 非法');
+    const transition = transitions[action]; if (!transition) throw new HttpError(400, '「note」 「action」 非法');
     const row = db.prepare('SELECT * FROM finance_notes WHERE id=?').get(noteId);
     if (!row) throw new HttpError(404, '票据不存在');
     if (row.status !== transition[0]) throw new HttpError(409, '票据状态不允许该操作');
@@ -124,7 +124,7 @@ export function listPaymentRequests(db, res, actor) {
 
 export async function createPaymentRequest(db, req, res, actor) {
   allow(actor, 'FINANCE_PAYMENT_REQUEST_MANAGE'); const body = await readJson(req);
-  const side = requiredText(body.side || 'AP', 'side', 4).toUpperCase(); if (!['AR', 'AP'].includes(side)) throw new HttpError(400, 'side 必须为 AR/AP');
+  const side = requiredText(body.side || 'AP', 'side', 4).toUpperCase(); if (!['AR', 'AP'].includes(side)) throw new HttpError(400, '「side」 必须为 AR/AP');
   const id = randomUUID(); const requestNo = body.requestNo || number('PAYREQ'); const now = stamp();
   db.prepare(`INSERT INTO finance_payment_requests(id,request_no,side,party_id,amount_cents,business_date,reason,status,creator_id,created_at)
     VALUES(?,?,?,?,?,?,?,'DRAFT',?,?)`).run(id, requestNo, side, requiredText(body.partyId, 'partyId', 64), positiveCents(body.amountCents), requiredText(body.businessDate, 'businessDate', 16), requiredText(body.reason, 'reason', 256), actor.id, now);
@@ -154,7 +154,7 @@ export async function actOnPaymentRequest(db, req, res, actor, requestId, action
       db.prepare("UPDATE finance_payment_requests SET status='EXECUTED',executor_id=?,executed_at=?,settlement_account_id=?,payment_method=?,treasury_movement_id=? WHERE id=?").run(actor.id, now, body.settlementAccountId, body.paymentMethod || 'BANK', movementId, requestId);
       audit(db, actor.id, 'EXECUTE', 'FINANCE_PAYMENT_REQUEST', requestId, movementId);
     });
-  } else throw new HttpError(400, 'payment request action 非法');
+  } else throw new HttpError(400, '「payment」 「request」 「action」 非法');
   audit(db, actor.id, action.toUpperCase(), 'FINANCE_PAYMENT_REQUEST', requestId, '');
   return send(res, 200, { id: requestId, status: action === 'submit' ? 'SUBMITTED' : action === 'approve' ? 'APPROVED' : action === 'reject' ? 'REJECTED' : action === 'cancel' ? 'CANCELLED' : 'EXECUTED' });
 }
@@ -200,7 +200,7 @@ export async function importBankStatement(db, req, res, actor) {
   if (!lines.length) throw new HttpError(400, '银行流水不能为空'); const fileName = requiredText(body.fileName, 'fileName', 256);
   const payloadFingerprint = fingerprint({ bankAccountId: body.bankAccountId, statementNo: body.statementNo, statementDate: body.statementDate, lines });
   const supplied = body.fingerprint ? requiredText(body.fingerprint, 'fingerprint', 128) : payloadFingerprint;
-  if (supplied !== payloadFingerprint) throw new HttpError(409, 'fingerprint 与导入内容不一致');
+  if (supplied !== payloadFingerprint) throw new HttpError(409, '「fingerprint」 与导入内容不一致');
   const existing = db.prepare('SELECT * FROM finance_bank_statement_imports WHERE file_name=? AND fingerprint=?').get(fileName, supplied);
   if (existing) return send(res, 200, { importId: existing.id, statementId: existing.statement_id, status: existing.status, replayed: true });
   const account = db.prepare('SELECT id FROM bank_accounts WHERE id=? AND active=1').get(body.bankAccountId); if (!account) throw new HttpError(409, '银行账户不存在或未启用');
@@ -210,7 +210,7 @@ export async function importBankStatement(db, req, res, actor) {
     db.prepare("INSERT INTO finance_bank_statement_imports(id,file_name,fingerprint,status,statement_id,created_at) VALUES(?,?,?,'PENDING',?,?)").run(importId, fileName, supplied, statementId, now);
     let debit = 0; let credit = 0;
     const normalized = lines.map((line, index) => {
-      const direction = requiredText(line.direction, `lines[${index}].direction`, 4).toUpperCase(); if (!['IN', 'OUT'].includes(direction)) throw new HttpError(400, '银行流水 direction 必须为 IN/OUT');
+      const direction = requiredText(line.direction, `lines[${index}].direction`, 4).toUpperCase(); if (!['IN', 'OUT'].includes(direction)) throw new HttpError(400, '银行流水 「direction」 必须为 IN/OUT');
       const amount = positiveCents(line.amountCents, `lines[${index}].amountCents`); if (direction === 'IN') credit += amount; else debit += amount;
       return { ...line, direction, amount, lineNo: index + 1, lineFingerprint: fingerprint({ importFingerprint: supplied, index, line }) };
     });

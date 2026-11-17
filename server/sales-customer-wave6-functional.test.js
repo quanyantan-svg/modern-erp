@@ -298,7 +298,7 @@ describe('Sales & Customer Wave 6 functional closure', () => {
     assert.equal(response.status, 409);
     response = await request(`/api/sales-returns/${created.id}/reverse`, 'warehouse', 'POST', { businessDate: DAY, reason: '不得绕过已履行换货' }, { 'idempotency-key': 'reverse-blocked' });
     assert.equal(response.status, 409);
-    assert.match((await response.json()).error, /Replacement Fulfillment/);
+    assert.match((await response.json()).error, /补货履行/);
   });
 
   test('RETURNS_VIEW without RETURNS_MANAGE cannot confirm, reverse, create or fulfill', async () => {

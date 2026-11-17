@@ -20,6 +20,8 @@ let mobileGroups;
 let deferredApplications;
 let buildMobileApplicationGroups;
 let canViewDecisionReport;
+let activeRoutes;
+let domainByKey;
 let MobileLauncher;
 let MobileShell;
 let db;
@@ -38,6 +40,8 @@ before(async () => {
     buildMobileApplicationGroups,
   } = await vite.ssrLoadModule('/src/navigation/applicationMetadata.js'));
   ({ canViewDecisionReport } = await vite.ssrLoadModule('/src/pages/decision-reports.jsx'));
+  ({ ACTIVE_APPLICATION_ROUTES: activeRoutes } = await vite.ssrLoadModule('/src/navigation/applicationRegistry.js'));
+  ({ DOMAIN_BY_KEY: domainByKey } = await vite.ssrLoadModule('/src/navigation/domainMetadata.js'));
   MobileLauncher = (await vite.ssrLoadModule('/src/components/MobileLauncher.jsx')).default;
   MobileShell = (await vite.ssrLoadModule('/src/components/MobileShell.jsx')).default;
   db = createDatabase(':memory:');
@@ -113,27 +117,54 @@ const ROLE_BOUNDARY = {
 let EXPECTED_ROLE_PAGES = {};
 
 describe('M2 application metadata', () => {
-  test('defines the eight canonical business domains', () => {
+  // Requirement §36.19 PL-NAVI-01/03/04（2026-11-17）：九个域各有一个启动器分组，
+  // 分组标题由 domainMetadata 的中文 navigationLabel 单源派生。
+  test('defines the nine canonical domain groups with Chinese labels', () => {
     const coreGroups = mobileGroups.filter((g) => g.kind === 'domain');
     assert.deepEqual(
       coreGroups.map(({ key, label }) => [key, label]),
       [
-        ['master-engineering', 'Master & Engineering'],
-        ['sales-customer', 'Sales & Customer'],
-        ['planning', 'Planning'],
-        ['procurement-outsourcing', 'Procurement & Outsourcing'],
-        ['manufacturing-quality', 'Manufacturing & Quality'],
-        ['inventory-warehouse', 'Inventory & Warehouse'],
-        ['finance-operations', 'Finance Operations'],
-        ['accounting-analytics', 'Accounting & Analytics'],
+        ['master-engineering', '主数据与工程'],
+        ['sales-customer', '销售与客户'],
+        ['planning', '计划'],
+        ['procurement-outsourcing', '采购与委外'],
+        ['manufacturing-quality', '制造与质量'],
+        ['inventory-warehouse', '库存与仓储'],
+        ['finance-operations', '财务运营'],
+        ['accounting-analytics', '会计与分析'],
+        ['platform', '系统设置'],
       ]
     );
   });
 
-  test('does not expose Platform or legacy utility groups as business domains', () => {
+  test('launcher group labels are derived from the canonical domain taxonomy', () => {
+    for (const group of mobileGroups) {
+      assert.equal(group.label, domainByKey[group.key].navigationLabel,
+        `${group.key} 的分组标题必须等于 domainMetadata.navigationLabel`);
+      assert.doesNotMatch(group.label, /[A-Za-z]/,
+        `${group.key} 的分组标题不得包含英文字母`);
+    }
+  });
+
+  // 本断言在 2026-11-17 被 Requirement §36.19 PL-NAVI-01 **显式修订**（不是删除）：
+  // 原断言锁定了 commit c77616b（2026-10-06）删除 utility-system 分组后
+  // 「Platform 不得进入启动器」这一历史决定，该决定正是 admin 无法在界面上
+  // 到达「用户与权限 → 用户管理 → 新增用户」的直接原因。
+  // 修订后：仍不存在 'utility' kind 分组，但 Platform 必须是一个 'domain' kind 分组，
+  // 且其条目集合必须等于 Platform 域 active route 集合扣除底部页签承载的 3 条。
+  test('exposes Platform as a domain group and keeps utility-kind groups absent', () => {
     const utilities = mobileGroups.filter((g) => g.kind === 'utility');
     assert.deepEqual(utilities, []);
-    assert.equal(mobileGroups.some((group) => group.key === 'platform'), false);
+    const platform = mobileGroups.find((group) => group.key === 'platform');
+    assert.ok(platform, 'Platform 必须有启动器分组');
+    assert.equal(platform.kind, 'domain');
+    const tabCarried = new Set(['approvals', 'notifications', 'workflow-tasks']);
+    const platformRoutes = activeRoutes
+      .filter((route) => route.domain === 'platform' && route.enabled)
+      .map((route) => route.key)
+      .filter((key) => !tabCarried.has(key))
+      .sort();
+    assert.deepEqual(platform.items.map((item) => item.page).sort(), platformRoutes);
   });
 
   test('contains no permission definitions or role/username branches', () => {

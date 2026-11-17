@@ -791,3 +791,152 @@ Manufacturing & Quality（§29.11）、Sales & Customer（§34.16）、Inventory
 **Requirement 状态：`APPROVED`（2026-11-15）。Design §32.18：`APPROVED`（同日）。
 Implementation：已授权（2026-11-15），范围仅限本节验收门禁所列的仓库内代码、测试与脚本；
 真实 MySQL 连接、数据库操作、Acceptance / Freeze 签发、发布与部署**未授权**。**
+
+### 36.19 导航分组完整性与界面语言一致性通用合同（`APPROVED`，2026-11-17）
+
+> **授权来源**：业务所有者于 2026-11-17 的指令「admin 缺少了系统设置 → 用户与权限 → 用户管理 → 新增用户，
+> 无法新增用户；前后端还存在中英文混用的情况，请做一次修整」。
+> 该指令一次性授权 AUDIT → REQUIREMENT → DESIGN → IMPLEMENTATION 的连续执行（AGENTS.md §4.0）；
+> **未**授权 push / tag / merge / release / deploy、数据库操作、真实 MySQL campaign
+> 与任何 Acceptance / Freeze / Release Readiness 签发。
+> 业务所有者同日就四件事作出决定：①「系统设置」分组取 **8 条配置类入口**；
+> ②中英文混用按**全量**修整；③阶段授权为 Requirement → Design → Implementation 连续执行；
+> ④腾讯云部署**单独授权**，本轮只交付部署执行清单。
+
+#### 36.19.1 身份、Owner 与生效边界
+
+| 项 | 内容 |
+|---|---|
+| 用途 | 把「route 存在但没有任何用户界面入口」与「最终用户界面出现英文」这两类**跨域缺陷形态**，从一次性点修补升级为**平台级通用合同** + 机器可验证守卫 |
+| Owner | Platform（`src/navigation/applicationRegistry.js` 的 route / 导航分组合同与最终用户界面文案语言的 canonical owner）。各业务域仍是各自页面与业务语义的 owner |
+| 状态 | `APPROVED`（2026-11-17）；Design §32.19 同日 `APPROVED`；Implementation 已授权，范围仅限 §36.19.5 所列仓库内代码、测试与脚本 |
+| 权威来源 | `document.md` §17、§22.22；本文件 §36.16.5（`PL-RI-04` canonical 浏览器门禁）、§36.18（`PL-EXPOSURE-01..07`）；`docs/status/PROJECT_STATUS.md` §68、§69 |
+| Supersession | 本节**不改写** §36.16、§36.17、§36.18 的已批准结论；它**显式修订** V1.6 P1B 遗留的「启动器只承载八个业务域、Platform / utility 分组不得出现」这一历史产品决定 —— 见 §36.19.3 第 3 条 |
+
+#### 36.19.2 事实基线（2026-11-17 在 HEAD `a12d127` 上实测，非引用既有结论）
+
+**基线一：route 可达性缺口。** 93 条 canonical route 中，**51 条**在启动器分组内有条目；
+**10 条**在「启动器条目 / 底部页签 / 父路由声明 / 页面内导航链接」四条可达路径上**全部落空**，
+即**只能靠手敲 URL 打开**：
+
+| 域 | 四路径全落空的 route |
+|---|---|
+| Platform | `workflow-designer`、`workflow-bindings`、`workflow-monitor`、`organizations`、`numbering`、`sod-rules`、`lifecycle`（7 条） |
+| Manufacturing & Quality | `quality-control-points`（1 条） |
+| Accounting & Analytics | `product-costs`、`cost-rates`（2 条） |
+
+另有 1 条 `users`（用户与权限）在页面内出现过，但只出现在工作台快捷入口候选表里 —— 它排在
+第 **13** 位而该表只保留前 **6** 位，因此**实际同样不可达**。
+**合计 11 条 route 在最终用户界面上没有任何可达入口**。
+
+作为对照，`manufacturing-analytics`（生产执行分析）**不算**缺口：它由
+`src/pages/business-overview.jsx` 的业务总览流程节点直接链接（`step(..., 'manufacturing-analytics')`）。
+
+**基线二：admin 的「新增用户」路径实测断裂。** `admin` 具备 `USERS_MANAGE` / `ROLES_MANAGE`
+（真实种子库共 266 项权限），`POST /api/users` 返回 **201**，`#users` 页面的「新增用户」按钮存在且可见；
+但启动器中 `v16-launcher-tile-users` **不存在**、页面文本中「系统设置」**不存在**。
+**结论**：断裂点不在权限、不在页面、不在后端，而在**导航分组缺失**。
+
+**基线三：回归来源可精确定位。** 启动器分组的历史形态是 6 个业务组 + 5 个 utility 折叠区，
+其中 `utility-system`（**系统设置**）承载 `users`（用户与权限）。
+commit `c77616b`（2026-10-06，「refactor: 收敛ERP八域与平台架构」）删除了全部 utility 分组
+（含 `utility-system`）、把 8 个分组标题由**中文**（`基础资料` / `销售管理` / `生产管理` / `采购管理` /
+`库存管理` / `决策报表` / `业务流程` / `财务工具` / `高级设置` / `系统设置`）改为**英文域名**
+（`Master & Engineering` / `Sales & Customer` / …），并**在同一提交内**新增测试
+「does not expose Platform or legacy utility groups as business domains」把「Platform 不进启动器」
+锁成不变量。随后 2026-11-13 的 Platform 域闭合新增的 9 条 Platform route **从未**获得任何启动器条目。
+**两个用户报告的缺陷形态同源于此一次重构。**
+
+**基线四：界面语言缺口。** 穷尽扫描 `src/`（81 个文件）与 `server/`：
+
+| 位置 | 用户可见英文条数 | 代表形态 |
+|---|---|---|
+| 前端 `src/` | **131** | 启动器 8 个英文分组标题；`PLANNING CONTROL` / `WORKFLOW DESIGNER` / `INVOICE CONTROL` 等全大写眉标；`canonical` / `legacy` / `fail closed` / `override` / `Handoff` 等嵌在中文句子里的英文单词；`LINE` / `HEADER` / `BLOCK` / `WARNING` 等枚举选项 |
+| 后端 `server/` | **172** | `HttpError(status, 'English message')` 与 `send(res, 4xx, { error: 'English' })`；经 `server/lib/http.js` 的 `serializeError` → 响应体 `message` → `src/api.js:60` → `src/lib/copy.js:37` 的 `return serverMessage` **原样透出**，中文兜底不覆盖 400 / 409 / 410 / 413 / 415 / 422 |
+
+`src/navigation/domainMetadata.js` 早已保存中文 `navigationLabel`（`主数据与工程` / `销售与客户` / … /
+`系统设置`），但启动器使用的是 registry 内另一份**硬编码英文**标签 —— 同一概念存在两份事实来源。
+
+#### 36.19.3 合同项 `PL-NAVI-01..06`
+
+- **`PL-NAVI-01`（域分组完整性）**：`APPLICATION_LAUNCHER_GROUPS` 必须覆盖
+  `DOMAIN_DEFINITIONS`（8 业务域 + Platform）的**全部 9 个域**，每域**有且只有一个**分组。
+  缺任一域即判定失败 —— 不得以「该域入口较少」为由豁免。
+- **`PL-NAVI-02`（route 可达性）**：每条 **active** route 必须至少具备一条用户界面可达路径：
+  ① 启动器分组条目；② 底部页签（`messages` / `approvals` / `workspace` / `workflow-tasks`）；
+  ③ 父路由声明（`parentRoute`）；④ 页面内导航链接。
+  路径 ④ 必须由**确定性**判据认定（`src/pages/**` 与 `src/components/**` 中的导航构造：
+  `navigateToPage(` / `navigate(` / `hrefFor(` / `canNavigate(` / `page:` / `page=` /
+  `routeKey:` / 业务总览 `step()` 的第三参数），**不得**用「页面上出现过这个字符串」这类宽判据。
+  四条路径全部落空的 route **必须为空**；确属「仅直达 URL」的 route 必须进入守卫中的
+  **显式登记清单**并附理由与真实链接来源，登记缺项即判定失败（**沉默的缺失一律失败**）。
+- **`PL-NAVI-03`（分组名单源）**：启动器分组的 `label` 必须**等于**
+  `DOMAIN_BY_KEY[group.key].navigationLabel`。registry **不得**再硬编码第二份域名称；
+  英文 `label` 仅保留在 `domainMetadata.js` 作为领域标识符，不再进入用户界面。
+- **`PL-NAVI-04`（分组标题语言）**：启动器分组标题必须是中文，**不得**出现 ASCII 字母。
+- **`PL-NAVI-05`（入口与权限一致）**：新增入口**不得**放宽任何 route 的 exposure 权限集合，
+  **不得**新增权限码、**不得**修改角色种子。入口的可见性继续由既有 route exposure 判定，
+  后端继续 fail closed；**前端显示不等于授权**。
+- **`PL-NAVI-06`（守卫必须可复跑）**：导航完整性判定必须来自**可复跑的确定性枚举**
+  （从 registry 计算，而非单次浏览器门禁输出），并输出
+  「不可达 route 清单」「缺分组域清单」「非中文分组标题清单」三张零结果清单。
+
+#### 36.19.4 合同项 `PL-LANG-01..07`
+
+- **`PL-LANG-01`（最终用户可见文案必须中文）**：`src/` 中所有最终用户可见文本
+  （按钮、标题、页签、选项、占位符、空态、帮助、toast、页眉眉标、报表口径说明）必须为中文。
+- **`PL-LANG-02`（后端用户可见消息必须中文）**：任何会进入 HTTP 响应 `message` / `error` /
+  `details.resolution` 的业务消息必须为中文。§36.19.2 基线四列出的 **172** 条必须在本次修整中
+  全部改写。**不得**改动 `details.code` / `details.reason` 等机器可读码、字段名、表名、
+  SQL 标识符、audit 的 action / entity type —— 前端 `src/lib/copy.js` 与
+  `scripts/qa/verify-error-code-coupling.mjs` 依赖这些码做分类与耦合校验。
+- **`PL-LANG-03`（前端错误消息兜底）**：前端在展示服务端 `message` 前必须做中文兜底；
+  **非中文**的 `serverMessage` **不得**原样透出。该兜底不得吞掉已有中文业务消息，
+  也不得改变 HTTP 状态码到中文文案的既有映射（`src/lib/copy.js` 既有分支保持不变）。
+- **`PL-LANG-04`（领域专名白名单）**：以下类别**允许保留**，且**必须**保持拼写一致：
+  制造与财务缩写（`MRP` / `BOM` / `WIP` / `IQC` / `OQC` / `GRNI` / `LOT` / `SERIAL` /
+  `UOM` / `ABC` / `GL` / `AR` / `AP` / `COGS` / `SKU` / `OEM` / `FIFO` / `LIFO` / `JSON` /
+  `CSV` / `PDF` 等）；内部批次与条目编号（`Wave N` / `SC01` / `M&Q` / `PL` / `IW` 等）；
+  权限码与枚举**取值**；产品名 `Modern ERP`。
+  白名单之外的英文一律判定失败。
+- **`PL-LANG-05`（枚举值展示）**：下拉选项等枚举**取值**保持英文（提交值不变），
+  但**展示文本**必须为中文标签。
+- **`PL-LANG-06`（守卫）**：提供**机器可验证入口**扫描 `src/` 与 `server/` 的用户可见字符串，
+  命中白名单之外的英文即失败并输出 `file:line` 与原文，供逐条修整与复核。
+- **`PL-LANG-07`（守卫不得自我豁免）**：白名单必须**显式列举**、逐条可读，
+  不得使用「忽略含字母的短串」之类的模糊规则；**不得**把白名单扩大为新的通配符。
+
+#### 36.19.5 验收、兼容与禁止事项
+
+**验收门禁**：
+
+1. **导航可达性守卫**：不可达 route 清单 = 0；缺分组域清单 = 0；非中文分组标题清单 = 0。
+2. **界面语言守卫**：`src/` 与 `server/` 的用户可见英文清单 = 0（白名单外）。
+3. **既有门禁不回归**：`server/mobile-application-launcher.test.js` 的既有断言
+   （角色 route 矩阵、禁用 route 不出现、内部流程流不作为主 tile）**保持通过**；
+   被本节修订的「Platform 不进启动器」断言必须**显式改写并注明依据**，不得删除。
+4. **canonical 浏览器门禁**：`node scripts/acceptance/release-browser-readiness.mjs` 返回退出码 0，
+   `PRODUCT_FAILURE` / `FIXTURE_FAILURE` / `CONTRACT_DRIFT` 三类均为 0。
+5. **变异实验（证明断言承重、非空洞）**：至少三条 ——
+   ① 从 `APPLICATION_LAUNCHER_GROUPS` 删除 `platform` 分组 → 导航守卫必须转红；
+   ② 把某个分组标题改回英文 → 导航守卫必须转红；
+   ③ 在任一用户可见文案里写入一句英文 → 语言守卫必须转红。
+6. `pnpm test:fast`、`pnpm test`、`pnpm test:heavy`、`pnpm build`、`git diff --check`、
+   两种文档一致性模式（current / migration）。
+
+**兼容要求**：不改变任何角色的权限集合与 `role_permissions`；不新增、不删除权限码；
+不改变 route 数量与 route key；不改变任何 API 的请求 / 响应合同与权限判定；
+不改变单据状态机、金额与估值语义、业务 schema、既有 release tag；
+不改变九个业务域的启动器条目集合（只补 Platform 分组与 4 条被遗漏的既有条目）。
+
+**禁止事项**：不得把「入口」实现为放宽 exposure 或新增权限码；
+不得以 allowlist 掩盖 `PL-NAVI-02` 的不可达 route；
+不得改动 `details.code` / `details.reason` 等机器可读码；
+不得把领域专名白名单扩大为通配规则；
+不得在修整中改动任何业务规则、状态机或审批语义；
+不得把腾讯云部署或任何数据库操作纳入本节授权范围。
+
+**Requirement 状态：`APPROVED`（2026-11-17）。Design §32.19：`APPROVED`（同日）。
+Implementation：已授权（2026-11-17），范围仅限本节验收门禁所列的仓库内代码、测试与脚本；
+腾讯云部署、数据库操作、Acceptance / Freeze / Release Readiness 签发、push / tag / merge / release
+**均未授权**。**

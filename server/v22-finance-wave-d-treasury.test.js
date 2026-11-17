@@ -104,7 +104,7 @@ test('assertBalanceReconciled: mismatch fail closed', () => {
   db.prepare(`UPDATE bank_accounts SET balance_cents=999999 WHERE id='ba-1'`).run();
   let threw = false;
   try { assertBalanceReconciled(db, 'ba-1'); }
-  catch (e) { threw = true; assert.match(e.message, /mismatch/); }
+  catch (e) { threw = true; assert.match(e.message, /不一致/); }
   assert.equal(threw, true);
 });
 

@@ -58,11 +58,11 @@ function strictNegativePostCheck(db, original) {
 // transaction are treated as ambiguous and reject (UUID/id ordering never used).
 function lotGuard(db, original) {
   const balance = db.prepare(`SELECT * FROM inventory_valuation_balances WHERE warehouse_id=? AND product_id=? AND lot_id=?`).get(original.warehouse_id, original.product_id, original.lot_id);
-  if (!balance) throw new HttpError(409, 'LOT 池不存在');
-  if (balance.lot_id !== original.lot_id) throw new HttpError(409, 'LOT 身份不匹配');
+  if (!balance) throw new HttpError(409, '批次（LOT）估值池不存在');
+  if (balance.lot_id !== original.lot_id) throw new HttpError(409, '批次（LOT）身份不匹配');
   // Per R1: balance >= is necessary but never sufficient. Reject aggregate equality as authority.
-  if (Number(balance.quantity) < Number(original.quantity_delta) - 1e-9) throw new HttpError(409, 'LOT 当前数量不足以精确反转');
-  if (Number(balance.value_cents) < Number(original.value_delta_cents) - 1) throw new HttpError(409, 'LOT 当前价值不足以精确反转');
+  if (Number(balance.quantity) < Number(original.quantity_delta) - 1e-9) throw new HttpError(409, '批次（LOT）当前数量不足以精确反转');
+  if (Number(balance.value_cents) < Number(original.value_delta_cents) - 1) throw new HttpError(409, '批次（LOT）当前价值不足以精确反转');
   // Conservative frontier: any POSTED negative valuation movement at the exact LOT identity
   // whose created_at >= original.created_at AND comes from another transaction blocks reverse.
   // Same-timestamp rows from another transaction are ambiguous and reject.
@@ -77,21 +77,21 @@ function lotGuard(db, original) {
     original.warehouse_id, original.product_id, original.lot_id,
     original.created_at, original.inventory_transaction_id || '00000000-0000-0000-0000-000000000000'
   );
-  if (frontier) throw new HttpError(409, 'LOT 同身份存在下游负 movement，无法精确反转');
+  if (frontier) throw new HttpError(409, '批次（LOT）同身份存在下游负向移动，无法精确反转');
   // §30.31.3 dependency proof — active exact-position inventory_locks block. Position_key
   // does not encode lot_id; check via product/warehouse (canonical lock truth).
   // §30.31.7 lock the range so a phantom insert cannot appear between proof and commit.
   const lock = db.prepare(`SELECT 1 FROM inventory_locks WHERE warehouse_id=? AND product_id=? AND status='ACTIVE' LIMIT 1${db.dialect === 'mysql' ? ' FOR UPDATE' : ''}`).get(
     original.warehouse_id, original.product_id
   );
-  if (lock) throw new HttpError(409, 'LOT 同身份存在活动 inventory_locks，无法精确反转');
+  if (lock) throw new HttpError(409, '批次（LOT）同身份存在活动库存锁定，无法精确反转');
   // §30.31.3 reservation dependency: planning_reservations has no LOT dimension, so any
   // ACTIVE reservation for the product/warehouse cannot prove it excludes this LOT → block.
   const reservation = db.prepare(`SELECT 1 FROM planning_reservations
     WHERE product_id=? AND warehouse_id=? AND status='ACTIVE' LIMIT 1${db.dialect === 'mysql' ? ' FOR UPDATE' : ''}`).get(
     original.product_id, original.warehouse_id
   );
-  if (reservation) throw new HttpError(409, 'LOT 同产品/仓库存在活动 reservation，无法精确反转');
+  if (reservation) throw new HttpError(409, '批次（LOT）同产品/仓库存在活动预留，无法精确反转');
   // Any later tracked_identity_hold_history action blocks (HOLD only allowed when unchanged Return-created).
   // §30.31.7 — FOR UPDATE locks the LOT identity range so a phantom HOLD insert cannot
   // appear between proof and commit. MySQL InnoDB next-key locks via the
@@ -100,32 +100,32 @@ function lotGuard(db, original) {
     WHERE identity_type='LOT' AND identity_id=? AND created_at >= ? LIMIT 1${db.dialect === 'mysql' ? ' FOR UPDATE' : ''}`).get(
     original.lot_id, original.created_at
   );
-  if (hold) throw new HttpError(409, 'LOT 在 Return 之后被加 HOLD，无法精确反转');
+  if (hold) throw new HttpError(409, '批次（LOT）在退货之后被加暂扣，无法精确反转');
 }
 
 // §30.31.4 SERIAL_GUARD — unique eligible original outbound valuation evidence is the
 // Confirm authority; current positive same-serial pool is NEVER authority. Reverse consumes
 // only the restored unit identified by the bounded provenance row.
 function serialGuard(db, original, provenanceRow) {
-  if (!provenanceRow) throw new HttpError(409, 'SERIAL 缺少 §30.31.2 唯一确定的 provenance，无法精确反转');
+  if (!provenanceRow) throw new HttpError(409, '序列号（SERIAL）缺少 §30.31.2 唯一确定的来源证据，无法精确反转');
   // The restored unit must still be the only active in-stock instance at the same warehouse/product.
   const serialRows = db.prepare(`SELECT id, lifecycle_state, current_warehouse_id FROM inventory_serials WHERE id=? AND product_id=?`).all(
     original.serial_id, original.product_id
   );
-  if (serialRows.length !== 1) throw new HttpError(409, 'SERIAL 身份不存在或不唯一');
+  if (serialRows.length !== 1) throw new HttpError(409, '序列号（SERIAL）身份不存在或不唯一');
   const serial = serialRows[0];
-  if (!['AVAILABLE', 'HOLD'].includes(serial.lifecycle_state)) throw new HttpError(409, 'SERIAL lifecycle 不在合法 IN-STOCK 状态');
-  if (serial.current_warehouse_id !== original.warehouse_id) throw new HttpError(409, 'SERIAL 已不在 Return 仓库');
+  if (!['AVAILABLE', 'HOLD'].includes(serial.lifecycle_state)) throw new HttpError(409, '序列号（SERIAL）状态不在合法在库状态');
+  if (serial.current_warehouse_id !== original.warehouse_id) throw new HttpError(409, '序列号（SERIAL）已不在退货仓库');
   // Provenance row's outbound identity must match the original.
-  if (provenanceRow.serial_id !== original.serial_id) throw new HttpError(409, 'SERIAL provenance 身份不匹配');
+  if (provenanceRow.serial_id !== original.serial_id) throw new HttpError(409, '序列号（SERIAL）来源证据身份不匹配');
   if (provenanceRow.product_id !== original.product_id || provenanceRow.warehouse_id !== original.warehouse_id) {
-    throw new HttpError(409, 'SERIAL provenance product/warehouse 不匹配');
+    throw new HttpError(409, '序列号（SERIAL）来源证据的产品/仓库不匹配');
   }
   // Original outbound valuation movement must still be POSTED and not reversed.
   const outbound = db.prepare(`SELECT * FROM inventory_valuation_movements WHERE id=? AND status='POSTED'`).get(provenanceRow.original_outbound_valuation_movement_id);
-  if (!outbound) throw new HttpError(409, 'SERIAL 原 outbound 估值事件不可用');
+  if (!outbound) throw new HttpError(409, '序列号（SERIAL）原出库估值事件不可用');
   if (db.prepare(`SELECT 1 FROM inventory_valuation_movements WHERE reversal_of_id=? AND status='POSTED' LIMIT 1`).get(outbound.id)) {
-    throw new HttpError(409, 'SERIAL 原 outbound 已被反向');
+    throw new HttpError(409, '序列号（SERIAL）原出库估值已被反向');
   }
   // No duplicate restoration: cumulative active restoration for this outbound must be zero.
   // §30.31.7 SERIAL outbound range is FOR UPDATE-locked so concurrent Confirm of another
@@ -136,7 +136,7 @@ function serialGuard(db, original, provenanceRow) {
     WHERE original_outbound_valuation_movement_id=? AND id <> ?${db.dialect === 'mysql' ? ' FOR UPDATE' : ''}`).all(
       provenanceRow.original_outbound_valuation_movement_id, provenanceRow.id
     );
-  if (cumulativeRows.length > 0) throw new HttpError(409, 'SERIAL 原 outbound 已被其他 Return 引用');
+  if (cumulativeRows.length > 0) throw new HttpError(409, '序列号（SERIAL）原出库估值已被其他退货单引用');
   // No later OUT/MOVE/transfer/hold-history/reservation/lock/reversal at the same identity after the provenance.
   // §30.31.7 — FOR UPDATE locks the serial identity range so a phantom post-OUT or
   // post-HOLD insert cannot appear between proof and commit.
@@ -144,28 +144,28 @@ function serialGuard(db, original, provenanceRow) {
     WHERE serial_id=? AND direction='OUT' AND created_at >= ? AND reversed=0 LIMIT 1${db.dialect === 'mysql' ? ' FOR UPDATE' : ''}`).get(
     original.serial_id, provenanceRow.created_at
   );
-  if (postOut) throw new HttpError(409, 'SERIAL 在 provenance 之后存在下游 OUT/MOVE');
+  if (postOut) throw new HttpError(409, '序列号（SERIAL）在来源证据之后存在下游出库/移库');
   const postHold = db.prepare(`SELECT 1 FROM tracked_identity_hold_history
     WHERE identity_type='SERIAL' AND identity_id=? AND created_at >= ? LIMIT 1${db.dialect === 'mysql' ? ' FOR UPDATE' : ''}`).get(
     original.serial_id, provenanceRow.created_at
   );
-  if (postHold) throw new HttpError(409, 'SERIAL 在 provenance 之后被加 HOLD');
+  if (postHold) throw new HttpError(409, '序列号（SERIAL）在来源证据之后被加暂扣');
   const lock = db.prepare(`SELECT 1 FROM inventory_locks WHERE product_id=? AND warehouse_id=? AND status='ACTIVE' LIMIT 1${db.dialect === 'mysql' ? ' FOR UPDATE' : ''}`).get(original.product_id, original.warehouse_id);
-  if (lock) throw new HttpError(409, 'SERIAL 存在活动 inventory_locks');
+  if (lock) throw new HttpError(409, '序列号（SERIAL）存在活动库存锁定');
 }
 
 function basisGuard(db, original, provenanceRow) {
   const basis = String(original.valuation_basis || '');
-  if (basis === 'LEGACY_UNVALUED') throw new HttpError(409, 'LEGACY_UNVALUED 不可冲销');
+  if (basis === 'LEGACY_UNVALUED') throw new HttpError(409, '历史未估值数据（LEGACY_UNVALUED）不可冲销');
   if (!original.lot_id && !original.serial_id) {
     const neg = Number(strictNegativePostCheck(db, original));
-    if (neg < 0) throw new HttpError(409, 'MOVING_AVERAGE 已发生下游消耗，无法精确反转');
+    if (neg < 0) throw new HttpError(409, '移动平均（MOVING_AVERAGE）已发生下游消耗，无法精确反转');
   } else if (original.lot_id) {
     lotGuard(db, original);
   } else if (original.serial_id) {
     serialGuard(db, original, provenanceRow);
   } else {
-    throw new HttpError(409, '未知估值 basis');
+    throw new HttpError(409, '未知估值基准');
   }
   if (db.prepare(`SELECT 1 FROM inventory_valuation_movements WHERE reversal_of_id=? AND status='POSTED'`).get(original.id)) {
     throw new HttpError(409, '原始估值已被反向');
@@ -194,13 +194,13 @@ function resolveOriginalOutboundEvidence(db, item, allocation, candidateOutbound
   let filtered = candidates;
   if (candidateOutboundId) {
     filtered = candidates.filter((c) => c.id === candidateOutboundId);
-    if (!filtered.length) throw new HttpError(409, '候选原 outbound 估值事件不存在或不满足 §30.31.2 资格');
+    if (!filtered.length) throw new HttpError(409, '候选原出库估值事件不存在或不满足 §30.31.2 资格');
   }
   // LOT: client must supply a candidate when multiple exist; auto-resolve only when exactly one.
   if (!filtered.length) return null;
   if (filtered.length > 1 && !candidateOutboundId) {
     if (product.tracking_policy === 'SERIAL') {
-      throw new HttpError(409, 'SERIAL 存在多个 eligible outbound，必须显式提供候选');
+      throw new HttpError(409, '序列号（SERIAL）存在多个合格出库估值，必须显式提供候选');
     }
     return null; // MA/LOT can rely on existing positive pool (legacy path)
   }
@@ -222,14 +222,14 @@ function freezeProvenance(db, { returnOrderId, returnOrderItemId, returnValuatio
       WHERE original_outbound_valuation_movement_id=? AND serial_id IS NOT NULL LIMIT 1${db.dialect === 'mysql' ? ' FOR UPDATE' : ''}`).get(
         originalOutbound.id
       );
-    if (serialOutboundExists) throw new HttpError(409, 'SERIAL 原 outbound 已被其他 Return 引用');
+    if (serialOutboundExists) throw new HttpError(409, '序列号（SERIAL）原出库估值已被其他退货单引用');
   }
   const provenanceId = randomUUID();
   // value_cents must be positive safe integer cents — the absolute outbound value is the
   // original outbound valuation, which IS the canonical source of value for this Return.
   const positiveValueCents = Math.abs(Number(originalOutbound.value_delta_cents));
   if (!Number.isSafeInteger(positiveValueCents) || positiveValueCents <= 0) {
-    throw new HttpError(409, '原 outbound 价值非正整数分，无法 freeze provenance');
+    throw new HttpError(409, '原出库估值金额不是大于 0 的整数分，无法冻结来源证据');
   }
   // Resolve the paired tracked_inventory_movements row for the original outbound.
   // LOT: nullable per §30.31.2; SERIAL: mandatory — exactly one matching tracked OUT row.
@@ -240,7 +240,7 @@ function freezeProvenance(db, { returnOrderId, returnOrderItemId, returnValuatio
         AND serial_id=? AND direction='OUT' AND reversed=0`).get(
       originalOutbound.source_id, allocation.productId, allocation.warehouseId, allocation.serialId
     );
-    if (!tracked) throw new HttpError(409, 'SERIAL 缺少 paired tracked_inventory_movements 行');
+    if (!tracked) throw new HttpError(409, '序列号（SERIAL）缺少配对的跟踪移动记录');
     trackedMovementId = tracked.id;
   } else if (allocation.lotId) {
     const tracked = db.prepare(`SELECT id FROM tracked_inventory_movements
@@ -266,36 +266,37 @@ function freezeProvenance(db, { returnOrderId, returnOrderItemId, returnValuatio
 
 function resolveOptionALinePlan(db, header, item, serialIds, candidateOutboundIds = {}) {
   const product = db.prepare(`SELECT tracking_policy,valuation_method,valuation_activated_at FROM products WHERE id=? AND active=1`).get(item.product_id);
-  if (!product) throw new HttpError(409, 'Wave6 Option A: product unavailable');
+  if (!product) throw new HttpError(409, '产品不可用');
   const policy = String(product.tracking_policy || 'NONE').toUpperCase();
   const expectedMethod = { NONE: 'MOVING_AVERAGE', LOT: 'LOT_SPECIFIC_POOL', SERIAL: 'SPECIFIC_SERIAL' }[policy];
-  if (!expectedMethod || product.valuation_method !== expectedMethod) throw new HttpError(409, 'Wave6 Option A: tracking and valuation method mismatch');
-  if (!product.valuation_activated_at) throw new HttpError(409, 'Wave6 Option A Gate: valuation is not activated');
+  if (!expectedMethod || product.valuation_method !== expectedMethod) throw new HttpError(409, '跟踪方式与估值方式不一致');
+  if (!product.valuation_activated_at) throw new HttpError(409, '估值尚未启用，无法执行退货过账');
   const tracked = db.prepare(`SELECT * FROM tracked_source_allocations
     WHERE source_type='SALES_RETURN' AND source_id=? AND source_item_id=? AND posted=0 AND reversed=0
     ORDER BY created_at,id`).all(header.id, item.id);
   let allocations;
   if (policy === 'NONE') {
-    if (tracked.length) throw new HttpError(409, 'Wave6 Option A: untracked product cannot carry LOT/SERIAL allocations');
+    if (tracked.length) throw new HttpError(409, '未启用跟踪的产品不能承载批次或序列号分配');
     allocations = [{ quantity: Number(item.quantity), lotId: null, serialId: null, productId: item.product_id, warehouseId: header.warehouse_id }];
   } else {
-    if (!tracked.length) throw new HttpError(409, `Wave6 Option A: ${policy} allocation is required`);
+    const policyLabel = policy === 'LOT' ? '批次（LOT）' : '序列号（SERIAL）';
+    if (!tracked.length) throw new HttpError(409, `必须提供${policyLabel}分配`);
     const total = tracked.reduce((sum, row) => sum + Number(row.quantity), 0);
-    if (Math.abs(total - Number(item.quantity)) > 1e-9) throw new HttpError(409, 'Wave6 Option A: tracking allocation quantity mismatch');
+    if (Math.abs(total - Number(item.quantity)) > 1e-9) throw new HttpError(409, '跟踪分配数量不一致');
     allocations = tracked.map((row) => {
       if (policy === 'LOT') {
         const lot = db.prepare('SELECT id,product_id FROM inventory_lots WHERE id=?').get(row.lot_id);
-        if (!lot || lot.product_id !== item.product_id) throw new HttpError(409, 'Wave6 Option A: LOT identity mismatch');
+        if (!lot || lot.product_id !== item.product_id) throw new HttpError(409, '批次（LOT）身份不一致');
         return { quantity: Number(row.quantity), lotId: lot.id, serialId: null, productId: item.product_id, warehouseId: header.warehouse_id };
       }
       const serial = db.prepare('SELECT id,product_id,lifecycle_state,current_warehouse_id FROM inventory_serials WHERE id=?').get(row.serial_id);
       if (!serial || serial.product_id !== item.product_id || !['DELIVERED','CONSUMED'].includes(serial.lifecycle_state)) {
-        throw new HttpError(409, 'Wave6 Option A: SERIAL identity is not returnable');
+        throw new HttpError(409, '该序列号不可退货');
       }
       // §30.31.4 Confirm precheck: lifecycle DELIVERED implies current_warehouse_id IS NULL.
       // Any non-null current_warehouse_id indicates an in-stock duplicate and must fail closed.
-      if (serial.current_warehouse_id) throw new HttpError(409, 'Wave6 Option A: SERIAL still shows an active in-stock warehouse');
-      if (Number(row.quantity) !== 1 || serialIds.has(serial.id)) throw new HttpError(409, 'Wave6 Option A: SERIAL allocation must be unique and quantity 1');
+      if (serial.current_warehouse_id) throw new HttpError(409, '该序列号仍在有库存的仓库中');
+      if (Number(row.quantity) !== 1 || serialIds.has(serial.id)) throw new HttpError(409, '序列号分配必须唯一且数量为 1');
       serialIds.add(serial.id);
       return { quantity: 1, lotId: null, serialId: serial.id, productId: item.product_id, warehouseId: header.warehouse_id };
     });
@@ -312,20 +313,20 @@ function resolveOptionALinePlan(db, header, item, serialIds, candidateOutboundId
       // §30.31.4 item 4: value comes from outbound, NOT from the pool.
       // Existing positive pool is a stale authoritative contradiction and must fail closed.
       if (pool && (Number(pool.quantity) > 0 || Number(pool.value_cents) > 0)) {
-        throw new HttpError(409, 'Wave6 Option A Gate: SERIAL 同一身份已存在正数估值池，禁止重复入库');
+        throw new HttpError(409, '序列号（SERIAL）同一身份已存在正数估值池，禁止重复入库');
       }
       // Resolve authoritative original outbound evidence and use its value verbatim.
       const originalOutbound = resolveOriginalOutboundEvidence(
         db, { ...item, warehouse_id: header.warehouse_id }, allocation,
         (allocation.serialId && candidateOutboundIds[allocation.serialId]) || null,
       );
-      if (!originalOutbound) throw new HttpError(409, 'Wave6 Option A: SERIAL 缺少唯一确定的 eligible outbound provenance');
+      if (!originalOutbound) throw new HttpError(409, '序列号（SERIAL）缺少唯一确定的合格出库来源证据');
       if (Math.abs(Number(originalOutbound.quantity_delta) + 1) > 1e-9) {
-        throw new HttpError(409, 'Wave6 Option A: SERIAL 原 outbound 数量必须为 -1');
+        throw new HttpError(409, '序列号（SERIAL）原出库估值数量必须为 -1');
       }
       const valueCents = Math.abs(Number(originalOutbound.value_delta_cents));
       if (!Number.isSafeInteger(valueCents) || valueCents <= 0) {
-        throw new HttpError(409, 'Wave6 Option A: SERIAL 原 outbound 价值非正整数分');
+        throw new HttpError(409, '序列号（SERIAL）原出库估值金额不是大于 0 的整数分');
       }
       return {
         ...allocation,
@@ -338,12 +339,12 @@ function resolveOptionALinePlan(db, header, item, serialIds, candidateOutboundId
     if (!pool || pool.valuation_method !== expectedMethod || pool.product_id !== item.product_id || pool.warehouse_id !== header.warehouse_id
       || Number(pool.quantity) <= 0 || Number(pool.value_cents) <= 0 || Number(allocation.quantity) > Number(pool.quantity) + 1e-9
       || (allocation.lotId && pool.lot_id !== allocation.lotId)) {
-      throw new HttpError(409, 'Wave6 Option A Gate: no legal positive valuation pool for exact identity');
+      throw new HttpError(409, '该身份没有可用的正数估值池');
     }
     const valueCents = Math.abs(Number(pool.quantity) - Number(allocation.quantity)) <= 1e-9
       ? Number(pool.value_cents)
       : allocateProportionalCents(Number(pool.value_cents), Number(allocation.quantity), Number(pool.quantity));
-    if (!Number.isSafeInteger(valueCents) || valueCents <= 0) throw new HttpError(409, 'Wave6 Option A Gate: allocated value must be positive safe integer cents');
+    if (!Number.isSafeInteger(valueCents) || valueCents <= 0) throw new HttpError(409, '分配金额必须是大于 0 的整数分');
     return {
       ...allocation,
       valueCents,
@@ -368,7 +369,7 @@ export async function confirmOptionAReturn(db, req, res, actor, returnId) {
     if (header.status !== 'DRAFT') throw new HttpError(409, '只有草稿可确认');
     const marker = header.commercial_source_marker || '';
     if (marker !== 'SO_BACKED' && marker !== 'NO_SOURCE') {
-      throw new HttpError(409, '该 marker 必走 DELIVERY_BACKED 路径');
+      throw new HttpError(409, '该来源标记必须走交付支持（DELIVERY_BACKED）路径');
     }
     guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate: header.return_date });
 
@@ -379,21 +380,21 @@ export async function confirmOptionAReturn(db, req, res, actor, returnId) {
 
     if (marker === 'SO_BACKED') {
       for (const item of items) {
-        if (!item.sales_order_item_id) throw new HttpError(409, 'SO_BACKED 必须提供 sales_order_item_id');
+        if (!item.sales_order_item_id) throw new HttpError(409, '销售订单支持来源（SO_BACKED）必须提供「sales_order_item_id」');
         const soi = db.prepare(`SELECT soi.id, soi.product_id, soi.quantity, soi.unit_price_cents, soi.order_id, so.customer_id, so.status FROM sales_order_items soi JOIN sales_orders so ON so.id=soi.order_id WHERE soi.id=?`).get(item.sales_order_item_id);
-        if (!soi) throw new HttpError(409, 'SO 行不存在');
-        if (soi.product_id !== item.product_id) throw new HttpError(409, 'product 不匹配');
-        if (soi.customer_id !== header.customer_id) throw new HttpError(409, 'customer 不匹配');
-        if (soi.status !== 'APPROVED') throw new HttpError(409, 'SO 未审批');
+        if (!soi) throw new HttpError(409, '销售订单行不存在');
+        if (soi.product_id !== item.product_id) throw new HttpError(409, '产品与销售订单行不匹配');
+        if (soi.customer_id !== header.customer_id) throw new HttpError(409, '客户与销售订单行不匹配');
+        if (soi.status !== 'APPROVED') throw new HttpError(409, '销售订单未审批');
         const executed = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) AS n FROM sales_delivery_items WHERE sales_order_item_id=?`).get(item.sales_order_item_id).n);
         const confirmed = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) AS n FROM return_order_items WHERE sales_order_item_id=? AND return_id<>?`).get(item.sales_order_item_id, returnId).n);
         const available = Number(soi.quantity) - executed - confirmed;
-        if (Number(item.quantity) > available + 1e-9) throw new HttpError(409, 'SO 行容量不足');
+        if (Number(item.quantity) > available + 1e-9) throw new HttpError(409, '销售订单行可用数量不足');
         soBackedOrderIds.add(soi.order_id);
       }
     } else {
       for (const item of items) {
-        if (item.sales_order_item_id || item.delivery_item_id) throw new HttpError(409, 'NO_SOURCE 必须不含 SO/Delivery 来源');
+        if (item.sales_order_item_id || item.delivery_item_id) throw new HttpError(409, '无来源（NO_SOURCE）不允许包含销售订单或出货来源');
       }
     }
 
@@ -518,7 +519,7 @@ export async function reverseOptionCReturn(db, req, res, actor, returnId) {
   // No body / random / server fallback. Missing → HTTP 400 before any business mutation.
   const idempotencyKey = String(req.headers['idempotency-key'] || '').trim();
   if (!idempotencyKey) {
-    throw new HttpError(400, 'Option C 冲销要求显式 Idempotency-Key header');
+    throw new HttpError(400, '冲销操作要求显式提供「Idempotency-Key」请求头');
   }
   const fingerprint = requestFingerprint({ reason, businessDate });
   const replay = idempotencyReplay(db, 'SALES_RETURN_REVERSAL_OPTION_C', returnId, idempotencyKey, fingerprint);
@@ -531,7 +532,7 @@ export async function reverseOptionCReturn(db, req, res, actor, returnId) {
     if (header.status !== 'CONFIRMED') throw new HttpError(409, '只有已确认退货单可冲销');
     const marker = header.commercial_source_marker || '';
     if (marker !== 'SO_BACKED' && marker !== 'NO_SOURCE') {
-      throw new HttpError(409, '该 marker 不允许 Option C 冲销');
+      throw new HttpError(409, '该来源标记不允许冲销');
     }
     guardPeriodAction(db, { actionCode: 'INVENTORY_MUTATION', businessDate: businessDate });
 
@@ -540,7 +541,7 @@ export async function reverseOptionCReturn(db, req, res, actor, returnId) {
       JOIN sales_order_replacement_lines rl ON rl.id = rf.replacement_line_id
       WHERE rl.source_return_item_id IN (SELECT id FROM return_order_items WHERE return_id=?)
     `).all(returnId);
-    if (fulfillmentRows.length) throw new HttpError(409, 'Gate-A.3 已确认 Replacement Fulfillment 存在，禁止冲销');
+    if (fulfillmentRows.length) throw new HttpError(409, '已确认的补货履行记录存在，禁止冲销');
 
     const replacementRows = db.prepare(`
       SELECT rl.id, rl.replacement_quantity, sr.cancellation_state
@@ -549,7 +550,7 @@ export async function reverseOptionCReturn(db, req, res, actor, returnId) {
       WHERE rl.source_return_item_id IN (SELECT id FROM return_order_items WHERE return_id=?)
     `).all(returnId);
     for (const row of replacementRows) {
-      if (row.cancellation_state === 'ACTIVE') throw new HttpError(409, 'Gate-A.2 存在 ACTIVE 未履行 Replacement');
+      if (row.cancellation_state === 'ACTIVE') throw new HttpError(409, '存在生效中且未履行的补货义务');
     }
 
     const items = db.prepare(`SELECT * FROM return_order_items WHERE return_id=? ORDER BY id`).all(returnId);
@@ -559,7 +560,7 @@ export async function reverseOptionCReturn(db, req, res, actor, returnId) {
 
     const reversalPlans = items.map((item) => {
       const originals = db.prepare(`SELECT * FROM inventory_valuation_movements WHERE source_type='SALES_RETURN' AND source_id=? AND source_item_id=? AND quantity_delta > 0 AND status='POSTED' ORDER BY created_at, id`).all(returnId, item.id);
-      if (!originals.length) throw new HttpError(409, 'Gate-B 原入库缺少权威估值事件');
+      if (!originals.length) throw new HttpError(409, '原入库缺少权威估值事件');
       for (const m of originals) {
         // §30.31.2 SERIAL: pass provenance row from same allocation; LOT uses conservative fence.
         const provenanceRow = m.serial_id
@@ -568,7 +569,7 @@ export async function reverseOptionCReturn(db, req, res, actor, returnId) {
         basisGuard(db, m, provenanceRow);
       }
       const total = originals.reduce((sum, movement) => sum + Number(movement.quantity_delta), 0);
-      if (Math.abs(total - Number(item.quantity)) > 1e-9) throw new HttpError(409, 'Gate-B original valuation quantity mismatch');
+      if (Math.abs(total - Number(item.quantity)) > 1e-9) throw new HttpError(409, '原始估值数量不一致');
       return { item, originals };
     });
 
@@ -607,7 +608,7 @@ export async function reverseOptionCReturn(db, req, res, actor, returnId) {
       });
 
       const txId = physical.movements?.find((movement) => movement.direction === 'OUT')?.transactionId;
-      if (!txId) throw new HttpError(409, 'Gate-C inventory reversal transaction missing');
+      if (!txId) throw new HttpError(409, '缺少库存冲销交易');
       const result = consumeOriginalInboundValue(db, {
         businessDate,
         productId: item.product_id,
@@ -625,13 +626,13 @@ export async function reverseOptionCReturn(db, req, res, actor, returnId) {
         inventoryTransactionId: txId,
         createdAt: at,
       });
-      if (!result || !result.length) throw new HttpError(409, 'Gate-C 反向估值失败');
+      if (!result || !result.length) throw new HttpError(409, '反向估值失败');
     }
 
     }
 
     const originalVoucher = db.prepare(`SELECT id FROM accounting_vouchers WHERE voucher_origin='SYSTEM' AND source_type='SALES_RETURN' AND source_id=? AND status='POSTED'`).get(returnId);
-    if (!originalVoucher) throw new HttpError(409, 'Gate-D 缺少原始凭证');
+    if (!originalVoucher) throw new HttpError(409, '缺少原始凭证');
     reverseSystemVoucher(db, {
       originalSourceType: 'SALES_RETURN',
       originalSourceId: returnId,
@@ -649,7 +650,7 @@ export async function reverseOptionCReturn(db, req, res, actor, returnId) {
       if (balance) {
         const consumed = Number(db.prepare(`SELECT COALESCE(SUM(amount_cents),0) n FROM balance_applications WHERE balance_id=? AND status='CONFIRMED'`).get(balance.id).n)
           + Number(db.prepare(`SELECT COALESCE(SUM(amount_cents),0) n FROM financial_refunds WHERE balance_id=? AND status='CONFIRMED'`).get(balance.id).n);
-        if (consumed > 0) throw new HttpError(409, 'Gate-E Credit 已被消费');
+        if (consumed > 0) throw new HttpError(409, '信用额度已被使用');
       }
       reverseCreditAdjustment(db, 'AR', 'SALES_RETURN', returnId, actor.id, businessDate, reason);
     }
@@ -663,7 +664,7 @@ export async function reverseOptionCReturn(db, req, res, actor, returnId) {
     for (const item of items) {
       const commercialUnitPrice = Number(item.unit_price_cents || 0);
       if (marker === 'NO_SOURCE' && commercialUnitPrice !== 0) {
-        throw new HttpError(409, 'Commercial independence: NO_SOURCE 不允许 unit_price_cents != 0 (防混淆库存估值或标准成本到商业字段)');
+        throw new HttpError(409, '商业独立性要求：无来源（NO_SOURCE）不允许「unit_price_cents」不为 0（防止把库存估值或标准成本混入商业字段）');
       }
       commercialTotal += Math.round(Number(item.quantity) * commercialUnitPrice);
     }
@@ -775,15 +776,15 @@ export async function createSalesOrderReplacement(db, req, res, actor) {
   transaction(db, () => {
     const header = db.prepare(`SELECT * FROM return_orders WHERE id=?`).get(sourceReturnId);
     if (!header) throw new HttpError(404, '来源退货单不存在');
-    if (header.status !== 'CONFIRMED') throw new HttpError(409, '来源退货必须 CONFIRMED');
+    if (header.status !== 'CONFIRMED') throw new HttpError(409, '来源退货单必须已确认');
     const lines = (body.lines || []).map((line) => {
       const ri = db.prepare(`SELECT * FROM return_order_items WHERE id=? AND return_id=?`).get(line.returnItemId, sourceReturnId);
       if (!ri) throw new HttpError(404, '来源退货明细不存在');
       const totalReplaced = Number(db.prepare(`SELECT COALESCE(SUM(rl.replacement_quantity),0) AS q FROM sales_order_replacement_lines rl WHERE rl.source_return_item_id=? AND EXISTS (SELECT 1 FROM sales_order_replacements sr WHERE sr.id=rl.replacement_id AND sr.cancellation_state='ACTIVE')`).get(line.returnItemId).q);
       const fulfilledAvailable = Math.max(0, Number(ri.quantity) - totalReplaced);
       const qty = Number(line.qty);
-      if (!Number.isFinite(qty) || qty <= 0) throw new HttpError(400, 'replacement qty 必须大于 0');
-      if (qty > fulfilledAvailable + 1e-9) throw new HttpError(409, 'replacement qty 超过剩余可补货量');
+      if (!Number.isFinite(qty) || qty <= 0) throw new HttpError(400, '补货数量必须大于 0');
+      if (qty > fulfilledAvailable + 1e-9) throw new HttpError(409, '补货数量超过剩余可补货量');
       return { ri, qty, materialId: String(line.materialId), uomCode: String(line.uomCode || 'EA') };
     });
     if (!lines.length) throw new HttpError(400, '至少一条补货明细');
@@ -857,27 +858,27 @@ export async function fulfillSalesOrderReplacement(db, req, res, actor, replacem
     if (!header) throw new HttpError(404, '补货义务不存在');
     if (header.cancellation_state !== 'ACTIVE') throw new HttpError(409, '已取消的补货义务不能再履行');
     const links = body.lines || [];
-    if (!Array.isArray(links) || !links.length) throw new HttpError(400, '请选择已确认的 Delivery 明细');
+    if (!Array.isArray(links) || !links.length) throw new HttpError(400, '请选择已确认的出货明细');
     for (const link of links) {
       const sdi = db.prepare(`SELECT sdi.*, sd.status, sd.customer_id AS delivery_customer_id FROM sales_delivery_items sdi JOIN sales_deliveries sd ON sd.id=sdi.delivery_id WHERE sdi.id=?`).get(link.salesDeliveryItemId);
-      if (!sdi) throw new HttpError(404, 'Sales Delivery 明细不存在');
-      if (sdi.status !== 'CONFIRMED') throw new HttpError(409, 'Sales Delivery 必须为已确认');
+      if (!sdi) throw new HttpError(404, '出货明细不存在');
+      if (sdi.status !== 'CONFIRMED') throw new HttpError(409, '出货单必须为已确认');
       const existing = db.prepare(`SELECT id FROM sales_replacement_fulfillments WHERE sales_delivery_item_id=?`).get(sdi.id);
-      if (existing) throw new HttpError(409, '同一 Delivery 明细已被其他补货履行占用');
+      if (existing) throw new HttpError(409, '同一出货明细已被其他补货履行占用');
       const rl = db.prepare(`SELECT * FROM sales_order_replacement_lines WHERE id=? AND replacement_id=?`).get(link.replacementLineId, replacementId);
       if (!rl) throw new HttpError(404, '补货行不存在');
-      if (sdi.product_id !== rl.replacement_material_id) throw new HttpError(409, 'material 不匹配');
+      if (sdi.product_id !== rl.replacement_material_id) throw new HttpError(409, '物料与补货行不匹配');
       // R2 — cross-document provenance: source Return customer identity must match Delivery customer
       const sourceReturn = db.prepare(`SELECT customer_id FROM return_orders WHERE id=?`).get(header.source_return_id);
       if (!sourceReturn) throw new HttpError(409, '源退货单不存在');
       if (sdi.delivery_customer_id !== sourceReturn.customer_id) {
-        throw new HttpError(409, 'Delivery customer 与 Replacement 源退货客户不一致 (跨文档身份不匹配)');
+        throw new HttpError(409, '出货单客户与补货义务的源退货客户不一致（跨文档身份不匹配）');
       }
       const fulfilled = Number(db.prepare(`SELECT COALESCE(SUM(rf.fulfilled_qty),0) n FROM sales_replacement_fulfillments rf WHERE rf.replacement_line_id=?`).get(rl.id).n);
       const remaining = Number(rl.replacement_quantity) - fulfilled;
       const qty = Number(link.qty);
-      if (!Number.isFinite(qty) || qty <= 0) throw new HttpError(400, 'qty 必须大于 0');
-      if (qty > remaining + 1e-9) throw new HttpError(409, 'qty 超过行剩余');
+      if (!Number.isFinite(qty) || qty <= 0) throw new HttpError(400, '履行数量必须大于 0');
+      if (qty > remaining + 1e-9) throw new HttpError(409, '履行数量超过补货行剩余数量');
       db.prepare(`INSERT INTO sales_replacement_fulfillments(id, replacement_line_id, sales_delivery_id, sales_delivery_item_id, fulfilled_qty, business_date, created_at) VALUES(?,?,?,?,?,?,?)`).run(
         randomUUID(), rl.id, sdi.delivery_id, sdi.id, qty, header.created_at, nowIso()
       );

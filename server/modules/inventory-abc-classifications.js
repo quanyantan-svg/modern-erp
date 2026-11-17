@@ -136,7 +136,7 @@ export async function classifyInventoryAbc(db, req, res, actor) {
 
   const basis = String(body.basis ?? 'USAGE').trim().toUpperCase();
   if (!['VALUE', 'USAGE'].includes(basis)) {
-    throw new HttpError(400, 'basis 必须为 VALUE 或 USAGE');
+    throw new HttpError(400, '「basis」 必须为 VALUE 或 USAGE');
   }
   const effectiveFrom = normalizeDate(body.effectiveFrom || nowIso().slice(0, 10), '生效日期');
   const warehouseId = body.warehouseId ? String(body.warehouseId).trim() : null;
@@ -147,9 +147,9 @@ export async function classifyInventoryAbc(db, req, res, actor) {
   const snapshotId = body.financeValuationSnapshotId ? String(body.financeValuationSnapshotId).trim() : null;
 
   if (basis === 'VALUE' && !snapshotId) {
-    throw new HttpError(409, 'basis=VALUE 必须引用 Finance 估值快照（financeValuationSnapshotId），Inventory 不复制估值引擎', {
+    throw new HttpError(409, '「basis」=VALUE 必须引用 「Finance」 估值快照（financeValuationSnapshotId），「Inventory」 不复制估值引擎', {
       code: 'ABC_FINANCE_VALUATION_SNAPSHOT_REQUIRED',
-      resolution: '请提供 Finance 域签发的估值快照 ID，或改用 basis=USAGE。',
+      resolution: '请提供财务域签发的估值快照 ID，或改用「basis=USAGE」。',
     });
   }
 
@@ -162,9 +162,9 @@ export async function classifyInventoryAbc(db, req, res, actor) {
   } else {
     weightByProduct = readValueByProduct(db, { fromDate, toDate, warehouseId, snapshotId });
     if (!weightByProduct.size) {
-      throw new HttpError(409, `Finance 估值快照 ${snapshotId} 没有可用的估值证据，无法执行 VALUE 基础分类`, {
+      throw new HttpError(409, `「Finance」 估值快照 ${snapshotId} 没有可用的估值证据，无法执行 VALUE 基础分类`, {
         code: 'ABC_FINANCE_VALUATION_SNAPSHOT_EMPTY',
-        resolution: '请确认该 Finance 估值快照已签发并包含已过账的估值事件。',
+        resolution: '请确认该财务估值快照已签发并包含已过账的估值事件。',
       });
     }
   }

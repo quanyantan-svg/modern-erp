@@ -27,7 +27,7 @@
 | Finance Operations | [`docs/design/finance-operations.md`](docs/design/finance-operations.md) | §28.0–§28.30；§28.30 = Finance 期间控制与折扣/结算接入（`PENDING_APPROVAL`，Implementation `NOT_AUTHORIZED`） |
 | Sales & Customer | [`docs/design/sales-customer/README.md`](docs/design/sales-customer/README.md) | §29 + §30 + Wave 8/9/11 基线；§29.52 = `W10-INV-RISK-01` Production Inventory Correctness Closure Design（`APPROVED`，2026-11-14；Implementation 已授权，仅仓库内代码与测试）；§29.53 = route exposure 与页面自身 API 权限一致性有界增补 Design（`APPROVED`，2026-11-15；Implementation 已授权，仅仓库内代码与测试；`SC-EXPOSURE-05` 裁定暂不收紧、延期处理） |
 | Accounting & Analytics | [`docs/design/accounting-analytics.md`](docs/design/accounting-analytics.md) | §31；§31.16 = 法定/经营期间控制接入（`PENDING_APPROVAL`，Implementation `NOT_AUTHORIZED`） |
-| Platform | [`docs/design/platform.md`](docs/design/platform.md) | §32；§32.15 = canonical 期间闸门与跨域协调（`APPROVED`，已实施并冻结）；§32.16 = Release Infrastructure 有界增补设计（`APPROVED`，2026-11-14；Implementation 已授权，仅仓库内代码、测试、脚本与模板）；§32.17 = Migration 风险工作包设计（`PENDING_APPROVAL`，2026-11-15，含同日技术复核修订五项与第二轮对抗性复核修正五处；HARD STOP，Implementation `NOT_AUTHORIZED`）；§32.18 = Route 首屏 API 授权一致性通用设计（`APPROVED`，2026-11-15；Implementation 已授权，仅仓库内代码、测试与脚本） |
+| Platform | [`docs/design/platform.md`](docs/design/platform.md) | §32；§32.15 = canonical 期间闸门与跨域协调（`APPROVED`，已实施并冻结）；§32.16 = Release Infrastructure 有界增补设计（`APPROVED`，2026-11-14；Implementation 已授权，仅仓库内代码、测试、脚本与模板）；§32.17 = Migration 风险工作包设计（`PENDING_APPROVAL`，2026-11-15，含同日技术复核修订五项与第二轮对抗性复核修正五处；HARD STOP，Implementation `NOT_AUTHORIZED`）；§32.18 = Route 首屏 API 授权一致性通用设计（`APPROVED`，2026-11-15；Implementation 已授权，仅仓库内代码、测试与脚本）；§32.19 = 导航分组完整性与界面语言一致性通用设计（`APPROVED`，2026-11-17；Implementation 已授权，仅仓库内代码、测试、脚本与文档） |
 
 ### 0.2 章节编号迁移规则
 

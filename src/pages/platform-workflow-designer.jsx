@@ -68,7 +68,7 @@ export default function PlatformWorkflowDesigner({ user, notify }) {
     <BusinessPageShell className="platform-ops" width="rail" data-testid="platform-workflow-designer-page">
       <header className="platform-ops__hero">
         <div>
-          <span>WORKFLOW DESIGNER</span>
+          <span>流程设计</span>
           <h2>流程设计</h2>
         </div>
         <p>定义流程模板与节点图，草稿经发布后不可变；试运行只走一遍节点图，不产生任何业务副作用。</p>
@@ -279,7 +279,7 @@ function DefinitionEditorSheet({ editor, canManage, notify, onClose, onChanged }
             <input value={meta.changeNote} onChange={(event) => setMeta({ ...meta, changeNote: event.target.value })}/>
           </FormRow>
         )}
-        <FormRow label="节点图定义 (JSON)" required hint="entry + nodes；节点类型 APPROVAL / PARALLEL_APPROVAL / CONDITION / NOTIFY / CC / END">
+        <FormRow label="节点图定义 (JSON)" required hint="「entry」+「nodes」；节点类型「APPROVAL」/「PARALLEL_APPROVAL」/「CONDITION」/「NOTIFY」/「CC」/「END」">
           <textarea rows={12} value={definitionText} onChange={(event) => setDefinitionText(event.target.value)} spellCheck={false}/>
         </FormRow>
         <FormRow label="试运行变量 (JSON)">

@@ -40,7 +40,7 @@ export async function createFormConversion(db, req, res, actor) {
   const body = await readJson(req);
   assertAllowedFields(body, ['productId','warehouseId','quantity','fromForm','toForm','reason','businessDate']);
   const quantity = Number(body.quantity);
-  if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, 'quantity must be positive');
+  if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, '数量必须大于 0');
   const id = genId();
   const docNo = `FC-${Date.now().toString().slice(-10)}-${Math.floor(Math.random()*90+10)}`;
   const now = nowIso();
@@ -58,8 +58,8 @@ export async function createFormConversion(db, req, res, actor) {
 export function confirmFormConversion(db, res, actor, docId) {
   allow(actor, 'INVENTORY_FORM_CONVERSION_MANAGE');
   const doc = db.prepare(`SELECT * FROM inventory_form_conversions WHERE id=?`).get(docId);
-  if (!doc) throw new HttpError(404, 'Form conversion not found');
-  if (doc.status !== 'DRAFT') throw new HttpError(409, `Status ${doc.status} not confirmable`);
+  if (!doc) throw new HttpError(404, '形态转换单不存在');
+  if (doc.status !== 'DRAFT') throw new HttpError(409, `状态为 ${doc.status}，无法确认`);
   const now = nowIso();
   const idempotencyKey = `FORM_CONV:${docId}`;
   // Same quantity, source position ↓ (fromForm) + target position ↑ (toForm).

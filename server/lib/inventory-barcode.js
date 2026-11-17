@@ -55,7 +55,7 @@ function tryPatterns(barcode) {
 
 export function parseBarcode(db, barcode) {
   ensureTable(db);
-  if (!barcode || typeof barcode !== 'string') throw new HttpError(400, 'barcode 必填');
+  if (!barcode || typeof barcode !== 'string') throw new HttpError(400, '「barcode」 必填');
   // Lookup binding first
   const binding = db.prepare(`SELECT * FROM inventory_barcode_bindings WHERE barcode=?`).get(barcode);
   if (binding) {
@@ -85,7 +85,7 @@ export function logResolution(db, actor, barcode, resolution, source) {
 export async function createBarcodeRule(db, req, res, actor) {
   allow(actor, 'INVENTORY_BARCODE_RULE_MANAGE');
   const body = await readJson(req);
-  if (!body.code || !body.pattern) throw new HttpError(400, '编码与 pattern 必填');
+  if (!body.code || !body.pattern) throw new HttpError(400, '编码与 「pattern」 必填');
   const id = genId();
   transaction(db, () => {
     ensureTable(db);
@@ -98,7 +98,7 @@ export async function createBarcodeRule(db, req, res, actor) {
 export async function createBarcodeBinding(db, req, res, actor) {
   allow(actor, 'INVENTORY_BARCODE_RULE_MANAGE');
   const body = await readJson(req);
-  if (!body.ruleId || !body.entityType || !body.entityId || !body.barcode) throw new HttpError(400, 'ruleId / entity / barcode 必填');
+  if (!body.ruleId || !body.entityType || !body.entityId || !body.barcode) throw new HttpError(400, 'ruleId / 「entity」 / 「barcode」 必填');
   const id = genId();
   transaction(db, () => {
     ensureTable(db);

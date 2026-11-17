@@ -171,7 +171,7 @@ function SubstituteEditor({ editor, schemes, onClose, notify }) {
         <button type="button" className={isEdit ? 'primary' : 'secondary'} onClick={onClose}>{isEdit ? '关闭' : '取消'}</button>
         {!isEdit && <button type="submit" className="primary">保存</button>}
       </BusinessActionBar>
-      {isEdit && <p className="engineering-form-help">历史已引用的替代关系不在 UI 提供 hard-delete；当前端点仅支持新增关系。</p>}
+      {isEdit && <p className="engineering-form-help">历史已引用的替代关系不在界面提供彻底删除；当前端点仅支持新增关系。</p>}
     </form>
   </Modal>;
 }
@@ -265,7 +265,7 @@ function ConfigurableBomSection({ user, notify, canManage }) {
     {preview && preview.warnings?.length > 0 && (
       <ul className="engineering-form-warnings">{preview.warnings.map((w, idx) => <li key={idx}>{w}</li>)}</ul>
     )}
-    <p className="engineering-form-help">可配置 BOM 仅做派生预览，不会产生库存、生产或会计副作用。Sales 侧配置能力由后续 Domain 承担。</p>
+    <p className="engineering-form-help">可配置 BOM 仅做派生预览，不会产生库存、生产或会计副作用。销售侧配置能力由后续领域承担。</p>
   </section>;
 }
 
@@ -279,7 +279,7 @@ export default function EngineeringSubstitute({ user, notify }) {
   const canManage = can(user, 'ENGINEERING_SUBSTITUTE_MANAGE') || can(user, 'ENGINEERING_CONFIGURABLE_MANAGE');
   return <BusinessPageShell className="engineering-substitute-v15" width="rail">
     <BusinessPageHeader title="替代料与可配置 BOM"
-      help={<HelpDisclosure summary="说明"><p>替代料解析（resolver）暴露给上游 Planning 使用；可配置 BOM 仅做派生预览，不改变库存或会计。</p></HelpDisclosure>} />
+      help={<HelpDisclosure summary="说明"><p>替代料解析（解析器）暴露给上游计划域使用；可配置 BOM 仅做派生预览，不改变库存或会计。</p></HelpDisclosure>} />
     <TabNav value={tab} onChange={setTab} items={[
       { key: 'substitute', label: '替代料' },
       { key: 'configurable', label: '可配置 BOM' },

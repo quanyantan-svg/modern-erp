@@ -63,12 +63,12 @@ export function validateOwner(db, ownerType, ownerId) {
   const ot = normalizeOwnerType(ownerType);
   if (ot === OWNER_TYPES.ENTERPRISE) {
     if (ownerId !== null && ownerId !== undefined && String(ownerId).trim() !== '') {
-      throw new HttpError(400, 'ENTERPRISE owner 的 owner_id 必须为 NULL');
+      throw new HttpError(400, 'ENTERPRISE 「owner」 的 owner_id 必须为 NULL');
     }
     return { ownerType: ot, ownerId: null };
   }
   if (ownerId === null || ownerId === undefined || String(ownerId).trim() === '') {
-    throw new HttpError(400, `${ot} owner 必须提供 owner_id`);
+    throw new HttpError(400, `${ot} 「owner」 必须提供 owner_id`);
   }
   const idText = String(ownerId).trim();
   if (ot === OWNER_TYPES.SUPPLIER) {
@@ -180,10 +180,10 @@ export function buildCanonicalPosition(db, input) {
 function evidenceString(value, label, { nullable = false } = {}) {
   if (value === null && nullable) return null;
   if (typeof value !== 'string' || value.trim() === '') {
-    throw new HttpError(409, `Invalid historical position evidence: ${label}`, { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
+    throw new HttpError(409, `历史仓位证据无效：${label}`, { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
   }
   if (value.length > 128 || value !== value.trim()) {
-    throw new HttpError(409, `Invalid historical position evidence: ${label}`, { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
+    throw new HttpError(409, `历史仓位证据无效：${label}`, { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
   }
   return value;
 }
@@ -204,11 +204,11 @@ export function canonicalPositionSnapshot(position) {
   if (!/^[0-9a-f]{64}$/.test(snapshot.positionKey)
       || (snapshot.ownerType === OWNER_TYPES.ENTERPRISE && snapshot.ownerId !== null)
       || (snapshot.ownerType !== OWNER_TYPES.ENTERPRISE && snapshot.ownerId === null)) {
-    throw new HttpError(409, 'Historical position evidence identity mismatch', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
+    throw new HttpError(409, '历史仓位证据身份不一致', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
   }
   const expected = computePositionKey(snapshot);
   if (snapshot.positionKey !== expected) {
-    throw new HttpError(409, 'Historical position evidence hash mismatch', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
+    throw new HttpError(409, '历史仓位证据哈希不一致', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
   }
   return JSON.stringify(snapshot);
 }
@@ -216,21 +216,21 @@ export function canonicalPositionSnapshot(position) {
 export function parseCanonicalPositionSnapshot(value) {
   let snapshot;
   try { snapshot = JSON.parse(String(value)); }
-  catch { throw new HttpError(409, 'Malformed historical position evidence JSON', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' }); }
+  catch { throw new HttpError(409, '历史仓位证据 JSON 格式错误', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' }); }
   if (!snapshot || Array.isArray(snapshot) || typeof snapshot !== 'object') {
-    throw new HttpError(409, 'Historical position evidence must be an object', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
+    throw new HttpError(409, '历史仓位证据必须是对象', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
   }
   const keys = Object.keys(snapshot);
   if (keys.length !== POSITION_SNAPSHOT_KEYS.length
       || keys.some((key, index) => key !== POSITION_SNAPSHOT_KEYS[index])) {
-    throw new HttpError(409, 'Historical position evidence shape mismatch', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
+    throw new HttpError(409, '历史仓位证据结构不一致', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
   }
   if (snapshot.schemaVersion !== POSITION_EVIDENCE_SCHEMA_VERSION) {
-    throw new HttpError(409, 'Unsupported historical position evidence version', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
+    throw new HttpError(409, '不支持的历史仓位证据版本', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
   }
   const canonical = canonicalPositionSnapshot(snapshot);
   if (canonical !== String(value)) {
-    throw new HttpError(409, 'Historical position evidence is not canonical', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
+    throw new HttpError(409, '历史仓位证据不是规范化格式', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
   }
   return JSON.parse(canonical);
 }

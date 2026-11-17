@@ -25,7 +25,7 @@ export function lookupOpenItemHeader(db, openItemId) {
 //   remaining = amount_cents - SUM(effective_amount_cents)
 export function computeCanonicalRemaining(db, openItemId) {
   const header = lookupOpenItemHeader(db, openItemId);
-  if (!header) throw new HttpError(404, 'open item 不存在');
+  if (!header) throw new HttpError(404, '「open」 「item」 不存在');
   const rows = projectFinanceEffects(db, header.side, openItemId);
   const effective = rows.reduce((s, r) => s + Number(r.effective_amount_cents || 0), 0);
   return Number(header.amount_cents) - effective;
@@ -33,7 +33,7 @@ export function computeCanonicalRemaining(db, openItemId) {
 
 export function refreshOpenAmount(db, openItemId) {
   const header = lookupOpenItemHeader(db, openItemId);
-  if (!header) throw new HttpError(404, 'open item 不存在');
+  if (!header) throw new HttpError(404, '「open」 「item」 不存在');
   const remaining = computeCanonicalRemaining(db, openItemId);
   const status = deriveStatus(header, remaining);
   const table = header.side === 'AR' ? 'account_receivables' : 'account_payables';
@@ -52,10 +52,10 @@ export function refreshOpenAmount(db, openItemId) {
 
 export function assertOpenAmountReconciled(db, openItemId) {
   const header = lookupOpenItemHeader(db, openItemId);
-  if (!header) throw new HttpError(404, 'open item 不存在');
+  if (!header) throw new HttpError(404, '「open」 「item」 不存在');
   const canonical = computeCanonicalRemaining(db, openItemId);
   if (canonical !== Number(header.open_amount_cents)) {
-    throw new HttpError(500, `open amount cache mismatch — fail closed (${openItemId}) canonical=${canonical} cached=${header.open_amount_cents}`);
+    throw new HttpError(500, `未结金额缓存不一致，已按保守口径拒绝（${openItemId}）权威=${canonical} 缓存=${header.open_amount_cents}`);
   }
 }
 

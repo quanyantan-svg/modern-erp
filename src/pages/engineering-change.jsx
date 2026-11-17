@@ -175,8 +175,8 @@ function EcoActions({ eco, refresh, notify, canManage, canApprove, previewReady 
     {eco.status === 'APPROVED' && canManage && previewReady && <ConfirmAction
       title="确认应用工程变更？"
       message="系统将按当前影响预览生成新 BOM 版本并保留旧版本与审计记录。"
-      buttonLabel="Apply（确认应用）"
-      confirmLabel="确认 Apply"
+      buttonLabel="应用（确认应用）"
+      confirmLabel="确认应用"
       onConfirm={() => call('apply')} />}
   </BusinessActionBar>;
 }
@@ -235,7 +235,7 @@ export default function EngineeringChange({ user, notify }) {
   const [detail, setDetail] = useState(null);
   return <BusinessPageShell className="engineering-change-v15" width="rail">
     <BusinessPageHeader title="工程变更"
-      help={<HelpDisclosure summary="使用提示"><p>变更单经审核后才可应用；Use-Up-Old 仅基于当前库存做清理候选，预计入供应尚未纳入本阶段判断。</p></HelpDisclosure>} />
+      help={<HelpDisclosure summary="使用提示"><p>变更单经审核后才可应用；「Use-Up-Old」仅基于当前库存做清理候选，预计入供应尚未纳入本阶段判断。</p></HelpDisclosure>} />
     <EcoList ecos={ecos} canManage={canManage}
       onSelect={(eco) => setDetail(eco)}
       onCreate={() => setEditor({})} />

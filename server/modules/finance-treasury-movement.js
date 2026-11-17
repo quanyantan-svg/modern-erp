@@ -21,7 +21,7 @@ import { guardPeriodAction, runGuardedMutation } from './period-control.js';
 export function applyTreasuryMovement(db, input) {
   const settlementAccountId = requiredText(input.settlementAccountId, 'settlementAccountId', 64);
   const direction = requiredText(input.direction, 'direction', 4);
-  if (!['IN', 'OUT'].includes(direction)) throw new HttpError(400, 'direction 必须是 IN 或 OUT');
+  if (!['IN', 'OUT'].includes(direction)) throw new HttpError(400, '「direction」 必须是 IN 或 OUT');
   const amountCents = Number(input.amountCents);
   if (!Number.isSafeInteger(amountCents) || amountCents <= 0) throw new HttpError(400, 'amountCents 必须为正整数');
   const businessDate = requiredText(input.businessDate, 'businessDate', 16);
@@ -46,7 +46,7 @@ export function applyTreasuryMovement(db, input) {
         && existing.business_date === businessDate
         && existing.source_type === sourceType
         && existing.source_id === sourceId;
-      if (!same) throw new HttpError(409, '同一 Treasury 幂等键不能用于不同经济事项');
+      if (!same) throw new HttpError(409, '同一 「Treasury」 幂等键不能用于不同经济事项');
       return existing.id;
     }
 
@@ -88,7 +88,7 @@ export function assertBalanceReconciled(db, accountId) {
   const canonical = opening + inSum - outSum;
   const cached = Number(db.prepare(`SELECT balance_cents FROM bank_accounts WHERE id=?`).get(accountId)?.balance_cents || 0);
   if (canonical !== cached) {
-    throw new HttpError(500, `treasury balance mismatch — fail closed (account=${accountId}, canonical=${canonical}, cached=${cached})`);
+    throw new HttpError(500, `资金余额不一致，已按保守口径拒绝（账户=${accountId}，权威=${canonical}，缓存=${cached}）`);
   }
 }
 
@@ -98,7 +98,7 @@ export async function postTreasuryTransfer(db, req, res, actor) {
   const body = await readJson(req);
   const fromAccountId = requiredText(body.fromAccountId, 'fromAccountId', 64);
   const toAccountId = requiredText(body.toAccountId, 'toAccountId', 64);
-  if (fromAccountId === toAccountId) throw new HttpError(400, 'from / to account 必须不同');
+  if (fromAccountId === toAccountId) throw new HttpError(400, '「from」 / 「to」 「account」 必须不同');
   const amount = Number(body.amountCents);
   if (!Number.isSafeInteger(amount) || amount <= 0) throw new HttpError(400, 'amountCents 必须为正整数');
   const businessDate = requiredText(body.businessDate, 'businessDate', 16);

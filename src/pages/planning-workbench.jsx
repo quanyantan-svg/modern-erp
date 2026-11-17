@@ -174,7 +174,7 @@ function PlannedOrders({ user, notify }) {
 
   return <BusinessPageShell className="planning-closure" width="rail">
     <header className="planning-hero">
-      <div><span>PLANNING CONTROL</span><h2>计划订单</h2></div>
+      <div><span>计划管控</span><h2>计划订单</h2></div>
       <p>确认供给建议，再安全释放到生产、采购或委外交接。可拆分、合并、按状态过滤。</p>
     </header>
 
@@ -656,7 +656,7 @@ function PlannerWorkbench({ user, notify }) {
   const excess = (data?.workbench?.rows || []).filter((row) => row.exception === 'EXCESS').length;
 
   return <BusinessPageShell className="planning-closure" width="rail">
-    <header className="planning-hero"><div><span>PLANNER WORKBENCH</span><h2>计划员工作台</h2></div><p>先看例外，再追踪需求、确定供给与计划余额。</p></header>
+    <header className="planning-hero"><div><span>计划员工作台</span><h2>计划员工作台</h2></div><p>先看例外，再追踪需求、确定供给与计划余额。</p></header>
     {state === 'LOADING' && <Loading/>}
     {state === 'ERROR' && <EmptyState title="工作台加载失败" action={<button className="secondary" onClick={() => void load()}>重新加载</button>}/>}
     {state === 'READY' && <>

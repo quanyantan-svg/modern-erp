@@ -242,7 +242,7 @@ function consumePlanningHandoff(db, { handoffId, actor, supplierId, bodyOrderId,
   const handoff = db.prepare('SELECT * FROM planning_outsource_handoffs WHERE id=?').get(handoffId);
   if (!handoff) throw new HttpError(404, '计划移交单不存在');
   if (handoff.status !== 'PENDING') {
-    throw new HttpError(409, `handoff 已不可消费：status=${handoff.status}`);
+    throw new HttpError(409, `「handoff」 已不可消费：「status」=${handoff.status}`);
   }
   const existingOrder = db.prepare('SELECT id FROM outsourcing_orders WHERE planning_handoff_id=?').get(handoffId);
   if (existingOrder) {
@@ -772,7 +772,7 @@ export async function createOutsourcingProcessingPurchaseOrder(db, req, res, act
   const body = await readJson(req);
   assertAllowedFields(body, PROCESSING_PO_BUSINESS_FIELDS);
   const idempotencyKey = String(req.headers['idempotency-key'] || '').trim();
-  if (!idempotencyKey) throw new HttpError(400, 'Idempotency-Key 必填');
+  if (!idempotencyKey) throw new HttpError(400, '「Idempotency-Key」 必填');
   const unitPriceCents = Number(body.unitPriceCents);
   if (!Number.isSafeInteger(unitPriceCents) || unitPriceCents < 0) throw new HttpError(400, '加工费单价必须为非负安全整数分');
   const fingerprint = requestFingerprint(normalizeProcessingPoFingerprint(orderId, body));
@@ -782,7 +782,7 @@ export async function createOutsourcingProcessingPurchaseOrder(db, req, res, act
     if (replay) return send(res, 200, { ...replay, replayed: true });
   } catch (error) {
     if (error?.status !== 409) throw error;
-    const conflict = new HttpError(409, error.message, { code: 'PROCESSING_PO_IDEMPOTENCY_CONFLICT' });
+    const conflict = new HttpError(409, '加工费订单创建失败，请刷新后重试', { code: 'PROCESSING_PO_IDEMPOTENCY_CONFLICT' });
     auditRejectedBusinessRule(db, actor, 'OUTSOURCING_ORDER', orderId, '创建加工费采购订单', conflict);
     throw conflict;
   }
@@ -1135,7 +1135,7 @@ export async function createOutsourcingReceipt(db, req, res, actor) {
     throw new HttpError(400, '委外收货明细不能为空', { code: 'OUTSOURCING_RECEIPT_ITEMS_REQUIRED' });
   }
   const idempotencyKey = String(req.headers['idempotency-key'] || '').trim();
-  if (!idempotencyKey) throw new HttpError(400, 'Idempotency-Key 必填');
+  if (!idempotencyKey) throw new HttpError(400, '「Idempotency-Key」 必填');
   const operation = 'OUTSOURCING_RECEIPT_CREATE';
   const documentId = `create-request:${idempotencyKey}`;
   const fingerprint = requestFingerprint(body);

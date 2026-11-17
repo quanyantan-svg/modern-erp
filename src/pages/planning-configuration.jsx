@@ -68,7 +68,7 @@ export default function PlanningConfiguration({ user, notify }) {
 
   return <BusinessPageShell className="planning-closure planning-configuration" width="rail">
     <header className="planning-hero">
-      <div><span>PLANNING CONFIGURATION</span><h2>计划配置</h2></div>
+      <div><span>计划配置</span><h2>计划配置</h2></div>
       <p>维护计划参数、物料策略、计划方案；仅授权用户可修改。</p>
     </header>
 

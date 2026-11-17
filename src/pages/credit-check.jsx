@@ -98,7 +98,7 @@ export function CreditCheck({ user }) {
 
   return <main className="page-stack">
     <header className="page-header"><div>
-      <p className="eyebrow">Sales & Customer · Wave 10</p>
+      <p className="eyebrow">销售与客户 · Wave 10</p>
       <h1>信用检查</h1>
       <p>按销售订单提交、审批与出货确认三个阶段执行信用检查。敞口由销售与财务的权威事实派生，不存在第二套信用余额。</p>
     </div></header>
@@ -182,7 +182,7 @@ export function CreditSpecialApprovals({ user }) {
 
   return <main className="page-stack">
     <header className="page-header"><div>
-      <p className="eyebrow">Sales & Customer · Wave 10</p>
+      <p className="eyebrow">销售与客户 · Wave 10</p>
       <h1>信用特别审批</h1>
       <p>特别审批只对产生该结论的一个信用范围有效，并且受权限上限、失效业务日期与申请审批分离约束。</p>
     </div></header>

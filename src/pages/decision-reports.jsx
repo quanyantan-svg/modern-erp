@@ -66,12 +66,12 @@ export const SALES_REPORT_VIEW_ENDPOINTS = Object.freeze({
 
 export const REPORT_DATE_BASIS = {
   'sales-summary': '本报表按期间业务活动统计：订单按订单日期，出货按出货日期，退货按退货日期；缺权威业务日期的记录明确标注，不回退创建时间。',
-  'sales-gross-profit': '本报表按期间业务活动统计：出货按出货日期，服务履约按业务日期，退货按退货日期；毛利 = 收入 - 成本，成本来自 Inventory / Finance 已过账的权威估值事件。',
-  'sales-ranking': '本报表按期间业务活动统计：出货按出货日期，服务履约按业务日期，退货按退货日期；排行指标为毛利，复用与销售毛利相同的 canonical 事实。',
-  'sales-outstanding': '本报表以要求交期作为日期筛选与到期口径；缺失要求交期的 legacy 订单明确标注，不回退订单日期。',
+  'sales-gross-profit': '本报表按期间业务活动统计：出货按出货日期，服务履约按业务日期，退货按退货日期；毛利 = 收入 - 成本，成本来自库存域 / 财务域已过账的权威估值事件。',
+  'sales-ranking': '本报表按期间业务活动统计：出货按出货日期，服务履约按业务日期，退货按退货日期；排行指标为毛利，复用与销售毛利相同的权威事实。',
+  'sales-outstanding': '本报表以要求交期作为日期筛选与到期口径；缺失要求交期的旧版订单明确标注，不回退订单日期。',
   'purchase-summary': '本报表按期间业务活动统计：订单按订单日期，入库按入库日期，退货按退货日期；缺权威业务日期的记录明确标注，不回退创建时间。',
-  'purchase-outstanding': '本报表以预计到货日作为日期筛选与到期口径；缺失预计到货日的 legacy 订单明确标注，不回退订单日期。',
-  'inventory-movements': '本报表按库存交易台账业务日期统计流水；缺业务日期的 legacy 记录明确标注，不回退创建时间。',
+  'purchase-outstanding': '本报表以预计到货日作为日期筛选与到期口径；缺失预计到货日的旧版订单明确标注，不回退订单日期。',
+  'inventory-movements': '本报表按库存交易台账业务日期统计流水；缺业务日期的旧版记录明确标注，不回退创建时间。',
 };
 
 // Frozen page title used by MobileShell / app router navigation group.

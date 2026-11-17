@@ -156,13 +156,14 @@ describe('P1B — application launcher contract', () => {
     assert.match(html, /data-testid="v16-launcher-group-master-data"/);
   });
 
-  test('mobile metadata exposes exactly eight canonical business groups', () => {
+  // 2026-11-17：九个域分组 + 中文标题（Requirement §36.19 PL-NAVI-01 / PL-NAVI-03）。
+  test('mobile metadata exposes exactly nine canonical domain groups', () => {
     const groups = applicationMetadata.MOBILE_APPLICATION_GROUPS;
     const coreGroups = groups.filter((g) => g.kind === 'domain');
     const labels = coreGroups.map((g) => g.label);
     assert.deepEqual(labels, [
-      'Master & Engineering', 'Sales & Customer', 'Planning', 'Procurement & Outsourcing',
-      'Manufacturing & Quality', 'Inventory & Warehouse', 'Finance Operations', 'Accounting & Analytics',
+      '主数据与工程', '销售与客户', '计划', '采购与委外',
+      '制造与质量', '库存与仓储', '财务运营', '会计与分析', '系统设置',
     ]);
   });
 
@@ -173,6 +174,7 @@ describe('P1B — application launcher contract', () => {
     assert.deepEqual(coreKeys, [
       'master-engineering', 'sales-customer', 'planning', 'procurement-outsourcing',
       'manufacturing-quality', 'inventory-warehouse', 'finance-operations', 'accounting-analytics',
+      'platform',
     ]);
   });
 
@@ -219,9 +221,22 @@ describe('P1B — application launcher contract', () => {
     );
   });
 
-  test('Platform routes stay outside business launcher groups', () => {
+  // 2026-11-17（Requirement §36.19 PL-NAVI-01）：Platform 取得「系统设置」启动器分组，
+  // 本断言**显式修订**而非删除 —— 原断言锁定的正是 commit c77616b 引入的缺失，
+  // 正是它让 admin 无法在界面上到达「用户与权限 → 用户管理 → 新增用户」。
+  // 修订后：业务审批与通知中心仍由底部页签承载（不重复进启动器）；
+  // 用户与权限、生命周期与归档进入「系统设置」分组。
+  test('Platform launcher placement matches the bottom-tab / 系统设置 split', () => {
     const launcherPages = new Set(applicationMetadata.MOBILE_APPLICATION_GROUPS.flatMap((group) => group.items.map((item) => item.page)));
-    for (const page of ['notifications','approvals','users','lifecycle']) assert.equal(launcherPages.has(page), false, page);
+    for (const page of ['notifications','approvals']) {
+      assert.equal(launcherPages.has(page), false, `${page} 由底部页签承载，不应重复进入启动器`);
+    }
+    for (const page of ['users','lifecycle']) {
+      assert.equal(launcherPages.has(page), true, `${page} 应在「系统设置」分组中有入口`);
+    }
+    const platformGroup = applicationMetadata.MOBILE_APPLICATION_GROUPS.find((group) => group.key === 'platform');
+    assert.ok(platformGroup, '必须存在「系统设置」启动器分组');
+    assert.equal(platformGroup.kind, 'domain');
   });
 
   test('disabled routes (cash-journals/bills/workflows/data-cleanup) are not launcher tiles', () => {

@@ -193,7 +193,9 @@ test('P1 material plan: page source uses centralized status labels (no raw enum 
 
 test('P1 launcher: Planning domain exposes forecast and MRP while material suggestions remain contextual', () => {
   const launcherSource = readFileSync(resolve(repoRoot, 'src/navigation/applicationRegistry.js'), 'utf8');
-  assertContains(launcherSource, "'planning','Planning'");
+  // 2026-11-17：分组标题不再硬编码在 registry，改为从 domainMetadata 派生
+  // （Requirement §36.19 PL-NAVI-03），故断言分组签名而非英文标签。
+  assertContains(launcherSource, "launcherGroup('planning','domain','planning'");
   assertContains(launcherSource, "['forecasts','计划预测'");
   assertContains(launcherSource, "['mrp-runs','MRP'");
   // material-requirements-plan is intentionally NOT a primary tile.

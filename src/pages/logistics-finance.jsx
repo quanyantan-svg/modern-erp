@@ -111,7 +111,7 @@ export const relationshipPage = (type) => ({ SALES_ORDER: 'orders', SALES_DELIVE
 
 export function RelationshipSections({ detail }) {
   const relation = detail.relationships || { upstream: [], downstream: [] };
-  const directLabel = detail.delivery_no ? 'Legacy / Source unavailable（旧版出货）' : detail.receipt_no ? 'Legacy / Source unavailable（旧版入库）' : 'Legacy / Source unavailable（旧版退货）';
+  const directLabel = detail.delivery_no ? '旧版单据 / 来源不可用（旧版出货）' : detail.receipt_no ? '旧版单据 / 来源不可用（旧版入库）' : '旧版单据 / 来源不可用（旧版退货）';
   return <>
     <section className="document-relations" data-testid="document-relations"><h4>关联单据</h4>
       {relation.upstream?.length ? <div><span>上游单据</span>{relation.upstream.map((item) => <AppLink key={item.id} page={relationshipPage(item.type)} documentId={item.id} documentType={item.type}>{relationshipLabel(item.type)} <b className="mono">{item.documentNo}</b></AppLink>)}</div> : relation.direct && <div className="direct-business"><span>上游单据</span><strong>{directLabel}</strong><small>仅兼容读取，不可重新过账</small></div>}

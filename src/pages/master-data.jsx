@@ -2422,7 +2422,7 @@ function PurchaseChangeEditor({ order, products, value, notify, onClose, onSaved
                 onChange={(event) => setForm({ ...form, quantity: event.target.value })}/>
             </label>
             <label className="full">单据单位（留空使用货品默认单位）
-              <input value={form.documentUomCode} placeholder="例如 EA / BOX"
+              <input value={form.documentUomCode} placeholder="例如「EA」/「BOX」"
                 onChange={(event) => setForm({ ...form, documentUomCode: event.target.value })}/>
             </label>
           </>

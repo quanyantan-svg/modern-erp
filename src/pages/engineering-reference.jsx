@@ -26,11 +26,11 @@ import {
 } from '../components/design-system.jsx';
 
 const SECTIONS = [
-  { key: 'calendar', label: '日历与班次', summary: 'Shift / Pattern / Calendar / Template' },
-  { key: 'formula', label: '公式', summary: 'Workshop Formula (受限语法)' },
-  { key: 'resources', label: '资源 / 设备', summary: 'Resource / Equipment' },
-  { key: 'operations', label: '作业 / 控制码', summary: 'Operation / Control Code / Activity' },
-  { key: 'work-centers', label: '工作中心', summary: 'Work Center (能力 / 停用)' },
+  { key: 'calendar', label: '日历与班次', summary: '班次 / 排班模式 / 日历 / 模板' },
+  { key: 'formula', label: '公式', summary: '工艺公式（受限语法）' },
+  { key: 'resources', label: '资源 / 设备', summary: '资源 / 设备' },
+  { key: 'operations', label: '作业 / 控制码', summary: '作业 / 控制码 / 活动' },
+  { key: 'work-centers', label: '工作中心', summary: '工作中心（能力 / 停用）' },
 ];
 
 const STATUS_LABELS = { ACTIVE: '启用', INACTIVE: '停用', DRAFT: '草稿' };
@@ -536,7 +536,7 @@ export default function EngineeringReference({ user, notify }) {
   const canManageWorkCenters = can(user, 'WORK_CENTERS_MANAGE');
   return <BusinessPageShell className="engineering-reference-v15" width="rail">
     <BusinessPageHeader title="工程基础资料"
-      help={<HelpDisclosure summary="工作面说明"><p>本工作面集中维护班次/日历/公式/资源/作业/工作中心等工程基础资料。所有历史已被引用的资料使用 active lifecycle (active=0 停用)，不在 UI 暴露 hard-delete。</p></HelpDisclosure>} />
+      help={<HelpDisclosure summary="工作面说明"><p>本工作面集中维护班次/日历/公式/资源/作业/工作中心等工程基础资料。所有历史已被引用的资料使用启用状态生命周期（active=0 停用），不在界面暴露彻底删除。</p></HelpDisclosure>} />
     <SectionTabs value={section} onChange={setSection} />
     {section === 'calendar' && <CalendarSection user={user} notify={notify} canManage={canManage} />}
     {section === 'formula' && <FormulaSection user={user} notify={notify} canManage={canManage} />}

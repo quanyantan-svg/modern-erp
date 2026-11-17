@@ -50,7 +50,7 @@ export default function PlatformNumbering({ user, notify }) {
     <BusinessPageShell className="platform-ops" width="rail" data-testid="platform-numbering-page">
       <header className="platform-ops__hero">
         <div>
-          <span>NUMBERING SERVICE</span>
+          <span>编号服务</span>
           <h2>编号规则</h2>
         </div>
         <p>统一编号服务按「单据类型 + 组织 + 期间」发放单号；既有单号格式保持不变，历史数据与既有断言不受影响。</p>

@@ -69,7 +69,7 @@ export function settlementAccountBalance(db, res, actor, accountId) {
   allow(actor, 'FINANCE_TREASURY_VIEW', 'ACCOUNTING_VIEW');
   if (!accountId) throw new HttpError(400, 'accountId 必填');
   const account = db.prepare(`SELECT * FROM bank_accounts WHERE id=?`).get(accountId);
-  if (!account) throw new HttpError(404, 'account 不存在');
+  if (!account) throw new HttpError(404, '「account」 不存在');
   return send(res, 200, { account });
 }
 

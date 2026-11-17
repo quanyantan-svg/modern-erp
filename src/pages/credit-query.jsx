@@ -312,7 +312,7 @@ export default function CreditQuery({ user }) {
 
   return <main className="credit-query" data-testid="credit-query-page">
     <header className="credit-query__header">
-      <div><p>Sales &amp; Customer</p><h1>信用额度与例外查询</h1><span>只读查询；不会修改信用事实、审批或历史记录。</span></div>
+      <div><p>销售与客户</p><h1>信用额度与例外查询</h1><span>只读查询；不会修改信用事实、审批或历史记录。</span></div>
     </header>
     <SegmentedControl label="信用查询视图" value={tab} onChange={(value) => { setTab(value); if (value === 'exposure' && detailId) closeDetail(); }} options={[{ value: 'exposure', label: '额度查询' }, { value: 'exceptions', label: '例外历史' }]} />
 

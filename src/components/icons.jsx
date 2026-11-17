@@ -1,13 +1,12 @@
 import {
-  Archive, ArrowLeftRight, BadgePercent, Banknote, Bell, Boxes, CalendarClock,
+  Activity, Archive, ArrowLeftRight, BadgePercent, Banknote, Bell, Boxes, Building2, CalendarClock,
   ChartNoAxesCombined, Check, CheckCircle2, ChevronLeft,
   ChevronRight, CircleDollarSign, CircleUserRound, ClipboardCheck, ClipboardList,
-  DatabaseZap, Factory, FileInput, FileText,
-  Grid3X3, Info, Inbox, Landmark, LayoutDashboard,
-  MessageCircle, MoreHorizontal, Network, Package,
+  DatabaseZap, Factory, FileInput, FileText, GitBranch, Grid3X3, Hash, Info, Inbox, Landmark,
+  LayoutDashboard, MessageCircle, MoreHorizontal, Network, Package,
   PackageCheck, PackageOpen, ReceiptText, RotateCcw, Search, Settings, ShieldCheck,
-  ShoppingBag, ShoppingCart, SlidersHorizontal, Sparkles, Trash2, TrendingUp,
-  TriangleAlert, UserRound, UsersRound, WalletCards, Warehouse, X,
+  ShoppingBag, ShoppingCart, SlidersHorizontal, Sparkles, Split, Tags, Trash2, TrendingUp,
+  TriangleAlert, UserRound, UsersRound, WalletCards, Warehouse, Workflow, X,
 } from 'lucide-react';
 
 const ICONS = {
@@ -76,6 +75,13 @@ const ICONS = {
   purchaseDiscount: BadgePercent,
   users: UsersRound,
   cleanup: DatabaseZap,
+  organizations: Building2,
+  numbering: Hash,
+  sodRules: Split,
+  workflowDesigner: Workflow,
+  workflowBindings: GitBranch,
+  workflowMonitor: Activity,
+  sourcingPricing: Tags,
 };
 
 export function Icon({ name, size = 20, strokeWidth = 1.75, className = '', ...props }) {

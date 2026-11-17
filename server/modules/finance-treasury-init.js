@@ -19,14 +19,14 @@ export function postTreasuryOpening(db, req, res, actor) {
     const accountId = requiredText(body.accountId, 'accountId', 64);
     const openingCents = Number(body.openingBalanceCents ?? 0);
     if (!Number.isSafeInteger(openingCents) || openingCents < 0) {
-      throw new HttpError(400, 'openingBalanceCents must be a non-negative integer');
+      throw new HttpError(400, '期初余额「openingBalanceCents」必须是非负整数');
     }
     const businessDate = requiredText(body.businessDate, 'businessDate', 16);
     const now = new Date().toISOString();
     transaction(db, () => {
       guardPeriodAction(db, { actionCode: 'FINANCE_TREASURY_MUTATION', businessDate: businessDate });
       const account = db.prepare(`SELECT id FROM bank_accounts WHERE id=? AND active=1`).get(accountId);
-      if (!account) throw new HttpError(409, 'settlement account not found or inactive');
+      if (!account) throw new HttpError(409, '结算账户不存在或已停用');
       db.prepare(`UPDATE bank_accounts SET opening_balance_cents=?, updated_at=? WHERE id=?`)
         .run(openingCents, now, accountId);
       refreshSettlementAccountBalance(db, accountId);

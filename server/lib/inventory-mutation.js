@@ -90,10 +90,10 @@ function mutationConflict(message, code = 'INVENTORY_MUTATION_IDEMPOTENCY_CONFLI
 
 function consignmentMicros(input) {
   if (!Number.isSafeInteger(input.quantityMicros) || input.quantityMicros <= 0 || input.quantityMicros > MAX_SAFE_MICROS) {
-    throw new HttpError(400, 'Consignment quantityMicros must be a positive safe integer');
+    throw new HttpError(400, '寄售数量「quantityMicros」必须是大于 0 的安全整数');
   }
   if (Number(input.quantity) * 1_000_000 !== input.quantityMicros) {
-    throw new HttpError(400, 'Consignment quantity does not round-trip to quantityMicros');
+    throw new HttpError(400, '寄售数量无法精确换算为「quantityMicros」');
   }
   return String(input.quantityMicros);
 }
@@ -101,12 +101,12 @@ function consignmentMicros(input) {
 function canonicalFingerprint(input, businessDate, movementGroupId, fromJson, toJson) {
   const amount = input.commercialAmountCents;
   if (amount !== null && amount !== undefined && !Number.isSafeInteger(amount)) {
-    throw new HttpError(400, 'commercialAmountCents must be a safe integer or null');
+    throw new HttpError(400, '商务金额「commercialAmountCents」必须是安全整数或空值');
   }
   const expectedPolicy = CONSIGNMENT_POLICIES[input.sourceType];
   if (input.trackingMode !== 'CANONICAL_STRICT' || input.valuationMode !== 'EXTERNAL'
       || input.valuationPolicy !== expectedPolicy) {
-    throw new HttpError(400, 'Consignment strict tracking/valuation policy mismatch');
+    throw new HttpError(400, '寄售的严格跟踪与估值策略不匹配');
   }
   const payload = {
     fingerprintVersion: 1,
@@ -147,7 +147,7 @@ function outsourcingFingerprint(input, businessDate, movementGroupId, fromJson, 
 
 function readConsignmentEvidence(db, row) {
   if (Number(row.evidence_schema_version) !== 1 || !row.source_item_id || !row.request_fingerprint) {
-    throw mutationConflict('Legacy Consignment evidence is unavailable', 'CONSIGNMENT_LEGACY_EVIDENCE_UNAVAILABLE');
+    throw mutationConflict('旧版寄售证据不可用', 'CONSIGNMENT_LEGACY_EVIDENCE_UNAVAILABLE');
   }
   const from = row.from_position_identity_json == null ? null : parseCanonicalPositionSnapshot(row.from_position_identity_json);
   const to = row.to_position_identity_json == null ? null : parseCanonicalPositionSnapshot(row.to_position_identity_json);
@@ -190,11 +190,11 @@ function validateInventoryMaster(db, identity) {
   }
   if (identity.lotId) {
     const lot = db.prepare('SELECT id, product_id FROM inventory_lots WHERE id=?').get(identity.lotId);
-    if (!lot || lot.product_id !== identity.productId) throw new HttpError(400, 'lot 与产品不匹配');
+    if (!lot || lot.product_id !== identity.productId) throw new HttpError(400, '「lot」 与产品不匹配');
   }
   if (identity.serialId) {
     const s = db.prepare('SELECT id, product_id FROM inventory_serials WHERE id=?').get(identity.serialId);
-    if (!s || s.product_id !== identity.productId) throw new HttpError(400, 'serial 与产品不匹配');
+    if (!s || s.product_id !== identity.productId) throw new HttpError(400, '「serial」 与产品不匹配');
   }
   // Application-level owner reference validation against the live DB
   validateOwner(db, identity.ownerType, identity.ownerId);
@@ -265,11 +265,11 @@ function writeTrackedMovement(db, input, identity, direction, businessDate, move
 }
 
 export function applyInventoryMutation(input) {
-  if (!input || typeof input !== 'object') throw new HttpError(400, 'mutation input 必填');
+  if (!input || typeof input !== 'object') throw new HttpError(400, '「mutation」 「input」 必填');
   if (!input.sourceType || !SOURCE_TYPES.has(input.sourceType)) throw new HttpError(400, 'sourceType 不合法');
   if (!input.sourceId) throw new HttpError(400, 'sourceId 必填');
   if (!MOVEMENT_KINDS.has(input.movementKind)) throw new HttpError(400, 'movementKind 不合法');
-  if (!Number.isFinite(Number(input.quantity)) || Number(input.quantity) <= 0) throw new HttpError(400, 'quantity 必须为正数');
+  if (!Number.isFinite(Number(input.quantity)) || Number(input.quantity) <= 0) throw new HttpError(400, '「quantity」 必须为正数');
   if (!input.idempotencyKey) throw new HttpError(400, 'idempotencyKey 必填');
   if (!input.fromPosition && !input.toPosition) throw new HttpError(400, '必须提供 fromPosition 或 toPosition');
   const businessDate = input.businessDate || new Date().toISOString().slice(0, 10);
@@ -278,10 +278,10 @@ export function applyInventoryMutation(input) {
   const isStrictOutsourcing = OUTSOURCING_STRICT_SOURCE_TYPES.has(input.sourceType);
   const requiresReplayEvidence = isConsignment || isStrictOutsourcing;
   if (requiresReplayEvidence && (!input.sourceItemId || !input.movementGroupId)) {
-    throw new HttpError(400, 'Strict inventory sourceItemId and stable movementGroupId are required');
+    throw new HttpError(400, '严格库存模式必须提供「sourceItemId」和稳定的「movementGroupId」');
   }
   if (isStrictOutsourcing && (input.trackingMode !== 'EXTERNAL' || input.valuationMode !== 'EXTERNAL')) {
-    throw new HttpError(400, 'Outsourcing strict tracking/valuation policy mismatch');
+    throw new HttpError(400, '委外的严格跟踪与估值策略不匹配');
   }
 
   // Movement-kind pairing: paired kinds must have both from and to.
@@ -325,7 +325,7 @@ export function applyInventoryMutation(input) {
         || replay.to_position_identity_json !== toPositionIdentityJson
         || replay.request_fingerprint !== requestFingerprint;
       if (readableMismatch) throw mutationConflict(
-        'Inventory mutation idempotency conflict',
+        '库存变更的幂等冲突',
         isStrictOutsourcing ? 'INVENTORY_MUTATION_UNEXPECTED_REPLAY' : 'INVENTORY_MUTATION_IDEMPOTENCY_CONFLICT',
       );
       result = {
@@ -370,7 +370,7 @@ export function applyInventoryMutation(input) {
     if (input.sourceType === 'OPENING_INVENTORY') {
       const init = db.prepare(`SELECT status FROM inventory_initialization LIMIT 1`).get();
       if (init && init.status === 'CLOSED') {
-        throw new HttpError(409, `Initialization status CLOSED; cannot create opening inventory`);
+        throw new HttpError(409, `初始化状态为 CLOSED，不能创建期初库存`);
       }
     }
 

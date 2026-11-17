@@ -859,7 +859,7 @@ export function getIncomeStatement(db, res, actor, url) {
   try {
     income = calculateIncomeForPeriod(db, period);
   } catch (e) {
-    throw new HttpError(400, e.message);
+    throw new HttpError(400, '利润表计算失败，请检查期间后重试');
   }
 
   const aggregateByType = db.prepare(`

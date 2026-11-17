@@ -104,7 +104,7 @@ export function issueValue(db, input) {
     const quantity = Number(input.quantity); if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, '出库估值数量无效');
     const { method, key, row } = getBalance(db, input);
     if (!row) { const activated=db.prepare('SELECT valuation_activated_at FROM products WHERE id=?').get(input.productId)?.valuation_activated_at; if(!activated)return writeLegacyMovement(db,input,-quantity); throw new HttpError(409, '可估值库存不足'); }
-    if (Number(row.quantity) + EPS < quantity) throw new HttpError(409, '可估值库存不足；旧库存须在 Phase 6E 转换后使用');
+    if (Number(row.quantity) + EPS < quantity) throw new HttpError(409, '可估值库存不足；旧库存须在开账转换后使用');
     const allocated = allocateProportionalCents(Number(row.value_cents), quantity, Number(row.quantity));
     return writeMovement(db, input, -quantity, -allocated, method, key);
   });
@@ -197,10 +197,10 @@ export function applyWave6SalesReturnPoolValue(db, input) {
     return runGuardedMutation(db, () => {
     guardPeriodAction(db, { actionCode: 'INVENTORY_VALUATION', businessDate: input.businessDate });
     if (!input.productId || !input.warehouseId || !input.businessDate) {
-      throw new HttpError(409, 'Wave6 Option A: missing product/warehouse/businessDate');
+      throw new HttpError(409, '缺少产品、仓库或业务日期');
     }
     if (!Number.isFinite(Number(input.quantity)) || Number(input.quantity) <= 0) {
-      throw new HttpError(409, 'Wave6 Option A: quantity must be positive');
+      throw new HttpError(409, '数量必须大于 0');
     }
     // Pool identity must be MOVING_AVERAGE / LOT / SERIAL — strict, no lot for MOVING_AVERAGE
     const method = valuationMethod(db, input.productId);
@@ -208,7 +208,7 @@ export function applyWave6SalesReturnPoolValue(db, input) {
     const serialId = input.serialId || null;
     const requireCheck = db.prepare('SELECT valuation_activated_at FROM products WHERE id=?').get(input.productId);
     if (!requireCheck || !requireCheck.valuation_activated_at) {
-      throw new HttpError(409, 'Wave6 Option A Gate: 估值未启用，禁止入库');
+      throw new HttpError(409, '估值未启用，禁止入库');
     }
     // Look up existing positive pool at the same identity
     const key = method === 'LOT_SPECIFIC_POOL'
@@ -218,13 +218,13 @@ export function applyWave6SalesReturnPoolValue(db, input) {
         : `NONE:${input.warehouseId}:${input.productId}`;
     const row = db.prepare('SELECT * FROM inventory_valuation_balances WHERE balance_key=?').get(key);
     if (!row || Number(row.quantity) <= 0 || Number(row.value_cents) <= 0) {
-      throw new HttpError(409, 'Wave6 Option A Gate: 同一身份无合法正数估值池，禁止入库');
+      throw new HttpError(409, '同一身份无合法正数估值池，禁止入库');
     }
-    if (lotId && lotId !== row.lot_id) throw new HttpError(409, 'Wave6 Option A Gate: LOT 身份不匹配');
+    if (lotId && lotId !== row.lot_id) throw new HttpError(409, '批次身份不匹配');
     const existing = Math.abs(Number(row.quantity) - Number(input.quantity)) <= 1e-9;
     const newQty = Number(input.quantity);
     const newValue = existing ? Number(row.value_cents) : allocateProportionalCents(Number(row.value_cents), newQty, Number(row.quantity));
-    if (!Number.isSafeInteger(newValue)) throw new HttpError(409, 'Wave6 Option A Gate: 分摊价值溢出 safe integer');
+    if (!Number.isSafeInteger(newValue)) throw new HttpError(409, '分摊价值溢出安全整数范围');
     const basis = method === 'LOT_SPECIFIC_POOL' ? 'LOT_CARRYING' : method === 'SPECIFIC_SERIAL' ? 'SERIAL_EXISTING' : 'MOVING_AVERAGE';
     return receiveValue(db, {
       businessDate: input.businessDate,

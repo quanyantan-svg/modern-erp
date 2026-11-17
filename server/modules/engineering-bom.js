@@ -426,7 +426,7 @@ export function consolidateBom(db, res, actor, url) {
   allowAny(actor, ['ENGINEERING_BOM_VIEW', 'PRODUCTION_ORDERS_VIEW']);
   const bomId = url.searchParams.get('bom_id');
   const quantity = Number(url.searchParams.get('quantity') || 1);
-  if (!bomId || !Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, '缺少 bom_id 或 quantity 不合法');
+  if (!bomId || !Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, '缺少 bom_id 或 「quantity」 不合法');
   const root = loadBomHeader(db, bomId);
   const totals = new Map();
   function walk(parentProductId, level, parentQty) {
@@ -462,7 +462,7 @@ export function compareBoms(db, res, actor, url) {
   allowAny(actor, ['ENGINEERING_BOM_VIEW', 'PRODUCTION_ORDERS_VIEW']);
   const leftId = url.searchParams.get('left');
   const rightId = url.searchParams.get('right');
-  if (!leftId || !rightId) throw new HttpError(400, '缺少 left/right');
+  if (!leftId || !rightId) throw new HttpError(400, '缺少「left」/「right」');
   const left = loadBomHeader(db, leftId);
   const right = loadBomHeader(db, rightId);
   const leftMap = new Map(left.items.map((it) => [it.product_id, it]));
@@ -606,7 +606,7 @@ async function handleBatchRequest(db, req, res, actor, mode) {
   const body = await readJson(req);
   const filter = body.filter || {};
   const changes = Array.isArray(body.changes) ? body.changes : [];
-  if (changes.length === 0) throw new HttpError(400, '缺少 changes');
+  if (changes.length === 0) throw new HttpError(400, '缺少 「changes」');
   const targets = batchTargetBoms(db, filter);
   if (mode === 'preview') {
     const preview = targets.map((bom) => {

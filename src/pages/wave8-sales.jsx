@@ -98,7 +98,7 @@ export function ServiceFulfillments({ user, notify }) {
   const selectedLine = lines.find((line) => line.id === form.salesOrderItemId);
 
   return <BusinessPageShell className="wave8-page" width="rail">
-    <header className="wave8-hero"><div><span>SERVICE FULFILLMENT</span><h2>服务履约</h2></div><p>服务确认与实物出库分离；确认后形成不可编辑的履约与财务证据。</p></header>
+    <header className="wave8-hero"><div><span>服务履约</span><h2>服务履约</h2></div><p>服务确认与实物出库分离；确认后形成不可编辑的履约与财务证据。</p></header>
     {salesOrderId && <InlineAlert tone="info">当前销售订单上下文：<span className="mono">{salesOrderId}</span></InlineAlert>}
     {notice && <InlineAlert tone={notice.tone === 'permission' ? 'warning' : notice.tone === 'conflict' ? 'warning' : 'info'}>
       <strong>{notice.title}</strong>{notice.message ? `：${notice.message}` : ''}
@@ -264,7 +264,7 @@ export function ConsignmentCommercial({ user, notify }) {
       setNotice({ tone: 'invalid', title: '请为每一行选择来源仓库并填写数量', message: '' }); return;
     }
     const value = await post(`/api/consignment-commercial-documents/${document_.id}/instruct`,
-      { expectedVersion: Number(document_.version), businessDate: day(), allocations }, 'consignment-handoff', 'Handoff 已执行');
+      { expectedVersion: Number(document_.version), businessDate: day(), allocations }, 'consignment-handoff', '交接已执行');
     if (value) await openDocument(document_.id);
   };
 
@@ -279,7 +279,7 @@ export function ConsignmentCommercial({ user, notify }) {
   };
 
   return <BusinessPageShell className="wave8-page" width="rail">
-    <header className="wave8-hero"><div><span>CONSIGNMENT</span><h2>寄售业务</h2></div><p>商业地点、企业所有库存与结算事实三层分离；执行只采用 Handoff 历史证据。</p></header>
+    <header className="wave8-hero"><div><span>寄售</span><h2>寄售业务</h2></div><p>商业地点、企业所有库存与结算事实三层分离；执行只采用交接历史证据。</p></header>
     {notice && <InlineAlert tone={['permission', 'conflict', 'invalid'].includes(notice.tone) ? 'warning' : 'info'}>
       <strong>{notice.title}</strong>{notice.message ? `：${notice.message}` : ''}
     </InlineAlert>}
@@ -337,14 +337,14 @@ export function ConsignmentCommercial({ user, notify }) {
     {selected && <section className="wave8-detail">
       <div className="wave8-card__head"><h3>{selected.document_no}</h3><div className="wave8-actions">
         {manageable && selected.status === 'DRAFT' && <>
-          <button className="primary" disabled={busy} onClick={() => void submitHandoff(selected)}>执行 Handoff</button>
+          <button className="primary" disabled={busy} onClick={() => void submitHandoff(selected)}>执行交接</button>
           <button className="secondary" disabled={busy} onClick={async () => { const value = await post(`/api/consignment-commercial-documents/${selected.id}/cancel`, { expectedVersion: Number(selected.version) }, 'consignment-cancel', '草稿已取消'); if (value) setSelected(null); }}>取消草稿</button>
         </>}
         <button className="secondary" onClick={() => setSelected(null)}>关闭</button>
       </div></div>
       {manageable && selected.status === 'DRAFT' && referenceState === 'LOADING' && <Loading/>}
       {manageable && selected.status === 'DRAFT' && handoffReference && <div className="wave8-handoff">
-        <h4>Handoff 来源分配</h4>
+        <h4>交接来源分配</h4>
         {selected.lines?.map((line) => <div className="wave8-handoff__row" key={line.id}>
           <strong className="mono">{line.product_id}</strong>
           <span>{handoffReference.warehouse.code} · {handoffReference.warehouse.name}</span>

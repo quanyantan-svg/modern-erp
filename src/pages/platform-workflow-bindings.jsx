@@ -44,7 +44,7 @@ export default function PlatformWorkflowBindings({ user, notify }) {
     <BusinessPageShell className="platform-ops" width="rail" data-testid="platform-workflow-bindings-page">
       <header className="platform-ops__hero">
         <div>
-          <span>WORKFLOW BINDINGS</span>
+          <span>流程绑定</span>
           <h2>流程绑定</h2>
         </div>
         <p>把单据类型与组织绑定到已发布的流程版本；同一单据类型 + 组织只允许一条生效绑定。</p>

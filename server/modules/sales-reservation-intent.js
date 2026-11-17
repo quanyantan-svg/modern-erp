@@ -187,7 +187,7 @@ function createPlanningReservationAdapter(db, actor, args) {
   // Planning-internal error code (Planning owns its own validation taxonomy
   // and is free to change it).
   if (args.supplySourceType === 'EXPECTED') {
-    throw new HttpError(409, 'EXPECTED 模式需要 Planning 端有界集成扩展以提供权威有限供给；当前 fail closed', {
+    throw new HttpError(409, 'EXPECTED 模式需要 「Planning」 端有界集成扩展以提供权威有限供给；当前 「fail」 「closed」', {
       code: 'SALES_RESERVATION_EXPECTED_BOUNDED_EXTENSION_REQUIRED',
     });
   }
@@ -340,7 +340,7 @@ export async function requestReservationIntent(db, req, res, actor) {
   const warehouseId = body.warehouseId || body.warehouse_id || null;
   if (!productId) throw new HttpError(400, 'productId 必填');
   const quantity = Number(body.quantity);
-  if (!isPositiveNumber(quantity)) throw new HttpError(400, 'quantity 必须为正数');
+  if (!isPositiveNumber(quantity)) throw new HttpError(400, '「quantity」 必须为正数');
 
   const expectedSupplySourceType = body.expectedSupplySourceType || body.expected_supply_source_type || null;
   const expectedSupplySourceId = body.expectedSupplySourceId || body.expected_supply_source_id || null;
@@ -508,9 +508,9 @@ export async function consumeReservationIntent(db, req, res, actor, intentId) {
   if (!intent) throw new HttpError(404, '预留意图不存在');
   if (intent.intent_state !== 'GRANTED') throw new HttpError(409, `当前状态 ${intent.intent_state} 不可消费`);
   const consumeQty = Number(body.quantity ?? body.consumeQty ?? body.qty);
-  if (!isPositiveNumber(consumeQty)) throw new HttpError(400, 'quantity 必须为正数');
+  if (!isPositiveNumber(consumeQty)) throw new HttpError(400, '「quantity」 必须为正数');
   if (consumeQty > Number(intent.granted_qty) - Number(intent.consumed_qty) + 1e-9) {
-    throw new HttpError(409, 'consume 超过可消费数量');
+    throw new HttpError(409, '「consume」 超过可消费数量');
   }
   const order = loadOrder(db, intent.sales_order_id);
   requireSalesGroupScope(db, actor, { salesGroupId: order.sales_group_id, businessDate: body.businessDate || now().slice(0, 10) });
@@ -529,7 +529,7 @@ export async function consumeReservationIntent(db, req, res, actor, intentId) {
       });
     }
     if (consumeQty > Number(locked.granted_qty) - Number(locked.consumed_qty) + 1e-9) {
-      throw new HttpError(409, 'consume 超过可消费数量', { code: 'SALES_RESERVATION_INTENT_STATE_INVALID' });
+      throw new HttpError(409, '「consume」 超过可消费数量', { code: 'SALES_RESERVATION_INTENT_STATE_INVALID' });
     }
     const newConsumed = Number(locked.consumed_qty) + consumeQty;
     const newState = newConsumed >= Number(locked.granted_qty) - 1e-9 ? 'CONSUMED' : 'GRANTED';

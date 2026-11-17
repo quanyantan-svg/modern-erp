@@ -118,7 +118,7 @@ export async function updateDeliveryNotice(db, req, res, actor, noticeId) {
 
 export async function deliveryNoticeAction(db, req, res, actor, noticeId, action) {
   requireSalesPermission(actor, 'SALES_MANAGE'); const body = await readJson(req); const key = String(req.headers['idempotency-key'] || '').trim();
-  if (action === 'confirm' && !key) throw new HttpError(422, 'Idempotency-Key 必填'); const fingerprint = requestFingerprint(body);
+  if (action === 'confirm' && !key) throw new HttpError(422, '「Idempotency-Key」 必填'); const fingerprint = requestFingerprint(body);
   if (action === 'confirm') { const replay = idempotencyReplay(db, 'DELIVERY_NOTICE_CONFIRM', noticeId, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true }); }
   let result; transaction(db, () => {
     const notice = db.prepare(`SELECT * FROM delivery_notices WHERE id=?${lockSuffix(db)}`).get(noticeId); if (!notice) throw new HttpError(404, '发货通知不存在'); scopedOrder(db, notice.sales_order_id, actor, true);

@@ -90,7 +90,7 @@ export async function upsertRecognitionPolicy(db, req, res, actor) {
   allow(actor, 'FINANCE_RECOGNITION_POLICY_MANAGE');
   const body = await readJson(req);
   const side = requiredText(body.side, 'side', 4).toUpperCase();
-  if (!['AR', 'AP'].includes(side)) throw new HttpError(400, 'side 必须为 AR/AP');
+  if (!['AR', 'AP'].includes(side)) throw new HttpError(400, '「side」 必须为 AR/AP');
   const sourceType = requiredText(body.sourceType, 'sourceType', 32).toUpperCase();
   const sourceId = optionalText(body.sourceId ?? '', 64) || null;
   const mode = requiredText(body.recognitionMode, 'recognitionMode', 40).toUpperCase();

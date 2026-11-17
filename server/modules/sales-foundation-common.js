@@ -10,7 +10,7 @@ export const RESERVATION_BEHAVIORS = Object.freeze([
 export function boolInt(value, fallback = true) {
   if (value === undefined) return fallback ? 1 : 0;
   if (value !== true && value !== false && value !== 1 && value !== 0) {
-    throw new HttpError(400, '布尔字段必须为 true 或 false');
+    throw new HttpError(400, '布尔字段必须为 「true」 或 「false」');
   }
   return value ? 1 : 0;
 }

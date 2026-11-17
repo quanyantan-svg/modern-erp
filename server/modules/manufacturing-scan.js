@@ -40,7 +40,7 @@ export async function productionScanLookup(db, req, res, actor) {
   const body = await readJson(req);
   const token = String(body.token || '').trim();
   const kind = String(body.kind || 'ORDER').trim().toUpperCase();
-  if (!token) throw new HttpError(400, '请提供扫描 token');
+  if (!token) throw new HttpError(400, '请提供扫描 「token」');
   if (kind === 'ORDER') {
     const order = matchOrderByToken(db, token);
     if (!order) throw new HttpError(404, '未找到匹配的生产工单');
@@ -84,7 +84,7 @@ export async function productionScanIssue(db, req, res, actor) {
   const warehouseId = String(body.warehouseId || '').trim();
   if (!db.prepare('SELECT 1 FROM warehouses WHERE id=? AND active=1').get(warehouseId)) throw new HttpError(400, '请选择有效仓库');
   const identity = body.identity ? matchLotSerialToken(db, body.identity) : null;
-  if (body.identity && !identity) throw new HttpError(404, 'LOT / SERIAL token 未找到');
+  if (body.identity && !identity) throw new HttpError(404, 'LOT / SERIAL 「token」 未找到');
   // A lot carries no warehouse of its own; only a serial does. The product
   // identity is checked for both.
   if (identity && (identity.productId !== requirement.product_id

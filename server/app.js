@@ -862,7 +862,7 @@ ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-reservation-inte
   if (action === 'grant') return grantReservationIntent(db,req,res,actor,params[0]);
   if (action === 'consume') return consumeReservationIntent(db,req,res,actor,params[0]);
   if (action === 'release') return releaseReservationIntent(db,req,res,actor,params[0]);
-  throw new HttpError(400, `action 不支持: ${action}`);
+  throw new HttpError(400, `「action」 不支持: ${action}`);
 }, owner: 'server/modules/sales-reservation-intent.js' });
 ownedRouteTable.register({ method: 'GET', path: '/api/service-fulfillments', handler: ({ db,res,actor,url }) => listServiceFulfillments(db,res,actor,url), owner: 'server/modules/service-fulfillment.js' });
 ownedRouteTable.register({ method: 'POST', path: '/api/service-fulfillments', handler: ({ db,req,res,actor }) => createServiceFulfillment(db,req,res,actor), owner: 'server/modules/service-fulfillment.js' });
@@ -4425,7 +4425,7 @@ async function handleApi(db, req, res, url) {
   if (adjustmentMatch && req.method === 'PATCH') return updateInventoryAdjustment(db, req, res, actor, adjustmentMatch[1]);
   if (adjustmentMatch && req.method === 'DELETE') return deleteDraftDocument(db, res, actor, 'inventoryAdjustment', adjustmentMatch[1]);
   if (pathname === '/api/mrp/calculate' && req.method === 'POST') return send(res, 410, { error: '旧版即时 MRP 已停用，请使用 /api/planning/mrp/runs' });
-  if (pathname === '/api/mrp/bom-explode' && req.method === 'POST') return send(res, 410, { error: '旧版 BOM 展开已停用，请使用 /api/planning/reports/supply-demand-detail 或 Engineering BOM resolver' });
+  if (pathname === '/api/mrp/bom-explode' && req.method === 'POST') return send(res, 410, { error: '旧版 BOM 展开已停用，请使用 /api/planning/reports/supply-demand-detail 或工程 BOM 解析接口' });
   // The legacy stocktake write paths are retired. The canonical module owns
   // create (POST /api/inventory-stocktakes) and approve
   // (POST /api/inventory-stocktakes/{id}/approve); the read model of the
@@ -4434,7 +4434,7 @@ async function handleApi(db, req, res, url) {
   const inventoryCheckReverseMatch = pathname.match(/^\/api\/inventory-checks\/([^/]+)\/(?:reverse|reversal-request|reversal-confirm)$/);
   if (inventoryCheckReverseMatch && req.method === 'POST') return reverseInventoryControl(db, req, res, actor, 'INVENTORY_CHECK', inventoryCheckReverseMatch[1], pathname.endsWith('reversal-confirm') ? 'CONFIRM' : pathname.endsWith('reversal-request') ? 'REQUEST' : null);
   const icMatch = pathname.match(/^\/api\/inventory-checks\/([^/]+)$/);
-  if (icMatch && req.method === 'PATCH') return send(res, 410, { error: '旧版盘点单据写入口已停用，请使用 /api/inventory-stocktakes/{id}/approve' });
+  if (icMatch && req.method === 'PATCH') return send(res, 410, { error: '旧版盘点单据写入口已停用，请使用 /api/inventory-stocktakes/{「id」}/approve' });
   // The duplicate transfer write path registered by the V24 round is retired:
   // the canonical module owns /api/inventory-transfers.
   if (pathname === '/api/inventory-transfer-commands' && req.method === 'POST') return send(res, 410, { error: '重复的调拨写入口已停用，请使用 /api/inventory-transfers' });
@@ -4784,14 +4784,15 @@ async function handleApi(db, req, res, url) {
              body.expiryDate || null, body.manufactureDate || null,
              'API', lotId, lotId, new Date().toISOString());
     } catch (e) {
-      return send(res, 400, { error: e.message });
+      console.error('[api] inventory-lots insert failed', e);
+      return send(res, 400, { error: '批次信息保存失败' });
     }
     return send(res, 201, { id: lotId, lot: { id: lotId, productId: body.productId, lotCode: body.lotCode, status: body.status || 'AVAILABLE' } });
   }
   const lotMatch = pathname.match(/^\/api\/inventory-lots\/([^/]+)$/);
   if (lotMatch && req.method === 'GET') {
     const row = db.prepare('SELECT * FROM inventory_lots WHERE id=?').get(lotMatch[1]);
-    if (!row) return send(res, 404, { error: 'lot not found' });
+    if (!row) return send(res, 404, { error: '批次不存在' });
     return send(res, 200, { lot: row });
   }
 
@@ -4805,7 +4806,8 @@ async function handleApi(db, req, res, url) {
              body.warehouseId || null, 'API', sid, sid,
              new Date().toISOString(), new Date().toISOString());
     } catch (e) {
-      return send(res, 400, { error: e.message });
+      console.error('[api] inventory-serials insert failed', e);
+      return send(res, 400, { error: '序列号信息保存失败' });
     }
     return send(res, 201, { id: sid, serial: { id: sid, productId: body.productId, serialNumber: body.serialNumber, lifecycleState: body.lifecycleState || 'AVAILABLE' } });
   }
@@ -4814,9 +4816,9 @@ async function handleApi(db, req, res, url) {
   // owns the packing relation (/api/inventory-containers).
   if (pathname === '/api/containers' && req.method === 'POST') return send(res, 410, { error: '旧版容器写入口已停用，请使用 /api/inventory-containers' });
   const containerPackMatch = pathname.match(/^\/api\/containers\/([^/]+)\/pack$/);
-  if (containerPackMatch && req.method === 'POST') return send(res, 410, { error: '旧版容器写入口已停用，请使用 /api/inventory-containers/{id}/pack' });
+  if (containerPackMatch && req.method === 'POST') return send(res, 410, { error: '旧版容器写入口已停用，请使用 /api/inventory-containers/{「id」}/pack' });
   const containerUnpackMatch = pathname.match(/^\/api\/containers\/([^/]+)\/unpack$/);
-  if (containerUnpackMatch && req.method === 'POST') return send(res, 410, { error: '旧版容器写入口已停用，请使用 /api/inventory-containers/{id}/unpack' });
+  if (containerUnpackMatch && req.method === 'POST') return send(res, 410, { error: '旧版容器写入口已停用，请使用 /api/inventory-containers/{「id」}/unpack' });
   const containerContentsMatch = pathname.match(/^\/api\/containers\/([^/]+)\/contents$/);
   if (containerContentsMatch && req.method === 'GET') return inventoryOfContainer(db, res, actor, containerContentsMatch[1]);
 
@@ -4832,7 +4834,7 @@ async function handleApi(db, req, res, url) {
     const body = await readJson(req);
     const code = body.code || '';
     const parsed = parseBarcode(db, code);
-    if (!parsed) return send(res, 400, { error: 'invalid barcode', code });
+    if (!parsed) return send(res, 400, { error: '条码无效', code });
     const position = { productId: parsed.productId, warehouseId: parsed.warehouseId, binId: parsed.binId, lotId: parsed.lotId, serialId: parsed.serialId };
     const valid = validateScanForInventory(db, code, position);
     return send(res, 200, { valid, parse: parsed });
@@ -4875,7 +4877,7 @@ async function handleApi(db, req, res, url) {
   // The legacy stocktake scan write path is retired: the canonical module
   // owns the scan on a draft stocktake.
   const checkScanMatch = pathname.match(/^\/api\/inventory-checks\/([^/]+)\/scan$/);
-  if (checkScanMatch && req.method === 'POST') return send(res, 410, { error: '旧版盘点扫码写入口已停用，请使用 /api/inventory-stocktakes/{id}/scan' });
+  if (checkScanMatch && req.method === 'POST') return send(res, 410, { error: '旧版盘点扫码写入口已停用，请使用 /api/inventory-stocktakes/{「id」}/scan' });
 
   // Narrow lookups for warehouse-flavored pickers (gated by INVENTORY_VIEW).
   // V2 Wave 4C: migrated to ownedRouteTable (server/modules/lookups.js).
@@ -7280,7 +7282,7 @@ export async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
           : Number(item.quantity);
         const classification = db.prepare('SELECT service_classification,active FROM product_commercial_classification WHERE product_id=?').get(item.product_id);
         if (Number(classification?.service_classification) === 1 && Number(classification?.active) === 1) {
-          if (!Number.isSafeInteger(baseQuantity * 1_000_000)) throw new HttpError(409, '服务交付数量不能精确表示为 micros', { code: 'SERVICE_QUANTITY_NOT_REPRESENTABLE' });
+          if (!Number.isSafeInteger(baseQuantity * 1_000_000)) throw new HttpError(409, '服务交付数量不能精确表示为 「micros」', { code: 'SERVICE_QUANTITY_NOT_REPRESENTABLE' });
           const confirmedMicros = Number(db.prepare("SELECT COALESCE(SUM(confirmation_qty_micros),0) n FROM service_fulfillments WHERE sales_order_item_id=? AND confirmation_state='CONFIRMED'").get(sourceItem.id).n);
           const deliveredBefore = Number(db.prepare(`SELECT COALESCE(SUM(COALESCE(di.base_quantity_num,di.quantity)*1000000/COALESCE(di.base_quantity_den,1)),0) n
             FROM sales_delivery_items di JOIN sales_deliveries dh ON dh.id=di.delivery_id
@@ -7445,13 +7447,13 @@ async function createOptionAReturnDraft(db, req, res, actor, body, marker) {
     for (const raw of items) {
       const productId = String(raw.productId);
       const quantity = Number(raw.quantity);
-      if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, 'quantity 必须大于 0');
+      if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, '「quantity」 必须大于 0');
       const salesOrderItemId = marker === 'SO_BACKED' ? String(raw.salesOrderItemId || '') : null;
       let unitPriceCents = 0;
       if (marker === 'SO_BACKED') {
         if (!salesOrderItemId) throw new HttpError(400, 'SO_BACKED 必须提供 salesOrderItemId');
         const soi = db.prepare(`SELECT soi.product_id, soi.unit_price_cents FROM sales_order_items soi WHERE soi.id=?`).get(salesOrderItemId);
-        if (!soi || soi.product_id !== productId) throw new HttpError(400, 'SO 行 product 不匹配');
+        if (!soi || soi.product_id !== productId) throw new HttpError(400, 'SO 行 「product」 不匹配');
         unitPriceCents = Number(soi.unit_price_cents);
       } else {
         unitPriceCents = 0; // NO_SOURCE commercial mirror deferred to canonical Option A valuation writer

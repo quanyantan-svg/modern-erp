@@ -32,14 +32,14 @@ before(async () => {
 after(async () => vite?.close());
 
 describe('V1.6 P1.1 application visual contract', () => {
-  test('preserves the eight canonical domain groups and explicit module identities', () => {
+  test('preserves the nine canonical domain groups and explicit module identities', () => {
     const groups = applicationMetadata.MOBILE_APPLICATION_GROUPS.filter((group) => group.kind === 'domain');
     assert.deepEqual(groups.map(({ label }) => label), [
-      'Master & Engineering', 'Sales & Customer', 'Planning', 'Procurement & Outsourcing',
-      'Manufacturing & Quality', 'Inventory & Warehouse', 'Finance Operations', 'Accounting & Analytics',
+      '主数据与工程', '销售与客户', '计划', '采购与委外',
+      '制造与质量', '库存与仓储', '财务运营', '会计与分析', '系统设置',
     ]);
     assert.deepEqual(groups.map(({ module }) => module), [
-      'master', 'sales', 'planning', 'purchasing', 'production', 'inventory', 'finance', 'analytics',
+      'master', 'sales', 'planning', 'purchasing', 'production', 'inventory', 'finance', 'analytics', 'platform',
     ]);
   });
 

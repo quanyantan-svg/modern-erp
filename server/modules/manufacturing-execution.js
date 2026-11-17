@@ -249,7 +249,7 @@ export function cancelOperationReport(db, res, actor, reportId) {
 
 export async function reverseOperationReport(db, req, res, actor, reportId) {
   allow(actor, 'PRODUCTION_ORDERS_START'); const body = await readJson(req);
-  const key = String(req.headers['idempotency-key'] || body.idempotencyKey || ''); if (!key) throw new HttpError(400, '冲销必须提供 Idempotency-Key');
+  const key = String(req.headers['idempotency-key'] || body.idempotencyKey || ''); if (!key) throw new HttpError(400, '冲销必须提供 「Idempotency-Key」');
   const values = { goodQuantity: nonNegative(body.goodQuantity, '冲销良品'), scrapQuantity: nonNegative(body.scrapQuantity, '冲销报废'), laborSeconds: integerSeconds(body.laborSeconds, '冲销人工工时'), machineSeconds: integerSeconds(body.machineSeconds, '冲销设备工时'), reason: String(body.reason || '').trim() };
   if (!values.reason) throw new HttpError(400, '必须填写冲销原因'); const fingerprint = requestFingerprint(values);
   const replay = idempotencyReplay(db, 'OPERATION_REPORT_REVERSAL', reportId, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
@@ -452,7 +452,7 @@ export function scheduleProductionOrder(db, res, actor, orderId, body) {
   const mode = String(body?.mode || 'FORWARD').toUpperCase();
   if (!['FORWARD', 'BACKWARD'].includes(mode)) throw new HttpError(400, '排程模式必须是 FORWARD 或 BACKWARD');
   const ops = db.prepare('SELECT * FROM production_order_operations WHERE production_order_id=? ORDER BY sequence_no').all(orderId);
-  if (!ops.length) throw new HttpError(409, '工单尚未生成 Operation Plan');
+  if (!ops.length) throw new HttpError(409, '工单尚未生成 「Operation」 「Plan」');
   const overloads = [];
   if (mode === 'FORWARD') {
     let cursorDate = order.planned_start || new Date().toISOString().slice(0, 10);
@@ -502,9 +502,9 @@ function assertPlanTransition(current, target) {
 export function submitOperationPlan(db, res, actor, orderId) {
   allow(actor, 'PRODUCTION_PLAN_MANAGE');
   const order = loadOrder(db, orderId);
-  if (!['RELEASED', 'IN_PROGRESS'].includes(order.status)) throw new HttpError(409, '只有 RELEASED/IN_PROGRESS 工单允许提交 Operation Plan');
+  if (!['RELEASED', 'IN_PROGRESS'].includes(order.status)) throw new HttpError(409, '只有 RELEASED/IN_PROGRESS 工单允许提交 「Operation」 「Plan」');
   const ops = db.prepare('SELECT * FROM production_order_operations WHERE production_order_id=?').all(orderId);
-  if (!ops.length) throw new HttpError(409, '工单尚未生成 Operation Plan');
+  if (!ops.length) throw new HttpError(409, '工单尚未生成 「Operation」 「Plan」');
   const now = new Date().toISOString();
   transaction(db, () => {
     for (const op of ops) {
@@ -519,9 +519,9 @@ export function submitOperationPlan(db, res, actor, orderId) {
 export function approveOperationPlan(db, res, actor, orderId) {
   allow(actor, 'PRODUCTION_PLAN_MANAGE');
   const order = loadOrder(db, orderId);
-  if (!['RELEASED', 'IN_PROGRESS'].includes(order.status)) throw new HttpError(409, '只有 RELEASED/IN_PROGRESS 工单允许审核 Operation Plan');
+  if (!['RELEASED', 'IN_PROGRESS'].includes(order.status)) throw new HttpError(409, '只有 RELEASED/IN_PROGRESS 工单允许审核 「Operation」 「Plan」');
   const ops = db.prepare('SELECT * FROM production_order_operations WHERE production_order_id=?').all(orderId);
-  if (!ops.length) throw new HttpError(409, '工单尚未生成 Operation Plan');
+  if (!ops.length) throw new HttpError(409, '工单尚未生成 「Operation」 「Plan」');
   const now = new Date().toISOString();
   transaction(db, () => {
     for (const op of ops) {
@@ -536,9 +536,9 @@ export function approveOperationPlan(db, res, actor, orderId) {
 export function releaseOperationPlan(db, res, actor, orderId) {
   allow(actor, 'PRODUCTION_PLAN_MANAGE');
   const order = loadOrder(db, orderId);
-  if (!['RELEASED', 'IN_PROGRESS'].includes(order.status)) throw new HttpError(409, '只有 RELEASED/IN_PROGRESS 工单允许下达 Operation Plan');
+  if (!['RELEASED', 'IN_PROGRESS'].includes(order.status)) throw new HttpError(409, '只有 RELEASED/IN_PROGRESS 工单允许下达 「Operation」 「Plan」');
   const ops = db.prepare('SELECT * FROM production_order_operations WHERE production_order_id=?').all(orderId);
-  if (!ops.length) throw new HttpError(409, '工单尚未生成 Operation Plan');
+  if (!ops.length) throw new HttpError(409, '工单尚未生成 「Operation」 「Plan」');
   const now = new Date().toISOString();
   transaction(db, () => {
     for (const op of ops) {

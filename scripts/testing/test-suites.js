@@ -671,6 +671,11 @@ const FULL = [
   // 需要真实种子库读取 canonical 角色权限，因此只登记在 FULL。
   'server/route-exposure-semantic-parity.test.js',
 
+  // 导航可达性与界面语言一致性（PL-NAVI-01..06 / PL-LANG-01..07，2026-11-17）。
+  // 两者都是只读静态守卫，不连数据库、不写仓库；登记在 FULL。
+  'server/navigation-reachability.test.js',
+  'server/ui-language.test.js',
+
   // ----- Sales / Purchase / Returns / Discounts -----
   'server/decision-reports.test.js',
   // SC78 / SC80 / SC81 — Sales Reporting closure (Requirement §34.3.16,

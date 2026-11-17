@@ -247,7 +247,7 @@ export async function convertReceiptNoticeToReceipts(db, req, res, actor, notice
   assertAllowedFields(body, ['items', 'receiptDate', 'remark', 'billingMode', 'idempotencyKey']);
   const rawKey = body.idempotencyKey || req.headers['idempotency-key'];
   if (!rawKey) {
-    throw new HttpError(400, '收料通知转换必须提供 Idempotency-Key');
+    throw new HttpError(400, '收料通知转换必须提供 「Idempotency-Key」');
   }
   const key = String(rawKey);
   const fingerprint = requestFingerprint({

@@ -17,10 +17,10 @@ const TABLES = {
 const atomic = (db, work) => db.isTransaction ? work() : transaction(db, work);
 
 function validateInput(input) {
-  if (!TABLES[input.side]) throw new HttpError(400, 'side 必须为 AR/AP');
+  if (!TABLES[input.side]) throw new HttpError(400, '「side」 必须为 AR/AP');
   if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0) throw new HttpError(400, 'amountCents 必须为正整数分');
-  if (!input.source?.sourceType || !input.source?.sourceId || !input.source?.sourceNo) throw new HttpError(400, 'recognition source 不完整');
-  if (!input.partyId || !input.businessDate || !input.actorId) throw new HttpError(400, 'recognition 上下文不完整');
+  if (!input.source?.sourceType || !input.source?.sourceId || !input.source?.sourceNo) throw new HttpError(400, '「recognition」 「source」 不完整');
+  if (!input.partyId || !input.businessDate || !input.actorId) throw new HttpError(400, '「recognition」 上下文不完整');
 }
 
 function sourcePolicy(db, side, source, businessDate) {
@@ -194,30 +194,30 @@ function recordInvoiceLinks(db, invoice, sources) {
     const quantity = source.invoicedQuantity;
     const amount = source.invoicedAmountCents;
     if (!Number.isSafeInteger(quantity) || quantity < 0 || !Number.isSafeInteger(amount) || amount < 0) {
-      throw new HttpError(409, 'Invoice source allocation is not a safe integer', { code: 'FINANCE_INVOICE_SOURCE_LINK_INVALID' });
+      throw new HttpError(409, '发票来源分配不是安全整数', { code: 'FINANCE_INVOICE_SOURCE_LINK_INVALID' });
     }
     if (source.sourceType === 'SERVICE_FULFILLMENT' && amount === 0) continue;
     if (source.sourceType === 'SERVICE_FULFILLMENT' && (quantity <= 0 || !source.sourceLineId || source.sourceLineId !== source.sourceId)) {
-      throw new HttpError(409, 'Service invoice source identity is invalid', { code: 'FINANCE_INVOICE_SOURCE_LINK_INVALID' });
+      throw new HttpError(409, '服务发票来源身份无效', { code: 'FINANCE_INVOICE_SOURCE_LINK_INVALID' });
     }
     const existing = db.prepare(`SELECT * FROM finance_invoice_source_links WHERE invoice_id=? AND invoice_side=? AND source_type=? AND source_id=? AND source_line_id=?${planLock(db)}`)
       .get(invoice.id, invoice.type, source.sourceType, source.sourceId, source.sourceLineId || '');
     if (existing) {
       if (Number(existing.invoiced_quantity) !== quantity || Number(existing.invoiced_amount_cents) !== amount) {
-        throw new HttpError(409, 'Invoice source allocation conflicts with persisted evidence', { code: 'FINANCE_INVOICE_SOURCE_LINK_CONFLICT' });
+        throw new HttpError(409, '发票来源分配与已存证证据冲突', { code: 'FINANCE_INVOICE_SOURCE_LINK_CONFLICT' });
       }
       continue;
     }
     if (source.sourceType === 'SERVICE_FULFILLMENT') {
       const fulfillment = db.prepare(`SELECT * FROM service_fulfillments WHERE id=? AND confirmation_state='CONFIRMED'${db.dialect === 'mysql' ? ' FOR UPDATE' : ''}`).get(source.sourceId);
       const open = db.prepare(`SELECT * FROM account_receivables WHERE source_type='SERVICE_FULFILLMENT' AND source_id=? AND item_kind='FINAL'${db.dialect === 'mysql' ? ' FOR UPDATE' : ''}`).get(source.sourceId);
-      if (!fulfillment || !open) throw new HttpError(409, 'Service fulfillment Finance source is unavailable', { code: 'SERVICE_INVOICE_SOURCE_UNAVAILABLE' });
+      if (!fulfillment || !open) throw new HttpError(409, '服务履约的财务来源不可用', { code: 'SERVICE_INVOICE_SOURCE_UNAVAILABLE' });
       const used = db.prepare(`SELECT COALESCE(SUM(l.invoiced_quantity),0) quantity,COALESCE(SUM(l.invoiced_amount_cents),0) amount
         FROM finance_invoice_source_links l JOIN sales_invoices i ON i.id=l.invoice_id
         WHERE l.source_type='SERVICE_FULFILLMENT' AND l.source_id=? AND i.status='POSTED'`).get(source.sourceId);
       if (Number(used.quantity) + quantity > Number(fulfillment.confirmation_qty_micros)
           || Number(used.amount) + amount > Number(open.amount_cents)) {
-        throw new HttpError(409, 'Service fulfillment invoice capacity exceeded', { code: 'SERVICE_INVOICE_CAPACITY_EXCEEDED' });
+        throw new HttpError(409, '服务履约的发票容量已超出', { code: 'SERVICE_INVOICE_CAPACITY_EXCEEDED' });
       }
     }
     db.prepare(`INSERT INTO finance_invoice_source_links(id,invoice_id,invoice_side,source_type,source_id,source_line_id,invoiced_quantity,invoiced_amount_cents,created_at)
@@ -259,7 +259,7 @@ export function recognizeFinanceExposure(db, input) {
     if (recognitionMode === RECOGNITION_MODES.DIRECT) {
       const openItems = [...new Set(sources.map((source) => {
         const row = db.prepare(`SELECT id,item_kind FROM ${TABLES[input.side].table} WHERE source_type=? AND source_id=?`).get(source.sourceType, source.sourceId);
-        if (!row || row.item_kind !== 'FINAL') throw new HttpError(409, '直接业务确认模式缺少来源最终 open item');
+        if (!row || row.item_kind !== 'FINAL') throw new HttpError(409, '直接业务确认模式缺少来源最终 「open」 「item」');
         return row.id;
       }))];
       updateInvoiceRecognition(db, input.invoice, recognitionMode, openItems.length === 1 ? openItems[0] : null, null);
@@ -276,7 +276,7 @@ export function recognizeFinanceExposure(db, input) {
     }
 
     if (sources.some((source) => source.fullyInvoiced !== true)) {
-      throw new HttpError(409, '暂估转财务模式必须完整开票后转换，避免 provisional/final 重复或遗漏');
+      throw new HttpError(409, '暂估转财务模式必须完整开票后转换，避免「provisional」/「final」重复或遗漏');
     }
     const provisionalRows = [...new Map(sources.map((source) => {
       const row = db.prepare(`SELECT * FROM ${TABLES[input.side].table} WHERE source_type=? AND source_id=?`).get(source.sourceType, source.sourceId);
