@@ -338,6 +338,7 @@ Sales & Customer Batch A 的独立浏览器验收脚本（需要本机 Edge、�
 | 重大决策记录 | [docs/decisions/](./docs/decisions/) |
 | 验收与冻结证据 | [docs/acceptance/](./docs/acceptance/) |
 | 运维与测试运行手册 | [docs/operations/](./docs/operations/) |
+| 客户测试用户手册（DRAFT） | [docs/operations/customer-test-manual.md](./docs/operations/customer-test-manual.md) |
 | 历史材料（非当前权威） | [docs/archive/](./docs/archive/) |
 | 开发与沟通历史 | [log/](./log/) |
 | 开发与 AI/Vibe Coding 治理政策 | [AGENTS.md](./AGENTS.md) |
