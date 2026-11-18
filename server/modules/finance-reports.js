@@ -6,6 +6,15 @@
 // FO50 — Treasury ↔ GL reconciliation (Integration-Backed).
 
 import { HttpError, allow, send } from '../lib/http.js';
+import { SETTLEMENT_ELIGIBLE_SQL } from './settlement-core.js';
+
+// FO54 / FO55 口径（Requirement §33.52 `FO54-FO55-CALIBER-01..04`）：
+// summary / aging 只统计**结算敞口**，与 `AR_TO_GL` / `AP_TO_GL` 权威对账逐分相等。
+// 暂估待转销行在总账的对方科目是 GRNI（不是应付账款），历史遗留行没有总账对应，
+// 计入会让报表高于总账 —— 与 F-01 同源的第二份口径。
+// 「往来义务」口径由客户 / 供应商对账单承担（settlement.js 的 obligation 口径）。
+// 资格判定复用结算模块的唯一原语，不复制第二份谓词。
+const REPORT_CALIBER = 'SETTLEMENT_EXPOSURE';
 
 export function arSummary(db, res, actor) {
   allow(actor, 'FINANCE_AR_VIEW');
@@ -13,15 +22,15 @@ export function arSummary(db, res, actor) {
     SELECT
       customer_id,
       COUNT(*) AS open_items,
-      -- original_amount_cents unavailable; 
+      -- original_amount_cents unavailable;
       SUM(open_amount_cents) AS total_open_cents,
       SUM(paid_cents) AS total_paid_cents,
       SUM(write_off_cents) AS total_write_off_cents
     FROM account_receivables
-    WHERE status IN ('PENDING','PARTIAL') AND COALESCE(conversion_state,'OPEN')='OPEN'
+    WHERE ${SETTLEMENT_ELIGIBLE_SQL} AND open_amount_cents>0
     GROUP BY customer_id
   `).all();
-  return send(res, 200, { rows });
+  return send(res, 200, { caliber: REPORT_CALIBER, rows });
 }
 
 export function apSummary(db, res, actor) {
@@ -30,15 +39,15 @@ export function apSummary(db, res, actor) {
     SELECT
       supplier_id,
       COUNT(*) AS open_items,
-      -- original_amount_cents unavailable; 
+      -- original_amount_cents unavailable;
       SUM(open_amount_cents) AS total_open_cents,
       SUM(paid_cents) AS total_paid_cents,
       SUM(write_off_cents) AS total_write_off_cents
     FROM account_payables
-    WHERE status IN ('PENDING','PARTIAL') AND COALESCE(conversion_state,'OPEN')='OPEN'
+    WHERE ${SETTLEMENT_ELIGIBLE_SQL} AND open_amount_cents>0
     GROUP BY supplier_id
   `).all();
-  return send(res, 200, { rows });
+  return send(res, 200, { caliber: REPORT_CALIBER, rows });
 }
 
 export function arAging(db, res, actor) {
@@ -46,11 +55,11 @@ export function arAging(db, res, actor) {
   const today = new Date().toISOString().slice(0, 10);
   const todayMs = Date.parse(`${today}T00:00:00Z`);
   const rows = db.prepare(`SELECT id,voucher_no,customer_id,due_date,open_amount_cents FROM account_receivables
-    WHERE open_amount_cents>0 AND COALESCE(conversion_state,'OPEN')='OPEN'`).all().map((row) => {
+    WHERE ${SETTLEMENT_ELIGIBLE_SQL} AND open_amount_cents>0`).all().map((row) => {
     const dueMs = Date.parse(`${row.due_date}T00:00:00Z`);
     return { days_overdue: Number.isFinite(dueMs) && todayMs > dueMs ? Math.floor((todayMs - dueMs) / 86400000) : 0, ...row };
   });
-  return send(res, 200, { rows });
+  return send(res, 200, { caliber: REPORT_CALIBER, rows });
 }
 
 export function treasuryMovementLedger(db, res, actor) {

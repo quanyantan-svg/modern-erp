@@ -1477,3 +1477,51 @@ Cross-domain dependency 是 acceptance dependency metadata，**不是** capabili
 - 法定关账：AR / AP / Treasury 任一未关闭至期间末时拒绝；三者齐备且其他前置通过时才允许。
 - 真实 MySQL：关闭与 dated mutation 使用真实 handler 并发，证明共享锁权威与唯一合法提交顺序。
 - UAT 保持 §33.40.2 的三轴独立性，并新增 operator UI 在 320 / 390 / 430 / 680 四档可完成关闭与重开。
+
+---
+
+### 33.52 FO54 / FO55 报表口径收敛（`APPROVED` → `IMPLEMENTED`，2026-11-18）
+
+#### 33.52.1 身份与边界
+
+- 用途：把 AR / AP 报表（summary / aging）的口径与 `AR_TO_GL` / `AP_TO_GL` 权威对账统一，
+  消除「报表高于总账」的第二份口径。Owner = Finance Operations（报表读模型）；
+  Accounting & Analytics 拥有 `AR_TO_GL` / `AP_TO_GL` 权威对账口径。
+- 授权来源与范围：业务所有者 2026-11-18 指令（选项「收敛 FO54/FO55 报表口径」，
+  明确为 Requirement → Design → Implementation 连续授权，承 AGENTS.md §4.0）。
+  **未授权**：真实 MySQL 连接与数据库写操作、Acceptance / Freeze 签发、
+  push / tag / merge / release / deploy。
+- 本节**只**改 FO54 / FO55 的口径与响应声明：新增报表类型、新增端点、权限码、
+  角色权限集合、结算清单 / 对账单 / 信用敞口 / 折扣额度的既有口径**均不变**。
+- 缺陷事实（2026-11-18 客户测试环境清库全业务验收的复验发现）：结算清单在 F-01 修复后
+  已收敛为「结算敞口」，与 `AR_TO_GL` / `AP_TO_GL` 逐分相等；`GET /api/finance/reports/ar/summary`、
+  `/ap/summary`、`/ar/aging` 仍按「往来义务」口径（含暂估待转销行与历史遗留行）求和，
+  因此同一份数据上报表总额可以高于总账 —— 与 F-01 同源的第二份口径。
+
+#### 33.52.2 合同项
+
+- **`FO54-FO55-CALIBER-01`（summary / aging = 结算敞口）**：AR / AP summary 与 aging 的金额
+  只能来自**结算敞口**：与 `AR_TO_GL` / `AP_TO_GL` 权威对账**逐分相等**的同一判定
+  （`item_class='SOURCE'` 且 `item_kind='FINAL'` 且 `conversion_state='OPEN'` 的未结金额）。
+  暂估待转销行（`item_kind='PROVISIONAL'`）与历史遗留行（`item_class<>'SOURCE'`）
+  **不得**计入汇总与账龄：暂估在总账的对方科目是 GRNI 而不是应付账款，历史遗留行没有总账
+  对应，计入会让报表高于总账。
+- **`FO54-FO55-CALIBER-02`（口径必须可辨识）**：summary / aging 的响应必须声明口径
+  （`caliber: 'SETTLEMENT_EXPOSURE'`），消费方不得把结算敞口与往来义务混用。
+- **`FO54-FO55-CALIBER-03`（往来义务口径的归属不变）**：「往来义务」口径（交付未开票的暂估
+  仍然可见）由**客户 / 供应商对账单**承担（§33.2.3 的 obligation 口径）；信用敞口与折扣额度
+  上限同样保持往来义务口径（更保守，不放宽既有拒绝）。报表不得成为第二份口径，
+  也不得改变这两处的既有行为。
+- **`FO54-FO55-CALIBER-04`（唯一口径原语）**：报表必须复用结算模块的**同一个**资格判定原语
+  （`server/modules/settlement-core.js` 的 `SETTLEMENT_ELIGIBLE_SQL`），不得复制第二份谓词。
+
+#### 33.52.3 验收增量
+
+1. summary 金额与 `AR_TO_GL` / `AP_TO_GL` 权威口径**逐分相等**（fixture 含暂估行与历史遗留行）。
+2. 负向对照：暂估行与历史遗留行**不**计入 summary / aging；同一笔数据在对账单上仍可见。
+3. summary / aging 响应带 `caliber: 'SETTLEMENT_EXPOSURE'`。
+4. `pnpm test`、`pnpm build`、`git diff --check` 与两种文档一致性模式全部通过。
+
+**Requirement 状态：`APPROVED`（2026-11-18，业务所有者授权）。Design §28.31：`APPROVED`（同日）。
+Implementation：已实施（2026-11-18）；真实 MySQL 连接、数据库写操作、Acceptance / Freeze 签发、
+发布与部署**未授权**。**

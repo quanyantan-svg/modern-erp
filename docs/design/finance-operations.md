@@ -6,6 +6,8 @@
 > 来源：`solution.md` §28.0–§28.29（源 SHA `4cb8c477aa00988bbfebef905764565cdfe62b71`，正文逐字迁移，章节编号保持不变）
 > 2026-11-14：业务所有者批准 Requirement §33.51 与新增 §28.30（Design `APPROVED`）并授权实施；
 > 不改变 §28.0–§28.29 的历史验收身份。
+> 2026-11-18：业务所有者批准 Requirement §33.52 与新增 §28.31（FO54 / FO55 报表口径收敛）并授权实施；
+> 不改变 §28.0–§28.30 的历史验收身份。
 
 ## 28.0 Scope of This Section
 
@@ -2861,3 +2863,78 @@ down migration。若整体回退，R-02 恢复为生产发布 blocker。
 **2026-11-14 消歧**：§28.30.2 的「重开落点」经业务所有者裁定为**完全打开**（截止日清空），既有实现与
 证据不变；该澄清不产生新的 Implementation 范围。
 **HARD STOP**：专属 ACK-4 campaign 仍须业务所有者单独批准后方可运行。
+
+---
+
+## 28.31 FO54 / FO55 报表口径收敛（Design `APPROVED` → 已实施，2026-11-18）
+
+> 对应 Requirement §33.52（`FO54-FO55-CALIBER-01..04`）。授权来源：业务所有者 2026-11-18
+> 指令（Requirement → Design → Implementation 连续授权，承 AGENTS.md §4.0）。
+> 本节不改变 §28.0–§28.30 的任何历史验收身份。
+
+### 28.31.1 模块与职责
+
+| 模块 | 职责 | 本节变化 |
+|---|---|---|
+| `server/modules/finance-reports.js` | FO54 / FO55 / FO56 报表读模型（AR / AP summary、AR aging、Treasury） | summary / aging 的口径改为结算敞口；响应增加 `caliber` 声明 |
+| `server/modules/settlement-core.js` | 结算敞口资格原语（`SETTLEMENT_ELIGIBLE_SQL` / `settlementEligibility`） | **不变**；成为报表与清单共用的唯一口径来源 |
+| `server/modules/settlement.js` | 结算清单（结算敞口）与对账单（往来义务） | **不变**；对账单继续承担往来义务口径 |
+| `server/modules/accounting-reconciliation.js`、`server/modules/financial-inventory.js` | `AR_TO_GL` / `AP_TO_GL` 权威对账 | **不变**；它们是报表必须对齐的那一侧 |
+
+### 28.31.2 数据流
+
+```text
+GET /api/finance/reports/ar/summary | /ap/summary | /ar/aging
+  → finance-reports.js
+      → SETTLEMENT_ELIGIBLE_SQL（来自 settlement-core.js，唯一口径原语）
+          → 按对方（客户 / 供应商）聚合 open_amount_cents
+      → { caliber: 'SETTLEMENT_EXPOSURE', rows: [...] }
+```
+
+- **金额口径**：`SUM(CASE WHEN <资格判定> THEN open_amount_cents ELSE 0 END)`，
+  与 `financial-inventory.js` 的 `AR_TO_GL` / `AP_TO_GL` 使用**同一判定、同一金额来源**
+  （`account_receivables.open_amount_cents` / `account_payables.open_amount_cents`），
+  因此两端在相同 as-of 条件下**逐分相等**。
+- **账龄**：AR aging 的行集合同样按资格判定收敛；`days_overdue` 与 `agingBucket` 的算法不变。
+- **不新增第二份谓词**：报表不得内联 `item_class` / `item_kind` / `conversion_state` 判定，
+  一律引用 `SETTLEMENT_ELIGIBLE_SQL`（AGENTS.md §6「同一业务原语只允许一个 active canonical
+  implementation」）。
+
+### 28.31.3 Schema、事务、状态、审计、错误
+
+- **Schema / migration**：无。本节是纯读模型口径变更，不新增列、不改数据、不做回填。
+- **事务**：报表是只读投影，不写任何 ledger，不参与事务（承 §28.5「Reports 不得成为 second
+  financial ledgers」）。
+- **状态机 / 审批**：不涉及。
+- **审计**：只读端点不写审计。
+- **错误行为**：权限与错误语义完全不变（`FINANCE_AR_VIEW` / `FINANCE_AP_VIEW` 守卫、
+  既有 HttpError 分类与 `code` / `resolution` 载荷不变）。
+
+### 28.31.4 兼容性
+
+- **数据不变**：历史行不迁移、不回填、不改状态。`item_class='LEGACY'` 与
+  `item_kind='PROVISIONAL'` 的行仍然存在，只是**不再计入** summary / aging。
+- **行为变化**：含暂估待转销行或历史遗留行的环境，summary / aging 金额会**下降**到与总账相等。
+  这是与 F-01 同源的收敛，不是数据丢失。
+- **无界面消费者**：FO54 / FO55 当前只有 API 端点，`src/` 下无任何调用方，因此本次收敛
+  不改变任何界面显示。
+- **不受影响的口径**：客户 / 供应商对账单（往来义务）、信用敞口、折扣额度上限
+  （`credit-check.js` / `discounts.js`）保持既有口径与行为不变。
+- **既有合同测试**：`server/v22-finance-wave-e-reports.test.js` 原先把
+  `item_class='LEGACY'`（列默认值）的人工行计入 summary。按 §33.52 该断言已过时，
+  随本节更新为：canonical 行计入、暂估行与历史遗留行**不**计入，并新增
+  「summary 总额 == 权威口径」的断言。
+
+### 28.31.5 测试、回滚与状态
+
+- **focused tests**：
+  1. summary / aging 的金额与 `AR_TO_GL` / `AP_TO_GL` 逐分相等（同一 fixture 同时含
+     canonical 行、暂估行、历史遗留行）；
+  2. 负向对照：暂估行与历史遗留行不计入；同笔数据在对账单上仍可见；
+  3. 响应带 `caliber: 'SETTLEMENT_EXPOSURE'`；
+  4. 变异对照：把报表口径改回「往来义务」，断言必须失败（证明断言真的承重）。
+- **门禁**：`pnpm test:fast`、`pnpm test`、`pnpm build`、`git diff --check` 与两种文档一致性模式。
+- **回滚**：回滚本节 = 把 `finance-reports.js` 的口径改回原谓词并回退合同测试，
+  无数据回滚、无 DDL、无 down migration；回滚后报表重新高于总账（F-01 同源问题复现）。
+- **状态**：本节 Design `APPROVED`（2026-11-18，业务所有者授权）；Implementation 已实施。
+  真实 MySQL 连接、Acceptance / Freeze 签发、发布与部署**未授权**。
