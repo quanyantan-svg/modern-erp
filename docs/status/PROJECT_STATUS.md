@@ -7314,3 +7314,31 @@ ADMIN_PASSWORD=客户原值(未改)；DEMO_ACCOUNTS=6(口令已重置，登录�
 VMI_SETTLEMENT=OPEN(D-P01)；VMI_OWNERSHIP_RELEASE=OPEN(VMI-05)
 TLS=无(仅 80)；AUTO_BACKUP=无(仅 3 份手工 dump)
 ```
+
+### 82.11 客户环境 TLS 与 MySQL 自动备份（2026-11-18 夜）
+
+业务所有者 2026-11-18「补齐 TLS 和自动备份 timer」。运维手册：
+[`docs/operations/customer-env-tls-and-backup.md`](../operations/customer-env-tls-and-backup.md)。
+
+| 项 | 结果（实测） |
+|---|---|
+| nginx `:443` | 已配置并监听（TLS 终止，`TLSv1.2/1.3`）；应用仍只监听 `127.0.0.1:3001`，对外仅 nginx 一个口子 |
+| 证书 | `/etc/nginx/tls/modern-erp.{crt,key}`，当前为**自签**（SAN 含 `IP:129.204.51.149`），浏览器提示不受信任 |
+| ACME | acme.sh 已装（jsDelivr 镜像；GitHub raw 在该机不可达）；`:80` / `:443` 均直通 `/.well-known/acme-challenge/` |
+| **未放行 443** | `:443` 被**腾讯云安全组**挡住（宿主防火墙 ufw inactive、iptables 仅拦 22 爆破源，不拦 443）→ **需业务所有者在控制台放行 443**；放行后按手册 §2.2 签发 Let's Encrypt 的 `shortlived` IP 证书并打开 `:80 → :443` 跳转 |
+| 跳转开关 | `map $modern_erp_force_https` 默认 **0**（不跳转）——443 未放行前开着会让公网访客落到打不通的端口；已实测公网 `:80` 与静态资源均 200 |
+| 备份脚本 | `/usr/local/bin/mysql-backup-local.mjs`，**复用仓库 canonical 原语**（`scripts/admin/lib/mysql-dr.mjs` 的 `runMysqlDump` / `hashFile`），不自建第二套 dump 实现 |
+| 导出身份 | `root` + unix socket（视图 `finance_open_item_effects` 的 `SHOWVIEW` 无法授予他人，MySQL 3619）；应用账号 `modern_erp` 权限**未扩大**（仍仅本库） |
+| 备份纪律 | `SNAPSHOT_RUNNING → LOCAL_VERIFIED → ROTATION_APPLIED → COMPLETE`；**新备份未通过哈希回读验证绝不清理旧备份**；失败即删半成品；保留最近 14 份 |
+| 定时器 | `modern-erp-backup.service` + `modern-erp-backup.timer`（每天 02:17 + 30m 抖动，`Persistent=true`）；已用 systemd 手动触发一次并 `COMPLETE` ✓ |
+| **恢复演练** | 最新 dump 导入演练库成功：**424 表 + 1 视图 + 5 触发器**，`users` / `products` / `accounting_vouchers` / `inventory_valuation_movements` / `inventory` 行数与线上**逐项一致**；演练库验证后即删除 |
+| 仍然开放 | **异机副本未落地**：仓库 canonical CLI 要求对象存储到 `REMOTE_VERIFIED` 才允许清理（`PL-RI-01` RPO 24h / RTO 4h / 季度演练），当前凭据未到位 → 只有本机副本，磁盘故障会同时带走数据与备份 |
+
+```text
+TLS=NGINX_443_READY(证书为自签；:443 待安全组放行；:80 跳转默认关闭)
+BACKUP_TIMER=ENABLED(daily 02:17, Persistent, keep 14, systemd 触发实测 COMPLETE)
+BACKUP_VERIFY=HASH_READBACK_OK(未通过回读不清理旧备份)
+RESTORE_DRILL=PASS(424 表 + 1 视图 + 5 触发器，行数与线上一致；演练库已删)
+OFFSITE_COPY=PENDING(对象存储凭据未到位 → 无异机副本，PL-RI-01 未达成)
+SECURITY_GROUP_443=REQUIRED(需业务所有者在腾讯云控制台放行)
+```
