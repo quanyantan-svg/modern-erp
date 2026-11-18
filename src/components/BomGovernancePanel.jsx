@@ -122,7 +122,7 @@ export function BomAnalysisActions({ bomId, productId, boms = [], onResult, noti
   </BusinessActionBar>;
 }
 
-export function BomBatchMaintenance({ boms, onChanged, notify, canManage }) {
+export function BomBatchMaintenance({ boms, products = [], onChanged, notify, canManage }) {
   const [filter, setFilter] = useState({ productIds: [] });
   const [changes, setChanges] = useState([]);
   const [preview, setPreview] = useState(null);
@@ -131,6 +131,11 @@ export function BomBatchMaintenance({ boms, onChanged, notify, canManage }) {
   const addChange = (type) => setChanges([...changes, { type, ...(type === 'modify' ? { componentProductId: '', quantity: 1, scrapRate: 0 } : type === 'add' ? { componentProductId: '', quantity: 1, scrapRate: 0 } : type === 'remove' ? { componentProductId: '' } : { fromProductId: '', toProductId: '' }) }]);
   const updateChange = (idx, patch) => setChanges(changes.map((c, i) => i === idx ? { ...c, ...patch } : c));
   const removeChange = (idx) => setChanges(changes.filter((_, i) => i !== idx));
+  const productLabel = (id) => {
+    const product = products.find((item) => item.id === id);
+    return product ? `${product.code} · ${product.name}` : '货品资料不可见';
+  };
+  const changeLabel = (type) => ({ add: '新增组件', modify: '修改组件', remove: '删除组件', replace: '替换组件' }[type] || type);
 
   const runPreview = async () => {
     try {
@@ -176,17 +181,17 @@ export function BomBatchMaintenance({ boms, onChanged, notify, canManage }) {
     {changes.map((c, idx) => (
       <article key={idx} className="bom-batch-change">
         <header>
-          <strong>{c.type}</strong>
+          <strong>{changeLabel(c.type)}</strong>
           <button type="button" className="danger-text" onClick={() => removeChange(idx)}>移除</button>
         </header>
         {c.type === 'replace' ? (
           <div className="bom-batch-row">
-            <label>从<input value={c.fromProductId} onChange={(e) => updateChange(idx, { fromProductId: e.target.value })} /></label>
-            <label>到<input value={c.toProductId} onChange={(e) => updateChange(idx, { toProductId: e.target.value })} /></label>
+            <label>原组件<select value={c.fromProductId} onChange={(e) => updateChange(idx, { fromProductId: e.target.value })}><option value="">请选择货品</option>{products.map((product) => <option key={product.id} value={product.id}>{product.code} · {product.name}</option>)}</select></label>
+            <label>替换为<select value={c.toProductId} onChange={(e) => updateChange(idx, { toProductId: e.target.value })}><option value="">请选择货品</option>{products.map((product) => <option key={product.id} value={product.id}>{product.code} · {product.name}</option>)}</select></label>
           </div>
         ) : (
           <div className="bom-batch-row">
-            <label>物料 ID<input value={c.componentProductId} onChange={(e) => updateChange(idx, { componentProductId: e.target.value })} /></label>
+            <label>组件货品<select value={c.componentProductId} onChange={(e) => updateChange(idx, { componentProductId: e.target.value })}><option value="">请选择货品</option>{products.map((product) => <option key={product.id} value={product.id}>{product.code} · {product.name}</option>)}</select></label>
             <label>用量<input type="number" value={c.quantity ?? ''} onChange={(e) => updateChange(idx, { quantity: Number(e.target.value) })} /></label>
             <label>损耗率<input type="number" step="0.01" value={c.scrapRate ?? ''} onChange={(e) => updateChange(idx, { scrapRate: Number(e.target.value) })} /></label>
           </div>
@@ -208,9 +213,9 @@ export function BomBatchMaintenance({ boms, onChanged, notify, canManage }) {
         <header><strong>预览（未应用）</strong><span>受影响 BOM：{preview.previewCount}</span></header>
         <CompactRecordList>
           {(preview.targets || []).map((target) => (
-            <RecordCard key={target.bom_id} title={`${target.product_id} · ${target.version} · ${target.purpose || ''}`}
+            <RecordCard key={target.bom_id} title={`${productLabel(target.product_id)} · ${target.version} · ${PURPOSE_LABELS[target.purpose] || target.purpose || ''}`}
               subtitle={`${(target.item_diff || []).length} 条差异`}
-              facts={(target.item_diff || []).slice(0, 4).map((d, idx) => ({ label: `差异 ${idx + 1}`, value: `${d.type}${d.product_id || d.from_product_id ? ` · ${d.product_id || d.from_product_id}` : ''}` }))} />
+              facts={(target.item_diff || []).slice(0, 4).map((d, idx) => ({ label: `差异 ${idx + 1}`, value: `${changeLabel(d.type)}${d.product_id || d.from_product_id ? ` · ${productLabel(d.product_id || d.from_product_id)}` : ''}` }))} />
           ))}
         </CompactRecordList>
       </section>

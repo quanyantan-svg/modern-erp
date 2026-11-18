@@ -7,6 +7,7 @@
 //   ② 合同编号：SC01…、PL-XX-NN、IW-XX-NN、MQ-XX-NN、AA-XX-NN、PRC-XX-NN；
 //   ③ 权限码：以 `server/db.js` 的 `PERMISSIONS` 目录为准，逐个精确匹配；
 //   ④ 数据库内部 ID：不作为文案解释操作 —— 由各业务页面的参照选择器承担。
+//   ⑤ 研发治理词：Requirement / Design / OUT_OF_SCOPE / canonical / legacy。
 //
 // 判定方式：只扫描**会呈现给最终用户**的位置。位置识别由
 // `scripts/qa/lib/user-visible-text.mjs` 唯一实现，源码注释、route key、
@@ -28,6 +29,9 @@ const BATCH_WORD = /\bWave\b|\b(?:Stage|Phase)\s+[A-Z0-9]+\b/i;
 
 /** 合同编号。 */
 const CONTRACT_ID = /\bSC\d{2,3}\b|\b(?:PL|IW|MQ|AA|FO|PRC)-[A-Z]{2,4}-\d{2}\b/;
+
+/** 不应进入客户工作面的研发与治理词。 */
+const INTERNAL_TERM = /\b(?:Requirement|Design|OUT_OF_SCOPE|canonical|legacy)\b/i;
 
 /**
  * 显式标注的技术标识符与模板插值不参与判定：中文书名号「」是既有的
@@ -75,6 +79,8 @@ export function forbiddenHits(text, permissions) {
   if (batch) hits.push(`实施批次词 ${batch[0]}`);
   const contract = scannableText.match(CONTRACT_ID);
   if (contract) hits.push(`合同编号 ${contract[0]}`);
+  const internalTerm = scannableText.match(INTERNAL_TERM);
+  if (internalTerm) hits.push(`研发治理词 ${internalTerm[0]}`);
   for (const token of identifierTokens(scannableText)) {
     if (permissions.has(token)) { hits.push(`权限码 ${token}`); break; }
   }

@@ -144,7 +144,7 @@ export function Boms({ user, notify }) {
       <BomTree bomId={detail?.id || filtered[0]?.id} notify={notify} />
     )}
     {tab === 'batch' && (
-      <BomBatchMaintenance boms={filtered} canManage={canManageBom}
+      <BomBatchMaintenance boms={filtered} products={products} canManage={canManageBom}
         notify={notify} onChanged={load} />
     )}
     {detail && <BomDetailModal detail={detail} boms={filtered} onClose={() => setDetail(null)} onEdit={() => { setView({ id: detail.id }); setDetail(null); }}

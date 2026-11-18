@@ -131,8 +131,8 @@ function PendingPanel({ pendingTypes, series }) {
   return (
     <section>
       <p className="platform-ops__note">
-        下列单据尚未接入编号服务，按 Requirement §36.8 判为 OUT_OF_SCOPE（迁移会触碰已冻结域的造号行为），
-        在本工作面以「待迁移」状态可见。
+        下列单据仍沿用各业务模块原有的编号方式，暂不能在这里统一维护。
+        本页保留清单，便于管理员确认哪些规则已可集中配置。
       </p>
       {remaining.length === 0 && <div className="platform-ops__empty">没有待迁移的单据。</div>}
       <div className="platform-ops__list">

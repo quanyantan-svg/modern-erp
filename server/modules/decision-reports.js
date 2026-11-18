@@ -466,10 +466,10 @@ export function getSalesSummary(db, res, actor, url) {
       '销售退货金额来自 CONFIRMED source_type=SALES 退货单，按 return_date 归集；',
       '净出货金额 = 出货金额 - 退货金额；',
       '订单金额不等于已实现收入；',
-      `业务日期缺失共 ${legacyMissingTotal} 条，未计入上方指标，已在 legacyMissing 字段按指标分解。`,
+      `业务日期缺失共 ${legacyMissingTotal} 条，未计入上方指标，已在数据完整性提示中按指标分解。`,
       '执行证据（execution）覆盖六类单据：报价单 / 销售订单 / 发货通知 / 销售出库 / 销售退货 / 销售换货；',
       '发货通知与销售换货单据本身不承载金额，其 amountCents 恒为 0 且 amountBasis 标记为 NONE，不得解读为金额为零；',
-      '执行证据只汇总 canonical 单据本身，不构成收入确认依据。',
+      '执行证据只汇总权威业务单据本身，不构成收入确认依据。',
     ].join(''),
   });
 }
@@ -732,7 +732,7 @@ export function getSalesGrossProfit(db, res, actor, url) {
     filters: buildFilterEcho(db, filters),
     moneyUnit: 'cents',
     notes: [
-      '收入来自 canonical 销售出库（CONFIRMED，按 delivery_date）、服务履约（CONFIRMED，按 business_date）与销售退货（CONFIRMED，按 return_date）；',
+      '收入来自已确认的销售出库（按出库日期）、服务履约（按业务日期）与销售退货（按退货日期）；',
       '成本来自 Inventory / Finance 已过账的权威估值事件 inventory_valuation_movements（SALES_DELIVERY_COGS 与 SALES_RETURN_COGS_REVERSAL），本报表不建立第二套估值引擎；',
       '赠品行收入为 0 但仍承担成本，因此毛利为负；报表不会把赠品当作免费库存；',
       '纯服务履约不产生库存异动也不产生 COGS，其成本按 0 计入并显式标记为 NO_COGS_APPLICABLE；',
@@ -765,7 +765,7 @@ export function getSalesRanking(db, res, actor, url) {
     filters: buildFilterEcho(db, filters),
     moneyUnit: 'cents',
     notes: [
-      '排行复用与销售毛利相同的 canonical 行级事实，不建立任何排行缓存或影子台账；',
+      '排行复用与销售毛利相同的权威行级数据，不建立任何排行缓存或影子台账；',
       '排行指标为毛利（GROSS_PROFIT），同时给出收入与成本分解；',
       '毛利相同者并列同一名次（稠密排名）；',
       '缺少维度归属的行归入 UNASSIGNED 桶，不会被静默丢弃。',
@@ -902,7 +902,7 @@ export function getPurchaseSummary(db, res, actor, url) {
       '采购退货金额来自 CONFIRMED 采购退货单，按 return_date 归集；',
       '净入库金额 = 入库金额 - 退货金额；',
       '订单金额不等于已实现成本；',
-      `业务日期缺失共 ${legacyMissingTotal} 条，未计入上方指标，已在 legacyMissing 字段按指标分解。`,
+      `业务日期缺失共 ${legacyMissingTotal} 条，未计入上方指标，已在数据完整性提示中按指标分解。`,
     ].join(''),
   });
 }

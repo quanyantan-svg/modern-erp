@@ -57,6 +57,8 @@ import {
   TextField,
 } from '../components/design-system.jsx';
 import { useAppNavigation } from '../navigation/AppNavigationContext.jsx';
+import { formatMoney } from '../lib/format.js';
+import { yuanToCents } from '../lib/money.js';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -557,11 +559,11 @@ export function SalesGroupMemberships({ user, notify }) {
         <BusinessState kind="EMPTY" title="该销售员暂无成员关系" description="没有有效成员关系时不得创建或处理组范围新单据。" />
       ) : (
         <>
-          <BusinessContentSection title="默认组合同" description="恰有一个有效成员关系时该成员关系必须为默认；多个有效成员关系时必须恰有一个默认。">
+          <BusinessContentSection title="默认组规则" description="恰有一个有效成员关系时该成员关系必须为默认；多个有效成员关系时必须恰有一个默认。">
             <div className="detail-grid">
               <div><span>有效成员关系</span><strong>{activeCount}</strong></div>
               <div><span>其中默认组</span><strong>{defaultCount}</strong></div>
-              <div><span>合同结论</span><strong>{activeCount === 0 ? '零默认（不得建组范围单据）' : defaultCount === 1 ? '满足唯一默认' : '违反唯一默认'}</strong></div>
+              <div><span>校验结果</span><strong>{activeCount === 0 ? '零默认（不得建组范围单据）' : defaultCount === 1 ? '满足唯一默认' : '违反唯一默认'}</strong></div>
             </div>
           </BusinessContentSection>
           <RecordList>
@@ -968,7 +970,7 @@ export function PriceOverrideAuthorizations({ user, notify }) {
     productId: '',
     uomCode: '',
     quantityDecimal: '1',
-    manualPriceCents: '',
+    manualPriceYuan: '',
     overrideReason: '',
     businessDate: today(),
   });
@@ -1005,7 +1007,8 @@ export function PriceOverrideAuthorizations({ user, notify }) {
       notify('缺少客户 / 物料参照读取权限，无法签发价格覆盖授权', 'error');
       return;
     }
-    if (!form.customerId || !form.productId || !form.manualPriceCents || !form.overrideReason.trim()) {
+    const manualPriceCents = yuanToCents(form.manualPriceYuan);
+    if (!form.customerId || !form.productId || manualPriceCents === null || !form.overrideReason.trim()) {
       notify('请填写客户、物料、手工单价与覆盖原因', 'error');
       return;
     }
@@ -1018,7 +1021,7 @@ export function PriceOverrideAuthorizations({ user, notify }) {
           productId: form.productId,
           uomCode: form.uomCode || undefined,
           quantityDecimal: Number(form.quantityDecimal || 0),
-          manualPriceCents: Number(form.manualPriceCents),
+          manualPriceCents,
           overrideReason: form.overrideReason.trim(),
           businessDate: form.businessDate,
         },
@@ -1066,7 +1069,7 @@ export function PriceOverrideAuthorizations({ user, notify }) {
           <p className="muted">当前没有可选物料。</p>
         </BusinessContentSection>
       )}
-      <BusinessContentSection title="授权申请" description="授权是一次性的；签发后在销售订单行上使用授权 ID 提交手工价格。">
+      <BusinessContentSection title="授权申请" description="授权是一次性的；签发后在销售订单行上使用授权编号提交手工价格。">
         <form className="sales-parameters-form" onSubmit={submit}>
           <div className="form-grid">
             <FormRow label="客户" required>
@@ -1094,8 +1097,8 @@ export function PriceOverrideAuthorizations({ user, notify }) {
             <FormRow label="数量" required>
               <TextField required inputMode="decimal" value={form.quantityDecimal} onChange={(event) => setForm({ ...form, quantityDecimal: event.target.value })} />
             </FormRow>
-            <FormRow label="手工单价（分）" required hint="以安全整数分提交">
-              <TextField required inputMode="numeric" value={form.manualPriceCents} onChange={(event) => setForm({ ...form, manualPriceCents: event.target.value })} />
+            <FormRow label="手工单价（元）" required hint="最多两位小数">
+              <TextField required inputMode="decimal" value={form.manualPriceYuan} onChange={(event) => setForm({ ...form, manualPriceYuan: event.target.value })} />
             </FormRow>
             <FormRow label="覆盖原因" required>
               <TextArea required value={form.overrideReason} onChange={(event) => setForm({ ...form, overrideReason: event.target.value })} />
@@ -1114,13 +1117,13 @@ export function PriceOverrideAuthorizations({ user, notify }) {
       {result && (
         <DetailSection title="已签发授权">
           <div className="detail-grid">
-            <div><span>授权 ID</span><strong><code>{result.authorizationId}</code></strong></div>
+            <div><span>授权编号</span><strong><code>{result.authorizationId}</code></strong></div>
             <div><span>物料</span><strong>{result.materialId}</strong></div>
             <div><span>单位</span><strong>{result.uomCode || '—'}</strong></div>
             <div><span>业务日期</span><strong>{result.businessDate}</strong></div>
-            <div><span>手工单价（分）</span><strong>{result.manualPriceCents ?? '—'}</strong></div>
+            <div><span>手工单价</span><strong>{result.manualPriceCents === undefined ? '—' : formatMoney(result.manualPriceCents)}</strong></div>
           </div>
-          <p className="muted">在销售订单行提交时使用上面的授权 ID 即可引用该覆盖授权。</p>
+          <p className="muted">在销售订单行提交时使用上面的授权编号即可引用该覆盖授权。</p>
         </DetailSection>
       )}
     </BusinessPageShell>

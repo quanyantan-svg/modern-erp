@@ -75,7 +75,7 @@ function EcoList({ ecos: list, canManage, onSelect, onCreate }) {
   </CompactRecordList>;
 }
 
-function EcoEditor({ editor, onClose, notify, refresh }) {
+function EcoEditor({ editor, products, onClose, notify, refresh }) {
   const isEdit = Boolean(editor.id);
   const [body, setBody] = useState(() => isEdit ? {
     docNo: editor.doc_no, title: editor.title, reason: editor.reason || '',
@@ -138,11 +138,11 @@ function EcoEditor({ editor, onClose, notify, refresh }) {
                   ))}
                 </select>
               </label>
-              <label>产品 ID<input value={item.productId} onChange={(e) => updateItem(idx, { productId: e.target.value })} /></label>
+              <label>变更货品<select value={item.productId} onChange={(e) => updateItem(idx, { productId: e.target.value })}><option value="">请选择货品</option>{products.map((product) => <option key={product.id} value={product.id}>{product.code} · {product.name}</option>)}</select></label>
               <label>数量<input type="number" value={item.quantity || ''} onChange={(e) => updateItem(idx, { quantity: Number(e.target.value) })} /></label>
               <label>损耗率<input type="number" step="0.01" value={item.scrapRate || ''} onChange={(e) => updateItem(idx, { scrapRate: Number(e.target.value) })} /></label>
-              <label>从<input value={item.fromProductId} onChange={(e) => updateItem(idx, { fromProductId: e.target.value })} /></label>
-              <label>到<input value={item.toProductId} onChange={(e) => updateItem(idx, { toProductId: e.target.value })} /></label>
+              <label>原货品<select value={item.fromProductId} onChange={(e) => updateItem(idx, { fromProductId: e.target.value })}><option value="">请选择货品</option>{products.map((product) => <option key={product.id} value={product.id}>{product.code} · {product.name}</option>)}</select></label>
+              <label>替换为<select value={item.toProductId} onChange={(e) => updateItem(idx, { toProductId: e.target.value })}><option value="">请选择货品</option>{products.map((product) => <option key={product.id} value={product.id}>{product.code} · {product.name}</option>)}</select></label>
               <button type="button" className="danger-text" onClick={() => removeItem(idx)}>移除</button>
             </div>
           </article>
@@ -233,13 +233,18 @@ export default function EngineeringChange({ user, notify }) {
   const canApprove = can(user, 'ENGINEERING_CHANGE_APPROVE');
   const [editor, setEditor] = useState(null);
   const [detail, setDetail] = useState(null);
+  const [products, setProducts] = useState([]);
+  useEffect(() => {
+    if (!can(user, 'PRODUCTS_VIEW') && !can(user, 'PRODUCTS_MANAGE')) return;
+    api('/api/products').then((result) => setProducts(result.products || [])).catch((error) => notify(error.message, 'error'));
+  }, [user, notify]);
   return <BusinessPageShell className="engineering-change-v15" width="rail">
     <BusinessPageHeader title="工程变更"
-      help={<HelpDisclosure summary="使用提示"><p>变更单经审核后才可应用；「Use-Up-Old」仅基于当前库存做清理候选，预计入供应尚未纳入本阶段判断。</p></HelpDisclosure>} />
+      help={<HelpDisclosure summary="使用提示"><p>变更单经审核后才可应用；旧料清理候选只计算当前库存，暂不包含预计到货和计划供应。</p></HelpDisclosure>} />
     <EcoList ecos={ecos} canManage={canManage}
       onSelect={(eco) => setDetail(eco)}
       onCreate={() => setEditor({})} />
-    {editor && <EcoEditor editor={editor} onClose={() => setEditor(null)} notify={notify} refresh={reload} />}
+    {editor && <EcoEditor editor={editor} products={products} onClose={() => setEditor(null)} notify={notify} refresh={reload} />}
     {detail && <EcoDetail eco={detail} onClose={() => setDetail(null)} refresh={reload} notify={notify}
       canManage={canManage} canApprove={canApprove} />}
   </BusinessPageShell>;

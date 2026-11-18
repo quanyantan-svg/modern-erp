@@ -308,10 +308,10 @@ const targetContractFor = (routeKey) => Object.freeze({
 // Design §32.22.3）。「下一步」只编排 document.md §6.1–§6.5 的五条端到端主链与
 // 明确的主数据前置步骤；没有编排后继的页面只显示来源，不显示下一步。
 const PURPOSE_BY_ARCHETYPE = Object.freeze({
-  LIST: '查找、查看并处理业务记录',
-  WORKFLOW: '按当前状态完成业务流程',
-  CONFIG: '维护本模块的业务规则与基础配置',
-  REPORT: '查询并核对业务结果',
+  LIST: '查找、查看并处理相关记录',
+  WORKFLOW: '按当前状态完成相关流程',
+  CONFIG: '维护相关业务规则与基础配置',
+  REPORT: '查询并核对相关业务结果',
 });
 const TASK_NEXT_ROUTE = Object.freeze({
   // O2C：客户 → 报价 → 订单 → 信用 → 出货 → 应收 → 收款。
@@ -399,7 +399,7 @@ const toApplicationRoute = (item) => Object.freeze({
   aliases: Object.freeze(Object.entries(TECHNICAL_ROUTE_ALIASES).filter(([, canonical]) => canonical === item.route).map(([alias]) => alias)),
   responsiveMode: RESPONSIVE_MODES.LEGACY_ADAPTER,
   taskContext: Object.freeze({
-    purpose: item.contextHint || PURPOSE_BY_ARCHETYPE[item.template] || `${item.title}业务处理`,
+    purpose: item.contextHint || `${item.title}：${PURPOSE_BY_ARCHETYPE[item.template] || '完成相关业务处理'}`,
     upstreamRoute: item.parentRoute || null,
     upstreamLabel: item.parentRoute ? (ROUTE_TITLE_BY_KEY.get(item.parentRoute) || null) : null,
     nextRoute: TASK_NEXT_ROUTE[item.route] || null,

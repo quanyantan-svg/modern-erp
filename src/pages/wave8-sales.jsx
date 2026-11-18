@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { formatMicros, formatMoney } from '../lib/format.js';
+import { yuanToCents } from '../lib/money.js';
 import { api } from '../api.js';
 import { can, Loading } from '../components/ui.jsx';
 import { BusinessPageShell, EmptyState, InlineAlert, StatusChip } from '../components/design-system.jsx';
@@ -155,13 +156,14 @@ export function ConsignmentCommercial({ user, notify }) {
   const [warehouses, setWarehouses] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [products, setProducts] = useState([]);
+  const [warehouseBins, setWarehouseBins] = useState([]);
   const [state, setState] = useState('LOADING');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState(null);
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState(false);
   const [location, setLocation] = useState({ locationCode: '', customerId: '', name: '', physicalWarehouseId: '', physicalBinId: '', effectiveFrom: day() });
-  const [draft, setDraft] = useState({ customerId: '', sourceWarehouseId: '', businessDate: day(), productId: '', locationId: '', quantity: '', unitPriceCents: '' });
+  const [draft, setDraft] = useState({ customerId: '', sourceWarehouseId: '', businessDate: day(), productId: '', locationId: '', quantity: '', unitPriceYuan: '' });
   const [handoff, setHandoff] = useState({});
   const [handoffReference, setHandoffReference] = useState(null);
   const [referenceState, setReferenceState] = useState('IDLE');
@@ -205,6 +207,22 @@ export function ConsignmentCommercial({ user, notify }) {
     }
   };
   useEffect(() => { void reload(); void loadReferences(); }, []);
+
+  const selectLocationWarehouse = async (warehouseId) => {
+    setLocation((current) => ({ ...current, physicalWarehouseId: warehouseId, physicalBinId: '' }));
+    setWarehouseBins([]);
+    if (!warehouseId) return;
+    if (!can(user, 'WAREHOUSE_BIN_VIEW') && !can(user, 'WAREHOUSE_BIN_MANAGE')) {
+      setNotice({ tone: 'permission', title: '无法读取仓位', message: '当前账号没有查看仓位的权限，请联系管理员调整岗位权限' });
+      return;
+    }
+    try {
+      const data = await api(`/api/warehouse-bins?warehouseId=${encodeURIComponent(warehouseId)}`);
+      setWarehouseBins((data.bins || []).filter((row) => row.active !== 0));
+    } catch (reason) {
+      setNotice(classify(reason));
+    }
+  };
 
   const post = async (path, body, prefix, successText) => {
     setBusy(true); setError(''); setNotice(null);
@@ -294,17 +312,19 @@ export function ConsignmentCommercial({ user, notify }) {
           {customers.map((row) => <option key={row.id} value={row.id}>{row.code} · {row.name}</option>)}
         </Select></Field>
         <Field label="名称"><input value={location.name} onChange={(event) => setLocation({ ...location, name: event.target.value })} required/></Field>
-        <Field label="映射仓库"><Select value={location.physicalWarehouseId} onChange={(value) => setLocation({ ...location, physicalWarehouseId: value })}>
+        <Field label="映射仓库"><Select value={location.physicalWarehouseId} onChange={(value) => void selectLocationWarehouse(value)}>
           {warehouses.filter((row) => row.active !== 0).map((row) => <option key={row.id} value={row.id}>{row.code} · {row.name}</option>)}
         </Select></Field>
-        <Field label="映射仓位 ID" hint="未启用仓位的仓库可留空"><input value={location.physicalBinId} onChange={(event) => setLocation({ ...location, physicalBinId: event.target.value })}/></Field>
+        <Field label="映射仓位" hint={warehouseBins.length ? '请选择仓位' : '仓库未启用仓位时可留空'}><Select value={location.physicalBinId} onChange={(value) => setLocation({ ...location, physicalBinId: value })} disabled={!warehouseBins.length}>
+          {warehouseBins.map((row) => <option key={row.id} value={row.id}>{row.code} · {row.name}</option>)}
+        </Select></Field>
         <Field label="生效日期"><input type="date" value={location.effectiveFrom} onChange={(event) => setLocation({ ...location, effectiveFrom: event.target.value })}/></Field>
         <button className="primary" disabled={busy}>创建地点</button>
       </form>
-      <form className="wave8-editor" onSubmit={(event) => { event.preventDefault(); void post('/api/consignment-commercial-documents', {
+      <form className="wave8-editor" onSubmit={(event) => { event.preventDefault(); const unitPriceCents = yuanToCents(draft.unitPriceYuan); if (unitPriceCents === null) { setNotice({ tone: 'invalid', title: '单价格式不正确', message: '请输入大于 0 且最多两位小数的金额' }); return; } void post('/api/consignment-commercial-documents', {
         customerId: draft.customerId, sourceWarehouseId: draft.sourceWarehouseId, businessDate: draft.businessDate, currencyCode: 'CNY',
         lines: [{ productId: draft.productId, consignmentCommodityLocationId: draft.locationId,
-          consignedQtyMicros: Math.round(Number(draft.quantity || 0) * 1_000_000), unitPriceCents: Number(draft.unitPriceCents || 0) }],
+          consignedQtyMicros: Math.round(Number(draft.quantity || 0) * 1_000_000), unitPriceCents }],
       }, 'consignment-create', '寄售指令草稿已创建').then((value) => { if (value) void openDocument(value.id); }); }}>
         <h3>寄售指令</h3>
         <Field label="客户"><Select value={draft.customerId} onChange={(value) => setDraft({ ...draft, customerId: value })}>
@@ -320,7 +340,7 @@ export function ConsignmentCommercial({ user, notify }) {
           {products.map((row) => <option key={row.id} value={row.id}>{row.code} · {row.name}</option>)}
         </Select></Field>
         <Field label="寄售数量（基本单位）"><input type="number" min="0.000001" step="0.000001" value={draft.quantity} onChange={(event) => setDraft({ ...draft, quantity: event.target.value })} required/></Field>
-        <Field label="单价（分）"><input type="number" min="0" step="1" value={draft.unitPriceCents} onChange={(event) => setDraft({ ...draft, unitPriceCents: event.target.value })} required/></Field>
+        <Field label="单价（元）"><input type="number" min="0.01" step="0.01" inputMode="decimal" value={draft.unitPriceYuan} onChange={(event) => setDraft({ ...draft, unitPriceYuan: event.target.value })} required/></Field>
         <Field label="业务日期"><input type="date" value={draft.businessDate} onChange={(event) => setDraft({ ...draft, businessDate: event.target.value })} required/></Field>
         <button className="primary" disabled={busy || !draft.locationId || !draft.productId}>创建草稿</button>
       </form>

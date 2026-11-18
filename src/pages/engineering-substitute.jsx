@@ -59,7 +59,7 @@ function useCollection(endpoint, responseKey, deps = []) {
   return { items, setItems, loading, error, reload: load };
 }
 
-function SchemeSection({ user, notify, canManage }) {
+function SchemeSection({ user, notify, canManage, products }) {
   const schemes = useCollection('/api/engineering/substitute-schemes', 'schemes');
   const substitutes = useCollection('/api/engineering/substitutes', 'substitutes');
   const [editingScheme, setEditingScheme] = useState(null);
@@ -104,7 +104,7 @@ function SchemeSection({ user, notify, canManage }) {
     </BusinessActionBar>}
 
     {editingScheme && <SchemeEditor editor={editingScheme} onClose={() => { setEditingScheme(null); refresh(); }} notify={notify} />}
-    {editingSubstitute && <SubstituteEditor editor={editingSubstitute} schemes={schemes.items} onClose={() => { setEditingSubstitute(null); refresh(); }} notify={notify} />}
+    {editingSubstitute && <SubstituteEditor editor={editingSubstitute} schemes={schemes.items} products={products} onClose={() => { setEditingSubstitute(null); refresh(); }} notify={notify} />}
   </section>;
 }
 
@@ -139,7 +139,7 @@ function SchemeEditor({ editor, onClose, notify }) {
   </Modal>;
 }
 
-function SubstituteEditor({ editor, schemes, onClose, notify }) {
+function SubstituteEditor({ editor, schemes, products, onClose, notify }) {
   const isEdit = !editor.create;
   const [body, setBody] = useState(() => isEdit ? {
     schemeId: editor.scheme_id, primaryProductId: editor.primary_product_id,
@@ -161,8 +161,8 @@ function SubstituteEditor({ editor, schemes, onClose, notify }) {
           {schemes.map((s) => <option key={s.id} value={s.id}>{s.code} - {s.name}</option>)}
         </select>
       </label>
-      <label>主料 ID<input value={body.primaryProductId} onChange={(e) => setBody({ ...body, primaryProductId: e.target.value })} required disabled={isEdit} /></label>
-      <label>替代料 ID<input value={body.substituteProductId} onChange={(e) => setBody({ ...body, substituteProductId: e.target.value })} required disabled={isEdit} /></label>
+      <label>主料<select value={body.primaryProductId} onChange={(e) => setBody({ ...body, primaryProductId: e.target.value })} required disabled={isEdit}><option value="">请选择货品</option>{products.map((product) => <option key={product.id} value={product.id}>{product.code} · {product.name}</option>)}</select></label>
+      <label>替代料<select value={body.substituteProductId} onChange={(e) => setBody({ ...body, substituteProductId: e.target.value })} required disabled={isEdit}><option value="">请选择货品</option>{products.map((product) => <option key={product.id} value={product.id}>{product.code} · {product.name}</option>)}</select></label>
       <label>优先级<input type="number" value={body.priority} onChange={(e) => setBody({ ...body, priority: Number(e.target.value) })} required disabled={isEdit} /></label>
       <label>比例<input type="number" value={body.ratio} onChange={(e) => setBody({ ...body, ratio: Number(e.target.value) })} required disabled={isEdit} /></label>
       <label>生效日期<input type="date" value={body.effectiveFrom} onChange={(e) => setBody({ ...body, effectiveFrom: e.target.value })} disabled={isEdit} /></label>
@@ -176,7 +176,7 @@ function SubstituteEditor({ editor, schemes, onClose, notify }) {
   </Modal>;
 }
 
-function ResolverSection({ user, notify }) {
+function ResolverSection({ user, notify, products }) {
   const [productId, setProductId] = useState('');
   const [results, setResults] = useState(null);
   const [error, setError] = useState(null);
@@ -192,7 +192,7 @@ function ResolverSection({ user, notify }) {
       <h3>替代料解析</h3>
     </div>
     <form className="engineering-form" onSubmit={(e) => { e.preventDefault(); run(); }}>
-      <label>主料 ID<input value={productId} onChange={(e) => setProductId(e.target.value)} placeholder="主料产品 ID" /></label>
+      <label>主料<select value={productId} onChange={(e) => setProductId(e.target.value)}><option value="">请选择货品</option>{products.map((product) => <option key={product.id} value={product.id}>{product.code} · {product.name}</option>)}</select></label>
       <BusinessActionBar>
         <button type="submit" className="primary" disabled={!productId}>解析</button>
       </BusinessActionBar>
@@ -276,7 +276,12 @@ function Record({ title, subtitle, status, facts }) {
 
 export default function EngineeringSubstitute({ user, notify }) {
   const [tab, setTab] = useState('substitute');
+  const [products, setProducts] = useState([]);
   const canManage = can(user, 'ENGINEERING_SUBSTITUTE_MANAGE') || can(user, 'ENGINEERING_CONFIGURABLE_MANAGE');
+  useEffect(() => {
+    if (!can(user, 'PRODUCTS_VIEW') && !can(user, 'PRODUCTS_MANAGE')) return;
+    api('/api/products').then((result) => setProducts(result.products || [])).catch((error) => notify(error.message, 'error'));
+  }, [user, notify]);
   return <BusinessPageShell className="engineering-substitute-v15" width="rail">
     <BusinessPageHeader title="替代料与可配置 BOM"
       help={<HelpDisclosure summary="说明"><p>替代料解析（解析器）暴露给上游计划域使用；可配置 BOM 仅做派生预览，不改变库存或会计。</p></HelpDisclosure>} />
@@ -285,8 +290,8 @@ export default function EngineeringSubstitute({ user, notify }) {
       { key: 'configurable', label: '可配置 BOM' },
     ]} />
     {tab === 'substitute' && <>
-      <SchemeSection user={user} notify={notify} canManage={canManage} />
-      <ResolverSection user={user} notify={notify} />
+      <SchemeSection user={user} notify={notify} canManage={canManage} products={products} />
+      <ResolverSection user={user} notify={notify} products={products} />
     </>}
     {tab === 'configurable' && <ConfigurableBomSection user={user} notify={notify} canManage={canManage} />}
   </BusinessPageShell>;

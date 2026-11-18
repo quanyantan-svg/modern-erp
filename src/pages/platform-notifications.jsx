@@ -142,7 +142,7 @@ export function Notifications({ user, notify, workflowTaskCount = 0 }) {
       {tab === 'SUBSCRIPTIONS' && (
         <section>
           <p className="platform-ops__note">
-            订阅决定「按角色 / 按订阅」路由的通知是否送达；外部通道（邮件 / 短信）本轮为 OUT_OF_SCOPE。
+        订阅决定「按角色 / 按订阅」路由的通知是否送达；当前测试版本只提供系统内通知，不发送邮件或短信。
           </p>
           {subscriptions.length === 0 && <div className="platform-ops__empty">还没有订阅。</div>}
           <div className="platform-ops__list">

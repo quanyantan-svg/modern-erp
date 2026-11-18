@@ -30,6 +30,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { api } from '../api.js';
 import { Empty, FormActions, Modal, can } from '../components/ui.jsx';
+import { centsToYuanInput, yuanToNonNegativeCents } from '../lib/money.js';
 import {
   BusinessAction, BusinessContentSection, BusinessPageHeader, BusinessPageShell,
   CompactRecord, CompactRecordList, HelpDisclosure, InlineAlert,
@@ -45,6 +46,8 @@ export default function SourcingPricingPage({ user, notify }) {
   const [quotas, setQuotas] = useState([]);
   const [prices, setPrices] = useState([]);
   const [discounts, setDiscounts] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
+  const [products, setProducts] = useState([]);
   const [error, setError] = useState('');
   const [editor, setEditor] = useState(null);
 
@@ -66,6 +69,16 @@ export default function SourcingPricingPage({ user, notify }) {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    Promise.all([
+      can(user, 'SUPPLIERS_VIEW') || can(user, 'SUPPLIERS_MANAGE') ? api('/api/suppliers') : Promise.resolve({ suppliers: [] }),
+      can(user, 'PRODUCTS_VIEW') || can(user, 'PRODUCTS_MANAGE') ? api('/api/products') : Promise.resolve({ products: [] }),
+    ]).then(([supplierResult, productResult]) => {
+      setSuppliers(supplierResult.suppliers || []);
+      setProducts(productResult.products || []);
+    }).catch((referenceError) => setError(referenceError.message));
+  }, [user]);
+
   const canManage = can(user, 'PROCUREMENT_CONFIG_MANAGE');
 
   return (
@@ -86,12 +99,12 @@ export default function SourcingPricingPage({ user, notify }) {
       {error && <HelpDisclosure>{error}</HelpDisclosure>}
       {tab === 'source' && (
         <CompactRecordList data-testid="sourcing-source-list">
-          {sources.map((s) => <CompactRecord key={s.id} title={`${s.supplierId} / ${s.productId}`} subtitle={`${s.sourceType} / ${s.enabled ? '启用' : '停用'}`} metadata={[{ label: '有效期', value: `${fmtDate(s.effectiveFrom)} → ${fmtDate(s.effectiveTo)}` }]}/>)}
+          {sources.map((s) => <CompactRecord key={s.id} title={`${referenceLabel(suppliers, s.supplierId, '供应商')} / ${referenceLabel(products, s.productId, '货品')}`} subtitle={`${sourceTypeLabel(s.sourceType)} / ${s.enabled ? '启用' : '停用'}`} metadata={[{ label: '有效期', value: `${fmtDate(s.effectiveFrom)} → ${fmtDate(s.effectiveTo)}` }]}/>)}
         </CompactRecordList>
       )}
       {tab === 'quota' && (
         <CompactRecordList>
-          {quotas.map((q) => <CompactRecord key={q.id} title={`${q.supplierId} / ${q.productId}`} subtitle={`${q.sourceType} / 比例 ${q.proportion.num}/${q.proportion.den}`} metadata={[{ label: '有效期', value: `${fmtDate(q.effectiveFrom)} → ${fmtDate(q.effectiveTo)}` }]}/>)}
+          {quotas.map((q) => <CompactRecord key={q.id} title={`${referenceLabel(suppliers, q.supplierId, '供应商')} / ${referenceLabel(products, q.productId, '货品')}`} subtitle={`${sourceTypeLabel(q.sourceType)} / 比例 ${q.proportion.num}/${q.proportion.den}`} metadata={[{ label: '有效期', value: `${fmtDate(q.effectiveFrom)} → ${fmtDate(q.effectiveTo)}` }]}/>)}
         </CompactRecordList>
       )}
       {tab === 'price' && (
@@ -105,7 +118,7 @@ export default function SourcingPricingPage({ user, notify }) {
               {prices.map((p) => (
                 <CompactRecord
                   key={p.id}
-                  title={`${p.supplierId} / ${p.productId}`}
+                  title={`${referenceLabel(suppliers, p.supplierId, '供应商')} / ${referenceLabel(products, p.productId, '货品')}`}
                   subtitle={`${p.pricingUomCode} / ${money(p.unitPriceCents)}`}
                   metadata={[{ label: '版本与有效期', value: `${p.status} v${p.version} ${fmtDate(p.effectiveFrom)} → ${fmtDate(p.effectiveTo)}` }]}
                   action={canManage ? (
@@ -125,20 +138,22 @@ export default function SourcingPricingPage({ user, notify }) {
           action={canManage ? <BusinessAction onClick={() => setEditor({ kind: 'discount' })}>新增折扣</BusinessAction> : null}
         >
           <CompactRecordList>
-            {discounts.map((d) => <CompactRecord key={d.id} title={`${d.supplierId} / ${d.productId}`} subtitle={`${d.basis} ${d.value.num}/${d.value.den}`} metadata={[{ label: '版本与有效期', value: `${d.status} v${d.version} ${fmtDate(d.effectiveFrom)} → ${fmtDate(d.effectiveTo)}` }]}/>)}
+            {discounts.map((d) => <CompactRecord key={d.id} title={`${referenceLabel(suppliers, d.supplierId, '供应商')} / ${referenceLabel(products, d.productId, '货品')}`} subtitle={`${d.basis === 'PERCENT' ? '百分比' : '固定额'} ${d.value.num}/${d.value.den}`} metadata={[{ label: '版本与有效期', value: `${d.status} v${d.version} ${fmtDate(d.effectiveFrom)} → ${fmtDate(d.effectiveTo)}` }]}/>)}
           </CompactRecordList>
           {!discounts.length && <Empty title="暂无折扣" text="折扣是可选的；没有折扣时按价格条目金额计价。"/>}
         </BusinessContentSection>
       )}
-      {tab === 'preview' && <PricingPreviewPanel notify={notify}/>}
+      {tab === 'preview' && <PricingPreviewPanel notify={notify} suppliers={suppliers} products={products}/>}
       {tab === 'source' && (
-        <SourceOverridePanel canManage={canManage} notify={notify} onChanged={load} />
+        <SourceOverridePanel canManage={canManage} notify={notify} onChanged={load} suppliers={suppliers} products={products} />
       )}
       {tab === 'source' && !sources.length && <Empty title="暂无货源" />}
       {tab === 'quota' && !quotas.length && <Empty title="暂无配额" />}
       {editor && (
         <PricingEditor
           value={editor}
+          suppliers={suppliers}
+          products={products}
           notify={notify}
           onClose={() => setEditor(null)}
           onSaved={() => { setEditor(null); load(); notify('定价资料已保存'); }}
@@ -148,23 +163,28 @@ export default function SourcingPricingPage({ user, notify }) {
   );
 }
 
-function PricingEditor({ value, notify, onClose, onSaved }) {
+function PricingEditor({ value, suppliers, products, notify, onClose, onSaved }) {
   const [form, setForm] = useState(
     value.kind === 'adjust'
-      ? { unitPriceCents: value.entry.unitPriceCents, effectiveFrom: todayIso(), effectiveTo: '' }
+      ? { unitPriceYuan: centsToYuanInput(value.entry.unitPriceCents), effectiveFrom: todayIso(), effectiveTo: '' }
       : value.kind === 'discount'
         ? { supplierId: '', productId: '', sourceType: 'PURCHASE', basis: 'PERCENT', numerator: 10, denominator: 100, effectiveFrom: todayIso(), effectiveTo: '' }
-        : { supplierId: '', productId: '', sourceType: 'PURCHASE', pricingUomCode: '', unitPriceCents: '', effectiveFrom: todayIso(), effectiveTo: '' },
+        : { supplierId: '', productId: '', sourceType: 'PURCHASE', pricingUomCode: '', unitPriceYuan: '', effectiveFrom: todayIso(), effectiveTo: '' },
   );
 
   async function submit(event) {
     event.preventDefault();
     try {
+      const unitPriceCents = value.kind === 'discount' ? null : yuanToNonNegativeCents(form.unitPriceYuan);
+      if (value.kind !== 'discount' && unitPriceCents === null) {
+        notify('请输入有效的人民币单价，最多两位小数', 'error');
+        return;
+      }
       if (value.kind === 'adjust') {
         await api(`/api/procurement/price-list/${value.entry.id}/adjust`, {
           method: 'POST',
           body: {
-            unitPriceCents: Number(form.unitPriceCents),
+            unitPriceCents,
             effectiveFrom: form.effectiveFrom,
             effectiveTo: form.effectiveTo || null,
           },
@@ -190,7 +210,7 @@ function PricingEditor({ value, notify, onClose, onSaved }) {
             productId: form.productId,
             sourceType: form.sourceType,
             pricingUomCode: form.pricingUomCode,
-            unitPriceCents: Number(form.unitPriceCents),
+            unitPriceCents,
             effectiveFrom: form.effectiveFrom,
             effectiveTo: form.effectiveTo || null,
           },
@@ -209,8 +229,8 @@ function PricingEditor({ value, notify, onClose, onSaved }) {
       <form className="form-grid" onSubmit={submit}>
         {value.kind !== 'adjust' && (
           <>
-            <label>供应商<input required value={form.supplierId} placeholder="供应商 ID" onChange={(e) => setForm({ ...form, supplierId: e.target.value })}/></label>
-            <label>货品<input required value={form.productId} placeholder="货品 ID" onChange={(e) => setForm({ ...form, productId: e.target.value })}/></label>
+            <ReferenceSelect label="供应商" value={form.supplierId} rows={suppliers} onChange={(supplierId) => setForm({ ...form, supplierId })}/>
+            <ReferenceSelect label="货品" value={form.productId} rows={products} onChange={(productId) => setForm({ ...form, productId })}/>
             <label>来源
               <select value={form.sourceType} onChange={(e) => setForm({ ...form, sourceType: e.target.value })}>
                 <option value="PURCHASE">采购</option>
@@ -235,7 +255,7 @@ function PricingEditor({ value, notify, onClose, onSaved }) {
           </>
         )}
         {value.kind !== 'discount' && (
-          <label>单价（分）<input type="number" min="0" step="1" required value={form.unitPriceCents} onChange={(e) => setForm({ ...form, unitPriceCents: e.target.value })}/></label>
+          <label>单价（元）<input type="number" min="0" step="0.01" required value={form.unitPriceYuan} onChange={(e) => setForm({ ...form, unitPriceYuan: e.target.value })}/></label>
         )}
         <label>生效日期<input type="date" required value={form.effectiveFrom} onChange={(e) => setForm({ ...form, effectiveFrom: e.target.value })}/></label>
         <label>失效日期<input type="date" value={form.effectiveTo} onChange={(e) => setForm({ ...form, effectiveTo: e.target.value })}/></label>
@@ -248,7 +268,7 @@ function PricingEditor({ value, notify, onClose, onSaved }) {
   );
 }
 
-function PricingPreviewPanel({ notify }) {
+function PricingPreviewPanel({ notify, suppliers, products }) {
   const [form, setForm] = useState({
     supplierId: '', productId: '', sourceType: 'PURCHASE',
     documentUomCode: '', quantity: '1', businessDate: todayIso(),
@@ -285,8 +305,8 @@ function PricingPreviewPanel({ notify }) {
       description="调用服务端取价原语，展示计价单位换算、折扣与舍入证据"
     >
       <form className="form-grid" onSubmit={preview}>
-        <label>供应商<input required value={form.supplierId} placeholder="供应商 ID" onChange={(e) => setForm({ ...form, supplierId: e.target.value })}/></label>
-        <label>货品<input required value={form.productId} placeholder="货品 ID" onChange={(e) => setForm({ ...form, productId: e.target.value })}/></label>
+        <ReferenceSelect label="供应商" value={form.supplierId} rows={suppliers} onChange={(supplierId) => setForm({ ...form, supplierId })}/>
+        <ReferenceSelect label="货品" value={form.productId} rows={products} onChange={(productId) => setForm({ ...form, productId })}/>
         <label>单据单位<input value={form.documentUomCode} placeholder="留空使用基础单位" onChange={(e) => setForm({ ...form, documentUomCode: e.target.value })}/></label>
         <label>单据数量<input type="number" min="0.000001" step="any" required value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })}/></label>
         <label>业务日期<input type="date" required value={form.businessDate} onChange={(e) => setForm({ ...form, businessDate: e.target.value })}/></label>
@@ -325,7 +345,7 @@ function PricingPreviewPanel({ notify }) {
 // 后端合同：
 //   - GET  /api/procurement/source-overrides
 //   - POST /api/procurement/source-entries/override
-function SourceOverridePanel({ canManage, notify, onChanged }) {
+function SourceOverridePanel({ canManage, notify, onChanged, suppliers, products }) {
   const [overrides, setOverrides] = useState([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -381,22 +401,8 @@ function SourceOverridePanel({ canManage, notify, onChanged }) {
       {canManage ? (
         <form onSubmit={submit}>
           <div className="field-grid">
-            <label>
-              <span>供应商</span>
-              <input
-                aria-label="覆盖供应商"
-                value={form.supplierId}
-                onChange={(event) => setForm({ ...form, supplierId: event.target.value })}
-              />
-            </label>
-            <label>
-              <span>货品</span>
-              <input
-                aria-label="覆盖货品"
-                value={form.productId}
-                onChange={(event) => setForm({ ...form, productId: event.target.value })}
-              />
-            </label>
+            <ReferenceSelect label="供应商" value={form.supplierId} rows={suppliers} onChange={(supplierId) => setForm({ ...form, supplierId })}/>
+            <ReferenceSelect label="货品" value={form.productId} rows={products} onChange={(productId) => setForm({ ...form, productId })}/>
             <label>
               <span>货源类型</span>
               <select
@@ -442,8 +448,8 @@ function SourceOverridePanel({ canManage, notify, onChanged }) {
         {overrides.map((item) => (
           <CompactRecord
             key={item.id}
-            title={`${item.supplierId} / ${item.productId}`}
-            subtitle={`${item.sourceType} / ${item.status}`}
+            title={`${referenceLabel(suppliers, item.supplierId, '供应商')} / ${referenceLabel(products, item.productId, '货品')}`}
+            subtitle={`${sourceTypeLabel(item.sourceType)} / ${item.status}`}
             metadata={[
               { label: '生效区间', value: `${fmtDate(item.effectiveFrom)} → ${fmtDate(item.effectiveTo)}` },
               { label: '原因', value: item.reason },
@@ -454,4 +460,25 @@ function SourceOverridePanel({ canManage, notify, onChanged }) {
       {!overrides.length ? <Empty title="暂无覆盖" text="没有有效货源时，可按有界区间登记一次有原因的放行。" /> : null}
     </BusinessContentSection>
   );
+}
+
+function ReferenceSelect({ label, value, rows, onChange }) {
+  return (
+    <label>{label}
+      <select required value={value} onChange={(event) => onChange(event.target.value)}>
+        <option value="">{rows.length ? `请选择${label}` : `暂无可用${label}`}</option>
+        {rows.map((row) => <option key={row.id} value={row.id}>{row.code ? `${row.code} · ` : ''}{row.name || row.title || row.id}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function referenceLabel(rows, id, fallback) {
+  const row = rows.find((item) => item.id === id);
+  if (!row) return `${fallback}记录`;
+  return `${row.code ? `${row.code} · ` : ''}${row.name || row.title || fallback}`;
+}
+
+function sourceTypeLabel(value) {
+  return value === 'OUTSOURCE' ? '委外' : '采购';
 }
