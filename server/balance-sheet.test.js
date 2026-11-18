@@ -224,7 +224,7 @@ describe('Balance Sheet — Direction / Sign', () => {
   test('LIABILITY credit increases liability balance', async () => {
     const date = '2098-03-15';
     await createAndPostVoucher(date, [
-      { subjectId: 'subject-004', direction: 'DEBIT', amountCents: 40000, summary: '库存商品' },
+      { subjectId: 'subject-1601', direction: 'DEBIT', amountCents: 40000, summary: '库存商品' },
       { subjectId: 'subject-005', direction: 'CREDIT', amountCents: 40000, summary: '应付账款' },
     ]);
     const { data } = await getBalanceSheet('2098-03');
@@ -235,7 +235,7 @@ describe('Balance Sheet — Direction / Sign', () => {
   test('LIABILITY debit decreases liability balance', async () => {
     const date = '2098-04-15';
     await createAndPostVoucher(date, [
-      { subjectId: 'subject-004', direction: 'DEBIT', amountCents: 60000, summary: '库存商品' },
+      { subjectId: 'subject-1601', direction: 'DEBIT', amountCents: 60000, summary: '库存商品' },
       { subjectId: 'subject-005', direction: 'CREDIT', amountCents: 60000, summary: '应付账款' },
     ]);
     await createAndPostVoucher(date, [
@@ -355,7 +355,7 @@ describe('Balance Sheet — Multiple Subjects', () => {
   test('multiple liability subjects summed correctly', async () => {
     const date = '2097-09-15';
     await createAndPostVoucher(date, [
-      { subjectId: 'subject-004', direction: 'DEBIT', amountCents: 15000, summary: '库存商品' },
+      { subjectId: 'subject-1601', direction: 'DEBIT', amountCents: 15000, summary: '库存商品' },
       { subjectId: 'subject-005', direction: 'CREDIT', amountCents: 15000, summary: '应付账款' },
     ]);
     const { data } = await getBalanceSheet('2097-09');

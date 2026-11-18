@@ -149,6 +149,10 @@ export function confirmInventoryTransferCommand(db, actor, transferId, confirmed
         : [{ quantity: Number(item.quantity), lotId: null, serialId: null }];
 
       let outTransactionId = null;
+      // 每条腿的入账事务 id：调拨的入库腿估值流水必须归属**自己的**事务行，
+      // 否则入库腿的 inventory_transactions 行永远停在 LEGACY_UNVALUED
+      // （Requirement §32.17 `IW-VAL-04`）。
+      const legTransactions = [];
       for (const leg of legs) {
         const result = applyInventoryMutation({
           db,
@@ -181,11 +185,24 @@ export function confirmInventoryTransferCommand(db, actor, transferId, confirmed
           trackingMode: 'EXTERNAL',
         });
         const outMovement = result?.movements?.find((movement) => movement.direction === 'OUT');
+        const inMovement = result?.movements?.find((movement) => movement.direction === 'IN');
         if (outMovement && !outTransactionId) outTransactionId = outMovement.transactionId;
+        legTransactions.push({
+          lotId: leg.lotId,
+          serialId: leg.serialId,
+          outTransactionId: outMovement?.transactionId || null,
+          inTransactionId: inMovement?.transactionId || null,
+        });
       }
 
       // The value follows the issued leg: the inbound warehouse receives the
       // carrying value of what left the source warehouse.
+      //
+      // 每条腿的估值流水归属**自己的**事务行（出库腿归属出库事务、入库腿归属入库事务）：
+      // 否则入库腿的 inventory_transactions 行永远停在 LEGACY_UNVALUED
+      // （Requirement §32.17 `IW-VAL-04`）。
+      const legTransactionFor = (lotId, serialId) => legTransactions.find((leg) =>
+        (leg.lotId || null) === (lotId || null) && (leg.serialId || null) === (serialId || null));
       const issued = issueSourceValue(db, {
         businessDate,
         productId: item.product_id,
@@ -196,6 +213,8 @@ export function confirmInventoryTransferCommand(db, actor, transferId, confirmed
         sourceId: transferId,
         sourceItemId: item.id,
         inventoryTransactionId: outTransactionId,
+        inventoryTransactionIdByAllocation: (allocation) =>
+          legTransactionFor(allocation.lotId, allocation.serialId)?.outTransactionId || null,
       });
       issued.forEach((movement) => receiveValue(db, {
         businessDate,
@@ -209,7 +228,7 @@ export function confirmInventoryTransferCommand(db, actor, transferId, confirmed
         sourceType: 'INVENTORY_TRANSFER',
         sourceId: transferId,
         sourceItemId: item.id,
-        inventoryTransactionId: outTransactionId,
+        inventoryTransactionId: legTransactionFor(movement.lotId, movement.serialId)?.inTransactionId || outTransactionId,
         valuationBasis: movement.valuationMethod === 'LEGACY_UNVALUED' ? 'LEGACY_UNVALUED' : 'TRANSFER_CARRYING_VALUE',
       }));
     }

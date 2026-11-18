@@ -102,10 +102,15 @@ export function runChecks(db, period) {
     '已过账应付科目余额应等于应付子账'));
 
   // --- GRNI (goods received not invoiced) ---
+  // 子账侧只能是**暂估未结转**的收货应付（item_kind='PROVISIONAL'）：GRNI 的定义就是
+  // 「已收货未收到发票」。原实现误用 item_kind='FINAL'（与 AR/AP 的口径复制），
+  // 使已转销的暂估行被排除、暂估行也被排除，恒定失配。
+  // 总账侧：在途物资（1407）在平台约定下是贷方口径（收货贷记、结转借记），
+  // 因此取其**贷 − 借**，与 `financial-inventory.js` 的同一检查保持同口径。
   const grni = Number(db.prepare(
-    "SELECT COALESCE(SUM(CASE WHEN item_class='SOURCE' AND COALESCE(item_kind,'FINAL')='FINAL' AND COALESCE(conversion_state,'OPEN')='OPEN' THEN open_amount_cents ELSE 0 END),0) n FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND business_date<=?",
+    "SELECT COALESCE(SUM(CASE WHEN item_class='SOURCE' AND COALESCE(item_kind,'PROVISIONAL')='PROVISIONAL' AND COALESCE(conversion_state,'OPEN')='OPEN' THEN open_amount_cents ELSE 0 END),0) n FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND business_date<=?",
   ).get(asOfDate).n);
-  lines.push(line('GRNI_TO_GL', 'WARNING', glRoleBalance(db, ['GRNI'], asOfDate) - grni, [],
+  lines.push(line('GRNI_TO_GL', 'WARNING', -glRoleBalance(db, ['GRNI'], asOfDate) - grni, [],
     '已暂估入库未收发票金额应与 GRNI 科目一致'));
 
   // --- Cash flow vs treasury ---

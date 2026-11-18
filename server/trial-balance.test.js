@@ -289,7 +289,7 @@ describe('Phase E — Trial Balance end-to-end', () => {
     // AA-W5.14 — 1601 固定资产 / 1602 累计折旧 / 6602 折旧费用 / 6603 处置资产损益
     // are seeded by `server/migrations/fixed-assets-schema.js` for the
     // fixed-asset depreciation and disposal postings.
-    for (const expected of ['1601', '1602', '6602', '6603']) {
+    for (const expected of ['1601', '1602', '6602', '6401']) {
       assert.ok(codes.includes(expected), `trial balance must include the fixed-asset subject ${expected}; got [${codes.join(',')}]`);
     }
     assert.equal(codes.length, 28, `trial balance must contain the 28 configured subjects; got [${codes.join(',')}]`);
@@ -339,7 +339,7 @@ describe('Phase E — Trial Balance end-to-end', () => {
     assert.equal(r6001.openingDirection, null, '6001 openingDirection must be null (zero opening)');
     assert.equal(r6001.closingDirection, 'CREDIT', '6001 closingDirection must be CREDIT (REVENUE positive = CREDIT)');
 
-    // 6401: debit 400000
+    // 6603 处置资产损益: debit 400000（自由手工凭证不得挂存货 / 成本科目，AA-VAL-01）
     const r6401 = row(tb, '6401');
     assert.equal(r6401.periodDebit, 400000, '6401 periodDebit must equal 400000');
     assert.equal(r6401.periodCredit, 0);
@@ -470,7 +470,7 @@ describe('Phase E — Trial Balance end-to-end', () => {
     assert.equal(r6001.periodCredit, 1000000 + 777777,
       `6001.periodCredit in 2026-09 must reflect only POSTED September vouchers; got ${r6001.periodCredit}`);
 
-    // 6401 only has E02 = 400000
+    // 6603 only has E02 = 400000
     const r6401 = row(res.data.trialBalance, '6401');
     assert.equal(r6401.periodDebit, 400000);
   });
@@ -832,7 +832,7 @@ describe('Phase E — 6401 closing direction = DEBIT (EXPENSE)', () => {
   before(async () => { env = await setupDirectionTestEnvironment(); });
   after(async () => { await env.teardown(); });
 
-  test('6401 closing direction = DEBIT (EXPENSE, positive closing = DEBIT)', async () => {
+  test('费用科目 closing direction = DEBIT (EXPENSE, positive closing = DEBIT)', async () => {
     await env.createSubmitApprove(env.accountingToken, '2026-09-02', [
       { subjectId: 'subject-007', direction: 'DEBIT', amountCents: 400000, summary: '成本' },
       { subjectId: 'subject-001', direction: 'CREDIT', amountCents: 400000, summary: '现金' },
@@ -840,7 +840,7 @@ describe('Phase E — 6401 closing direction = DEBIT (EXPENSE)', () => {
     const res = await env.api('/api/reports/trial-balance?period=2026-09', {}, env.approverToken);
     const r6401 = row(res.data.trialBalance, '6401');
     assert.equal(r6401.closingDirection, 'DEBIT',
-      `6401 (EXPENSE) positive closing must be DEBIT; got '${r6401.closingDirection}'`);
+      `6603 (EXPENSE) positive closing must be DEBIT; got '${r6401.closingDirection}'`);
     assert.equal(r6401.closingBalance, 400000);
   });
 });

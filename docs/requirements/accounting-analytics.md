@@ -623,3 +623,59 @@ Finance 或库存轴由各自 owner 显式决定，法定反结账不得隐式�
   归属缺失时同样被拒；换用未参与该期分摊的人关账则成功；既有历史行的归属回填可核验。
 - 既有 43 项冻结能力的当前有效性须在 Acceptance 轮按 `AGENTS.md` §4.6 逐条复核；本节不预判其
   `STILL_VALID` / `NEEDS_REVIEW` 结论。
+
+---
+
+### 35.12 存货与成本科目的手工凭证守卫与 GRNI 检查口径统一（F-06 附属，`APPROVED` → `IMPLEMENTED`，2026-11-18）
+
+#### 35.12.1 身份与边界
+
+- 用途：关闭「总账与权威估值被静默拆开」的两条路径，使 §32.15 的三项 BLOCKING 检查在真实环境里
+  可归零。Owner = Accounting & Analytics（估值流水、关账检查、凭证录入）。
+- 授权来源与范围：业务所有者 2026-11-18 指令「F-06 与 GRNI 口径立项走 Requirement → Design →
+  Implementation」与「F-02 好像也还有矛盾 能否一并修好」（§4.0 连续阶段授权）。
+- 缺陷事实（客户测试环境实测，真实 MySQL 8）：`INVENTORY_VALUE_TO_GL` = −10,219，逐笔归因为
+  **三个互不相同的来源**：① 一张自由手工凭证贷记了存货科目而**没有任何估值流水**（−10,000）；
+  ② 库存状态变更 IN 腿未计价（+1,381，属 Inventory 域，见 §32.17）；
+  ③ 委外库存异动有估值流水但**没有总账分录**（−1,600，属 Procurement & Outsourcing 域，
+  已在其 §31.21.4-5 登记为开放项，本轮不实现）。
+
+#### 35.12.2 合同项
+
+- **`AA-VAL-01`（自由手工凭证不得触碰存货科目）**：存货科目由**权威估值事实**驱动，
+  因此自由手工凭证（`POST /api/accounting-vouchers`）不得以其为对方分录。受控科目集合由
+  `account_role_mappings` 的角色码决定（`RAW_MATERIAL_INVENTORY` / `FINISHED_GOODS_INVENTORY` /
+  `OTHER_INVENTORY` / `WIP` / `GRNI`），不得硬编码科目号。
+  命中时固定 409（`MANUAL_VOUCHER_CANONICAL_SUBJECT`），**零副作用**（不产生凭证与分录）。
+  更正路径：库存调整单 / 成本调整（自动过账），或对既有凭证做**补记 / 冲销**。
+  *残余登记*：成本与差异科目（`COGS` / `INVENTORY_GAIN_LOSS` / `INVENTORY_SCRAP_EXPENSE` /
+  `MATERIAL_PRICE_VARIANCE` / `MANUFACTURING_VARIANCE` / `PURCHASE_PRICE_VARIANCE` /
+  `PURCHASE_RETURN_VARIANCE` / `OUTSOURCING_PROCESSING_FEE`）、应收 / 应付 / 现金 / 银行 / 税金 /
+  收入科目本轮**不**纳入守卫：成本侧的自由调整同时牵涉损益结转合同（`AA-W3`），应收 / 应付 /
+  现金 / 税金科目属 Finance Operations 与本域的其余合同。其对账检查同样可能因自由凭证失配，
+  作为开放项登记，待各自合同裁定后再纳入。
+- **`AA-VAL-02`（GRNI 子账侧只能是暂估未结转）**：`GRNI_TO_GL` / `RECEIPT_GRNI_TO_GL` 的子账侧
+  只能是**暂估未结转**的收货应付（`item_class='SOURCE'` 且 `item_kind='PROVISIONAL'` 且
+  `conversion_state='OPEN'`）。原实现误用 `item_kind='FINAL'`（与 AR/AP 口径复制），
+  使已转销行与暂估行同时被排除，恒定失配。
+- **`AA-VAL-03`（GRNI 总账侧按平台记账约定取贷 − 借）**：在途物资（1407）在平台约定下是
+  **贷方口径**（确认收货贷记、账单结转借记），因此「未结转收货金额」= 贷 − 借。
+  同一检查在三处实现（`financial-inventory.js` / `accounting-reconciliation.js` /
+  `commercial-golive.js`）必须**同口径**，不得一处贷 − 借、另一处借 − 贷。
+- **`AA-VAL-04`（存货价值对账的两侧必须同域）**：`INVENTORY_VALUE_TO_GL` 的价值流水侧覆盖
+  **全部**存货估值池（含在制 / 委外在途仓位），总账侧因此必须包含在制科目（`WIP` / 1404）；
+  否则在制池有值而总账侧没有 → 恒定失配。
+
+#### 35.12.3 验收增量
+
+1. 自由手工凭证命中存货 / 成本科目时 409 + `MANUAL_VOUCHER_CANONICAL_SUBJECT`，且**零副作用**
+   （凭证与分录计数不变）。
+2. 非受控科目的自由手工凭证仍可正常创建、提交、审批（既有能力不回退）。
+3. GRNI 检查：暂估未结转金额与总账在途物资口径一致，差异为 0；三处实现同口径。
+4. `INVENTORY_VALUE_TO_GL` 两侧同域（含在制科目）。
+5. 变异对照：把守卫的科目集合清空 → 「手工凭证 409」断言必须转红；
+   把 GRNI 总账侧改回借 − 贷 → GRNI 差异断言必须转红。
+6. `pnpm test`、`pnpm build`、`git diff --check` 与两种文档一致性模式全部通过。
+
+**Requirement 状态：`APPROVED`（2026-11-18，业务所有者授权）。Design §31.17：`APPROVED`（同日）。
+Implementation：已实施（2026-11-18）；真实 MySQL 连接、数据库写操作、发布与部署**未授权**。**

@@ -36,7 +36,7 @@ import { transaction, id as genId } from '../db.js';
 import { audit } from './audit.js';
 import { HttpError } from './http.js';
 import { canonicalPositionSnapshot, computePositionKey, normalizeOwnerType, parseCanonicalPositionSnapshot, validateOwner, validateStockStatus, validateBin } from './inventory-position.js';
-import { issueSourceValue } from '../modules/financial-inventory.js';
+import { issueSourceValue, receiveValue } from '../modules/financial-inventory.js';
 import { guardPeriodAction } from '../modules/period-control.js';
 import { postCanonicalTrackedLeg, maintainTrackedDimension } from '../modules/traceability-quality.js';
 
@@ -423,9 +423,75 @@ export function applyInventoryMutation(input) {
     }
 
     // Valuation integration (cents-based INTEGER safe) — fires on every quantity-delta.
+    //
+    // 腿归属合同（Requirement §32.17 `IW-VAL-01..04`）：
+    //   * OUT 腿按来源位发出价值；
+    //   * IN 腿**只**承接同一异动 OUT 腿发出的价值（纯重分类价值中性）；
+    //   * 既有 best-effort 分支把每条 movement 都当「出库计值」——IN 腿因此在目标位
+    //     找不到来源池而抛错，被 catch 静默吞掉：价值离开来源池却不到目标池，
+    //     IN 腿的事务行永远停在 LEGACY_UNVALUED，权威结账被 BLOCKING 检查挡下；
+    //   * 单腿异动里**只有 IN 腿**的不得「出库计值」：那会从目标池扣掉价值。
+    //     这类异动的入库价值由调用方以 valuationMode=EXTERNAL 自持（残余清单见
+    //     Requirement §32.17 `IW-VAL-05`）。
     if (input.valuationMode !== 'EXTERNAL') {
-      try {
-        for (const m of movements) {
+      const outMovements = movements.filter((movement) => movement.direction === 'OUT');
+      const inMovements = movements.filter((movement) => movement.direction === 'IN');
+      // 未进入估值口径的货品（`products.valuation_activated_at` 为空）沿用既有行为：
+      // 物理异动照常发生，但不写估值流水 —— 这类行由关账异常清单
+      // （`LEGACY_UNVALUED_MOVEMENTS`）标记，不是本节要修的「有值却不承接」。
+      const valuedProductId = movements[0]?.position?.productId;
+      const activated = valuedProductId
+        ? db.prepare('SELECT valuation_activated_at FROM products WHERE id=?').get(valuedProductId)?.valuation_activated_at
+        : null;
+      if (outMovements.length && inMovements.length && activated) {
+        // 配对异动（仓位间移动 / 状态变更 / 批号重分类 / 形态转换 …）：
+        // 严格路径。计值失败即整体失败（外层事务回滚 → 零副作用）。
+        const issued = [];
+        for (const m of outMovements) {
+          issued.push(...issueSourceValue(db, {
+            businessDate,
+            productId: m.position.productId,
+            warehouseId: m.position.warehouseId,
+            quantity: Number(input.quantity),
+            movementType: input.sourceType,
+            sourceType: input.sourceType,
+            sourceId: input.sourceId,
+            sourceItemId: input.sourceItemId,
+            inventoryTransactionId: m.transactionId,
+          }));
+        }
+        const carriedCents = issued.reduce((sum, row) => sum + Number(row.valueDeltaCents || 0), 0);
+        const carriedQuantity = issued.reduce((sum, row) => sum + Math.abs(Number(row.quantityDelta || 0)), 0);
+        for (const m of inMovements) {
+          if (!issued.length || carriedCents === 0
+            || Math.abs(carriedQuantity - Number(input.quantity)) > 1e-9) {
+            throw new HttpError(409, '入账腿没有可承接的出库价值，配对异动不得留下未估值事实', {
+              code: 'VALUATION_IN_LEG_UNRESOLVED',
+              resolution: '配对异动的入账腿必须承接同一异动出库腿发出的价值；无价值时调用方必须以 valuationMode=EXTERNAL 自持计值',
+            });
+          }
+          receiveValue(db, {
+            businessDate,
+            productId: m.position.productId,
+            warehouseId: m.position.warehouseId,
+            lotId: m.position.lotId,
+            serialId: m.position.serialId,
+            quantity: Number(input.quantity),
+            valueCents: -carriedCents,
+            // 入账腿的 movement_type 必须与出账腿不同：估值流水的唯一索引是
+            // (source_type, source_id, source_item_id, lot_id, serial_id, movement_type)。
+            movementType: `${input.sourceType}_IN`,
+            sourceType: input.sourceType,
+            sourceId: input.sourceId,
+            sourceItemId: input.sourceItemId,
+            inventoryTransactionId: m.transactionId,
+            valuationBasis: 'CARRYING_VALUE',
+          });
+        }
+      } else if (outMovements.length && activated) {
+        // 已激活估值口径的单腿出库：计值失败必须让异动整体失败（值离开池而数量离开，
+        // 静默吞掉会让「在库数量 ≠ 估值池数量」）。
+        for (const m of outMovements) {
           issueSourceValue(db, {
             businessDate,
             productId: m.position.productId,
@@ -438,10 +504,26 @@ export function applyInventoryMutation(input) {
             inventoryTransactionId: m.transactionId,
           });
         }
-      } catch (e) {
-        // Legacy callers retain their historical best-effort valuation behavior.
-        // Callers using valuationMode=EXTERNAL own a strict valuation step in the
-        // same outer transaction and never enter this compatibility branch.
+      } else {
+        // 未进入估值口径的货品：沿用既有 best-effort 行为 —— 物理异动照常发生但不写估值
+        // 流水，这类行由关账异常清单（LEGACY_UNVALUED_MOVEMENTS）标记。
+        for (const m of outMovements) {
+          try {
+            issueSourceValue(db, {
+              businessDate,
+              productId: m.position.productId,
+              warehouseId: m.position.warehouseId,
+              quantity: Number(input.quantity),
+              movementType: input.sourceType,
+              sourceType: input.sourceType,
+              sourceId: input.sourceId,
+              sourceItemId: input.sourceItemId,
+              inventoryTransactionId: m.transactionId,
+            });
+          } catch {
+            // 沿用既有 best-effort 行为：不阻断物理异动。
+          }
+        }
       }
     }
 

@@ -422,6 +422,13 @@ const FULL = [
   // 同码重复登记不产生第二条身份、无权 403 且零副作用、跟踪方式不匹配固定拒绝、
   // 端到端登记后按该身份期初并形成身份级估值池。
   'server/inventory-opening-identity.test.js',
+  // 异动腿的计值归属（F-06；Requirement §32.17 `IW-VAL-01..06`）：配对异动的两条腿都必须
+  // VALUED、入账腿承接出账腿的价值、估值流水逐腿归属自己的事务行、计值失败零副作用。
+  'server/inventory-valuation-leg-attribution.test.js',
+  // 存货与成本科目的手工凭证守卫 + GRNI 检查口径统一（F-06 附属；Requirement §35.12
+  // `AA-VAL-01..04`）：受控科目 409 且零副作用、非受控科目仍可用、GRNI 三处实现同口径、
+  // 存货价值对账两侧同域。
+  'server/accounting-canonical-subject-guard.test.js',
   // 委外跟踪物料身份（F-03）新增套件与期初计价（F-02）新增套件的 FULL 登记。
 
   // ----- V21 Inventory & Warehouse Domain Closure — Wave A foundation -----

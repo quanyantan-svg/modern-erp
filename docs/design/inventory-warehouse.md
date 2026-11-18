@@ -2403,3 +2403,66 @@ POST /api/inventory/opening-identities
 - **状态**：Requirement §32.16 `APPROVED`（2026-11-18）；本节 Design `APPROVED`（同日）；
   Implementation **已实施**（2026-11-18）。真实 MySQL 连接、数据库写操作、Acceptance / Freeze
   签发、发布与部署**未授权**。
+
+---
+
+## 27.62 异动腿的计值归属设计（F-06，`APPROVED` → `IMPLEMENTED`，2026-11-18）
+
+> 对应 Requirement §32.17（`IW-VAL-01..06`）。授权来源：业务所有者 2026-11-18 指令
+> 「F-06 与 GRNI 口径立项走 Requirement → Design → Implementation」与「F-02 一并修好」。
+
+### 27.62.1 模块与职责
+
+| 模块 | 职责 | 本节变化 |
+|---|---|---|
+| `server/lib/inventory-mutation.js` | canonical 位移写入器（唯一库存异动写入路径） | 计值分支改为**按腿归属**：OUT 腿发出、IN 腿承接同一异动 OUT 腿的价值；计值失败不再静默吞掉 |
+| `server/modules/inventory-transfer.js` | 直接调拨确认（自持计值） | 每条腿的估值流水归属**该腿自己的**事务 id（多批次 / 多序列号逐腿归属） |
+| `server/modules/financial-inventory.js` | 权威估值流水（`issueSourceValue` / `receiveValue`） | `issueSourceValue` 支持按身份分配逐条指定事务 id（`inventoryTransactionIdByAllocation`） |
+
+### 27.62.2 数据流
+
+```text
+applyInventoryMutation(...)
+  → movements = [OUT?, IN?]              // 每个 movement 一条 inventory_transactions 行
+  → 计值分支（valuationMode !== 'EXTERNAL'）
+      ├─ 有 OUT 腿且有 IN 腿（配对异动）
+      │    1. OUT 腿：issueSourceValue → 发出价值（写估值流水 + 标记 OUT 行 VALUED）
+      │    2. 承接校验：Σ|数量| == input.quantity 且 Σ价值 != 0，否则 409 VALUATION_IN_LEG_UNRESOLVED
+      │    3. IN 腿：receiveValue(承接价值, valuationBasis='CARRYING_VALUE') → 写入目标池 + 标记 IN 行 VALUED
+      └─ 只有 OUT 腿（单腿出库）：沿用既有出库计值
+         只有 IN 腿（单腿入库）：**不**做任何出库计值（残余，见 §32.17 `IW-VAL-05`）
+```
+
+- **承接价值的符号**：`issueSourceValue` 返回的 `valueDeltaCents` 为负（出库），承接值取其相反数。
+- **失败即失败**：配对异动的计值失败不再被 `catch` 吞掉，异常向上冒泡 → 外层事务回滚 →
+  库存 / 估值 / 事务 / 凭证**零副作用**。
+- **多腿归属**：`issueSourceValue` 新增可选的 `inventoryTransactionIdByAllocation(allocation)`
+  回调；调拨模块按（lotId, serialId）把每条身份分配映射到自己的腿事务 id。
+
+### 27.62.3 Schema、事务、状态、审计、错误
+
+- **Schema / migration**：**无**。本节只改写既有列的写入方式，不新增列、不加迁移。
+- **事务**：计值与位移写入同处调用方的外层事务（`transaction(db, …)`），失败整体回滚。
+- **状态机 / 审批**：不涉及。
+- **审计**：不新增审计事件（异动本身的审计由既有流程负责）。
+- **错误行为**：承接失败 → 409 `VALUATION_IN_LEG_UNRESOLVED`（含 `resolution`）；出库计值失败 →
+  既有 409（可估值库存不足等）不再被吞掉。
+
+### 27.62.4 兼容性
+
+- **数据不变**：不迁移、不回填；既有 `LEGACY_UNVALUED` 行保持原样（按 §32.15 `IW-OPEN-05` 的
+  「不得凭空估价」原则，不得为通过检查而回填）。
+- **行为变化**：配对异动的入账腿现在**有**估值流水且事务行为 `VALUED`；价值中性（承接出库腿价值）。
+- **单腿入库异动**：不再从目标池扣价值（既有 best-effort 行为是错的），但其入库价值仍待调用方
+  自持 —— 残余清单见 §32.17 `IW-VAL-05`（组装拆卸入库腿、步进调拨入库腿、VMI 入库腿）。
+- **既有能力不回退**：委外发料 / 收货、期初、采购入库、销售退货等以 `valuationMode: 'EXTERNAL'`
+  自持计值的路径**不受影响**。
+
+### 27.62.5 测试与状态
+
+- **合同测试**（`server/inventory-valuation-leg-attribution.test.js`，登记 FULL）：
+  配对异动（状态变更 / 直接调拨）两条腿均 `VALUED`、池数量与在库数量相等、价值守恒；
+  多腿异动逐腿归属；承接失败时 409 + 零副作用；变异对照（去掉承接 / 把归属改回 OUT 腿）。
+- **状态**：Requirement §32.17 `APPROVED`（2026-11-18）；本节 Design `APPROVED`（同日）；
+  Implementation **已实施**（2026-11-18）。真实 MySQL 的结构变更、Acceptance / Freeze 签发、
+  发布与部署**未授权**。

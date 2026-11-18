@@ -155,7 +155,12 @@ export function issueSourceValue(db, input) {
   const method=valuationMethod(db,input.productId); const allocations=method==='MOVING_AVERAGE'?[{ quantity:input.quantity,lotId:null,serialId:null }]:identityAllocations(db,input.sourceType,input.sourceId,input.sourceItemId);
   if(!allocations.length) throw new HttpError(409,'跟踪库存缺少已过账身份分配');
   const totalQty=allocations.reduce((s,x)=>s+Number(x.quantity),0); if(Math.abs(totalQty-Number(input.quantity))>EPS) throw new HttpError(409,'身份分配数量与估值数量不一致');
-  return allocations.map((allocation)=>issueValue(db,{...input,...allocation,quantity:Number(allocation.quantity)}));
+  // 多身份腿（多批次 / 多序列号）时，每条腿的出库流水必须归属**自己的**事务行，
+  // 否则未归属那条腿的事务行永远停在 LEGACY_UNVALUED（Requirement §32.17 `IW-VAL-04`）。
+  return allocations.map((allocation)=>issueValue(db,{...input,...allocation,quantity:Number(allocation.quantity),
+    ...(typeof input.inventoryTransactionIdByAllocation==='function'
+      ? { inventoryTransactionId: input.inventoryTransactionIdByAllocation(allocation) || input.inventoryTransactionId }
+      : {})}));
 }
 
 export function restoreSourceValue(db,input){
@@ -342,7 +347,9 @@ export function systemHealth(db, { asOfDate='9999-12-31' }={}) {
   const iqty=currentQuantity-afterQuantity;
   checks.push(check('INVENTORY_QUANTITY_VS_VALUATION',Number(iqty)-Number(vqty),[], '未估值旧库存会阻止权威结账'));
   const negative=db.prepare('SELECT balance_key FROM inventory_valuation_balances WHERE quantity<0 OR value_cents<0 OR (quantity=0 AND value_cents<>0)').all(); checks.push(check('NEGATIVE_OR_RESIDUAL_VALUATION',negative.length,negative.map(x=>x.balance_key)));
-  const inventoryRoles=['RAW_MATERIAL_INVENTORY','FINISHED_GOODS_INVENTORY','OTHER_INVENTORY']; const inventoryGl=glRoleBalance(db,inventoryRoles,asOfDate); const asOfValue=Number(db.prepare("SELECT COALESCE(SUM(value_delta_cents),0) n FROM inventory_valuation_movements WHERE status='POSTED' AND business_date<=?").get(asOfDate).n); checks.push(check('INVENTORY_VALUE_TO_GL',inventoryGl-asOfValue,[], '已过账存货科目余额应等于价值子账'));
+  // 两侧必须同域：价值流水覆盖**全部**存货估值池（含在制 / 委外在途仓位），
+  // 总账侧因此必须包含在制科目（1404），否则在制池有值而总账侧没有 → 恒定失配。
+  const inventoryRoles=['RAW_MATERIAL_INVENTORY','FINISHED_GOODS_INVENTORY','OTHER_INVENTORY','WIP']; const inventoryGl=glRoleBalance(db,inventoryRoles,asOfDate); const asOfValue=Number(db.prepare("SELECT COALESCE(SUM(value_delta_cents),0) n FROM inventory_valuation_movements WHERE status='POSTED' AND business_date<=?").get(asOfDate).n); checks.push(check('INVENTORY_VALUE_TO_GL',inventoryGl-asOfValue,[], '已过账存货科目余额应等于价值子账'));
   const wip=Number(db.prepare('SELECT COALESCE(SUM(amount_cents),0) n FROM production_wip_movements WHERE business_date<=?').get(asOfDate).n); checks.push(check('WIP_TO_GL',glRoleBalance(db,['WIP'],asOfDate)-wip));
   const ar=Number(db.prepare("SELECT COALESCE(SUM(CASE WHEN item_class='SOURCE' AND COALESCE(item_kind,'FINAL')='FINAL' AND COALESCE(conversion_state,'OPEN')='OPEN' THEN open_amount_cents ELSE 0 END),0) n FROM account_receivables WHERE business_date<=?").get(asOfDate).n); checks.push(check('AR_TO_GL',glRoleBalance(db,['ACCOUNTS_RECEIVABLE'],asOfDate)-ar));
   const ap=Number(db.prepare("SELECT COALESCE(SUM(CASE WHEN item_class='SOURCE' AND COALESCE(item_kind,'FINAL')='FINAL' AND COALESCE(conversion_state,'OPEN')='OPEN' THEN open_amount_cents ELSE 0 END),0) n FROM account_payables WHERE business_date<=?").get(asOfDate).n); checks.push(check('AP_TO_GL',liabilityRoleBalance(db,['ACCOUNTS_PAYABLE'],asOfDate)-ap));
@@ -358,7 +365,10 @@ export function systemHealth(db, { asOfDate='9999-12-31' }={}) {
   const billGl=Number(db.prepare("SELECT COALESCE(SUM(e.amount_cents),0)n FROM accounting_entries e JOIN accounting_vouchers v ON v.id=e.voucher_id WHERE v.source_type='SUPPLIER_BILL' AND v.status='POSTED' AND COALESCE(v.business_date,v.voucher_date)<=? AND e.subject_id=(SELECT subject_id FROM account_role_mappings WHERE role_code='ACCOUNTS_PAYABLE') AND e.direction='CREDIT'").get(asOfDate).n);
   checks.push(check('SUPPLIER_BILL_TO_AP_GL',Math.abs(billTotal-billAp)+Math.abs(billTotal-billGl),[], '供应商账单含税额应等于原始 AP 与账单系统凭证'));
   const grniExpected=Number(db.prepare("SELECT COALESCE(SUM(total_cents),0)n FROM purchase_receipts WHERE status='CONFIRMED' AND billing_mode<>'LEGACY_DIRECT' AND receipt_date<=?").get(asOfDate).n)-Number(db.prepare("SELECT COALESCE(SUM(grni_cents),0)n FROM supplier_bills WHERE status='POSTED' AND bill_date<=?").get(asOfDate).n);
-  const grniGl=Number(db.prepare(`SELECT COALESCE(SUM(CASE WHEN e.direction='DEBIT' THEN e.amount_cents ELSE -e.amount_cents END),0)n FROM accounting_entries e JOIN accounting_vouchers v ON v.id=e.voucher_id WHERE v.status='POSTED' AND COALESCE(v.business_date,v.voucher_date)<=? AND e.subject_id=(SELECT subject_id FROM account_role_mappings WHERE role_code='GRNI') AND v.source_type IN ('PURCHASE_RECEIPT','SUPPLIER_BILL','SUPPLIER_CREDIT_NOTE')`).get(asOfDate).n);
+  // 在途物资（1407）在平台的记账约定里是**贷方口径**：确认收货时贷记、账单结转时借记，
+  // 因此「未结转收货金额」= 贷 − 借。原实现用借 − 贷，与本平台的记账约定相反，
+  // 使 GRNI 检查恒定失配（与 commercial-golive.js 的同一检查口径也不一致）。
+  const grniGl=Number(db.prepare(`SELECT COALESCE(SUM(CASE WHEN e.direction='CREDIT' THEN e.amount_cents ELSE -e.amount_cents END),0)n FROM accounting_entries e JOIN accounting_vouchers v ON v.id=e.voucher_id WHERE v.status='POSTED' AND COALESCE(v.business_date,v.voucher_date)<=? AND e.subject_id=(SELECT subject_id FROM account_role_mappings WHERE role_code='GRNI') AND v.source_type IN ('PURCHASE_RECEIPT','SUPPLIER_BILL','SUPPLIER_CREDIT_NOTE')`).get(asOfDate).n);
   checks.push(check('RECEIPT_GRNI_TO_GL',grniGl-grniExpected,[], '未结转收货 GRNI 应等于 GL GRNI'));
   const outputTax=Number(db.prepare("SELECT COALESCE(SUM(tax_cents),0)n FROM sales_invoices WHERE status='POSTED' AND invoice_date<=?").get(asOfDate).n)-Number(db.prepare("SELECT COALESCE(SUM(tax_cents),0)n FROM commercial_credit_notes WHERE side='AR' AND status='POSTED' AND credit_date<=?").get(asOfDate).n);
   const inputTax=Number(db.prepare("SELECT COALESCE(SUM(tax_cents),0)n FROM supplier_bills WHERE status='POSTED' AND bill_date<=?").get(asOfDate).n)-Number(db.prepare("SELECT COALESCE(SUM(tax_cents),0)n FROM commercial_credit_notes WHERE side='AP' AND status='POSTED' AND credit_date<=?").get(asOfDate).n);

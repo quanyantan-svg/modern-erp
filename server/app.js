@@ -6221,6 +6221,21 @@ async function createAccountingVoucher(db, req, res, actor) {
   if (debitTotal !== creditTotal) {
     throw new HttpError(400, '借贷不平衡，借方合计：' + debitTotal + '，贷方合计：' + creditTotal);
   }
+
+  // 存货科目由**权威估值事实**驱动：自由手工凭证不得直接改这些科目。
+  // 否则总账与存货子账被静默拆开，`INVENTORY_VALUE_TO_GL` / `INVENTORY_QUANTITY_VS_VALUATION`
+  // 等 BLOCKING 检查会永远失败且无法归因（Requirement §35.12 `AA-VAL-01`）。
+  // 更正路径：库存调整 / 成本调整（自动过账），或对既有凭证做补记 / 冲销。
+  const canonicalRoles = ['RAW_MATERIAL_INVENTORY', 'FINISHED_GOODS_INVENTORY', 'OTHER_INVENTORY', 'WIP', 'GRNI'];
+  const canonicalSubjects = new Set(db.prepare(
+    `SELECT subject_id FROM account_role_mappings WHERE role_code IN (${canonicalRoles.map(() => '?').join(',')})`,
+  ).all(...canonicalRoles).map((row) => row.subject_id));
+  if (entries.some((entry) => canonicalSubjects.has(entry.subjectId))) {
+    throw new HttpError(409, '手工凭证不得直接调整存货科目', {
+      code: 'MANUAL_VOUCHER_CANONICAL_SUBJECT',
+      resolution: '请通过库存调整单 / 成本调整过账，或对既有凭证做补记 / 冲销',
+    });
+  }
   
   const voucherId = id();
   const now = new Date().toISOString();

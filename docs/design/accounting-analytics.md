@@ -1199,3 +1199,70 @@ ownership migration 必须逐步完成 caller proof；未切换前旧 owner 可�
 SOD 归因设计状态为 `APPROVED`，其 **Implementation 尚未授权** —— 按 AGENTS.md §4.3，Design 完成后
 HARD STOP，须业务所有者明确批准后方可实施（加列 migration + 归属回填 + 关账判定 + 测试）。
 **HARD STOP**：专属 ACK-4 campaign 仍须业务所有者单独批准后方可运行。
+
+---
+
+## 31.17 存货与成本科目的手工凭证守卫与 GRNI 检查口径统一设计（F-06 附属，`APPROVED` → `IMPLEMENTED`，2026-11-18）
+
+> 对应 Requirement §35.12（`AA-VAL-01..04`）。授权来源：业务所有者 2026-11-18 指令
+> 「F-06 与 GRNI 口径立项走 Requirement → Design → Implementation」与「F-02 一并修好」。
+
+### 31.17.1 手工凭证守卫
+
+`POST /api/accounting-vouchers` 在校验借贷平衡之后、建凭证之前，追加一道守卫：
+
+```text
+受控科目集合 = account_role_mappings 中 role_code ∈ {RAW_MATERIAL_INVENTORY, FINISHED_GOODS_INVENTORY,
+  OTHER_INVENTORY, WIP, GRNI} 的 subject_id
+  → 命中任一 entry.subjectId
+      → 409 MANUAL_VOUCHER_CANONICAL_SUBJECT
+        resolution: 请通过库存调整单 / 成本调整过账，或对既有凭证做补记 / 冲销
+      → 零副作用：不产生 accounting_vouchers / accounting_entries 行
+```
+
+> **范围说明**：本守卫只覆盖**存货科目族**。成本与差异科目（`COGS` 等）本轮不纳入 ——
+> 自由成本调整同时牵涉损益结转合同（`AA-W3` 真实损益结转），纳入前必须先裁定该合同；
+> 应收 / 应付 / 现金 / 税金 / 收入科目同理（属 Finance Operations 与本域的其余合同）。
+> 这些科目作为开放项登记在 §35.12 `AA-VAL-01` 的残余登记里。
+
+- 科目集合**由角色码推导**，不硬编码科目号：科目目录调整时守卫自动跟随。
+- 既有能力不回退：非受控科目的自由手工凭证仍可创建 / 提交 / 审批（既有 SOD 与期间守卫不变）。
+- 不新增权限码、不改 `role_permissions`、不改任何角色的权限集合。
+
+### 31.17.2 GRNI 检查口径统一
+
+平台对在途物资（1407）的记账约定是**贷方口径**：确认收货时贷记、账单结转时借记。
+因此「未结转收货金额」= 贷 − 借。三处实现必须同口径：
+
+| 实现 | 子账侧 | 总账侧 | 本节变化 |
+|---|---|---|---|
+| `server/modules/financial-inventory.js`（AA-W6.15 检查清单 `RECEIPT_GRNI_TO_GL`） | 已确认收货 − 已过账账单冲抵 | 借 − 贷 | 改为**贷 − 借** |
+| `server/modules/accounting-reconciliation.js`（AA-W1 对账 `GRNI_TO_GL`） | 误用 `item_kind='FINAL'` | 借 − 贷 | 子账侧改为 **`item_kind='PROVISIONAL'`**；总账侧取**贷 − 借** |
+| `server/modules/commercial-golive.js`（既有同口径实现） | 同上 | 贷 − 借 | 不变（作为口径基准） |
+
+### 31.17.3 存货价值对账的两侧同域
+
+`INVENTORY_VALUE_TO_GL` 的价值流水侧覆盖**全部**存货估值池（含在制 / 委外在途仓位），
+总账侧因此必须包含在制科目：角色集合由
+`['RAW_MATERIAL_INVENTORY','FINISHED_GOODS_INVENTORY','OTHER_INVENTORY']`
+改为 `['RAW_MATERIAL_INVENTORY','FINISHED_GOODS_INVENTORY','OTHER_INVENTORY','WIP']`。
+
+### 31.17.4 Schema、事务、状态、审计、错误、兼容
+
+- **Schema / migration**：**无**。
+- **事务**：守卫在建凭证之前执行，拒绝时不产生任何写入；既有建凭证事务不变。
+- **状态机 / 审批 / 审计**：不涉及（凭证的提交 / 审批 / 审计路径不变）。
+- **错误行为**：409 + `MANUAL_VOUCHER_CANONICAL_SUBJECT` + `resolution`；既有错误码不变。
+- **兼容性**：既有凭证与历史数据不变；本节只阻止**新的**非法手工凭证。
+- **残余登记**：应收 / 应付 / 现金 / 银行 / 税金 / 收入科目本轮不纳入守卫（见 §35.12 `AA-VAL-01`
+  的残余登记）；委外库存异动缺总账分录属 Procurement & Outsourcing 域（其 §31.21.4-5），
+  本节不实现。
+
+### 31.17.5 测试与状态
+
+- **合同测试**（`server/accounting-canonical-subject-guard.test.js`，登记 FULL）：
+  命中受控科目 409 + 零副作用；非受控科目仍可创建并出现在试算平衡；GRNI 三个实现的同口径断言；
+  变异对照（清空守卫集合 / 改回借 − 贷）。
+- **状态**：Requirement §35.12 `APPROVED`（2026-11-18）；本节 Design `APPROVED`（同日）；
+  Implementation **已实施**（2026-11-18）。真实 MySQL 的结构变更、Acceptance / Freeze 签发、
+  发布与部署**未授权**。
