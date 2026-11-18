@@ -6813,7 +6813,9 @@ release / deploy、生产部署。
 
 - **F-01**：新增唯一结算敞口资格原语（`settlement-core.js`）；应收 / 应付清单逐行按资格判定，
   非结算敞口行（暂估待转销 / 已转销 / 历史遗留）未结归零并带明确状态标签；清单汇总口径改为
-  结算敞口，与 `AR_TO_GL` / `AP_TO_GL` 逐分相等；FO54 / FO55 汇总与账龄同口径；
+  结算敞口，与 `AR_TO_GL` / `AP_TO_GL` 逐分相等；**FO54 / FO55 汇总与账龄保持既有「往来义务」
+  口径**（含暂估与历史 `LEGACY` 行，与清单口径不同，登记为待裁定项，见 §78.5-5；
+  该表述于 2026-11-18 复验时按实现改正，见 §79.3-1）；
   **付款 / 收款建单即拒**不可结算项，不再产生永远无法确认的挂起 DRAFT。
 - **F-02**：新增迁移 `v26-opening-inventory-cost.js`（`opening_inventory_items.unit_cost_cents`
   + 期初权益科目 `4001` 与角色 `OPENING_EQUITY`，既有行不回填）；期初行必须带成本单价与
@@ -6831,7 +6833,7 @@ release / deploy、生产部署。
 | 门禁 | 结果 |
 |---|---|
 | `pnpm test:fast` | **775 / 775 PASS**（F-01 / F-04 修复后） |
-| `pnpm test`（FULL） | **4181 / 4178 PASS，3 FAIL**（3 项均由本轮改动引起 → 已修：报表口径回退为既有行为、试算平衡科目快照 27→28；受影响套件复跑 42/42 PASS；**全量门禁在修正后未重跑**） |
+| `pnpm test`（FULL） | **4181 / 4181 PASS，0 FAIL**（2026-11-18 复验：最后一次修正后的**首次完整重跑**，545 suites / 463,960 ms；此前记录为 4181 / 4178 PASS + 3 FAIL → 已修但未重跑） |
 | `pnpm build` | PASS |
 | 变异实验（F-04） | 修复前口径 **360**（= 120 × 3 笔移动）vs 修复后 **120**（真实数量） |
 | 新增合同测试 | `server/outsourcing-tracked-identity.test.js` 3/3、`server/inventory-opening-cost.test.js` 3/3（均已登记 FULL） |
@@ -6856,6 +6858,9 @@ release / deploy、生产部署。
 6. **科目表新增 1 个科目**：期初权益 `4001 实收资本`（`EQUITY`）；试算平衡科目快照由 27 变 28，
    `server/trial-balance.test.js` 的快照断言同步更新（新增要求 `4001` 可见）。
 7. 未签发 Acceptance / Freeze / Release Readiness；未 push / tag / merge / release / deploy。
+8. **跟踪物料的期初录入在界面层不可用**（2026-11-18 复验新增发现，见 §79.4）：服务端合同
+   `IW-OPEN-04` 要求期初行携带**已存在**的批次 / 序列号身份，但期初编辑器无身份字段、
+   界面也无批次 / 序列号身份主档的登记入口。API 路径可用，界面路径断链。
 
 ### 78.6 最终登记
 
@@ -6879,3 +6884,194 @@ ACCEPTANCE_FREEZE=NOT_ISSUED(未授权)
 | F-02 期初权益科目口径 | Accounting & Analytics + 业务所有者 | 待确认 |
 | 真实 MySQL 迁移与目标环境复验 | 业务所有者 | 未授权 |
 | Acceptance / Freeze / 推送 / 部署 | 业务所有者 | 本轮**未**执行 |
+
+---
+
+## 79. 四项修复的复验与新增发现（2026-11-18 复验）
+
+### 79.1 授权与边界
+
+本次会话的授权范围：**复验**上一轮（F-01 / F-02 / F-03 / F-04）的本机门禁证据，登记复验中
+发现的文档失真与新增产品缺口。**未授权**：实现修复、真实 MySQL 连接与数据库写操作、
+Acceptance / Freeze 签发、push / tag / merge / release / deploy。
+
+复验时的代码基线：`master` @ `370a5bf`（`github/master` 之前 13 个提交，本轮未推送），
+工作树干净。
+
+### 79.2 复验结果
+
+| 门禁 | 结果 |
+|---|---|
+| `pnpm test`（FULL） | **4181 / 4181 PASS，0 FAIL**（545 suites，duration 463,960 ms）——最后一次修正后的**首次完整重跑**，补上 §78.4 的证据缺口 |
+
+### 79.3 登记修正（文档失真）
+
+1. **§78.3 的 FO54 / FO55 表述失真**：原文写「FO54 / FO55 汇总与账龄同口径」，与实现不符。
+   `server/modules/finance-reports.js` **未被本轮改动**，其汇总仍是
+   `status IN ('PENDING','PARTIAL') AND conversion_state='OPEN'`（含暂估与历史 `LEGACY` 行）的
+   「往来义务」口径；结算清单则是「结算敞口」口径（`SETTLEMENT_ELIGIBLE_SQL`）。已按实现改正
+   §78.3，并把口径差异登记为待裁定项（§78.5-5）。
+2. **commit `5f748ee` 的提交信息失真**：其「范围」段列出
+   `server/modules/finance-reports.js：FO54 / FO55 汇总与账龄改用同一资格口径`，但该文件
+   **不在**该提交的变更清单内（报表口径改动在提交前被回退，改为登记待裁定项）。Git 历史
+   不做重写（未授权），此处登记事实差异。
+
+### 79.4 新增发现：跟踪物料的期初录入在界面层不可用（F-05 候选，未修复）
+
+**服务端合同**（Requirement §32.15 `IW-OPEN-04`，实现于
+`server/modules/inventory-opening.js:113-129`）：跟踪物料（`tracking_policy=LOT|SERIAL`）的期初行
+必须携带**已存在且属于该货品**的批次 / 序列号 id；缺省即 400 拒绝。序列号物料每次只能期初 1 件；
+非跟踪物料不得携带身份。
+
+**界面现状**：
+
+| 环节 | 事实 |
+|---|---|
+| 期初编辑器 `src/pages/inventory-work.jsx:2134` `InventoryOpeningEditor` | 每行只有 货品 / 仓库 / 数量 / 期初成本单价，**无批次 / 序列号字段**（本轮 F-02 只补了成本字段；AC2 已登记的 UI 身份缺口未修） |
+| 身份主档登记端点 | `POST /api/inventory-lots`（`server/app.js:4810`）、`POST /api/inventory-serials`（`server/app.js:4832`）**存在且可用** |
+| 界面对上述端点的调用 | `src/` 下**无任何调用方**，界面没有登记批次 / 序列号身份的入口 |
+
+**后果**：跟踪物料的期初只能经 API 录入（AC2 验收即如此：先登记 `AC2-LOT-OPEN-001` 批次，
+再建单时逐行带 `lotId`）。客户从**界面**无法给批次 / 序列号物料录期初；服务端现在会在建单时
+明确 400「第 N 行批次物料必须提供批次身份」——属 fail closed，但业务链在界面上走不通。
+
+**类别**：与 F-03 同类（API 层可用，界面断链），但**不在**本轮四项修复范围内。
+
+**候选裁定方向（均未实施，需业务所有者裁定）**：
+
+- (a) **界面补齐**：期初编辑器增加批次 / 序列号选择与身份主档登记入口（纯前端任务，不动合同）。
+- (b) **合同补齐**：把 `IW-OPEN-04` 从「身份必须已存在」改为「期初确认作为该批次的 canonical
+  Writer 登记身份主档」，与 F-03 的成品 Writer 原则一致（Requirement 变更；改的是合同不是代码）。
+
+### 79.5 复验新增的未解决事项
+
+1. §79.4 的 F-05 候选**未修复、未登记为合同**。
+2. 报表口径待裁定项见 §78.5-5：FO54 / FO55 汇总与账龄仍为「往来义务」口径，与结算清单的
+   「结算敞口」口径不同；既有合同测试（`server/v22-finance-wave-e-reports.test.js`）把
+   `item_class='LEGACY'` 行计入报表，收敛需先改合同再改实现。
+3. **清单汇总是「当前页」的结算敞口**（既有行为，非本轮引入）：`listReceivables` /
+   `listPayables` 的汇总由 `LIMIT 200` 的展示行求和得出。默认无筛选且 ≤200 行时与
+   `AR_TO_GL` / `AP_TO_GL` 逐分相等；一旦按客户 / 状态筛选或超过 200 行，页面汇总是筛选后子集，
+   不是全量口径。
+
+### 79.6 Owner
+
+| 角色 | 承担者 | 说明 |
+|---|---|---|
+| 复验与登记修正 | 仓库（执行） | 已完成；**不是** Acceptance |
+| F-05 候选的裁定（界面补齐 vs 合同补齐） | Inventory & Warehouse + 业务所有者 | 待裁定 |
+| 报表口径收敛的裁定 | Finance Operations + 业务所有者 | 待裁定 |
+| 真实 MySQL 迁移、目标环境复验、Acceptance / Freeze / 推送 / 部署 | 业务所有者 | 未授权 |
+
+---
+
+## 80. F-05 界面补齐、FO54/FO55 口径收敛与客户环境部署复验（2026-11-18）
+
+### 80.1 授权与边界
+
+业务所有者 2026-11-18 一次性授权三项：**修 F-05 界面缺口**、**部署 + 真实 MySQL 迁移与清库
+全业务复验**、**收敛 FO54/FO55 报表口径**（后者明确为 Requirement → Design → Implementation
+连续授权，承 AGENTS.md §4.0）。期初权益科目口径裁定为**照 `4001 实收资本` 落地**（只是期初余额的
+权益锚点，不改期初单据合同）。
+
+本轮按连续阶段授权执行 Requirement → Design → Implementation，并按 §11.3 分两个逻辑单元提交：
+
+| 提交 | 内容 |
+|---|---|
+| `878e6c8` | 补齐期初跟踪身份的登记入口，让跟踪物料期初能从界面录入（F-05） |
+| `b3dde68` | 收敛 FO54/FO55 报表口径到结算敞口，与 AR_TO_GL / AP_TO_GL 对齐 |
+
+**未授权 / 未执行**：Acceptance / Freeze 签发、push / tag / merge / release、
+真实 MySQL 的**结构变更**（本轮只做受支持的幂等迁移）、生产部署到正式环境。
+
+### 80.2 已实施
+
+- **F-05（Requirement §32.16 `IW-OPEN-07..10` / Design §27.61）**：期初流程自己拥有身份登记入口
+  `POST /api/inventory/opening-identities`（守卫既有权限码 `INVENTORY_OPENING_MANAGE`；身份类型
+  必须与货品跟踪方式一致；同码幂等复用既有身份）；期初编辑器按货品跟踪方式呈现「已有身份」与
+  「登记新身份」，序列号物料数量锁定为 1，无权读取身份主档时不发起该读取。
+  跟踪物料的期初从「只有 API 能做」变为「界面可完成」。
+- **FO54/FO55 口径（Requirement §33.52 `FO54-FO55-CALIBER-01..04` / Design §28.31）**：
+  `arSummary` / `apSummary` / `arAging` 改用结算模块的唯一资格原语 `SETTLEMENT_ELIGIBLE_SQL`，
+  响应声明 `caliber='SETTLEMENT_EXPOSURE'`；暂估待转销行与历史遗留行不再计入，
+  报表合计与 `AR_TO_GL` / `AP_TO_GL` 对齐。对账单、信用敞口、折扣额度口径不变。
+
+### 80.3 客户环境部署与真实 MySQL 迁移证据
+
+| 项 | 事实 |
+|---|---|
+| 目标主机 | `129.204.51.149`（腾讯云轻量，`VM-0-3-ubuntu`）；部署前 commit `ff5f6a8e` |
+| 传输方式 | `git bundle`（增量 126 KB，`^ff5f6a8e..master`），**未 push**、未动任何远端 |
+| 部署动作 | 停服务 → `git checkout --detach b3dde68` → `pnpm install --frozen-lockfile` → `pnpm build` → 启动 |
+| 部署后代码 | 已验证构建产物含 F-05 界面代码（`page-inventory-work-CcMjumEB.js`，与本机构建同 hash） |
+| **迁移显式验证** | v26 `opening_inventory_items.unit_cost_cents` = 1；科目 `4001 实收资本`（EQUITY/CREDIT）= 1；角色 `OPENING_EQUITY` = 1；v27 `planned_lot_code` / `planned_serial_number` = 1 / 1。**逐项查库确认，不以「迁移跑过」推定**（v26 的 `addColumn` 吞异常，失败是静默的） |
+| 共享主机零干扰 | `calculator_db` 仍 1 张表；MySQL **未重启**；未触碰 `pairbook-web` / nginx 既有站点块 |
+| 清库 | `ac2-reset.sh`：停服务 → DROP `modern_erp` 全部表与视图 → 启动触发 bootstrap → 重建 admin；结果 424 表 + 1 视图 + 5 触发器，`inventory` / `inventory_transactions` / `inventory_lot_balances` / `inventory_initialization` 均 0 |
+
+### 80.4 清库全业务验收证据
+
+| 链路 | 结果 |
+|---|---|
+| AC2 验收执行器 13 个脚本 | **13 / 13 exit=0**（上一轮 `04-stock-seed` 因脚本缺 F-02 成本字段被 400 拒绝、3 个浏览器脚本因 SSH 隧道未开而失败；两者均为**装置问题**，已修正后重跑） |
+| 跟踪物料端到端 `ac2-tracked-e2e.mjs` | **28 / 28 PASS**：采购入库带批次 → 批次身份 `currentQuantity=20`（不是 20×3=60）→ 委外发料带身份 201 → 委外收货生效 200（倒冲 3 件 / 携带价值 7500 分）→ 加工费过账 → 身份级估值池 数量=17 / 价值=42500 |
+| 浏览器巡检 | 93 route × 5 角色、库存作业 11 页签、无权访问巡检：全部通过 |
+| **F-05 界面复验**（新脚本 `.tmp/ac2-sweeps/ac2-f05-opening-identity-ui.mjs`） | **9 / 9 PASS**：未选货品时无身份控件 → 批次物料行出现「已有批号」+「登记新批号」→ 登记返回 201 并拿到身份 id → 登记后该身份出现在下拉 → 关闭初始化恢复终态 → 无控制台错误、无 4xx/5xx 读取失败 |
+| 期初播种 | **6 / 6**：期初单 13 行（带批次 1 行、带序列号 10 行）确认后 `VALUED`，身份级估值池成立 |
+
+### 80.5 四项症状的判定（客户环境，真实 MySQL 8）
+
+| 项 | 判定 | 证据 |
+|---|---|---|
+| F-01 幽灵应付 | **未复现** | 应付清单中没有被转销但仍显示未付的暂估项；`AP_TO_GL` 权威检查 PASS |
+| F-02 期初无成本 | **已消失** | 期初移动 `VALUED`；身份级估值池成立；`LEGACY_UNVALUED_MOVEMENTS` 由 **17 → 2**，`INVENTORY_QUANTITY_VS_VALUATION` 由 **1691 → 1** |
+| F-03 委外界面缺身份 | **已消失** | 跟踪物料链路 28/28；委外发料 201、收货生效 200 携带价值 |
+| F-04 批次数量放大 | **已消失** | 批次身份 `currentQuantity=20`（真实数量），与 canonical 仓位一致 |
+
+### 80.6 新暴露的残余缺陷（F-06 候选，**未修复**，需新一轮 Requirement）
+
+F-02 修好后，未估值移动从 17 降到 2 —— 剩下的 2 条来自**另外两个流程**，此前被 F-02 的大面积
+未估值掩盖。权威结账**仍然被挡**，但根因已经不是期初：
+
+| 检查 | 差异 | 定位 |
+|---|---|---|
+| `LEGACY_UNVALUED_MOVEMENTS`（BLOCKING） | **2** | 调拨 IN 腿与库存状态变更 IN 腿的 `inventory_transactions` 行仍是 `LEGACY_UNVALUED`：调拨把 IN 腿的估值流水挂到了 OUT 腿的事务 id 上（`server/modules/inventory-transfer.js:212`）；状态变更的 IN 腿**根本没有估值流水** —— canonical 写入器的 best-effort 分支（`server/lib/inventory-mutation.js:426-446`）把每条 movement 都当「出库计值」，IN 腿取不到来源池即抛错，被 `catch` 静默吞掉 |
+| `INVENTORY_QUANTITY_VS_VALUATION`（BLOCKING） | **1** | 同一根因：状态变更 IN 腿的 1 件没有估值流水 → 在库数量比估值池多 1（实测库存 1029.6，估值池 1028.6） |
+| `INVENTORY_VALUE_TO_GL`（BLOCKING） | **-10219** | 存货科目余额（2,474,749）与已过账估值流水（2,484,968）不符；其中状态变更 IN 腿缺失的 1,381 只能解释一部分，**其余 8,838 尚未逐笔归因**，需要一次专门的「总账 ↔ 价值流水」对账 |
+| `RECEIPT_GRNI_TO_GL`（BLOCKING） | **-300000** | GRNI 口径有两处不一致：`server/modules/accounting-reconciliation.js:105-109` 的子账谓词用 `item_kind='FINAL'`（GRNI 应当是 **PROVISIONAL** 暂估），`financial-inventory.js:362` 的 GL 侧用「贷 − 借」而其他检查用「借 − 贷」；本轮数据下 GL GRNI 为 +150,000、期望值 450,000 |
+
+四项均为**既有产品行为**，本轮未触碰相关代码；它们此前被 F-02 的大面积未估值掩盖。
+
+### 80.7 未解决事项
+
+1. **F-06 候选（§80.6）未修复**：调拨 / 库存状态变更的 IN 腿计值、GRNI 检查口径不一致。
+   按 AGENTS.md §4.4 属新增语义，**须回到 Requirement / Design 层**，本轮不擅自实现。
+2. 既有期初行不自动估价（§78.5-3）不变；客户账套若要拆分权益科目，按科目扩展处理。
+3. 清单汇总是「当前页」口径（§79.5-3）不变。
+4. 本轮在客户环境登记了 2 个界面复验用批次身份（`F05-UI-*`，零库存），属验收残留数据。
+5. 未签发 Acceptance / Freeze / Release Readiness；**未 push / tag / merge / release**（部署走 git bundle）。
+
+### 80.8 机器可读状态
+
+```text
+F05_OPENING_IDENTITY_UI=PASS(登记端点 4/4；浏览器 9/9；真实 MySQL 已部署)
+FO54_FO55_CALIBER=IMPLEMENTED(结算敞口；caliber 已声明；合同测试已更新)
+DEPLOY_TARGET_COMMIT=b3dde68(git bundle；未 push)
+REAL_MYSQL_MIGRATION=PASS(v26 三项 + v27 两项逐项查库确认)
+AC2_CLEAN_DB_ROUND=PASS(13/13 脚本；跟踪链路 28/28；浏览器 93 route × 5 角色)
+F01_GHOST_PAYABLE=NOT_REPRODUCED
+F02_OPENING_COST=RESOLVED(LEGACY_UNVALUED 17→2；QUANTITY_VS_VALUATION 1691→1)
+F03_OUTSOURCING_IDENTITY=RESOLVED(28/28)
+F04_IDENTITY_QUANTITY=RESOLVED(currentQuantity=20)
+F06_TRANSFER_STATUS_IN_LEG_VALUATION=OPEN(2 腿未计值；BLOCKING 结账仍被挡)
+GRNI_CHECK_CALIBER=OPEN(FINAL vs PROVISIONAL；符号不一致)
+AUTHORITATIVE_CLOSE=BLOCKED(4 项 BLOCKING 检查 FAIL)
+ACCEPTANCE_FREEZE=NOT_ISSUED(未授权)
+```
+
+### 80.9 Owner
+
+| 角色 | 承担者 | 说明 |
+|---|---|---|
+| F-05 与报表口径的实现、部署与复验 | 仓库（执行）+ 业务所有者（授权） | 已实施并复验；**不是** Acceptance |
+| F-06 候选与 GRNI 检查口径的裁定 | Inventory & Warehouse + Accounting & Analytics + 业务所有者 | 待裁定 |
+| 真实 MySQL 结构变更、Acceptance / Freeze / push / 正式部署 | 业务所有者 | 未授权 |
