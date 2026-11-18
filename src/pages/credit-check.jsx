@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api.js';
+import BusinessReferenceSelector from '../components/BusinessReferenceSelector.jsx';
+import { creditWorkReferences } from '../lib/creditWorkReferences.js';
+import { centsToYuanInput, yuanToNonNegativeCents } from '../lib/money.js';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const idempotencyKey = (scope) => `${scope}:${Date.now()}:${crypto.randomUUID()}`;
@@ -55,8 +58,8 @@ function ScopeCard({ result }) {
   return <article className="mini-card" aria-label={`credit-scope-${result.scopeType}`}>
     <strong>{SCOPE_LABELS[result.scopeType] || result.scopeType}</strong>
     <div>{DECISION_LABELS[result.decision] || result.decision}</div>
-    <div>已用 {result.exposureCents} 分 · 可用 {result.availableCents == null ? '不设上限' : `${result.availableCents} 分`}</div>
-    <div>本次合计 {result.proposedTotalCents} 分</div>
+    <div>已用 ¥ {centsToYuanInput(result.exposureCents)} · 可用 {result.availableCents == null ? '不设上限' : `¥ ${centsToYuanInput(result.availableCents)}`}</div>
+    <div>本次合计 ¥ {centsToYuanInput(result.proposedTotalCents)}</div>
     <small>{(result.reasonCodes || []).join(' / ') || '无附加原因'}</small>
     {breakdown.consumedSpecialApprovalId ? <small>已使用特别审批 {breakdown.consumedSpecialApprovalId}</small> : null}
   </article>;
@@ -67,7 +70,7 @@ export function CreditCheck({ user }) {
   const evaluable = canEvaluate(user);
   const [form, setForm] = useState({
     customerId: '', salespersonId: '', stage: 'SO_SUBMIT', businessDate: today(),
-    proposedDeltaCents: 0, salesOrderId: '', salesDeliveryId: '',
+    proposedDeltaYuan: '0.00', salesOrderId: '', salesDeliveryId: '',
   });
   const [outcome, setOutcome] = useState(null);
   const [feedback, setFeedback] = useState(null);
@@ -76,12 +79,14 @@ export function CreditCheck({ user }) {
 
   const evaluate = async () => {
     setBusy(true); setOutcome(null); setFeedback(null);
+    const proposedDeltaCents = yuanToNonNegativeCents(form.proposedDeltaYuan);
+    if (proposedDeltaCents == null) { setFeedback({ type: 'error', message: '本次敞口增量须为不超过两位小数的非负元金额' }); setBusy(false); return; }
     const body = {
       customerId: form.customerId,
       salespersonId: form.salespersonId || null,
       stage: form.stage,
       businessDate: form.businessDate,
-      proposedDeltaCents: Number(form.proposedDeltaCents || 0),
+      proposedDeltaCents,
       salesOrderId: form.salesOrderId || null,
       salesDeliveryId: form.salesDeliveryId || null,
     };
@@ -98,7 +103,7 @@ export function CreditCheck({ user }) {
 
   return <main className="page-stack">
     <header className="page-header"><div>
-      <p className="eyebrow">销售与客户 · Wave 10</p>
+      <p className="eyebrow">销售与客户 · 信用管理</p>
       <h1>信用检查</h1>
       <p>按销售订单提交、审批与出货确认三个阶段执行信用检查。敞口由销售与财务的权威事实派生，不存在第二套信用余额。</p>
     </div></header>
@@ -107,13 +112,13 @@ export function CreditCheck({ user }) {
         <h2>执行信用检查</h2>
         {evaluable ? <>
           <div className="form-row">
-            <label><span>客户 ID</span><input value={form.customerId} onChange={(e) => setForm({ ...form, customerId: e.target.value })} /></label>
-            <label><span>销售员 ID（可选）</span><input value={form.salespersonId} onChange={(e) => setForm({ ...form, salespersonId: e.target.value })} /></label>
+            <BusinessReferenceSelector descriptor={creditWorkReferences.profileContext()} label="客户" value={form.customerId} onChange={(customerId) => setForm({ ...form, customerId, salesOrderId: '', salesDeliveryId: '' })} />
+            <BusinessReferenceSelector descriptor={creditWorkReferences.salesperson()} label="销售员" optional value={form.salespersonId} onChange={(salespersonId) => setForm({ ...form, salespersonId })} />
             <label><span>业务阶段</span><select value={form.stage} onChange={(e) => setForm({ ...form, stage: e.target.value })}><option value="SO_SUBMIT">销售订单提交</option><option value="SO_APPROVE">销售订单审批</option><option value="SALES_DELIVERY_CONFIRM">销售出库确认</option></select></label>
             <label><span>业务日期</span><input type="date" value={form.businessDate} onChange={(e) => setForm({ ...form, businessDate: e.target.value })} /></label>
-            <label><span>本次敞口增量（分）</span><input type="number" value={form.proposedDeltaCents} onChange={(e) => setForm({ ...form, proposedDeltaCents: e.target.value })} /></label>
-            <label><span>销售订单 ID</span><input value={form.salesOrderId} onChange={(e) => setForm({ ...form, salesOrderId: e.target.value })} /></label>
-            <label><span>销售出库 ID</span><input value={form.salesDeliveryId} onChange={(e) => setForm({ ...form, salesDeliveryId: e.target.value })} /></label>
+            <label><span>本次敞口增量（元）</span><input inputMode="decimal" value={form.proposedDeltaYuan} onChange={(e) => setForm({ ...form, proposedDeltaYuan: e.target.value })} /></label>
+            <BusinessReferenceSelector descriptor={creditWorkReferences.salesOrder({ customerId: form.customerId })} label="销售订单" optional value={form.salesOrderId} onChange={(salesOrderId) => setForm({ ...form, salesOrderId, salesDeliveryId: '' })} />
+            <BusinessReferenceSelector descriptor={creditWorkReferences.salesDelivery({ customerId: form.customerId })} label="销售出货" optional value={form.salesDeliveryId} onChange={(salesDeliveryId) => setForm({ ...form, salesDeliveryId, salesOrderId: '' })} />
           </div>
           <button type="button" className="primary" onClick={evaluate} disabled={busy || !form.customerId || (!form.salesOrderId && !form.salesDeliveryId)}>执行检查</button>
         </> : <p className="muted">当前账号只有查看权限。执行信用检查需要独立的信用评估权限。</p>}
@@ -126,7 +131,7 @@ export function CreditCheck({ user }) {
         {results.loading ? <p>加载中…</p> : <div className="detail-grid">{results.rows.map((row) => <article className="mini-card" key={row.id}>
           <strong>{DECISION_LABELS[row.decision] || row.decision}</strong>
           <div>{SCOPE_LABELS[row.scopeType] || row.scopeType} · {STAGE_LABELS[row.stage] || row.stage}</div>
-          <div>{row.businessDate} · 敞口 {row.componentBreakdown?.exposureCents ?? '—'} 分</div>
+          <div>{row.businessDate} · 敞口 {row.componentBreakdown?.exposureCents == null ? '—' : `¥ ${centsToYuanInput(row.componentBreakdown.exposureCents)}`}</div>
           <small>{(row.reasonCodes || []).join(' / ') || '无附加原因'}</small>
         </article>)}</div>}
       </section>
@@ -139,8 +144,8 @@ export function CreditSpecialApprovals({ user }) {
   const requestable = canRequestApproval(user);
   const decidable = canDecideApproval(user);
   const [form, setForm] = useState({
-    sourceCreditCheckResultId: '', reason: '', requestedOverrideCents: 0,
-    requestedCeilingCents: 0, requestedExpiryBusinessDate: today(), scopeMode: 'ONE_TIME',
+    sourceCreditCheckResultId: '', reason: '', requestedOverrideYuan: '0.00',
+    requestedCeilingYuan: '0.00', requestedExpiryBusinessDate: today(), scopeMode: 'ONE_TIME',
   });
   const [feedback, setFeedback] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -148,11 +153,14 @@ export function CreditSpecialApprovals({ user }) {
 
   const submitRequest = async () => {
     setBusy(true); setFeedback(null);
+    const requestedOverrideCents = yuanToNonNegativeCents(form.requestedOverrideYuan);
+    const requestedCeilingCents = yuanToNonNegativeCents(form.requestedCeilingYuan);
+    if (requestedOverrideCents == null || requestedCeilingCents == null) { setFeedback({ type: 'error', message: '申请金额须为不超过两位小数的非负元金额' }); setBusy(false); return; }
     const body = {
       sourceCreditCheckResultId: form.sourceCreditCheckResultId,
       reason: form.reason,
-      requestedOverrideCents: Number(form.requestedOverrideCents || 0),
-      requestedCeilingCents: Number(form.requestedCeilingCents || 0),
+      requestedOverrideCents,
+      requestedCeilingCents,
       requestedExpiryBusinessDate: form.requestedExpiryBusinessDate,
       scopeMode: form.scopeMode,
     };
@@ -182,7 +190,7 @@ export function CreditSpecialApprovals({ user }) {
 
   return <main className="page-stack">
     <header className="page-header"><div>
-      <p className="eyebrow">销售与客户 · Wave 10</p>
+      <p className="eyebrow">销售与客户 · 信用管理</p>
       <h1>信用特别审批</h1>
       <p>特别审批只对产生该结论的一个信用范围有效，并且受权限上限、失效业务日期与申请审批分离约束。</p>
     </div></header>
@@ -191,10 +199,10 @@ export function CreditSpecialApprovals({ user }) {
         <h2>申请特别审批</h2>
         {requestable ? <>
           <div className="form-row">
-            <label><span>信用检查结果 ID</span><input value={form.sourceCreditCheckResultId} onChange={(e) => setForm({ ...form, sourceCreditCheckResultId: e.target.value })} /></label>
+            <BusinessReferenceSelector descriptor={creditWorkReferences.checkResult()} label="需特别审批的检查结果" value={form.sourceCreditCheckResultId} onChange={(sourceCreditCheckResultId) => setForm({ ...form, sourceCreditCheckResultId })} />
             <label><span>申请原因</span><input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></label>
-            <label><span>申请覆盖金额（分）</span><input type="number" value={form.requestedOverrideCents} onChange={(e) => setForm({ ...form, requestedOverrideCents: e.target.value })} /></label>
-            <label><span>申请额度上限（分）</span><input type="number" value={form.requestedCeilingCents} onChange={(e) => setForm({ ...form, requestedCeilingCents: e.target.value })} /></label>
+            <label><span>申请覆盖金额（元）</span><input inputMode="decimal" value={form.requestedOverrideYuan} onChange={(e) => setForm({ ...form, requestedOverrideYuan: e.target.value })} /></label>
+            <label><span>申请额度上限（元）</span><input inputMode="decimal" value={form.requestedCeilingYuan} onChange={(e) => setForm({ ...form, requestedCeilingYuan: e.target.value })} /></label>
             <label><span>申请失效业务日期</span><input type="date" value={form.requestedExpiryBusinessDate} onChange={(e) => setForm({ ...form, requestedExpiryBusinessDate: e.target.value })} /></label>
             <label><span>审批范围模式</span><select value={form.scopeMode} onChange={(e) => setForm({ ...form, scopeMode: e.target.value })}><option value="ONE_TIME">一次性</option><option value="TIME_BOUNDED">限期</option><option value="OBJECT_BOUNDED">限定单据</option></select></label>
           </div>
@@ -208,7 +216,7 @@ export function CreditSpecialApprovals({ user }) {
         {approvals.loading ? <p>加载中…</p> : <div className="detail-grid">{approvals.rows.map((row) => <article className="mini-card" key={row.id}>
           <strong>{SCOPE_LABELS[row.scopeType] || row.scopeType}</strong>
           <div>{row.decision === 'PENDING' ? '待审批' : row.decision === 'APPROVED' ? '已批准' : '已拒绝'} · {row.scopeMode}</div>
-          <div>权限上限 {row.authorityCeilingCents} 分 · 申请上限 {row.requestedCeilingCents} 分</div>
+          <div>权限上限 ¥ {centsToYuanInput(row.authorityCeilingCents)} · 申请上限 ¥ {centsToYuanInput(row.requestedCeilingCents)}</div>
           <small>失效业务日期 {row.requestedExpiryBusinessDate}</small>
           {row.decision === 'PENDING' && decidable ? <div className="form-row">
             <button type="button" className="primary" onClick={() => decide(row, 'APPROVED')}>批准</button>

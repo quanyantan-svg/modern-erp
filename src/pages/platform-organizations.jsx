@@ -64,7 +64,7 @@ export default function PlatformOrganizations({ user, notify }) {
       </header>
 
       {!canManage && !canManageScope && (
-        <InlineAlert tone="info">当前账号为只读，维护组织需要 ORGANIZATIONS_MANAGE 权限。</InlineAlert>
+        <InlineAlert tone="info">当前账号为只读，维护组织需要组织维护权限。</InlineAlert>
       )}
 
       <div className="platform-ops__tabs">

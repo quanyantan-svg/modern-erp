@@ -56,7 +56,7 @@ export default function PlatformNumbering({ user, notify }) {
         <p>统一编号服务按「单据类型 + 组织 + 期间」发放单号；既有单号格式保持不变，历史数据与既有断言不受影响。</p>
       </header>
 
-      {!canManage && <InlineAlert tone="info">当前账号为只读，维护编号规则需要 NUMBERING_MANAGE 权限。</InlineAlert>}
+      {!canManage && <InlineAlert tone="info">当前账号为只读，维护编号规则需要编号规则维护权限。</InlineAlert>}
 
       <div className="platform-ops__tabs">
         <SegmentedControl label="工作面分区" options={TABS} value={tab} onChange={setTab}/>

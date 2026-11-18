@@ -324,7 +324,7 @@ function ParameterDetail({ parameter, user, notify, onBack, onEdit }) {
         </BottomActionBar>
       )}
       {!can(user, 'SALES_PARAMETERS_MANAGE') && (
-        <p className="muted">当前账号没有 SALES_PARAMETERS_MANAGE 权限，只能查看参数。</p>
+        <p className="muted">当前账号没有销售参数维护权限，只能查看参数。</p>
       )}
     </BusinessPageShell>
   );
@@ -376,7 +376,7 @@ export function SalesParameters({ user, notify }) {
     <BusinessPageShell className="sales-parameters-list" data-testid="sales-parameters-page" width="rail">
       <BusinessPageHeader
         title="销售参数"
-        context="SC01 · 系统级与单据类型级控制语义"
+        context="系统级与单据类型级控制语义"
         primaryAction={can(user, 'SALES_PARAMETERS_MANAGE')
           ? <PrimaryButton type="button" onClick={() => setEditor({})}>新建参数行</PrimaryButton>
           : null}
@@ -534,7 +534,7 @@ export function SalesGroupMemberships({ user, notify }) {
     <BusinessPageShell className="sales-memberships-list" data-testid="sales-group-memberships-page" width="rail">
       <BusinessPageHeader
         title="销售组成员关系"
-        context="SC06 · 多组归属与唯一默认组"
+        context="多组归属与唯一默认组"
         primaryAction={can(user, 'SALES_FOUNDATION_MANAGE') && salespersonId
           ? <PrimaryButton type="button" onClick={() => setEditor({})}>新建成员关系</PrimaryButton>
           : null}
@@ -733,7 +733,7 @@ export function SellableScopeRules({ user, notify }) {
     <BusinessPageShell className="sales-sellable-list" data-testid="sellable-scope-rules-page" width="rail">
       <BusinessPageHeader
         title="可销范围规则"
-        context="SC07 · 客户 / 销售员 / 物料三个维度的允许 / 拒绝"
+        context="客户 / 销售员 / 物料三个维度的允许 / 拒绝"
         primaryAction={can(user, 'SALES_COMMERCIAL_MANAGE')
           ? <PrimaryButton type="button" onClick={() => setEditor({})}>新建规则</PrimaryButton>
           : null}
@@ -899,7 +899,7 @@ export function ProductClassifications({ user, notify }) {
     <BusinessPageShell className="sales-classification-list" data-testid="product-classifications-page" width="rail">
       <BusinessPageHeader
         title="产品商业分类"
-        context="SC08 · 可售 / 服务 / 销售与计价单位 / 交货容差默认值"
+        context="可售 / 服务 / 销售与计价单位 / 交货容差默认值"
         primaryAction={can(user, 'SALES_COMMERCIAL_MANAGE')
           ? <PrimaryButton type="button" onClick={() => setEditor({})}>新建分类</PrimaryButton>
           : null}
@@ -1036,14 +1036,14 @@ export function PriceOverrideAuthorizations({ user, notify }) {
     <BusinessPageShell className="sales-price-override" data-testid="sales-price-override-authorizations-page" width="rail">
       <BusinessPageHeader
         title="价格覆盖授权"
-        context="SC19 · 手工价格覆盖的独立授权"
+        context="手工价格覆盖的独立授权"
         primaryAction={canAuthorize
           ? <PrimaryButton type="button" disabled={busy || !referenceReady} onClick={submit}>签发授权</PrimaryButton>
           : null}
       />
       {!canAuthorize && (
         <BusinessContentSection title="权限">
-          <p className="muted">当前账号没有 SALES_PRICING_OVERRIDE 权限，无法签发价格覆盖授权。</p>
+          <p className="muted">当前账号没有价格覆盖授权权限，无法签发价格覆盖授权。</p>
         </BusinessContentSection>
       )}
       {!access.any && (

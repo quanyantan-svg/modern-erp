@@ -81,7 +81,7 @@ export default function PlatformSodRules({ user, notify }) {
         <p>为审批族配置职责分离约束、处置方式与升级角色；规则变更全部留痕。</p>
       </header>
 
-      {!canManage && <InlineAlert tone="info">当前账号为只读，维护职责分离规则需要 SOD_RULES_MANAGE 权限。</InlineAlert>}
+      {!canManage && <InlineAlert tone="info">当前账号为只读，维护职责分离规则需要职责分离规则维护权限。</InlineAlert>}
 
       <div className="platform-ops__tabs">
         <SegmentedControl label="工作面分区" options={TABS} value={tab} onChange={setTab}/>

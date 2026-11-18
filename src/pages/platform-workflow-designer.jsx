@@ -74,7 +74,7 @@ export default function PlatformWorkflowDesigner({ user, notify }) {
         <p>定义流程模板与节点图，草稿经发布后不可变；试运行只走一遍节点图，不产生任何业务副作用。</p>
       </header>
 
-      {!canManage && <InlineAlert tone="info">当前账号为只读，编辑与发布流程需要 WORKFLOW_MANAGE 权限。</InlineAlert>}
+      {!canManage && <InlineAlert tone="info">当前账号为只读，编辑与发布流程需要流程维护权限。</InlineAlert>}
 
       <div className="platform-ops__toolbar">
         <strong>共 {templates.length} 个模板</strong>

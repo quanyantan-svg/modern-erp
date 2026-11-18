@@ -1903,7 +1903,7 @@ export function InventoryWork({ user, notify }) {
     return (
       <BusinessPageShell className="v16-inventory-shell inv-work" width="rail">
         <BusinessPageHeader title="库存作业" context="—" />
-        <EmptyState title="没有权限" description="当前账号没有可打开的库存工作面页签（需要 INVENTORY_VIEW 或相应的库存子域读取权限）。" />
+        <EmptyState title="没有权限" description="当前账号没有可打开的库存工作面页签（需要库存查看权限或相应的库存子域读取权限）。" />
       </BusinessPageShell>
     );
   }
@@ -2549,7 +2549,7 @@ export function InventoryStatusChange({ user, notify, references }) {
       description="同一物理库存在两个状态之间迁移：数量、所有权与仓位不变。"
     >
       {access && !access.stockStatuses && (
-        <InlineAlert tone="info">当前账号没有库存状态读取权限（STOCK_STATUS_VIEW / STOCK_STATUS_MANAGE），无法选择原状态与目标状态。</InlineAlert>
+        <InlineAlert tone="info">当前账号没有库存状态读取权限，无法选择原状态与目标状态。</InlineAlert>
       )}
       <InventoryWorkEditorShell title="库存状态调整" onSubmit={submit} submitLabel="提交状态调整">
         <div className="inv-work-form-grid">

@@ -303,6 +303,89 @@ const targetContractFor = (routeKey) => Object.freeze({
   pathParam: DETAIL_TARGET_ROUTES.has(routeKey) ? 'documentId' : null,
   queryKeys: Object.freeze(ROUTE_QUERY_KEYS[routeKey] || []),
 });
+
+// 任务上下文只承载呈现事实，不承载 access 事实（Requirement §36.22 PL-UX-05；
+// Design §32.22.3）。「下一步」只编排 document.md §6.1–§6.5 的五条端到端主链与
+// 明确的主数据前置步骤；没有编排后继的页面只显示来源，不显示下一步。
+const PURPOSE_BY_ARCHETYPE = Object.freeze({
+  LIST: '查找、查看并处理业务记录',
+  WORKFLOW: '按当前状态完成业务流程',
+  CONFIG: '维护本模块的业务规则与基础配置',
+  REPORT: '查询并核对业务结果',
+});
+const TASK_NEXT_ROUTE = Object.freeze({
+  // O2C：客户 → 报价 → 订单 → 信用 → 出货 → 应收 → 收款。
+  customers: 'quotations',
+  quotations: 'orders',
+  orders: 'credit-check',
+  'credit-check': 'sales-deliveries',
+  'sales-deliveries': 'accounts-receivable',
+  'accounts-receivable': 'payment-collections',
+  'payment-collections': 'decision-reports',
+  returns: 'accounts-receivable',
+  // P2P：供应商 → 请购 → 采购订单 → 收货 → 应付 → 付款。
+  suppliers: 'purchase-requisitions',
+  'purchase-requisitions': 'purchase-orders',
+  'purchase-orders': 'purchase-receipts',
+  'purchase-receipts': 'accounts-payable',
+  'accounts-payable': 'payment-disbursements',
+  'payment-disbursements': 'accounting',
+  // Plan-to-Produce：预测 → MRP → 计划订单 → 生产指令 → 制令 → 用料 → 入库。
+  forecasts: 'mrp-runs',
+  'mrp-runs': 'planned-orders',
+  'planned-orders': 'production-instructions',
+  'production-instructions': 'production-orders',
+  'production-orders': 'material-issues',
+  'material-issues': 'production-receipts',
+  'production-receipts': 'accounting-costing',
+  // Plan-to-Outsource：委外加工 → 存货成本。
+  outsourcing: 'accounting-costing',
+  // R2R：会计事件 → 凭证 → 对账 → 报表 → 经营分析。
+  'accounting-events': 'accounting',
+  accounting: 'accounting-reconciliation',
+  'accounting-reconciliation': 'accounting-reports',
+  'accounting-reports': 'decision-reports',
+  // 主数据与质量前置步骤。
+  products: 'boms',
+  warehouses: 'inventory',
+  'quality-control-points': 'iqc',
+  iqc: 'purchase-receipts',
+  oqc: 'sales-deliveries',
+  'production-scan': 'production-receipts',
+  'inventory-scraps': 'inventory-month-end',
+  'inventory-month-end': 'accounting-reconciliation',
+  'sales-invoices': 'accounts-receivable',
+  'finance-invoices': 'accounts-receivable',
+  'supplier-bills': 'accounts-payable',
+  'credit-foundation': 'credit-check',
+  'credit-special-approvals': 'credit-check',
+  'credit-evaluation': 'credit-query',
+  'credit-query': 'credit-foundation',
+  'delivery-notices': 'sales-deliveries',
+  'service-fulfillments': 'sales-deliveries',
+  'sales-order-changes': 'orders',
+  'sales-price-override-authorizations': 'orders',
+  users: 'workflow-designer',
+  'workflow-designer': 'workflow-bindings',
+  'workflow-bindings': 'workflow-tasks',
+  notifications: 'workflow-tasks',
+});
+
+// 高风险页面：确认 / 审批 / 过账 / 反冲 / 月结 / 结算类。帮助文案只说明来源、
+// 前置条件与失败零副作用，不重新解释或改变业务动词的语义（Design §32.22.3）。
+const HIGH_RISK_ROUTES = new Set([
+  'approvals','credit-check','credit-special-approvals','credit-foundation',
+  'accounts-receivable','accounts-payable','payment-collections','payment-disbursements',
+  'supplier-bills','sales-invoices','finance-invoices','finance-treasury','cash-journals','bills',
+  'inventory','inventory-scraps','inventory-month-end','returns',
+  'production-orders','material-issues','production-receipts','production-quality','production-scan',
+  'iqc','oqc','outsourcing','consignment-commercial','service-fulfillments','delivery-notices',
+  'sales-order-changes','sales-price-override-authorizations','sales-discounts','purchase-discounts',
+  'sales-prepayment-gates','accounting','accounting-events','accounting-costing','lifecycle',
+]);
+const ROUTE_TITLE_BY_KEY = new Map(
+  [...ACTIVE_ROUTE_DEFINITIONS, ...DISABLED_ROUTE_DEFINITIONS].map((item) => [item.route, item.title]),
+);
 const toApplicationRoute = (item) => Object.freeze({
   key: item.route, title: item.title, domain: item.domain, archetype: item.template,
   semanticLevel: item.semanticLevel, level: item.level,
@@ -315,6 +398,14 @@ const toApplicationRoute = (item) => Object.freeze({
   classification: classificationFor(item.route),
   aliases: Object.freeze(Object.entries(TECHNICAL_ROUTE_ALIASES).filter(([, canonical]) => canonical === item.route).map(([alias]) => alias)),
   responsiveMode: RESPONSIVE_MODES.LEGACY_ADAPTER,
+  taskContext: Object.freeze({
+    purpose: item.contextHint || PURPOSE_BY_ARCHETYPE[item.template] || `${item.title}业务处理`,
+    upstreamRoute: item.parentRoute || null,
+    upstreamLabel: item.parentRoute ? (ROUTE_TITLE_BY_KEY.get(item.parentRoute) || null) : null,
+    nextRoute: TASK_NEXT_ROUTE[item.route] || null,
+    nextLabel: TASK_NEXT_ROUTE[item.route] ? (ROUTE_TITLE_BY_KEY.get(TASK_NEXT_ROUTE[item.route]) || null) : null,
+    helpLevel: HIGH_RISK_ROUTES.has(item.route) ? 'HIGH_RISK' : 'STANDARD',
+  }),
   presentation: item,
 });
 

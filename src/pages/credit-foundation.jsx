@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api.js';
+import BusinessReferenceSelector from '../components/BusinessReferenceSelector.jsx';
+import { creditWorkReferences } from '../lib/creditWorkReferences.js';
+import { centsToYuanInput, yuanToNonNegativeCents } from '../lib/money.js';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const idempotencyKey = (scope) => `${scope}:${Date.now()}:${crypto.randomUUID()}`;
@@ -83,7 +86,7 @@ function Rules({ user }) {
     catch (error) { setFeedback({ type: 'error', message: error.message || String(error) }); }
     finally { setSaving(false); }
   };
-  return <section className="card" aria-label="credit-rules"><h2>信用检查规则</h2><p className="muted">Wave 9 仅配置规则，不会启用销售订单或出货信用阻断。</p>
+  return <section className="card" aria-label="credit-rules"><h2>信用检查规则</h2><p className="muted">规则按业务阶段生效；阻断和预警结果由信用检查统一判定。</p>
     {manageable ? <CreateForm onSave={save} saving={saving} label="新增规则版本">
       <label><span>规则代码</span><input value={form.ruleCode} onChange={(e) => setForm({ ...form, ruleCode: e.target.value })} placeholder="STANDARD_BLOCK" /></label>
       <label><span>业务阶段</span><select value={form.businessStage} onChange={(e) => setForm({ ...form, businessStage: e.target.value })}><option value="SO_SUBMIT">销售订单提交</option><option value="SO_APPROVE">销售订单审批</option><option value="SALES_DELIVERY_CONFIRM">销售出货确认</option></select></label>
@@ -99,35 +102,38 @@ function Profiles({ user }) {
   const manageable = canManage(user);
   const readable = canRead(user);
   const data = useCollection('/api/credit/profiles', 'profiles', readable);
-  const [form, setForm] = useState({ customerId: '', salespersonId: '', creditObjectType: 'CUSTOMER', creditObjectId: '', creditLimitCents: '', initialState: 'NORMAL', status: 'ACTIVE', ratingGrade: 'A', overdueDayPolicy: '0', effectiveFrom: today() });
+  const [form, setForm] = useState({ customerId: '', salespersonId: '', creditObjectType: 'CUSTOMER', creditObjectId: '', creditLimitYuan: '', initialState: 'NORMAL', status: 'ACTIVE', ratingGrade: 'A', overdueDayPolicy: '0', effectiveFrom: today() });
   const [feedback, setFeedback] = useState(null);
   const [saving, setSaving] = useState(false);
   const save = async () => {
     setSaving(true);
-    const body = { ...form, salespersonId: form.salespersonId || null, creditLimitCents: form.creditLimitCents === '' ? null : Number(form.creditLimitCents) };
+    const creditLimitCents = form.creditLimitYuan === '' ? null : yuanToNonNegativeCents(form.creditLimitYuan);
+    if (form.creditLimitYuan !== '' && creditLimitCents == null) { setFeedback({ type: 'error', message: '信用额度须为不超过两位小数的非负元金额' }); setSaving(false); return; }
+    const { creditLimitYuan, ...payload } = form;
+    const body = { ...payload, salespersonId: form.salespersonId || null, creditLimitCents };
     try { await post('/api/credit/profiles', body, 'credit-profile'); setFeedback({ type: 'ok', message: '信用档案版本与初始评级已保存' }); await data.reload(); }
     catch (error) { setFeedback({ type: 'error', message: error.message || String(error) }); }
     finally { setSaving(false); }
   };
   return <section className="card" aria-label="credit-profiles"><h2>信用档案</h2><p className="muted">销售员留空表示客户总额度；填写销售员表示该销售员子额度。两者同时适用时必须同时满足。销售员子额度只对本人可见。</p>
     {manageable ? <CreateForm onSave={save} saving={saving} label="新增档案版本">
-      <label><span>客户 ID</span><input value={form.customerId} onChange={(e) => setForm({ ...form, customerId: e.target.value })} /></label>
-      <label><span>销售员 ID（可选）</span><input value={form.salespersonId} onChange={(e) => setForm({ ...form, salespersonId: e.target.value })} /></label>
-      <label><span>信用对象 ID</span><input value={form.creditObjectId} onChange={(e) => setForm({ ...form, creditObjectId: e.target.value })} /></label>
-      <label><span>信用额度（分，留空不设上限）</span><input type="number" min="0" value={form.creditLimitCents} onChange={(e) => setForm({ ...form, creditLimitCents: e.target.value })} /></label>
+      <BusinessReferenceSelector descriptor={creditWorkReferences.profileContext()} label="客户" value={form.customerId} onChange={(customerId) => setForm({ ...form, customerId, creditObjectId: customerId })} />
+      <BusinessReferenceSelector descriptor={creditWorkReferences.salesperson()} label="销售员" optional value={form.salespersonId} onChange={(salespersonId) => setForm({ ...form, salespersonId })} />
+      <label><span>信用对象</span><input value={form.creditObjectId} readOnly /><small>客户信用档案自动使用所选客户作为信用对象。</small></label>
+      <label><span>信用额度（元，留空表示不设上限）</span><input inputMode="decimal" value={form.creditLimitYuan} onChange={(e) => setForm({ ...form, creditLimitYuan: e.target.value })} placeholder="例如 100000.00" /></label>
       <label><span>初始评级</span><input value={form.ratingGrade} onChange={(e) => setForm({ ...form, ratingGrade: e.target.value })} /></label>
       <label><span>逾期天数策略</span><input value={form.overdueDayPolicy} onChange={(e) => setForm({ ...form, overdueDayPolicy: e.target.value })} /></label>
       <label><span>生效日期</span><input type="date" value={form.effectiveFrom} onChange={(e) => setForm({ ...form, effectiveFrom: e.target.value })} /></label>
     </CreateForm> : <ReadOnlyNotice />}
     <Feedback value={feedback} />
-    {data.error && <div className="flash flash-error">{data.error}</div>}{data.loading ? <p>加载中…</p> : <div className="detail-grid">{data.rows.map((row) => <article className="mini-card" key={row.id}><strong>{row.scopeType === 'CUSTOMER_AGGREGATE' ? '客户总额度' : '销售员子额度'}</strong><div>{row.customerId}{row.salespersonId ? ` / ${row.salespersonId}` : ''}</div><div>{row.unlimited ? '不设上限' : `${row.creditLimitCents} 分`} · 评级 {row.ratingGrade}</div><small>{row.effectiveFrom} → {row.effectiveTo || '长期'} · {row.status}</small></article>)}</div>}
+    {data.error && <div className="flash flash-error">{data.error}</div>}{data.loading ? <p>加载中…</p> : <div className="detail-grid">{data.rows.map((row) => <article className="mini-card" key={row.id}><strong>{row.scopeType === 'CUSTOMER_AGGREGATE' ? '客户总额度' : '销售员子额度'}</strong><div>{row.customerId}{row.salespersonId ? ` / ${row.salespersonId}` : ''}</div><div>{row.unlimited ? '不设上限' : `¥ ${centsToYuanInput(row.creditLimitCents)}`} · 评级 {row.ratingGrade}</div><small>{row.effectiveFrom} → {row.effectiveTo || '长期'} · {row.status}</small></article>)}</div>}
   </section>;
 }
 
 export default function CreditFoundation({ user }) {
   const [tab, setTab] = useState('profiles');
   const readable = canRead(user);
-  return <main className="page-stack"><header className="page-header"><div><p className="eyebrow">销售与客户 · Wave 9</p><h1>信用管理基础</h1><p>维护信用参数、检查规则与有效期信用档案。当前阶段不会对销售订单或出货执行信用拦截。</p></div></header>
+  return <main className="page-stack"><header className="page-header"><div><p className="eyebrow">销售与客户 · 信用管理</p><h1>信用管理基础</h1><p>维护信用参数、检查规则与有效期信用档案。生效规则会用于销售订单与出货信用检查。</p></div></header>
     {readable ? <>
       <nav className="segmented" aria-label="信用管理基础导航">{[['profiles','信用档案'],['parameters','信用参数'],['rules','检查规则']].map(([key,label]) => <button type="button" key={key} onClick={() => setTab(key)} className={tab === key ? 'active' : ''}>{label}</button>)}</nav>
       {tab === 'profiles' && <Profiles user={user} />}{tab === 'parameters' && <Parameters user={user} />}{tab === 'rules' && <Rules user={user} />}

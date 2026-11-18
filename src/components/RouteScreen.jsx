@@ -1,4 +1,5 @@
 import { Component, Suspense, lazy } from 'react';
+import RouteGuidance from './RouteGuidance.jsx';
 
 const screens = new Map();
 function lazyScreen(route) {
@@ -27,6 +28,7 @@ export default function RouteScreen({ route, locationKey = '', ...screenProps })
   return (
     <RouteErrorBoundary resetKey={`${route.key}:${locationKey}`}>
       <Suspense fallback={<div className="v16-empty" data-testid="route-screen-loading">正在载入应用…</div>}>
+        <RouteGuidance route={route} user={screenProps.user} />
         <Screen {...screenProps} />
       </Suspense>
     </RouteErrorBoundary>

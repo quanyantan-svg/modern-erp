@@ -333,14 +333,14 @@ export default function CreditQuery({ user }) {
       {optionsState.loading ? <Skeleton lines={2} /> : optionsState.error ? <InlineAlert tone="danger" title="授权对象加载失败">{optionsState.error}</InlineAlert> : optionsState.total === 0 ? <EmptyState title="当前权限范围内没有可查询的信用对象" description="调整业务日期或搜索条件后重试。" /> : <div className="credit-query__selector-page"><span>第 {selectorOffset + 1}–{Math.min(selectorOffset + optionsState.rows.length, optionsState.total)} 项，共 {optionsState.total} 项</span><div><SecondaryButton type="button" disabled={selectorOffset === 0} onClick={() => setSelectorOffset(Math.max(0, selectorOffset - SELECTOR_PAGE_SIZE))}>上一页</SecondaryButton><SecondaryButton type="button" disabled={selectorOffset + SELECTOR_PAGE_SIZE >= optionsState.total} onClick={() => setSelectorOffset(selectorOffset + SELECTOR_PAGE_SIZE)}>下一页</SecondaryButton></div></div>}
     </section>}
 
-    {tab === 'exposure' && !detailId ? <section className="credit-query__workspace" aria-label="SC101 信用额度查询">
+    {tab === 'exposure' && !detailId ? <section className="credit-query__workspace" aria-label="信用额度查询">
       <div className="credit-query__primary-action"><PrimaryButton type="button" disabled={exposureLoading || !selectedOption} onClick={() => runExposure()}>{exposureLoading ? '正在查询…' : '查询额度'}</PrimaryButton></div>
       {exposureError ? <InlineAlert tone="danger" title="额度查询失败">{exposureError}<button type="button" className="credit-query__retry" onClick={() => runExposure()}>按相同条件重试</button></InlineAlert> : null}
       {!exposure && !exposureLoading && !exposureError ? <EmptyState title="请选择上下文并查询" description="结果将分别展示客户总额度与授权可见的销售员子额度。" /> : null}
       {exposureLoading ? <Skeleton lines={8} /> : <ExposureResult exposure={exposure} />}
     </section> : null}
 
-    {tab === 'exceptions' && !detailId ? <section className="credit-query__workspace" aria-label="SC102 信用例外历史">
+    {tab === 'exceptions' && !detailId ? <section className="credit-query__workspace" aria-label="信用例外历史">
       <div className="credit-query__history-toolbar"><div><strong>例外历史</strong><span>服务端授权、筛选、计数与分页</span></div><FilterButton type="button" activeCount={activeFilterCount} onClick={() => { setFilterDraft(filters); setFiltersOpen(true); }}>筛选</FilterButton></div>
       {filtersOpen ? <FilterSheet title="信用例外筛选" onClose={() => setFiltersOpen(false)} onReset={() => setFilterDraft(emptyFilters)} onApply={() => { setFilters(filterDraft); setHistoryOffset(0); setFiltersOpen(false); }}>
         <FormRow label="例外分类"><select value={filterDraft.category} onChange={(event) => setFilterDraft({ ...filterDraft, category: event.target.value })}><option value="">全部分类</option>{CATEGORIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></FormRow>

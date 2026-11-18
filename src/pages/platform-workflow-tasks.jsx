@@ -154,7 +154,7 @@ function TaskActionSheet({ task, canAct, notify, onClose, onChanged }) {
         <FormRow label="处理意见">
           <textarea rows={4} value={comment} onChange={(event) => setComment(event.target.value)}/>
         </FormRow>
-        {!canAct && <InlineAlert tone="info">处理流程任务需要 WORKFLOW_TASK_ACT 权限。</InlineAlert>}
+        {!canAct && <InlineAlert tone="info">处理流程任务需要流程任务处理权限。</InlineAlert>}
       </div>
       <BottomActionBar>
         <button type="button" className="secondary" onClick={onClose}>取消</button>

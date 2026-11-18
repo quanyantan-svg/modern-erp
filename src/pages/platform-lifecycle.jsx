@@ -148,7 +148,7 @@ export default function PlatformLifecycle({ user, notify }) {
   const searchPlaceholder = tab === 'records' ? '搜索单号或编号' : '搜索清理单号或原因';
   const typeOptions = useMemo(() => [{ key: '', label: '全部类型' }, ...entityTypes], [entityTypes]);
 
-  if (!canView) return <EmptyState title="没有权限" description="需要 LIFECYCLE_VIEW 权限才能查看文档生命周期与归档记录。"/>;
+  if (!canView) return <EmptyState title="没有权限" description="需要文档生命周期与归档查看权限才能查看文档生命周期与归档记录。"/>;
 
   return <BusinessPageShell className="platform-ops" width="rail" data-testid="platform-lifecycle-page">
   <section className="mobile-cleanup" aria-label="生命周期与归档">

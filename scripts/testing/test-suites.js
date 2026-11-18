@@ -737,6 +737,7 @@ const FULL = [
   // 两者都是只读静态守卫，不连数据库、不写仓库；登记在 FULL。
   'server/navigation-reachability.test.js',
   'server/ui-language.test.js',
+  'server/user-facing-copy.test.js',
 
   // ----- Sales / Purchase / Returns / Discounts -----
   'server/decision-reports.test.js',

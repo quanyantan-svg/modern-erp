@@ -72,7 +72,7 @@ export default function PlanningConfiguration({ user, notify }) {
       <p>维护计划参数、物料策略、计划方案；仅授权用户可修改。</p>
     </header>
 
-    {!canManage && <InlineAlert tone="warning">当前账号为只读，需要 PLANNING_CONFIG_MANAGE 权限才能修改。</InlineAlert>}
+    {!canManage && <InlineAlert tone="warning">当前账号为只读，需要计划配置维护权限才能修改。</InlineAlert>}
 
     <SegmentedControl label="配置分类" options={CONFIG_TABS} value={tab} onChange={setTab}/>
 
@@ -251,7 +251,7 @@ function SchemeEditorSheet({ scheme, onClose, onChanged, canManage, notify }) {
       <label className="form-row"><span className="field-label">备注</span>
         <textarea rows={3} value={form.notes} disabled={readOnly} onChange={(event) => setForm({ ...form, notes: event.target.value })}/>
       </label>
-      {readOnly && <InlineAlert tone="info">只有草稿状态、且具备 PLANNING_CONFIG_MANAGE 权限时可编辑。</InlineAlert>}
+      {readOnly && <InlineAlert tone="info">只有草稿状态、且具备计划配置维护权限时可编辑。</InlineAlert>}
     </section>
     <div className="bottom-action-bar">
       <button type="button" className="secondary" onClick={onClose}>关闭</button>

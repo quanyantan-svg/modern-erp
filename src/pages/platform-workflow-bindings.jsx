@@ -50,7 +50,7 @@ export default function PlatformWorkflowBindings({ user, notify }) {
         <p>把单据类型与组织绑定到已发布的流程版本；同一单据类型 + 组织只允许一条生效绑定。</p>
       </header>
 
-      {!canManage && <InlineAlert tone="info">当前账号为只读，维护绑定需要 WORKFLOW_MANAGE 权限。</InlineAlert>}
+      {!canManage && <InlineAlert tone="info">当前账号为只读，维护绑定需要流程维护权限。</InlineAlert>}
 
       <div className="platform-ops__toolbar">
         <strong>共 {bindings.length} 条绑定</strong>

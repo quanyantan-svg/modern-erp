@@ -30,9 +30,17 @@ import { createDatabase, hashPassword } from '../../server/db.js';
 import {
   ACTIVE_APPLICATION_ROUTES, applicationRouteFor, userCanAccessRoute,
 } from '../../src/navigation/applicationRegistry.js';
+import { forbiddenHits, permissionCodes } from '../qa/verify-user-facing-copy.mjs';
 
 const edgePath = process.env.EDGE_PATH || 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 const MIN_TARGET = 44;
+
+/**
+ * 可见 DOM 里的研发内部标识（Requirement §36.22 PL-UX-01/02）。静态守卫
+ * `scripts/qa/verify-user-facing-copy.mjs` 判定源码里的展示位；这一条判定
+ * **真实渲染出来**的文本，两处共用同一份规则。
+ */
+const PERMISSION_CODES = permissionCodes();
 
 /** 门禁夹具账号的密码（临时库内使用，不进入任何证据文件）。 */
 const GATE_PASSWORD = 'rel-readiness-gate';
@@ -300,6 +308,16 @@ async function main() {
             ok: badResponses.length === 0,
             classification: PRODUCT_FAILURE,
             detail: badResponses.slice(0, 3).join(' | '),
+          });
+
+          /* 可见 DOM 里没有研发内部标识 */
+          const visibleText = await page.evaluate(() => (document.body?.innerText || '').replace(/\s+/g, ' ').trim());
+          const copyHits = forbiddenHits(visibleText, PERMISSION_CODES);
+          record({
+            role: role.key, width: viewport.width, route: route.key, check: '可见文案无研发内部标识',
+            ok: copyHits.length === 0,
+            classification: PRODUCT_FAILURE,
+            detail: copyHits.join('、'),
           });
 
           /* refresh */

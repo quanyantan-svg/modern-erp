@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
+import BusinessReferenceSelector from '../components/BusinessReferenceSelector.jsx';
+import { creditWorkReferences } from '../lib/creditWorkReferences.js';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const idempotencyKey = (scope) => `${scope}:${Date.now()}:${crypto.randomUUID()}`;
@@ -421,7 +423,7 @@ function Sheets({ user, onOpen }) {
   const models = useCollection('/api/credit/evaluation/models', 'models', readable);
   const [form, setForm] = useState({
     modelId: '', creditObjectType: 'SALES_ORDER', creditObjectId: '', customerId: '',
-    salespersonId: '', businessDate: today(), allowedEvaluatorIds: '',
+    salespersonId: '', businessDate: today(), allowedEvaluatorIds: [],
   });
   const [feedback, setFeedback] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -432,7 +434,7 @@ function Sheets({ user, onOpen }) {
       const created = await post('/api/credit/evaluation/sheets', {
         ...form,
         salespersonId: form.salespersonId || null,
-        allowedEvaluatorIds: form.allowedEvaluatorIds.split(/[,，\s]+/).map((value) => value.trim()).filter(Boolean),
+        allowedEvaluatorIds: form.allowedEvaluatorIds,
       }, 'credit-evaluation-sheet');
       setFeedback({ type: 'ok', message: `评分表 ${created?.sheet?.sheetNo || ''} 已创建` });
       await sheets.reload();
@@ -450,14 +452,14 @@ function Sheets({ user, onOpen }) {
           <option value="">请选择</option>
           {models.rows.map((row) => <option key={row.id} value={row.id}>{row.code}</option>)}
         </select></label>
-        <label><span>信用对象类型</span><input value={form.creditObjectType} onChange={(e) => setForm({ ...form, creditObjectType: e.target.value })} /></label>
-        <label><span>信用对象</span><input value={form.creditObjectId} onChange={(e) => setForm({ ...form, creditObjectId: e.target.value })} /></label>
-        <label><span>客户 ID</span><input value={form.customerId} onChange={(e) => setForm({ ...form, customerId: e.target.value })} /></label>
-        <label><span>销售员 ID（可选）</span><input value={form.salespersonId} onChange={(e) => setForm({ ...form, salespersonId: e.target.value })} /></label>
+        <label><span>信用对象类型</span><select value={form.creditObjectType} onChange={(e) => setForm({ ...form, creditObjectType: e.target.value, creditObjectId: '' })}><option value="SALES_ORDER">销售订单</option><option value="CUSTOMER">客户</option></select></label>
+        <BusinessReferenceSelector descriptor={creditWorkReferences.profileContext()} label="客户" value={form.customerId} onChange={(customerId) => setForm({ ...form, customerId, creditObjectId: form.creditObjectType === 'CUSTOMER' ? customerId : '' })} />
+        {form.creditObjectType === 'SALES_ORDER' ? <BusinessReferenceSelector descriptor={creditWorkReferences.salesOrder({ customerId: form.customerId })} label="销售订单" value={form.creditObjectId} onChange={(creditObjectId) => setForm({ ...form, creditObjectId })} /> : <label><span>信用对象</span><input value={form.creditObjectId} readOnly /></label>}
+        <BusinessReferenceSelector descriptor={creditWorkReferences.salesperson()} label="销售员" optional value={form.salespersonId} onChange={(salespersonId) => setForm({ ...form, salespersonId })} />
         <label><span>业务日期</span><input type="date" value={form.businessDate} onChange={(e) => setForm({ ...form, businessDate: e.target.value })} /></label>
-        <label><span>评分人 ID（逗号分隔）</span><input value={form.allowedEvaluatorIds} onChange={(e) => setForm({ ...form, allowedEvaluatorIds: e.target.value })} /></label>
+        <BusinessReferenceSelector descriptor={creditWorkReferences.evaluator()} label="评分人" multiple value={form.allowedEvaluatorIds} onChange={(allowedEvaluatorIds) => setForm({ ...form, allowedEvaluatorIds })} />
       </div>
-      <button type="button" className="primary" onClick={create} disabled={busy || !form.modelId || !form.customerId || !form.creditObjectId || !form.allowedEvaluatorIds}>创建评分表</button>
+      <button type="button" className="primary" onClick={create} disabled={busy || !form.modelId || !form.customerId || !form.creditObjectId || form.allowedEvaluatorIds.length === 0}>创建评分表</button>
     </> : <p className="muted">当前账号只有查看权限。创建评分表需要信用评估权限。</p>}
     <Feedback value={feedback} />
     {sheets.error && <div className="flash flash-error">{sheets.error}</div>}
@@ -480,7 +482,7 @@ export function CreditEvaluation({ user }) {
 
   if (!readable) return <main className="page-stack" data-testid="credit-evaluation-page">
     <header className="page-header"><div>
-      <p className="eyebrow">销售与客户 · Wave 11</p>
+      <p className="eyebrow">销售与客户 · 信用管理</p>
       <h1>信用评估</h1>
     </div></header>
     <section className="card" aria-label="credit-evaluation-denied">
@@ -490,7 +492,7 @@ export function CreditEvaluation({ user }) {
 
   return <main className="page-stack" data-testid="credit-evaluation-page">
     <header className="page-header"><div>
-      <p className="eyebrow">销售与客户 · Wave 11</p>
+      <p className="eyebrow">销售与客户 · 信用管理</p>
       <h1>信用评估</h1>
       <p>指标、等级方案与评分模型按生效日期版本化。评分表在创建时固定目标，由有界评分人集合逐人提交，终评后生成唯一聚合结果。</p>
     </div></header>

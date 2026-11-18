@@ -467,7 +467,7 @@ export function getSalesSummary(db, res, actor, url) {
       '净出货金额 = 出货金额 - 退货金额；',
       '订单金额不等于已实现收入；',
       `业务日期缺失共 ${legacyMissingTotal} 条，未计入上方指标，已在 legacyMissing 字段按指标分解。`,
-      '执行证据（execution）覆盖 SC78 六类单据：报价单 / 销售订单 / 发货通知 / 销售出库 / 销售退货 / 销售换货；',
+      '执行证据（execution）覆盖六类单据：报价单 / 销售订单 / 发货通知 / 销售出库 / 销售退货 / 销售换货；',
       '发货通知与销售换货单据本身不承载金额，其 amountCents 恒为 0 且 amountBasis 标记为 NONE，不得解读为金额为零；',
       '执行证据只汇总 canonical 单据本身，不构成收入确认依据。',
     ].join(''),
@@ -765,7 +765,7 @@ export function getSalesRanking(db, res, actor, url) {
     filters: buildFilterEcho(db, filters),
     moneyUnit: 'cents',
     notes: [
-      '排行复用与 SC80 相同的 canonical 行级事实，不建立任何排行缓存或影子台账；',
+      '排行复用与销售毛利相同的 canonical 行级事实，不建立任何排行缓存或影子台账；',
       '排行指标为毛利（GROSS_PROFIT），同时给出收入与成本分解；',
       '毛利相同者并列同一名次（稠密排名）；',
       '缺少维度归属的行归入 UNASSIGNED 桶，不会被静默丢弃。',

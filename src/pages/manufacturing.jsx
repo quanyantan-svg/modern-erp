@@ -111,7 +111,7 @@ export function Boms({ user, notify }) {
   return <BusinessPageShell className="boms-v15" width="rail">
     <BusinessPageHeader title="BOM"
       primaryAction={canManageBom && <BusinessAction hierarchy="primary" onClick={() => setView({})}>新建 BOM</BusinessAction>}
-      help={<HelpDisclosure summary="生命周期与权限说明"><p>使用 ENGINEERING_BOM_MANAGE 维护；使用 ENGINEERING_BOM_APPROVE 审核。审核通过 + 启用 的 BOM 才会被生产 / 计划引用。</p></HelpDisclosure>} />
+      help={<HelpDisclosure summary="生命周期与权限说明"><p>由工程物料清单维护权限维护，由工程物料清单审核权限审核。审核通过并启用的 BOM 才会被生产 / 计划引用。</p></HelpDisclosure>} />
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索 BOM"
       extra={<select aria-label="产品筛选" value={filterProduct} onChange={(e) => setFilterProduct(e.target.value)}>
         <option value="">全部产品</option>
