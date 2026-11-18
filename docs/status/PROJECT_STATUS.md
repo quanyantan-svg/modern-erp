@@ -6785,3 +6785,97 @@ push / tag / merge / release、部署。本轮**仓库零代码改动**（`git s
 | F-03 委外界面跟踪身份 | Procurement & Outsourcing + 业务所有者 | 待裁定 |
 | F-04 批次身份列表聚合 | Inventory & Warehouse + 业务所有者 | 待裁定 |
 | Acceptance / Freeze / 推送 / tag / release | 业务所有者 | 本轮**未**执行 |
+
+---
+
+## 78. 四项 BLOCKING 的直接修复（F-01 / F-02 / F-03 / F-04，2026-11-18）
+
+### 78.1 授权与边界
+
+业务所有者 2026-11-18 指令：「现在请修复四项阻塞 直接修」。本轮按 AGENTS.md §4.0 作为
+**连续阶段授权**执行 Requirement → Design → Implementation；F-02 涉及 schema 变更，
+因此先行补齐 Requirement §32.15 与 Design §27.60。F-01 / F-03 / F-04 是既有已批准合同的
+**实现缺口**，只登记实现决定，不新开业务能力。
+
+**未授权**：真实 MySQL 连接与数据库写操作、Acceptance / Freeze 签发、push / tag / merge /
+release / deploy、生产部署。
+
+### 78.2 合同锚点与缺口性质
+
+| 缺陷 | 既有合同锚点 | 缺口性质 |
+|---|---|---|
+| F-01 | Requirement §33.2.3、§33.38 F3 | 清单读模型与建单守卫违反「settlement eligibility 仅限 final」 |
+| F-02 | Requirement §32.5、Accounting §33.3 / AA-W6.15 | 期初单据缺成本字段（新增合同项 §32.15 `IW-OPEN-01..06`） |
+| F-03 | Requirement §31.15 `OUT-WB-REQ-03/05`（`FROZEN`） | 界面与读模型没有身份来源（Design §26.42） |
+| F-04 | Requirement §32.14 `IW-TRACE-01/06` | 身份列表笛卡尔积聚合，数量被移动笔数放大 |
+
+### 78.3 已实施
+
+- **F-01**：新增唯一结算敞口资格原语（`settlement-core.js`）；应收 / 应付清单逐行按资格判定，
+  非结算敞口行（暂估待转销 / 已转销 / 历史遗留）未结归零并带明确状态标签；清单汇总口径改为
+  结算敞口，与 `AR_TO_GL` / `AP_TO_GL` 逐分相等；FO54 / FO55 汇总与账龄同口径；
+  **付款 / 收款建单即拒**不可结算项，不再产生永远无法确认的挂起 DRAFT。
+- **F-02**：新增迁移 `v26-opening-inventory-cost.js`（`opening_inventory_items.unit_cost_cents`
+  + 期初权益科目 `4001` 与角色 `OPENING_EQUITY`，既有行不回填）；期初行必须带成本单价与
+  （跟踪物料）已存在身份；确认写数量 + 权威估值流水 + **身份级估值池** + 总账期初权益对方分录。
+- **F-03**：物料行读模型暴露 `sourceWarehouseId`；发料 / 补料 / 退料按来源仓可用身份选批次 /
+  序列号；收货生效在界面不提供身份时由服务端从该物料行已登记的供给事实继承身份（最早供给
+  优先，不可证明固定 409）；收货明细接受**计划身份值**（`lotCode` / `serialNumber`），身份主档
+  由**成品 Writer 在收货生效时**登记（成品身份是成品事实，来源字面量只允许出现在成品 Writer
+  内 —— M1C-Gate `G04-R1-1` 成品唯一 Writer 合同）。
+- **F-04**：`listTrackingIdentities` 批次分支改为先聚合余额再连接主档，消除笛卡尔积；
+  数量以数字返回（MySQL 口径一致）。
+
+### 78.4 门禁证据
+
+| 门禁 | 结果 |
+|---|---|
+| `pnpm test:fast` | **775 / 775 PASS**（F-01 / F-04 修复后） |
+| `pnpm test`（FULL） | **4181 / 4178 PASS，3 FAIL**（3 项均由本轮改动引起 → 已修：报表口径回退为既有行为、试算平衡科目快照 27→28；受影响套件复跑 42/42 PASS；**全量门禁在修正后未重跑**） |
+| `pnpm build` | PASS |
+| 变异实验（F-04） | 修复前口径 **360**（= 120 × 3 笔移动）vs 修复后 **120**（真实数量） |
+| 新增合同测试 | `server/outsourcing-tracked-identity.test.js` 3/3、`server/inventory-opening-cost.test.js` 3/3（均已登记 FULL） |
+| 更新既有测试 | `v22-finance-recognition-production.test.js`（建单即拒 + 保留确认守卫覆盖）、`m14-discounts.test.js`（超额核销用例保留确认阶段守卫覆盖，并新增「已结清项建单即拒」） |
+| 文档一致性双模式 | 见 §78.6 最终登记 |
+
+### 78.5 未解决事项
+
+1. **真实 MySQL 未验证**：本轮**未**连接真实 MySQL 8、未执行 §32.15 的加列与科目迁移。
+   客户测试环境的 `unit_cost_cents` 列与 `4001` 科目**尚未生效**；需部署 + 迁移 + 重跑清库
+   全业务验收后，才能判定四项客户症状确实消失。
+2. **期初权益科目口径待业主确认**：科目表此前没有权益科目，期初价值无处记账会让
+   `INVENTORY_VALUE_TO_GL` 失配；本轮以 `4001 实收资本` 作为期初余额的权益锚点。
+   若客户账套需要「实收资本 + 未分配利润」拆分，按科目扩展处理，不改期初单据合同。
+3. **既有期初行不自动估价**：历史期初行保持无成本状态，确认时被明确拒绝；这符合
+   §32.15 `IW-OPEN-05`（不得凭空估价），但意味着既有环境需要重新录期初。
+4. **F-03 的序列号成品逐件收货**：既有服务端合同要求 SERIAL 成品逐行数量为 1，界面据此
+   一次只登记一件；若客户需要单据多件，需另行裁定合同。
+5. **报表口径未收敛（待裁定）**：FO54 / FO55 应收/应付汇总与账龄仍按「往来义务」口径（含暂估与
+   历史 `LEGACY` 行），与本轮收敛后的结算清单「结算敞口」口径不同；既有合同测试明确把
+   `LEGACY` 行计入报表，故本轮不改，登记为待裁定项。
+6. **科目表新增 1 个科目**：期初权益 `4001 实收资本`（`EQUITY`）；试算平衡科目快照由 27 变 28，
+   `server/trial-balance.test.js` 的快照断言同步更新（新增要求 `4001` 可见）。
+7. 未签发 Acceptance / Freeze / Release Readiness；未 push / tag / merge / release / deploy。
+
+### 78.6 最终登记
+
+```text
+F01_SETTLEMENT_ELIGIBILITY=PASS
+F02_OPENING_COST_AND_VALUATION=PASS
+F03_OUTSOURCING_IDENTITY_SOURCE=PASS
+F04_IDENTITY_QUANTITY=PASS
+LOCAL_FULL_GATE=见 log/2026-11-18.md 最终登记
+LOCAL_BUILD=PASS
+REAL_MYSQL_MIGRATION=NOT_EXECUTED(未授权)
+DEPLOYMENT=NOT_EXECUTED(未授权)
+ACCEPTANCE_FREEZE=NOT_ISSUED(未授权)
+```
+
+### 78.7 Owner
+
+| 角色 | 承担者 | 说明 |
+|---|---|---|
+| 四项修复的实现与本机门禁 | 仓库（执行）+ 业务所有者（授权） | 已实施；**不是** Acceptance |
+| F-02 期初权益科目口径 | Accounting & Analytics + 业务所有者 | 待确认 |
+| 真实 MySQL 迁移与目标环境复验 | 业务所有者 | 未授权 |
+| Acceptance / Freeze / 推送 / 部署 | 业务所有者 | 本轮**未**执行 |

@@ -774,3 +774,61 @@ Implementation：已授权（2026-11-15），范围仅限本节验收门禁所�
 **Requirement 状态：`APPROVED`（2026-11-17，业务所有者批准）。Design §27.59：`APPROVED`（同日）。
 Implementation：已实施（2026-11-17），范围仅限本节验收门禁所列的仓库内代码、迁移、前端与测试变更；
 真实 MySQL 连接、数据库写操作、Acceptance / Freeze 签发、发布与部署**未授权**。**
+
+---
+
+### 32.15 期初库存计价与权威结账可行性（F-02，`APPROVED` → `IMPLEMENTED`，2026-11-18）
+
+> **用途 / Owner / 状态 / 权威关系**：本节把 2026-11-18 客户测试环境清库 + 全业务验收发现的
+> F-02 BLOCKING 缺陷固化为可验收合同。Owner = Inventory & Warehouse（期初单据与物理库存）
+> 与 Accounting & Analytics（估值与结账口径）共同承担；本节是 `document.md` §32 的当前增补，
+> 不取代 §32.1～§32.14 的任何正文。
+>
+> **授权来源与范围**：业务所有者 2026-11-18 指令「现在请修复四项阻塞 直接修」，授权对
+> F-01 / F-02 / F-03 / F-04 四项 BLOCKING 直接进入 Requirement → Design → Implementation
+> 的连续授权执行（AGENTS.md §4.0）。本节据此登记；**不含**授权：真实 MySQL 连接与数据库
+> 写操作、Acceptance / Freeze 签发、push / tag / merge / release / deploy。
+>
+> **缺陷事实（客户测试环境实测）**：期初库存单没有成本字段，确认只写数量不写估值，于是每条
+> 期初移动停在 `LEGACY_UNVALUED`，`LEGACY_UNVALUED_MOVEMENTS` 与
+> `INVENTORY_QUANTITY_VS_VALUATION` 两项 BLOCKING 永久失败；带批次的期初没有身份级估值池，
+> 委外发料被 409 `OUTSOURCING_VALUATION_UNVERIFIED` 挡住。
+
+#### 32.15.1 合同项
+
+- **`IW-OPEN-01`（期初必须计价）**：期初库存单的每一行必须携带**成本单价**（安全整数分，
+  必须大于 0）。没有可证明的成本不得凭空估价：建单与确认都固定拒绝，错误信息指向具体行。
+  期初行金额 = 成本单价 × 数量，按 `HALF_UP` 取整到安全整数分。
+- **`IW-OPEN-02`（期初必须形成权威估值）**：期初确认必须写入权威估值流水
+  （`inventory_valuation_movements`）并把对应 `inventory_transactions.valuation_status`
+  置为 `VALUED`。带批次 / 序列号的期初必须建立**身份级估值池**
+  （`LOT:<仓>:<货品>:<批次>` / `SERIAL:<序列号>`），使下游（委外发料、盘点、调整）能按
+  同一身份证明成本。估值口径 `OPENING_COST`，与采购入库的 `APPROVED_PO_PRICE`、
+  生产的 `FROZEN_STANDARD_MANUFACTURING_COST` 并列，属同一本权威估值流水。
+- **`IW-OPEN-03`（期初价值必须有总账对方科目）**：期初存货价值必须在总账成立对方分录
+  （`OPENING_EQUITY` 期初权益），借贷必须平衡。平台此前没有期初权益科目，期初价值无处记账，
+  会让 `INVENTORY_VALUE_TO_GL` 因「有估值无总账」而失配。期初权益科目是**期初余额**的
+  权益锚点，不改变既有科目余额，也不替代任何既有收入 / 成本科目。
+- **`IW-OPEN-04`（跟踪期初必须带已存在身份）**：跟踪物料的期初行必须携带**已存在且属于该货品**
+  的批次 / 序列号身份；序列号物料每次只能期初 1 件；非跟踪物料不得携带身份。身份与
+  canonical 跟踪维度投影（§32.14 `IW-TRACE-04`）是同一份事实。
+- **`IW-OPEN-05`（不得回填历史成本）**：本节**不**为既有期初行回填成本。历史期初行没有可证明的
+  成本，按 §32.5「canonical facts 必须可重算」保持无成本状态，并在确认时明确拒绝；
+  既有环境的处理由 Inventory 域的**有界迁移**另行授权，不得借本节自动估价。
+- **`IW-OPEN-06`（与结账检查的关系）**：本节只保证「期初走规范期初单路径」时该路径可完成
+  权威结账。`LEGACY_UNVALUED_MOVEMENTS` / `INVENTORY_QUANTITY_VS_VALUATION` 的判定口径
+  （Accounting & Analytics `AA-W6.15` 关闭异常清单）**不变**，不得为通过检查而弱化。
+
+#### 32.15.2 验收门禁
+
+1. 期初行带成本 → 确认后 `inventory_transactions.valuation_status='VALUED'`、权威估值流水成立、
+   带批次的期初存在身份级估值池（数量与金额逐分相等）。
+2. 期初确认生成总账凭证：存货科目借方 = 期初权益贷方 = 期初金额合计，借贷平衡。
+3. `LEGACY_UNVALUED_MOVEMENTS`、`INVENTORY_QUANTITY_VS_VALUATION`、`INVENTORY_VALUE_TO_GL`
+   在期初确认后差异均为 0。
+4. 缺成本、缺身份、身份不属于该货品的期初行固定拒绝，且不留下任何库存 / 估值 / 凭证事实。
+5. `pnpm test`、`pnpm build`、`git diff --check` 与两种文档一致性模式全部通过。
+
+**Requirement 状态：`APPROVED`（2026-11-18，业务所有者「直接修」授权）。Design §27.60：`APPROVED`（同日）。
+Implementation：已实施（2026-11-18）；真实 MySQL 连接、数据库写操作、Acceptance / Freeze 签发、
+发布与部署**未授权**。**

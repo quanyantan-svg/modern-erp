@@ -2249,3 +2249,88 @@ Requirement §32.14：`APPROVED`（2026-11-17）；本节 Design：`APPROVED`（
 Implementation：**已实施**（`IW-TRACE-01..06`）。
 
 **未授权**：真实 MySQL 连接、数据库写操作、Acceptance / Freeze 签发、push / tag / merge / release / deploy。
+
+---
+
+## 27.60 期初库存计价设计（F-02，`APPROVED` → `IMPLEMENTED`，2026-11-18）
+
+> **授权来源**：业务所有者 2026-11-18「现在请修复四项阻塞 直接修」→ Requirement §32.15 与本节
+> Design 连续授权；Implementation 随之实施。**未授权**：真实 MySQL 连接与数据库写操作、
+> Acceptance / Freeze 签发、push / tag / merge / release / deploy。
+>
+> **前置合同**：Requirement §32.15 `IW-OPEN-01..06`；估值与结账口径归 Accounting & Analytics
+> （`AA-W6.15` 关闭异常清单、`INVENTORY_VALUE_TO_GL` 对账）。
+
+### 27.60.1 模块与责任
+
+| 模块 | 责任 |
+|---|---|
+| `server/migrations/v26-opening-inventory-cost.js` | additive 迁移：`opening_inventory_items.unit_cost_cents`（安全整数分）+ 期初权益科目 `4001 实收资本` 与角色映射 `OPENING_EQUITY` |
+| `server/modules/inventory-opening.js` | 期初单据唯一 owner：建单校验（成本 / 身份）、确认写数量 + 权威估值 + 总账对方分录、列表读模型暴露成本 |
+| `server/modules/financial-inventory.js` | 既有 canonical 估值与凭证原语（`receiveValue` / `createSystemVoucher` / `inventoryAccountRole`），**不新建第二套估值算法** |
+| `server/lib/inventory-mutation.js` | 既有 canonical 物理库存写入器；期初以 `valuationMode='EXTERNAL'` 调用，**跳过**其 best-effort 估值分支（该分支对 IN 型移动按出库口径取值且吞异常） |
+| `src/pages/inventory-work.jsx` | 期初录入界面：每行新增「期初成本单价（元）」，按精确十进制换算成整数分 |
+
+### 27.60.2 数据流与调用
+
+```text
+POST /api/inventory/opening-documents
+  → createOpeningDocument
+      · 逐行校验 productId / warehouseId / quantity
+      · 逐行校验 unitCostCents（安全整数分、> 0）        [IW-OPEN-01]
+      · 逐行校验身份：跟踪物料必须带已存在且属于该货品的批次 / 序列号  [IW-OPEN-04]
+      · INSERT opening_inventory_items(..., unit_cost_cents)
+
+POST /api/inventory/opening-documents/:id/confirm
+  → confirmOpeningDocument（单事务）
+      · applyInventoryMutation(valuationMode='EXTERNAL')   → 数量 + 跟踪维度投影
+      · receiveValue(quantity, valueCents, lotId/serialId, valuationBasis='OPENING_COST')
+                                                          → 权威估值流水 + 身份级估值池 + VALUED
+      · createSystemVoucher(存货角色 DEBIT | OPENING_EQUITY CREDIT)  → 总账同步
+      · opening_inventory_documents.status = 'CONFIRMED'
+```
+
+### 27.60.3 Schema / Migration
+
+- `opening_inventory_items.unit_cost_cents INTEGER NOT NULL DEFAULT 0`：
+  **既有行不回填**（`IW-OPEN-05`）；缺成本的既有行在确认时被拒绝。
+- 期初权益：科目 `4001 实收资本`（`EQUITY` / `CREDIT`）+ 角色 `OPENING_EQUITY`。
+  科目表此前没有权益科目，期初价值无处记账；权益锚点不改变任何既有科目余额。
+- 迁移幂等（列存在性检查 + `INSERT OR IGNORE`）；SQLite 与 MySQL 双路径共用
+  （列类型用两库通用的 `INTEGER`，无 `CHECK`）。
+
+### 27.60.4 事务、状态与错误行为
+
+- 建单与确认均在既有 `transaction(db, …)` 内；确认失败（缺成本 / 缺身份 / 估值溢出 /
+  凭证借贷不平衡）整体回滚，**零库存、零估值、零凭证副作用**。
+- 状态机不变：`DRAFT → CONFIRMED`；只有 `DRAFT` 可确认，`OPEN` 初始化状态之外不可确认。
+- 错误信息指向具体行与具体原因（成本缺失 / 身份缺失 / 身份不属于该货品）。
+- 幂等：期初行以 `OPENING:<item_id>` 为幂等键，复用 canonical 写入器的重放证据。
+
+### 27.60.5 RBAC / SOD / 审计
+
+- 权限沿用既有 `INVENTORY_OPENING_MANAGE` / `INVENTORY_OPENING_VIEW`，**不新增权限码**。
+- 审计沿用既有 `CREATE` / `CONFIRM` 两条 `OPENING_INVENTORY` 审计事件，不新增审计实体。
+- 本节不引入新的职责分离要求：期初建单与确认仍是同一既有权限码下的两个动作。
+
+### 27.60.6 兼容性与影响面
+
+- 只影响期初单据路径；采购入库、生产入库、委外收发、盘点、调拨的估值路径**不变**。
+- 既有期初单据（`unit_cost_cents=0`）在确认时被拒绝而不是被自动估价；这是刻意 fail closed。
+- `INVENTORY_VALUE_TO_GL` 由「空转相等」变为「有值相等」：期初估值与总账同步写入，
+  差额恒为 0；这是本节的正向结果，不得通过弱化该检查达成。
+
+### 27.60.7 测试与变异实验
+
+1. 合同测试（`server/inventory-opening-cost.test.js`）：带成本确认 → 移动 `VALUED`、
+   身份级估值池数量与金额逐分相等、总账借贷平衡、三项健康检查差异为 0。
+2. 负向对照：缺成本、缺身份、身份不属于该货品三种拒绝，且不留下任何事实。
+3. 变异实验：① 去掉 `receiveValue` → 估值池与 `VALUED` 断言必须转红；
+   ② 把成本校验放宽为 0 → 「缺成本固定拒绝」必须转红；
+   ③ 去掉总账凭证 → `INVENTORY_VALUE_TO_GL` 断言必须转红。
+
+### 27.60.8 Design 状态
+
+Requirement §32.15：`APPROVED`（2026-11-18）；本节 Design：`APPROVED`（同日）；
+Implementation：**已实施**（2026-11-18）。真实 MySQL 连接、数据库写操作、Acceptance / Freeze
+签发、发布与部署**未授权**。

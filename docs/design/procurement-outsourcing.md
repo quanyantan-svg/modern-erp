@@ -2729,3 +2729,62 @@ Design §26.15 的**扫码入仓闭环**（`lookup-document` / `draft-receipt` /
 - §26.29 的「Inventory mutation：`server/lib/stock.js::adjustInventory` + `financial-inventory.js::receiveValue` /
   `issueValue`」**更正**为 `server/lib/inventory-mutation.js::applyInventoryMutation`（唯一入口，Design §27.6 /
   §27.8）+ `financial-inventory.js::receiveValue` / `issueValue`；其余 canonical owner 表述不变。
+
+---
+
+### 26.42 委外跟踪物料的身份来源设计（F-03，`APPROVED` → `IMPLEMENTED`，2026-11-18）
+
+> **授权来源**：业务所有者 2026-11-18「现在请修复四项阻塞 直接修」。本节是既有
+> Requirement §31.15 `OUT-WB-REQ-03/05`（`FROZEN`）的**实现补齐**，不是新开业务能力：
+> 合同早已要求发补退料「查看并使用 LOT/SERIAL 来源」、收货员能在「材料身份可证明」时收货，
+> 缺口在读模型与界面没有提供身份来源。
+>
+> **未授权**：真实 MySQL 连接与数据库写操作、Acceptance / Freeze 签发、发布与部署。
+
+#### 26.42.1 三处断点与各自的权威身份来源
+
+| 断点 | 既有服务端合同 | 身份来源（本节落地） |
+|---|---|---|
+| 委外发料 / 补料 / 退料 | 服务端要求 LOT / SERIAL 物料带唯一身份，否则 409 `WIP_IDENTITY_EVIDENCE_MISSING` | **来源仓可用身份**：物料行暴露 `sourceWarehouseId`，界面按 `/api/tracking/availability` 列出该仓可用批次 / 序列号，选择后随请求提交 `lotId` / `serialId` |
+| 委外收货「生效」 | 服务端要求倒冲带身份，否则 409 | **服务端继承**：界面不提供身份时，服务端从该物料行**自己已登记的供给事实**（`outsourcing_wip_identity_balances` + SUPPLY effect）按最早供给优先解析出唯一可覆盖本次倒冲的身份；不可证明时固定 409 `OUTSOURCING_WIP_IDENTITY_UNPROVEN` |
+| 委外收货单创建 | 服务端要求 LOT 成品带批次、SERIAL 成品逐行带序列号 | **计划身份**：明细行接受 `lotCode` / `serialNumber` 并登记为计划值；身份主档由**成品 Writer 在收货生效时**登记（`receiveOutsourcingFinishedGoods`），既有身份 ID 仍优先 |
+
+#### 26.42.2 为什么倒冲身份由服务端继承
+
+Requirement §31.15 `OUT-WB-REQ-04/05` 明确：受限收货岗**不得**看到 Supplier WIP 身份明细，
+而服务端要求跟踪物料的倒冲必须带唯一身份。两者同时成立时，唯一自洽的解是服务端从该物料行
+自己登记的供给事实继承身份——这既满足「身份必须可证明」，也不向受限岗位暴露 WIP 明细。
+「最早供给优先」与既有消费分配器（`recordConsumption` 按 `created_at` 取供给）同一条纪律，
+不新增第二套规则。界面显式提供 `materialIdentities` 时仍以界面为准。
+
+#### 26.42.3 模块与调用
+
+| 模块 | 责任 |
+|---|---|
+| `server/modules/outsourcing.js` | 物料行读模型暴露 `sourceWarehouseId`（`rowToMaterialList`）；收货明细接受并登记**计划身份值**（批次号 / 序列号），不登记身份主档 |
+| `server/modules/outsourcing-finance.js` | 倒冲身份继承（`resolveWipBackflushIdentity`），只在客户端未提供身份时生效 |
+| `server/modules/outsourcing-inventory.js` | 成品 Writer 在**收货生效**时登记计划身份（`receiveOutsourcingFinishedGoods` 内调用 `resolveInboundLot` / `resolveInboundSerial`）：成品身份是成品事实，只能由成品 Writer 写入，来源字面量只允许出现在本模块内（M1C-Gate `G04-R1-1` 成品唯一 Writer 合同） |
+| `server/modules/traceability-quality.js` | 计划入库身份的登记原语（`resolveInboundLot` / `resolveInboundSerial`），与 `postTrackedMovement` 的入库口径同源 |
+| `server/modules/outsourcing-read-models.js` | 收货上下文暴露成品 `trackingPolicy`（成品策略，**不是** WIP 身份明细），供界面判断是否必须登记身份 |
+| `src/pages/outsourcing.jsx` | 发料 / 补料 / 退料身份选择、收货成品批次 / 序列号录入 |
+
+#### 26.42.4 事务、错误行为、审计与兼容
+
+- 计划身份在**收货生效**事务内由成品 Writer 登记（建单只登记计划值）；生效失败整体回滚，
+  不留孤儿身份，也不在待检期间提前产生在库身份。
+- 序列号身份重复且**在库**时固定 409（与既有入库序列号口径一致）；已交付 / 已消耗的序列号可再次接收。
+- Schema：新增 `outsourcing_receipt_items.planned_lot_code` / `planned_serial_number` 两个 additive
+  列承载计划值（既有行不回填，语义不变）。
+- 委外收货岗的受限投影边界不变：只新增成品跟踪策略，不返回任何 WIP 身份明细。
+- 既有 API 字段全部保留（`lotId` / `serialId` / `materialIdentities` 语义不变），只新增可选的
+  `lotCode` / `serialNumber`；权限码、审计事件与状态机不变。
+
+#### 26.42.5 测试与 Design 状态
+
+合同测试：`server/outsourcing-tracked-identity.test.js` —— 发料缺身份固定 409 且零副作用；
+带身份 201 并按该身份记账；收货生效在界面不提供身份时由服务端继承身份并真实消费；
+收货明细的计划批次由 canonical 跟踪写入器登记。
+
+Requirement §31.15：`FROZEN`（既有）；本节 Design：`APPROVED`（2026-11-18）；
+Implementation：**已实施**（2026-11-18）。真实 MySQL 连接、数据库写操作、Acceptance / Freeze
+签发、发布与部署**未授权**。
