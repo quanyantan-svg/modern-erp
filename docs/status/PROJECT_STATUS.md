@@ -6677,3 +6677,111 @@ legacy 写入点未动。
 | 委外收货的 GL 覆盖缺口（§76.7-1） | Accounting & Analytics + Outsourcing + 业务所有者 | 待裁定 |
 | 其余 11 处 legacy 写入点 | Procurement & Manufacturing + 业务所有者 | 待裁定（§31.21.6-2） |
 | ACK-4 campaign / Acceptance / Freeze / 推送 / tag / release | 业务所有者 | 本轮**未**执行 |
+
+---
+
+## 77. 客户测试环境清库 + 新虚构数据全业务验收（2026-11-18）
+
+### 77.1 授权与边界
+
+业务所有者 2026-11-18 指令：「我已将该系统部署到腾讯云服务器 等待客户进行测试 但在交付之前 我想让你先进行一轮跑通验收 可能已经存在一些数据 请清空 然后用新的虚构数据进行一轮全业务验收 如果出现阻塞等 请报告给我」。
+
+授权范围 = **清空目标环境业务数据 + 全新虚构数据的全业务验收 + 阻塞项报告**。
+未授权：改代码、改合同正文、改 schema / migration、Acceptance / Freeze / Release Readiness 签发、
+push / tag / merge / release、部署。本轮**仓库零代码改动**（`git status` 干净，
+测试装置全部在 `$TEMP` 与仓库内已忽略的 `.tmp/`）。
+
+### 77.2 清库与重建
+
+| 项 | 值 |
+|---|---|
+| 清库前基线 | 424 表 + 1 视图 + 5 触发器；**163** 张非空表 / **6629** 行；`system-health` **FAIL**（5 项 BLOCKING） |
+| 回退点 | `/var/backups/modern-erp/mysql/pre-ac2-clear-20261118-085455.sql`，2,429,683 B，md5 `20365bf93baaf0fd588803b9270f298a`，424 `CREATE TABLE` / 163 `INSERT INTO` |
+| 清库方式 | `DROP TABLE` 424 张 + 1 视图（`FOREIGN_KEY_CHECKS=0`，只引用 `modern_erp` 库）→ `systemctl restart modern-erp.service` → fresh bootstrap |
+| 清库后 | **424 表 + 1 视图 + 5 触发器精确复现**；残余 **801 行全部是基础种子**，**零业务数据**；`users` / `inventory` / `inventory_transactions` / `inventory_lot_balances` 均 0；`inventory_initialization` 0 行 |
+| 管理员 | `scripts/admin/setup-admin.mjs` 重建 `admin`（`user-admin-init` / `role-admin`），沿用客户现有凭据；未产生旁路 SQLite 文件 |
+| `system-health` | 清库后 **24 / 24 PASS** → 清库前的 5 项 FAIL **全部是历史数据残留，不是代码缺陷** |
+
+### 77.3 本轮虚构数据与链路结果
+
+全新前缀 `AC2-`（与上一轮 `UAT-` 完全不重叠）+ 6 个新角色账号 + 业务日期 `2026-11-18`。
+期初库存走**规范期初单路径**（`inventory-initialization/open` → `opening-documents` → confirm → close）
+并逐行携带批次 / 序列号身份：期初单 13 行（1 行带批次、10 行带序列号）。
+
+| 链路 | 结果 |
+|---|---|
+| 地基造数 | **43 / 45**（2 项由 `foundation2` 补正） |
+| 期初库存播种 | **6 / 6** |
+| 采购 + 委外 | **51 / 56**（5 项失败，根因见 §77.4-F-02 与一项角色权限缺口） |
+| 销售 + 财务 | **46** 步，1 项失败（§77.4-F-01） |
+| 制造 / 计划 / 库存 / 会计 / 平台 | **87** 步，8 项「失败」= **负控按业务规则正确拦截** |
+| **跟踪物料端到端** | **28 / 28 PASS** |
+| 前端 93 route × 5 角色 | **202 组合，0 问题** |
+| 库存作业页签 | 仓管 **11 / 11** 全绿；sales / accounting 可见 0 页签（无库存权限，**装置误标**，非缺陷） |
+
+**上一轮阻塞项 `UAT_BLOCKER_TRACKED_INBOUND` 已确认解除**：采购入库（带批次分配）→ 确认入库 200 →
+批次身份 `currentQuantity=20` → 委外发料（带批次身份）201 → 委外收货确认生效 200（倒冲 3 件、携带价值
+7500 分）→ 加工费账单过账 200，整链打通。
+
+### 77.4 本轮发现的 4 项 BLOCKING（均为**既有**产品行为，非本轮修复引入）
+
+**F-01 应付清单幽灵应付** —— 暂估应付结转成供应商账单后 `conversion_state='CONVERTED'` 但
+`open_amount_cents` 未清零（`server/modules/finance-provisional-conversion.js:16`），
+`listPayables`（`server/modules/settlement.js:99-112`）不区分 `item_kind` / `conversion_state`：
+已转销行仍以 `status=OPEN` / `outstandingCents=450000` 出现，清单汇总 `balanceCents=550000`
+而权威口径（`AP_TO_GL` + 付款守卫只认 `FINAL + OPEN`）为 0 → **汇总高估 550000 分**；
+对该行付款**创建成功 201、确认被 409 拒绝** → 客户侧留下挂起的 DRAFT 付款单。
+
+**F-02 期初库存单没有成本字段** —— 期初 API 与 UI 均无成本字段，期初恒为 `LEGACY_UNVALUED`，
+永久触发 `LEGACY_UNVALUED_MOVEMENTS`（17）与 `INVENTORY_QUANTITY_VS_VALUATION`（1691）两项 BLOCKING；
+**连带**：跟踪物料的期初批次没有身份级估值池 → 委外发料被 409 `OUTSOURCING_VALUATION_UNVERIFIED` 阻断，
+收货 / 完工 / 加工费过账级联失败 → **批次料一旦从期初进来就走不通委外**。
+另：期初单 UI 也没有批次 / 序列号字段（API 层 `item.lotId` / `item.serialId` 是支持的）。
+
+**F-03 委外加工界面无法完成跟踪物料的收货** —— 服务端要跟踪身份、界面不给：
+委外发料 body 无 `lotId`（`src/pages/outsourcing.jsx:519-530`）、
+委外收货「生效」`body: {}` 无 `materialIdentities`（`:1021-1023`）、
+委外收货单 item 无 `serialId`（`:998-1005`）。
+客户侧：批次料点「发料」或「收货生效」均 409「LOT 物料必须提供唯一批次身份」；序列号成品建不出带身份的收货明细。
+**API 层是通的**（本轮用 `materialIdentities` + `serialId` 一次跑通 28/28），**断的是界面**。
+
+**F-04 批次身份列表数量被移动笔数放大** —— `GET /api/tracking/identities`
+（`server/modules/traceability-quality.js:606-613`）把 `inventory_lot_balances` 与
+`tracked_inventory_movements` 同时 JOIN 到同一批次且二者无关联，形成笛卡尔积：
+`currentQuantity` = 真实数量 × 该批次移动笔数（实测 20×3=60、17×4=68）。
+库内 canonical 与跟踪投影**逐批次一致**，错的是读模型；同源的批次主档列表（`listLots`，同文件 `:646`）
+是正确的，两页互相矛盾。引入于 `b85a445`（2026-09-27），**与上一轮 D4 改动无关**。
+
+### 77.5 本机门禁
+
+`pnpm test`（FULL）**4168 / 4168 PASS**（543 suites）；`pnpm build` PASS；`git diff --check` PASS；
+文档一致性 `current` / `migration` 双模式 ALL CHECKS PASSED（N2 `RETIRED`）；5 个 QA 守卫全 PASS。
+
+### 77.6 共享主机零干扰核验
+
+`modern-erp` / `nginx` / `mysql` / `calculator-backend` / `pairbook-web` 全部 `active`；
+**MySQL 未重启**（`ActiveEnterTimestamp` 仍 `Fri 2026-10-02 21:45:34 CST`）、**nginx 未重启**（`21:45:30 CST`）；
+`calculator`(8082) 与 `pairbook`(18088) 均 200；`calculator_db` 仍 1 张表**未触碰**；
+`modern_erp` 424 表 / 5 触发器 / 1 视图；磁盘 49 G 可用。本轮只重启过 `modern-erp.service`。
+
+### 77.7 未解决事项
+
+1. **F-01 / F-02 / F-03 / F-04 四项 BLOCKING** 的处置方案待业务所有者裁定；本轮**未改代码、未改合同**。
+2. **未做数据修复**：本轮遗留的 4 个孤儿序列号身份（登记了但收货未生效）与 3 张 `PENDING_INSPECTION`
+   委外收货单既未追认也未删除 —— 它们使 `TRACKED_DIMENSION_VS_CANONICAL` 差 1，是**遗留状态的真实后果**。
+3. **ACK-4 campaign 未运行**：本轮是真实 MySQL 8，但不是 ACK-4 campaign，按
+   [`MYSQL-EV-01`](../decisions/mysql-evidence-policy-20261112.md) **不得**作为可引用的域级 MySQL 证据。
+4. **未跑 canonical 浏览器发布门禁** `pnpm test:release:browser`（本轮用 202 组合 + 页签级巡检替代）。
+5. **§70.6 其余事项未变**：COS 备份凭据与 timer、无 TLS、安全组复核、SSH 口令轮换。
+6. 本轮**未签发** Acceptance / Freeze / Release Readiness，**未** push / tag / merge / release。
+
+### 77.8 Owner
+
+| 角色 | 承担者 | 说明 |
+|---|---|---|
+| 清库 + 全业务验收 + 判定 | 仓库（执行）+ 业务所有者（授权） | 已执行并实测；**不是 Acceptance** |
+| F-01 应付清单读模型口径 | Finance Operations + Accounting & Analytics + 业务所有者 | 待裁定 |
+| F-02 期初库存计价 | Inventory & Warehouse + Accounting & Analytics + 业务所有者 | 待裁定 |
+| F-03 委外界面跟踪身份 | Procurement & Outsourcing + 业务所有者 | 待裁定 |
+| F-04 批次身份列表聚合 | Inventory & Warehouse + 业务所有者 | 待裁定 |
+| Acceptance / Freeze / 推送 / tag / release | 业务所有者 | 本轮**未**执行 |
