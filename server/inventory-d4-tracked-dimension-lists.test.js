@@ -19,7 +19,7 @@ import { after, before, beforeEach, describe, test } from 'node:test';
 import { createTempDb } from './test-utils/temp-db.js';
 import { applyInventoryMutation } from './lib/inventory-mutation.js';
 import {
-  listLotsHandler, listSerialsHandler, reconcileTrackedInventory, resolveQualityPolicy,
+  listLotsHandler, listSerialsHandler, listTrackingIdentities, reconcileTrackedInventory, resolveQualityPolicy,
 } from './modules/traceability-quality.js';
 import { listLotAdjustments } from './modules/inventory-lot-adjustment.js';
 import { listFormConversions } from './modules/inventory-form-conversion.js';
@@ -408,6 +408,82 @@ describe('D4 · IW-TRACE-02/03 前端页签登记', () => {
     for (const key of ['lot', 'form', 'containers']) {
       assert.ok(warehouse.includes(key), `仓库角色应看到页签 ${key}`);
     }
+  });
+});
+
+describe('F-04 · IW-TRACE-06 身份列表与主档列表读同一份数量口径', () => {
+  let db;
+  let handle;
+
+  before(() => {
+    handle = createTempDb({ label: 'f04-identity-quantity', production: true });
+    db = handle.db;
+  });
+
+  after(() => {
+    try { handle?.cleanup?.(); } catch { /* 清理失败不影响结论 */ }
+  });
+
+  beforeEach(() => clearMovements(db));
+
+  test('同一批次多次移动后，身份列表数量仍是真实数量而不是「真实数量 × 移动笔数」', () => {
+    for (const index of [1, 2, 3]) {
+      applyInventoryMutation({
+        db, sourceType: 'OTHER_RECEIPT', sourceId: `doc-in-${index}`, sourceItemId: `item-in-${index}`,
+        businessDate: '2026-11-18', actor: { id: 'u-act' }, movementKind: 'IN', quantity: 40,
+        toPosition: {
+          productId: 'p-lot', warehouseId: 'wh-A', ownerType: 'ENTERPRISE',
+          stockStatus: 'AVAILABLE', lotId: 'lot-1',
+        },
+        idempotencyKey: `F04:IN:${index}`, remark: 'f04',
+      });
+    }
+    const movements = Number(db.prepare(`SELECT COUNT(*) n FROM tracked_inventory_movements
+      WHERE lot_id='lot-1' AND reversed=0`).get().n);
+    const truth = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) n FROM inventory_lot_balances
+      WHERE lot_id='lot-1'`).get().n);
+    assert.equal(movements, 3, '负向对照前提：同一批次必须有 3 笔移动，放大因子不为 1');
+    assert.equal(truth, 120);
+
+    const identity = listTrackingIdentities(db, 'LOT', 'LOT-1').find((row) => row.id === 'lot-1');
+    assert.ok(identity, '身份列表必须包含批次 lot-1');
+    assert.equal(identity.currentQuantity, truth);
+    assert.notEqual(identity.currentQuantity, truth * movements, '数量不得被移动笔数放大');
+    assert.equal(identity.warehouseCodes, 'WH-A');
+  });
+
+  test('身份列表与批次主档列表对同一批次给出同一个数量（单一口径）', () => {
+    applyInventoryMutation({
+      db, sourceType: 'OTHER_RECEIPT', sourceId: 'doc-in', sourceItemId: 'item-in',
+      businessDate: '2026-11-18', actor: { id: 'u-act' }, movementKind: 'IN', quantity: 70,
+      toPosition: {
+        productId: 'p-lot', warehouseId: 'wh-A', ownerType: 'ENTERPRISE',
+        stockStatus: 'AVAILABLE', lotId: 'lot-1',
+      },
+      idempotencyKey: 'F04:PARITY:IN', remark: 'f04',
+    });
+    const identity = listTrackingIdentities(db, 'LOT', 'LOT-1').find((row) => row.id === 'lot-1');
+    const master = callHandler(listLotsHandler, db, FULL_ACTOR, '/api/inventory-lots').body.lots
+      .find((row) => row.id === 'lot-1');
+    assert.equal(identity.currentQuantity, master.onHandQuantity);
+    assert.equal(identity.currentQuantity, 70);
+  });
+
+  test('负向对照：投影被清零时身份列表给 0，而不是自己另算一份数量', () => {
+    applyInventoryMutation({
+      db, sourceType: 'OTHER_RECEIPT', sourceId: 'doc-in', sourceItemId: 'item-in',
+      businessDate: '2026-11-18', actor: { id: 'u-act' }, movementKind: 'IN', quantity: 90,
+      toPosition: {
+        productId: 'p-lot', warehouseId: 'wh-A', ownerType: 'ENTERPRISE',
+        stockStatus: 'AVAILABLE', lotId: 'lot-1',
+      },
+      idempotencyKey: 'F04:NEG:IN', remark: 'f04',
+    });
+    db.prepare(`UPDATE inventory_lot_balances SET quantity=0 WHERE lot_id='lot-1'`).run();
+    const identity = listTrackingIdentities(db, 'LOT', 'LOT-1').find((row) => row.id === 'lot-1');
+    assert.equal(identity.currentQuantity, 0);
+    // canonical 仓位仍然是 90：端点没有另算一份数量。
+    assert.equal(canonicalQuantity(db, { productId: 'p-lot', warehouseId: 'wh-A' }), 90);
   });
 });
 

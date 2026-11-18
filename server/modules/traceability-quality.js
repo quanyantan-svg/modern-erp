@@ -599,18 +599,29 @@ export function traceIdentity(db, identityType, identityId, direction = 'BACKWAR
   return { identity, direction, includeReversed, movements, genealogy: genealogyRows, downstream, creation, provenance, legacyNotice: provenance.code === 'LEGACY_INCOMPLETE' ? provenance.label : null };
 }
 
+// 批次在库数量的唯一聚合口径（Requirement §32.14 `IW-TRACE-01/06`）：
+// 维度事实只来自 `inventory_lot_balances`，按批次先聚合再连接主档。
+// 身份列表与批次主档列表（`listLots`）必须读同一份事实；直接把余额表与移动表
+// 同时 JOIN 到批次会产生笛卡尔积，把数量放大成「真实数量 × 移动笔数」。
+const LOT_BALANCE_AGGREGATE_SQL = `
+  SELECT b.lot_id lot_id, SUM(b.quantity) currentQuantity, GROUP_CONCAT(DISTINCT w.code) warehouseCodes
+    FROM inventory_lot_balances b JOIN warehouses w ON w.id=b.warehouse_id
+   WHERE b.quantity>0 GROUP BY b.lot_id`;
+
 export function listTrackingIdentities(db, identityType, search = '') {
   const type = String(identityType || 'LOT').toUpperCase();
   if (!['LOT', 'SERIAL'].includes(type)) throw new HttpError(400, '跟踪身份类型无效');
   const term = `%${String(search).trim()}%`;
   if (type === 'LOT') return db.prepare(`SELECT l.id,l.lot_code identityCode,l.status,p.code productCode,p.name productName,
-      COALESCE(SUM(b.quantity),0) currentQuantity,GROUP_CONCAT(DISTINCT w.code) warehouseCodes,
-      MAX(m.business_date) latestMovementDate
+      COALESCE(b.currentQuantity,0) currentQuantity,b.warehouseCodes,
+      m.latestMovementDate
     FROM inventory_lots l JOIN products p ON p.id=l.product_id
-    LEFT JOIN inventory_lot_balances b ON b.lot_id=l.id LEFT JOIN warehouses w ON w.id=b.warehouse_id AND b.quantity>0
-    LEFT JOIN tracked_inventory_movements m ON m.lot_id=l.id AND m.reversed=0
+    LEFT JOIN (${LOT_BALANCE_AGGREGATE_SQL}) b ON b.lot_id=l.id
+    LEFT JOIN (SELECT tm.lot_id lot_id,MAX(tm.business_date) latestMovementDate
+      FROM tracked_inventory_movements tm WHERE tm.reversed=0 GROUP BY tm.lot_id) m ON m.lot_id=l.id
     WHERE l.lot_code LIKE ? OR p.code LIKE ? OR p.name LIKE ?
-    GROUP BY l.id,l.lot_code,l.status,p.code,p.name ORDER BY latestMovementDate DESC,l.lot_code LIMIT 100`).all(term, term, term);
+    ORDER BY latestMovementDate DESC,l.lot_code LIMIT 100`).all(term, term, term)
+    .map((row) => ({ ...row, currentQuantity: Number(row.currentQuantity) }));
   return db.prepare(`SELECT s.id,s.serial_number identityCode,s.lifecycle_state status,p.code productCode,p.name productName,
       CASE WHEN s.current_warehouse_id IS NULL THEN 0 ELSE 1 END currentQuantity,w.code warehouseCodes,
       (SELECT MAX(business_date) FROM tracked_inventory_movements WHERE serial_id=s.id AND reversed=0) latestMovementDate
