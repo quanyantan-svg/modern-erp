@@ -118,6 +118,28 @@ function addDays(dateText, days) {
 export function ensureReceivableSource(db, source) { return ensureSubledger(db, 'AR', source); }
 export function ensurePayableSource(db, source) { return ensureSubledger(db, 'AP', source); }
 
+// ---------------------------------------------------------------------------
+// 结算敞口资格（Requirement §33.2.3、§33.38 F3 `Provisional != Financial`）。
+//
+// 普通结算（收款 / 付款核销、余额应用、坏账核销）**只认 final / financial open item**。
+// 暂估（PROVISIONAL）对应 GRNI、已转销（CONVERTED）行的敞口已转移到最终行：
+// 这两类行仍然出现在清单里（它们是真实业务事实），但**不携带结算敞口**。
+//
+// 这是清单读模型、汇总口径与权威对账（AR_TO_GL / AP_TO_GL）共用的唯一判定。
+// 读模型与写守卫必须共用它，否则会出现「清单显示未付、确认核销却 409」的
+// 幽灵敞口。
+// ---------------------------------------------------------------------------
+export const SETTLEMENT_ELIGIBLE_SQL = "item_class='SOURCE' AND COALESCE(item_kind,'FINAL')='FINAL' AND COALESCE(conversion_state,'OPEN')='OPEN'";
+
+export function settlementEligibility(row) {
+  if (!row) return { eligible: false, reason: 'NOT_FOUND' };
+  // 判定顺序即语义顺序：已转销优先于暂估（转销后的暂估行是历史事实，不再是待转销暂估）。
+  if (String(row.conversion_state || 'OPEN').toUpperCase() !== 'OPEN') return { eligible: false, reason: 'CONVERTED_ITEM' };
+  if (String(row.item_class || '') !== 'SOURCE') return { eligible: false, reason: 'LEGACY_ITEM' };
+  if (String(row.item_kind || 'FINAL').toUpperCase() !== 'FINAL') return { eligible: false, reason: 'PROVISIONAL_ITEM' };
+  return { eligible: true, reason: null };
+}
+
 export function openItemSnapshot(db, side, itemId) {
   const ar = side === 'AR';
   const table = ar ? 'account_receivables' : 'account_payables';

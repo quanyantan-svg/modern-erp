@@ -3,7 +3,7 @@ import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, optionalText, readJson, send } from '../lib/http.js';
 import { transaction } from '../db.js';
 import { lifecycleArchiveFilter } from './lifecycle-engine.js';
-import { checkSettlementInvariants, openItemSnapshot, refreshOpenItem, unappliedBalanceSnapshot } from './settlement-core.js';
+import { checkSettlementInvariants, openItemSnapshot, refreshOpenItem, settlementEligibility, unappliedBalanceSnapshot } from './settlement-core.js';
 import { idempotencyReplay, recordPrepayment, recordSettlementMovement, requestFingerprint, requireSettlementAccount, saveIdempotency } from './financial-controls.js';
 import { acquireParentBalanceLock } from './sales-prepayment-finance-adapter.js';
 import { guardPeriodAction } from './period-control.js';
@@ -12,6 +12,13 @@ import { financeActionCode } from './period-action-registry.js';
 const STATUS_OUT = { PENDING: 'OPEN', PARTIAL: 'PARTIALLY_SETTLED', COMPLETED: 'SETTLED', WRITTEN_OFF: 'SETTLED' };
 const STATUS_LABEL = { OPEN: '未结清', PARTIALLY_SETTLED: '部分收款', SETTLED: '已结清' };
 const PAYMENT_STATUS_LABEL = { OPEN: '未结清', PARTIALLY_SETTLED: '部分付款', SETTLED: '已结清' };
+// 非结算敞口行的展示状态（Requirement §33.2.3）：暂估与已转销行仍在清单里可见，
+// 但不得再被读成「未付」。标签与状态值一一对应，清单的状态筛选也按它们过滤。
+const INELIGIBLE_STATUS = {
+  PROVISIONAL_ITEM: { status: 'PROVISIONAL', label: '暂估待转销' },
+  CONVERTED_ITEM: { status: 'CONVERTED', label: '已转销' },
+  LEGACY_ITEM: { status: 'LEGACY', label: '历史遗留项' },
+};
 const DOCUMENT_STATUS_LABEL = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 
 function cents(value, label = '金额') {
@@ -32,10 +39,20 @@ function party(db, table, partyId, label) {
   return id;
 }
 
-function sourceStatus(row, paymentLabel = false) {
-  const status = STATUS_OUT[row.status] || row.status;
+// 口径：
+//   - `settlement`（应收 / 应付清单、汇总、账龄）：结算敞口。暂估与已转销行不携带
+//     结算余额（Requirement §33.2.3），与 AR_TO_GL / AP_TO_GL 权威口径一致。
+//   - `obligation`（客户 / 供应商对账单）：往来义务。交付未开票的暂估仍在对账单上
+//     可见；已转销行由既有 conversion_state 过滤排除，不会与最终行重复计入。
+function sourceStatus(row, paymentLabel = false, exposure = 'settlement') {
   const canonical = row.item_class === 'SOURCE';
-  const netCents = canonical ? Number(row.open_amount_cents) : row.amount_cents + row.adjustment_cents - row.paid_cents - row.write_off_cents;
+  const eligibility = settlementEligibility(row);
+  const obligation = exposure === 'obligation';
+  const ineligible = (!eligibility.eligible && !obligation) ? INELIGIBLE_STATUS[eligibility.reason] : null;
+  const status = ineligible ? ineligible.status : (STATUS_OUT[row.status] || row.status);
+  const netCents = ineligible
+    ? 0
+    : (canonical ? Number(row.open_amount_cents) : row.amount_cents + row.adjustment_cents - row.paid_cents - row.write_off_cents);
   const isCredit = netCents < 0;
   const today = new Date().toISOString().slice(0, 10);
   const daysOverdue = row.due_date && netCents > 0 && row.due_date < today
@@ -61,13 +78,32 @@ function sourceStatus(row, paymentLabel = false) {
     paymentTermsDays: row.payment_terms_days,
     daysOverdue,
     agingBucket: daysOverdue === 0 ? '未到期' : daysOverdue <= 30 ? '1–30' : daysOverdue <= 60 ? '31–60' : daysOverdue <= 90 ? '61–90' : '90+',
+    settlementEligible: eligibility.eligible,
+    settlementState: eligibility.eligible ? 'SETTLEMENT_ELIGIBLE' : eligibility.reason,
     status,
-    statusLabel: isCredit ? (paymentLabel ? '供应商借项' : '客户贷项') : ((paymentLabel ? PAYMENT_STATUS_LABEL : STATUS_LABEL)[status] || status),
+    statusLabel: ineligible
+      ? ineligible.label
+      : (isCredit ? (paymentLabel ? '供应商借项' : '客户贷项') : ((paymentLabel ? PAYMENT_STATUS_LABEL : STATUS_LABEL)[status] || status)),
   };
 }
 
 function statusFilter(value) {
   return ({ OPEN: 'PENDING', PARTIALLY_SETTLED: 'PARTIAL', SETTLED: 'COMPLETED' })[value] || value;
+}
+
+// 清单的状态筛选按**展示状态**过滤，而不是数据库原始状态：
+// 「未结清 / 部分核销」只包含结算敞口行；暂估、已转销、历史遗留各有自己的状态值。
+function statusWhere(alias, rawValue) {
+  const value = statusFilter(rawValue);
+  if (value === 'PENDING' || value === 'PARTIAL') {
+    return { clause: `${alias}.status=? AND ${alias}.item_class='SOURCE' AND COALESCE(${alias}.item_kind,'FINAL')='FINAL' AND COALESCE(${alias}.conversion_state,'OPEN')='OPEN'`, params: [value] };
+  }
+  if (value === 'PROVISIONAL') {
+    return { clause: `${alias}.item_class='SOURCE' AND ${alias}.item_kind='PROVISIONAL' AND COALESCE(${alias}.conversion_state,'OPEN')='OPEN'`, params: [] };
+  }
+  if (value === 'CONVERTED') return { clause: `${alias}.conversion_state='CONVERTED'`, params: [] };
+  if (value === 'LEGACY') return { clause: `${alias}.item_class<>'SOURCE'`, params: [] };
+  return { clause: `${alias}.status=?`, params: [value] };
 }
 
 export function listReceivables(db, res, actor, url) {
@@ -77,12 +113,14 @@ export function listReceivables(db, res, actor, url) {
   const archiveFilter = lifecycleArchiveFilter('ACCOUNT_RECEIVABLE', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'ar.id' });
   if (archiveFilter.clause) where.push(archiveFilter.clause);
   if (customerId) { where.push('ar.customer_id=?'); params.push(customerId); }
-  if (status) { where.push('ar.status=?'); params.push(statusFilter(status)); }
+  if (status) { const filter = statusWhere('ar', status); where.push(filter.clause); params.push(...filter.params); }
   const rows = db.prepare(`SELECT ar.*,c.code customerCode,c.name customerName FROM account_receivables ar JOIN customers c ON c.id=ar.customer_id WHERE ${where.join(' AND ')} ORDER BY ar.business_date DESC,ar.created_at DESC LIMIT 200`).all(...params);
   const unapplied = partyUnappliedSummary(db, 'CUSTOMER', customerId);
-  const openCents = rows.reduce((sum, row) => sum + (row.item_class === 'SOURCE' ? Number(row.open_amount_cents) : Math.max(0, row.amount_cents + row.adjustment_cents - row.paid_cents - row.write_off_cents)), 0);
+  const receivables = rows.map((row) => sourceStatus(row));
+  // 汇总口径 = 结算敞口（Requirement §33.2.3），与 AR_TO_GL / AP_TO_GL 权威口径一致。
+  const openCents = receivables.reduce((sum, row) => sum + row.outstandingCents, 0);
   const netExposureCents = openCents - unapplied.unappliedCreditCents - unapplied.unappliedPrepaymentCents;
-  return send(res, 200, { receivables: rows.map((row) => sourceStatus(row)), summary: { openCents, ...unapplied, netExposureCents, balanceCents: netExposureCents } });
+  return send(res, 200, { receivables, summary: { openCents, ...unapplied, netExposureCents, balanceCents: netExposureCents } });
 }
 
 export function getReceivable(db, res, actor, receivableId) {
@@ -103,12 +141,14 @@ export function listPayables(db, res, actor, url) {
   const archiveFilter = lifecycleArchiveFilter('ACCOUNT_PAYABLE', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'ap.id' });
   if (archiveFilter.clause) where.push(archiveFilter.clause);
   if (supplierId) { where.push('ap.supplier_id=?'); params.push(supplierId); }
-  if (status) { where.push('ap.status=?'); params.push(statusFilter(status)); }
+  if (status) { const filter = statusWhere('ap', status); where.push(filter.clause); params.push(...filter.params); }
   const rows = db.prepare(`SELECT ap.*,s.code supplierCode,s.name supplierName FROM account_payables ap JOIN suppliers s ON s.id=ap.supplier_id WHERE ${where.join(' AND ')} ORDER BY ap.business_date DESC,ap.created_at DESC LIMIT 200`).all(...params);
   const unapplied = partyUnappliedSummary(db, 'SUPPLIER', supplierId);
-  const openCents = rows.reduce((sum, row) => sum + (row.item_class === 'SOURCE' ? Number(row.open_amount_cents) : Math.max(0, row.amount_cents + row.adjustment_cents - row.paid_cents - row.write_off_cents)), 0);
+  const payables = rows.map((row) => sourceStatus(row, true));
+  // 汇总口径 = 结算敞口（Requirement §33.2.3），与 AP_TO_GL 权威口径一致。
+  const openCents = payables.reduce((sum, row) => sum + row.outstandingCents, 0);
   const netExposureCents = openCents - unapplied.unappliedCreditCents - unapplied.unappliedPrepaymentCents;
-  return send(res, 200, { payables: rows.map((row) => sourceStatus(row, true)), summary: { openCents, ...unapplied, netExposureCents, balanceCents: netExposureCents } });
+  return send(res, 200, { payables, summary: { openCents, ...unapplied, netExposureCents, balanceCents: netExposureCents } });
 }
 
 export function getPayable(db, res, actor, payableId) {
@@ -128,12 +168,14 @@ function statement(db, kind, url) {
   const sourceFk = ar ? 'receivable_id' : 'payable_id'; const documentFk = ar ? 'collection_id' : 'disbursement_id'; const settlementDate = ar ? 'collection_date' : 'disbursement_date';
   const partyId = url.searchParams.get(ar ? 'customer' : 'supplier'); if (!partyId) throw new HttpError(400, ar ? '请选择客户' : '请选择供应商');
   const from = url.searchParams.get('dateFrom') || '0000-01-01'; const to = url.searchParams.get('dateTo') || '9999-12-31';
+  // 对账单按「往来义务」口径：交付未开票的暂估也必须在对账单上可见（客户确实收货欠款）。
+  // 已转销行由既有 conversion_state 过滤排除，不会与最终行重复计入。
   const beforeSources = db.prepare(`SELECT COALESCE(SUM(amount_cents+adjustment_cents),0) n FROM ${sourceTable} WHERE ${partyColumn}=? AND business_date<? AND COALESCE(conversion_state,'OPEN')='OPEN'`).get(partyId, from).n;
   const beforeSettled = db.prepare(`SELECT COALESCE(SUM(ai.amount_cents),0) n FROM ${allocationTable} ai JOIN ${settlementTable} d ON d.id=ai.${documentFk} WHERE d.${partyColumn}=? AND d.status='CONFIRMED' AND d.${settlementDate}<?`).get(partyId, from).n;
   const period = db.prepare(`SELECT COALESCE(SUM(CASE WHEN amount_cents>0 THEN amount_cents ELSE 0 END),0) increases,COALESCE(SUM(CASE WHEN adjustment_cents<0 THEN -adjustment_cents ELSE 0 END),0) adjustments FROM ${sourceTable} WHERE ${partyColumn}=? AND business_date BETWEEN ? AND ? AND COALESCE(conversion_state,'OPEN')='OPEN'`).get(partyId, from, to);
   const settled = db.prepare(`SELECT COALESCE(SUM(ai.amount_cents),0) n FROM ${allocationTable} ai JOIN ${settlementTable} d ON d.id=ai.${documentFk} WHERE d.${partyColumn}=? AND d.status='CONFIRMED' AND d.${settlementDate} BETWEEN ? AND ?`).get(partyId, from, to).n;
   const requestedStatus = url.searchParams.get('status');
-  const rows = db.prepare(`SELECT * FROM ${sourceTable} WHERE ${partyColumn}=? AND business_date BETWEEN ? AND ? AND COALESCE(conversion_state,'OPEN')='OPEN'${requestedStatus ? ' AND status=?' : ''} ORDER BY business_date,created_at`).all(...(requestedStatus ? [partyId, from, to, statusFilter(requestedStatus)] : [partyId, from, to])).map((row) => sourceStatus(row, !ar));
+  const rows = db.prepare(`SELECT * FROM ${sourceTable} WHERE ${partyColumn}=? AND business_date BETWEEN ? AND ? AND COALESCE(conversion_state,'OPEN')='OPEN'${requestedStatus ? ' AND status=?' : ''} ORDER BY business_date,created_at`).all(...(requestedStatus ? [partyId, from, to, statusFilter(requestedStatus)] : [partyId, from, to])).map((row) => sourceStatus(row, !ar, 'obligation'));
   const preRangeOutstandingCents = beforeSources - beforeSettled;
   return { rows, summary: { preRangeOutstandingCents, increaseCents: period.increases, adjustmentCents: period.adjustments, settledCents: settled, endingOutstandingCents: preRangeOutstandingCents + period.increases - period.adjustments - settled } };
 }
@@ -169,9 +211,15 @@ function validateAllocations(db, cfg, partyId, raw = []) {
   return raw.map((item, index) => {
     const sourceId = String(item?.[cfg.sourceKey] || '').trim(); if (!sourceId) throw new HttpError(400, `第${index + 1}行未选择待核销记录`);
     if (seen.has(sourceId)) throw new HttpError(400, '同一待核销记录不能重复选择'); seen.add(sourceId);
-    const source = db.prepare(`SELECT id,${cfg.partyColumn} partyId FROM ${cfg.sourceTable} WHERE id=?`).get(sourceId);
+    const source = db.prepare(`SELECT id,${cfg.partyColumn} partyId,item_class,item_kind,conversion_state FROM ${cfg.sourceTable} WHERE id=?`).get(sourceId);
     if (!source) throw new HttpError(400, `第${index + 1}行待核销记录不存在`);
     if (source.partyId !== partyId) throw new HttpError(400, `核销记录必须属于同一${cfg.partyLabel}`);
+    // 建单时即拒绝不可结算项目（Requirement §33.2.3）：否则会留下一张永远无法
+    // 确认的挂起草稿（确认时才 409），客户侧看不到原因。
+    const eligibility = settlementEligibility(source);
+    if (!eligibility.eligible) throw new HttpError(409, `第${index + 1}行不是可结算的最终${cfg.side === 'AP' ? '应付' : '应收'}项目：暂估、已转销与历史遗留项不能核销`);
+    const snap = openItemSnapshot(db, cfg.side, sourceId);
+    if (!snap || snap.openCents <= 0) throw new HttpError(409, `第${index + 1}行待核销记录已结清`);
     return { sourceId, amountCents: cents(item.amountCents, `第${index + 1}行核销金额`) };
   });
 }

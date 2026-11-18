@@ -546,6 +546,9 @@ tfoot td {
 .status.partial     { background: var(--warning-soft); color: var(--warning); }
 .status.closed      { background: var(--neutral-soft); color: var(--neutral); }
 .status.open        { background: var(--info-soft); color: var(--accent); }
+.status.provisional { background: var(--warning-soft); color: var(--warning); }
+.status.converted,
+.status.legacy      { background: var(--neutral-soft); color: var(--neutral); }
 
 .active-state {
   display: inline-flex; align-items: center; gap: 6px;

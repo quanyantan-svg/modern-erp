@@ -458,6 +458,13 @@ describe('M14 — Sales Discount', () => {
     assert.equal(customerNet(cust), 2000);
     // The 3000 credit remains unapplied. The future AR stays independently
     // open for 5000 and can be collected only by an explicit allocation.
+    // 超额核销单先建（建单时余额仍有 5000，合法），等主收款单确认结清后再确认它：
+    // 确认时余额已归零，必须被拒绝（确认阶段的超额守卫）。
+    const over = await request('/api/payment-collections', { token: accountingToken, method: 'POST', body: {
+      customerId: cust, businessDate: '2026-08-15', amountCents: 1, paymentMethod: 'BANK',
+      allocations: [{ receivableId: newAr, amountCents: 1 }],
+    } });
+    assert.equal(over.status, 201, JSON.stringify(over.data));
     const ok = await request('/api/payment-collections', { token: accountingToken, method: 'POST', body: {
       customerId: cust, businessDate: '2026-08-15', amountCents: 5000, paymentMethod: 'BANK',
       allocations: [{ receivableId: newAr, amountCents: 5000 }],
@@ -467,12 +474,14 @@ describe('M14 — Sales Discount', () => {
     if (okConfirm.status === 200) {
       assert.equal(customerNet(cust), -3000);
     }
-    const over = await request('/api/payment-collections', { token: accountingToken, method: 'POST', body: {
+    const overConfirm = await request(`/api/payment-collections/${over.data.id}/confirm`, { token: accountingToken, method: 'POST', body: {} });
+    assert.equal(overConfirm.status === 409 || overConfirm.status === 400, true, JSON.stringify(overConfirm.data));
+    // 已结清的应收项目不得再被建单选中（不留挂起草稿）。
+    const overAgain = await request('/api/payment-collections', { token: accountingToken, method: 'POST', body: {
       customerId: cust, businessDate: '2026-08-15', amountCents: 1, paymentMethod: 'BANK',
       allocations: [{ receivableId: newAr, amountCents: 1 }],
     } });
-    const overConfirm = await request(`/api/payment-collections/${over.data.id}/confirm`, { token: accountingToken, method: 'POST', body: {} });
-    assert.equal(overConfirm.status === 409 || overConfirm.status === 400, true, JSON.stringify(overConfirm.data));
+    assert.equal(overAgain.status === 409 || overAgain.status === 400, true, JSON.stringify(overAgain.data));
   });
 });
 
