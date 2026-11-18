@@ -149,6 +149,9 @@ export function readOutsourcingReceivingContext(db, orderId) {
       productId: order.product_id,
       productCode: product?.code || null,
       productName: product?.name || null,
+      // 成品的跟踪策略：收货员据此判断本次收货是否必须登记批次 / 序列号身份。
+      // 这是**成品**策略，不是 Supplier WIP 身份明细，不违反受限岗位投影边界。
+      trackingPolicy: String(product?.tracking_policy || 'NONE').toUpperCase(),
       orderQuantity: orderedQuantity,
       unit: order.unit,
       status: order.status,

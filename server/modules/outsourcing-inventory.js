@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { HttpError } from '../lib/http.js';
 import { applyInventoryMutation } from '../lib/inventory-mutation.js';
-import { postCanonicalTrackedLeg } from './traceability-quality.js';
+import { postCanonicalTrackedLeg, resolveInboundLot, resolveInboundSerial } from './traceability-quality.js';
 import { issueValue, receiveValue } from './financial-inventory.js';
 
 const EPS = 1e-9;
+const nowIso = () => new Date().toISOString();
 
 function codedConflict(code, message) {
   return new HttpError(409, message, { code });
@@ -354,7 +355,29 @@ export function recordWipTransferIdentity(db, {
 export function receiveOutsourcingFinishedGoods(db, {
   actor, order, receipt, item, valueCents, businessDate,
 }) {
-  const identity = resolveOutsourcingIdentity(db, item.product_id, { lotId: item.lot_id, serialId: item.serial_id });
+  // 计划身份（F-03）：成品身份是**成品事实**，由成品 Writer 在收货生效时登记。
+  // 收货建单只登记计划值（批次号 / 序列号），身份主档的来源字面量只允许出现在
+  // 本模块内（成品唯一 Writer 合同，M1C-Gate G04-R1-1）。
+  let lotId = item.lot_id || null;
+  let serialId = item.serial_id || null;
+  if (!lotId && !serialId) {
+    const plannedLotCode = item.planned_lot_code ? String(item.planned_lot_code).trim() : null;
+    const plannedSerialNumber = item.planned_serial_number ? String(item.planned_serial_number).trim() : null;
+    if (plannedLotCode) {
+      lotId = resolveInboundLot(db, {
+        productId: item.product_id, lotCode: plannedLotCode,
+        sourceType: 'OUTSOURCING_RECEIPT', sourceId: receipt.id, sourceItemId: item.id, at: nowIso(),
+      }).id;
+      db.prepare('UPDATE outsourcing_receipt_items SET lot_id=? WHERE id=?').run(lotId, item.id);
+    } else if (plannedSerialNumber) {
+      serialId = resolveInboundSerial(db, {
+        productId: item.product_id, serialNumber: plannedSerialNumber,
+        sourceType: 'OUTSOURCING_RECEIPT', sourceId: receipt.id, sourceItemId: item.id, at: nowIso(),
+      }).id;
+      db.prepare('UPDATE outsourcing_receipt_items SET serial_id=? WHERE id=?').run(serialId, item.id);
+    }
+  }
+  const identity = resolveOutsourcingIdentity(db, item.product_id, { lotId, serialId });
   const mutationKey = `OUTSOURCING_RECEIPT:${receipt.id}:${item.id}:IN:${identity.identityKey}`;
   const mutation = applyInventoryMutation({
     db, actor, sourceType: 'OUTSOURCING_RECEIPT', sourceId: receipt.id, sourceItemId: item.id,

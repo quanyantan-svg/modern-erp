@@ -14,6 +14,37 @@ import { RECOGNITION_MODES } from './finance-recognition-policy.js';
 import { guardPeriodAction } from './period-control.js';
 import { createSystemVoucher, reverseSystemVoucher } from './financial-inventory.js';
 
+/**
+ * 倒冲身份解析（F-03）。
+ *
+ * 服务端要求跟踪物料的倒冲必须带唯一身份（LOT / SERIAL），但受限收货岗位
+ * **不得**看到 Supplier WIP 身份明细（Requirement §31.15 `OUT-WB-REQ-04/05`），
+ * 因此界面无法提供身份输入。此时身份必须由服务端从该物料行**自己已登记的
+ * 供给事实**继承：取最早供给、可用量足以覆盖本次倒冲的那个身份。
+ *
+ * 「最早供给优先」与既有消费分配器（`outsourcing-inventory.js`
+ * `recordConsumption` 按 `created_at` 顺序取供给）同一条纪律，不新增第二套规则；
+ * 身份不可证明时固定 409，不猜测、不虚构身份。
+ */
+function resolveWipBackflushIdentity(db, material, incremental) {
+  const rows = db.prepare(`
+    SELECT b.identity_key identityKey, b.identity_type identityType, b.lot_id lotId, b.serial_id serialId,
+           b.available_quantity availableQuantity,
+           (SELECT MIN(e.created_at) FROM outsourcing_wip_identity_effects e
+             WHERE e.material_list_id=b.material_list_id AND e.identity_key=b.identity_key
+               AND e.effect_direction='SUPPLY' AND e.event_type IN ('ISSUE','SUPPLEMENT','OPENING')) firstSupplyAt
+      FROM outsourcing_wip_identity_balances b
+     WHERE b.material_list_id=? AND b.available_quantity>0
+     ORDER BY firstSupplyAt, b.identity_key`).all(material.id);
+  const usable = rows.find((row) => Number(row.availableQuantity) + 1e-9 >= incremental);
+  if (!usable) {
+    throw new HttpError(409, '委外物料行没有可证明的可用 WIP 身份', { code: 'OUTSOURCING_WIP_IDENTITY_UNPROVEN' });
+  }
+  if (usable.identityType === 'LOT') return { lotId: usable.lotId };
+  if (usable.identityType === 'SERIAL') return { serialId: usable.serialId };
+  return {};
+}
+
 // ---------------------------------------------------------------------------
 // OUT-20 委外加工费正式过账 —— 会计口径（C-P01..C-P04）
 // ---------------------------------------------------------------------------
@@ -338,7 +369,7 @@ export async function confirmOutsourcingReceipt(db, req, res, actor, receiptId) 
         throw new HttpError(409, `BACKFLUSH_INSUFFICIENT_SUPPLY: 行 ${m.id}`, { code: 'OUTSOURCING_WIP_INSUFFICIENT' });
       }
       if (incremental <= 0) continue;
-      const identityInput = materialIdentities.get(m.id) || {};
+      const identityInput = materialIdentities.get(m.id) || resolveWipBackflushIdentity(db, m, incremental);
       const backflush = executeOutsourcingBackflush(db, {
         actor, order: lockedOrder, material: m, receipt: lockedReceipt, quantity: incremental,
         businessDate: lockedReceipt.business_date || lockedReceipt.received_date, identityInput,

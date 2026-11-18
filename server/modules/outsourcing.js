@@ -135,6 +135,9 @@ function rowToMaterialList(row) {
     productId: row.product_id,
     requiredQuantity: row.required_quantity,
     unit: row.unit,
+    // 来源仓：发料 / 补料 / 退料时可用身份必须取自这个仓（Requirement §31.15
+    // `OUT-WB-REQ-03`：业务员要能看到 LOT/SERIAL 来源）。
+    sourceWarehouseId: row.source_warehouse_id ?? null,
     issuedQuantity: row.issued_quantity,
     supplementedQuantity: row.supplemented_quantity,
     returnedQuantity: row.returned_quantity,
@@ -1192,11 +1195,11 @@ export async function createOutsourcingReceipt(db, req, res, actor) {
       body.warehouseId, notice.id, body.businessDate || body.receivedDate || now.slice(0, 10),
     );
     const insertItem = db.prepare(`INSERT INTO outsourcing_receipt_items(
-      id,receipt_id,product_id,quantity,unit_price_cents,line_no,lot_id,serial_id,unit_code,processing_po_item_id,source_notice_item_source_id
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)`);
+      id,receipt_id,product_id,quantity,unit_price_cents,line_no,lot_id,serial_id,unit_code,processing_po_item_id,source_notice_item_source_id,planned_lot_code,planned_serial_number
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     const seenNoticeItems = new Set();
     body.items.forEach((item, index) => {
-      assertAllowedFields(item, ['productId', 'quantity', 'unitCode', 'unitPriceCents', 'processingPoItemId', 'sourceNoticeItemId', 'lotId', 'serialId']);
+      assertAllowedFields(item, ['productId', 'quantity', 'unitCode', 'unitPriceCents', 'processingPoItemId', 'sourceNoticeItemId', 'lotId', 'serialId', 'lotCode', 'serialNumber']);
       const poItem = db.prepare('SELECT * FROM purchase_order_items WHERE id=? AND order_id=?').get(item.processingPoItemId, processingPo.id);
       const noticeItem = db.prepare('SELECT * FROM receipt_notice_items WHERE id=? AND notice_id=?').get(item.sourceNoticeItemId, notice.id);
       const product = db.prepare('SELECT tracking_policy,base_uom_code,unit FROM products WHERE id=? AND active=1').get(item.productId);
@@ -1217,12 +1220,33 @@ export async function createOutsourcingReceipt(db, req, res, actor) {
           `第 ${index + 1} 行超过完工通知行剩余容量：通知行 ${noticeLineQuantity}、已占用 ${noticeLineUsed}、本次 ${requestedQuantity}`);
       }
       noticeLine.usage.set(noticeItem.id, noticeLineUsed + requestedQuantity);
-      if (product.tracking_policy === 'LOT' && (!item.lotId || item.serialId)) throw businessConflict('OUTSOURCING_RECEIPT_ITEM_SOURCE_MISMATCH', 'LOT 成品必须提供批次身份');
-      if (product.tracking_policy === 'SERIAL' && (!item.serialId || item.lotId || Number(item.quantity) !== 1)) throw businessConflict('OUTSOURCING_RECEIPT_ITEM_SOURCE_MISMATCH', 'SERIAL 成品必须逐行提供唯一序列号');
-      if (product.tracking_policy === 'NONE' && (item.lotId || item.serialId)) throw businessConflict('OUTSOURCING_RECEIPT_ITEM_SOURCE_MISMATCH', '非跟踪成品不得携带 LOT/SERIAL');
+      // 成品身份：既接受既有身份 ID，也接受「计划身份」（批次号 / 序列号）。
+      // 计划身份是**成品事实**，由成品 Writer 在收货生效时登记
+      // （`receiveOutsourcingFinishedGoods`），本模块只登记计划值 —— 身份主档的
+      // 来源字面量只允许出现在成品 Writer 内（成品唯一 Writer 合同）。
+      const itemId = randomUUID();
+      let lotId = item.lotId || null;
+      let serialId = item.serialId || null;
+      const plannedLotCode = item.lotCode ? String(item.lotCode).trim() : null;
+      const plannedSerialNumber = item.serialNumber ? String(item.serialNumber).trim() : null;
+      if (product.tracking_policy === 'LOT') {
+        if (serialId || (!lotId && !plannedLotCode)) throw businessConflict('OUTSOURCING_RECEIPT_ITEM_SOURCE_MISMATCH', 'LOT 成品必须提供批次身份');
+        if (lotId) {
+          const lot = db.prepare('SELECT product_id FROM inventory_lots WHERE id=?').get(lotId);
+          if (!lot || lot.product_id !== item.productId) throw businessConflict('OUTSOURCING_RECEIPT_ITEM_SOURCE_MISMATCH', `第 ${index + 1} 行批次与成品不匹配`);
+        }
+      } else if (product.tracking_policy === 'SERIAL') {
+        if (lotId || Number(item.quantity) !== 1 || (!serialId && !plannedSerialNumber)) {
+          throw businessConflict('OUTSOURCING_RECEIPT_ITEM_SOURCE_MISMATCH', 'SERIAL 成品必须逐行提供唯一序列号');
+        }
+        if (serialId) {
+          const serial = db.prepare('SELECT product_id FROM inventory_serials WHERE id=?').get(serialId);
+          if (!serial || serial.product_id !== item.productId) throw businessConflict('OUTSOURCING_RECEIPT_ITEM_SOURCE_MISMATCH', `第 ${index + 1} 行序列号与成品不匹配`);
+        }
+      } else if (lotId || serialId || plannedLotCode || plannedSerialNumber) throw businessConflict('OUTSOURCING_RECEIPT_ITEM_SOURCE_MISMATCH', '非跟踪成品不得携带 LOT/SERIAL');
       seenNoticeItems.add(noticeItem.id);
-      insertItem.run(randomUUID(), id, item.productId, Number(item.quantity), itemUnitPriceCents[index], index + 1,
-        item.lotId || null, item.serialId || null, unitCode, poItem.id, noticeItem.id);
+      insertItem.run(itemId, id, item.productId, Number(item.quantity), itemUnitPriceCents[index], index + 1,
+        lotId, serialId, unitCode, poItem.id, noticeItem.id, plannedLotCode, plannedSerialNumber);
     });
     audit(db, actor.id, 'CREATE', 'OUTSOURCING_RECEIPT', id, `${receiptNo} 待检，${body.items.length} 行`);
     saveIdempotency(db, operation, documentId, idempotencyKey, fingerprint, { id, receiptNo });

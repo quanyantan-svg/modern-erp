@@ -411,6 +411,14 @@ const FULL = [
   // 委外核心执行工作面（Requirement §31.15；Design §26.35）：订单状态机安全门禁、
   // 供应商资格按业务日期判定、受限读模型与职责分离、OUTSOURCE 通知来源级授权。
   'server/outsourcing-workbench.test.js',
+  // 委外跟踪物料的身份链路（F-03；Requirement §31.15 `OUT-WB-REQ-03/05`）：发料缺身份
+  // 固定 409、带身份 201 并按该身份记账、收货生效由服务端继承已登记的供给身份、
+  // 收货明细的计划身份由 canonical 跟踪写入器登记。
+  'server/outsourcing-tracked-identity.test.js',
+  // 期初库存计价（F-02）：期初行必须带成本单价、确认后形成权威估值与身份级估值池、
+  // 总账期初权益同步、缺成本固定拒绝、跟踪物料必须带已存在身份。
+  'server/inventory-opening-cost.test.js',
+  // 委外跟踪物料身份（F-03）新增套件与期初计价（F-02）新增套件的 FULL 登记。
 
   // ----- V21 Inventory & Warehouse Domain Closure — Wave A foundation -----
   // Pure / contract tests for canonical position identity, owner validation,

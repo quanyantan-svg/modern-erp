@@ -492,9 +492,36 @@ function MaterialActionSheet({ mode, user, notify, orderId, materials, bomId, pr
   const [materialListId, setMaterialListId] = useState(materials[0]?.id || '');
   const [quantityValue, setQuantityValue] = useState('');
   const [reason, setReason] = useState('');
+  const [identity, setIdentity] = useState({ lotId: '', serialId: '' });
+  const [availability, setAvailability] = useState(null);
+  const [availabilityError, setAvailabilityError] = useState('');
   const [idempotencyKey, setIdempotencyKey] = useState(() => `os-${mode}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+
+  const selectedMaterial = materials.find((material) => material.id === materialListId) || null;
+
+  // 跟踪物料必须带唯一身份（Requirement §31.15 `OUT-WB-REQ-03`：发补退料要能看到
+  // 并使用 LOT/SERIAL 来源）。可用身份取自该物料行的来源仓。
+  useEffect(() => {
+    if (mode === 'snapshot') return undefined;
+    const material = materials.find((item) => item.id === materialListId);
+    if (!material?.sourceWarehouseId || !material?.productId) {
+      setAvailability(null);
+      return undefined;
+    }
+    let current = true;
+    setAvailabilityError('');
+    const params = new URLSearchParams({
+      productId: material.productId,
+      warehouseId: material.sourceWarehouseId,
+      businessDate: new Date().toISOString().slice(0, 10),
+    });
+    api(`/api/tracking/availability?${params}`)
+      .then((result) => { if (current) setAvailability(result); })
+      .catch((err) => { if (current) { setAvailability(null); setAvailabilityError(err.message); } });
+    return () => { current = false; };
+  }, [mode, materialListId, materials]);
 
   const modeMeta = {
     issue: { title: '委外发料', path: 'issues', hint: '发料把企业仓物料移动到供应商 WIP 位置。' },
@@ -522,6 +549,9 @@ function MaterialActionSheet({ mode, user, notify, orderId, materials, bomId, pr
     try {
       const body = { materialListId, quantity: Number(quantityValue), idempotencyKey };
       if (mode === 'supplement') body.reason = reason;
+      // 跟踪物料的身份是发补退料的必填证据：服务端按 LOT/SERIAL 强制要求。
+      if (availability?.policy === 'LOT') body.lotId = identity.lotId;
+      if (availability?.policy === 'SERIAL') body.serialId = identity.serialId;
       await api(`/api/procurement/outsourcing/orders/${orderId}/${modeMeta.path}`, { method: 'POST', body });
       notify(`${modeMeta.title}已提交`);
       onDone();
@@ -531,13 +561,18 @@ function MaterialActionSheet({ mode, user, notify, orderId, materials, bomId, pr
     } finally { setBusy(false); }
   }
 
+  const identityRequired = availability?.policy === 'LOT' || availability?.policy === 'SERIAL';
+  const identityChosen = availability?.policy === 'LOT'
+    ? Boolean(identity.lotId)
+    : availability?.policy === 'SERIAL' ? Boolean(identity.serialId) : true;
+
   return (
     <DetailSheet title={modeMeta.title} onClose={onClose}>
       <InlineAlert tone="info">{modeMeta.hint}</InlineAlert>
       <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {error ? <InlineAlert tone="danger" title="提交未完成">{error}</InlineAlert> : null}
         <FormRow label="物料行" required>
-          <SelectField value={materialListId} onChange={(event) => setMaterialListId(event.target.value)} required>
+          <SelectField value={materialListId} onChange={(event) => { setMaterialListId(event.target.value); setIdentity({ lotId: '', serialId: '' }); }} required>
             {materials.map((material) => (
               <option key={material.id} value={material.id}>
                 {material.productId} · 需求 {fmtNumber(material.requiredQuantity)}
@@ -548,6 +583,43 @@ function MaterialActionSheet({ mode, user, notify, orderId, materials, bomId, pr
         <FormRow label="数量" required>
           <QuantityField aria-label="数量" value={quantityValue} onChange={(event) => setQuantityValue(event.target.value)} required />
         </FormRow>
+        {availabilityError ? <InlineAlert tone="danger" title="可用身份读取失败">{availabilityError}</InlineAlert> : null}
+        {availability?.policy === 'LOT' ? (
+          <FormRow label="批次" required>
+            <SelectField
+              aria-label="选择批次"
+              value={identity.lotId}
+              onChange={(event) => setIdentity({ lotId: event.target.value, serialId: '' })}
+              required
+            >
+              <option value="">请选择来源仓可用批次</option>
+              {(availability.lots || []).map((lot) => (
+                <option key={lot.id} value={lot.id}>{lot.lot_code} · 可用 {fmtNumber(lot.available_quantity)}</option>
+              ))}
+            </SelectField>
+          </FormRow>
+        ) : null}
+        {availability?.policy === 'SERIAL' ? (
+          <FormRow label="序列号" required>
+            <SelectField
+              aria-label="选择序列号"
+              value={identity.serialId}
+              onChange={(event) => setIdentity({ lotId: '', serialId: event.target.value })}
+              required
+            >
+              <option value="">请选择来源仓可用序列号</option>
+              {(availability.serials || []).filter((serial) => serial.available).map((serial) => (
+                <option key={serial.id} value={serial.id}>{serial.serial_number}</option>
+              ))}
+            </SelectField>
+          </FormRow>
+        ) : null}
+        {availability?.policy === 'LOT' && !(availability.lots || []).length ? (
+          <InlineAlert tone="danger" title="来源仓没有可用批次">该物料行的来源仓没有可用批次，请先补货或改选来源仓。</InlineAlert>
+        ) : null}
+        {availability?.policy === 'SERIAL' && !(availability.serials || []).filter((serial) => serial.available).length ? (
+          <InlineAlert tone="danger" title="来源仓没有可用序列号">该物料行的来源仓没有可用序列号，请先补货或改选来源仓。</InlineAlert>
+        ) : null}
         {mode === 'supplement' ? (
           <FormRow label="补料原因" required>
             <TextField aria-label="补料原因" value={reason} onChange={(event) => setReason(event.target.value)} required />
@@ -555,7 +627,7 @@ function MaterialActionSheet({ mode, user, notify, orderId, materials, bomId, pr
         ) : null}
         <BottomActionBar>
           <SecondaryButton type="button" onClick={onClose}>取消</SecondaryButton>
-          <PrimaryButton type="submit" disabled={busy || !materials.length}>{modeMeta.title}</PrimaryButton>
+          <PrimaryButton type="submit" disabled={busy || !materials.length || (identityRequired && !identityChosen)}>{modeMeta.title}</PrimaryButton>
         </BottomActionBar>
       </form>
     </DetailSheet>
@@ -900,6 +972,7 @@ function ReceivingContextSheet({ user, notify, navigation, focus, onClose, onCha
   const [noticeQuantity, setNoticeQuantity] = useState('');
   const [receiptQuantity, setReceiptQuantity] = useState('');
   const [processingFeeCents, setProcessingFeeCents] = useState('');
+  const [finishedIdentity, setFinishedIdentity] = useState('');
   const [warehouseId, setWarehouseId] = useState('');
   const [warehouses, setWarehouses] = useState([]);
   const [selectedNotice, setSelectedNotice] = useState('');
@@ -984,11 +1057,16 @@ function ReceivingContextSheet({ user, notify, navigation, focus, onClose, onCha
       const notice = context.notices.find((item) => item.id === selectedNotice) || confirmedNotice;
       const source = notice?.items?.[0];
       const poItem = approvedPo?.items?.[0];
+      // 成品身份（Requirement §31.15 `OUT-WB-REQ-05`）：跟踪成品的收货明细必须带
+      // 批次 / 序列号。序列号成品逐件收货（服务端要求每行数量为 1）。
+      const trackingPolicy = String(context.order?.trackingPolicy || 'NONE').toUpperCase();
+      const identityCode = String(finishedIdentity || '').trim();
+      const effectiveQuantity = trackingPolicy === 'SERIAL' ? 1 : Number(receiptQuantity);
       await api('/api/procurement/outsourcing/receipts', {
         method: 'POST',
         body: {
           orderId: order.id,
-          quantity: Number(receiptQuantity),
+          quantity: effectiveQuantity,
           receivedDate: new Date().toISOString().slice(0, 10),
           businessDate: new Date().toISOString().slice(0, 10),
           processingFeeCents: Math.round(Number(processingFeeCents || 0) * 100),
@@ -997,11 +1075,13 @@ function ReceivingContextSheet({ user, notify, navigation, focus, onClose, onCha
           warehouseId: notice.warehouseId || warehouseId,
           items: [{
             productId: order.productId,
-            quantity: Number(receiptQuantity),
+            quantity: effectiveQuantity,
             unitCode: poItem?.unitCode || null,
             unitPriceCents: Math.round(Number(processingFeeCents || 0) * 100),
             processingPoItemId: poItem?.id,
             sourceNoticeItemId: source?.id,
+            ...(trackingPolicy === 'LOT' ? { lotCode: identityCode } : {}),
+            ...(trackingPolicy === 'SERIAL' ? { serialNumber: identityCode } : {}),
           }],
         },
         headers: { 'idempotency-key': `os-receipt-${order.id}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` },
@@ -1122,10 +1202,26 @@ function ReceivingContextSheet({ user, notify, navigation, focus, onClose, onCha
                 <FormRow label="收货数量" required>
                   <QuantityField aria-label="收货数量" value={receiptQuantity} onChange={(event) => setReceiptQuantity(event.target.value)} />
                 </FormRow>
+                {String(context.order?.trackingPolicy || 'NONE').toUpperCase() === 'LOT' ? (
+                  <FormRow label="成品批次号" required>
+                    <TextField aria-label="成品批次号" value={finishedIdentity} onChange={(event) => setFinishedIdentity(event.target.value)} required />
+                  </FormRow>
+                ) : null}
+                {String(context.order?.trackingPolicy || 'NONE').toUpperCase() === 'SERIAL' ? (
+                  <FormRow label="成品序列号" required>
+                    <TextField aria-label="成品序列号" value={finishedIdentity} onChange={(event) => setFinishedIdentity(event.target.value)} required />
+                  </FormRow>
+                ) : null}
+                {String(context.order?.trackingPolicy || 'NONE').toUpperCase() === 'SERIAL' ? (
+                  <InlineAlert tone="info" title="序列号成品逐件收货">序列号成品每次只能登记一件，请按实物序列号逐次录入。</InlineAlert>
+                ) : null}
                 <FormRow label="加工费（元）" required>
                   <QuantityField aria-label="加工费（元）" value={processingFeeCents} onChange={(event) => setProcessingFeeCents(event.target.value)} />
                 </FormRow>
-                <BusinessAction disabled={busy || !receiptQuantity} onClick={createReceipt}>录入待检收货</BusinessAction>
+                <BusinessAction
+                  disabled={busy || !receiptQuantity || (['LOT', 'SERIAL'].includes(String(context.order?.trackingPolicy || 'NONE').toUpperCase()) && !String(finishedIdentity || '').trim())}
+                  onClick={createReceipt}
+                >录入待检收货</BusinessAction>
               </>
             ) : null}
           </>

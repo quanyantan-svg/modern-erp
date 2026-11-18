@@ -331,6 +331,45 @@ export function postCanonicalTrackedLeg(db, {
   return db.prepare('SELECT * FROM tracked_inventory_movements WHERE id=?').get(movementId);
 }
 
+/**
+ * 登记一条「计划入库」的批次身份。
+ *
+ * 已存在同货品同批次号 → 复用；不存在 → 新建并记录来源单据。
+ * 与 `postTrackedMovement` 的入库批次口径同源（`getOrCreateLot`）。
+ */
+export function resolveInboundLot(db, { productId, lotCode, sourceType, sourceId, sourceItemId, at = nowIso() }) {
+  const code = String(lotCode || '').trim();
+  if (!code) throw new HttpError(400, '批次号必填');
+  const existing = db.prepare('SELECT * FROM inventory_lots WHERE product_id=? AND lot_code=?').get(productId, code);
+  if (existing) return existing;
+  const lotId = id();
+  db.prepare(`INSERT INTO inventory_lots(id, product_id, lot_code, status, created_source_type, created_source_id, created_source_item_id, created_at)
+    VALUES(?,?,?,'AVAILABLE',?,?,?,?)`).run(lotId, productId, code, sourceType, sourceId, sourceItemId, at);
+  return db.prepare('SELECT * FROM inventory_lots WHERE id=?').get(lotId);
+}
+
+/**
+ * 登记一条「计划入库」的序列号身份。
+ *
+ * 已在库的序列号不可重复入库（与 `postTrackedMovement` 的入库序列号口径一致）：
+ * 只有已交付 / 已消耗的序列号可以被再次接收。
+ */
+export function resolveInboundSerial(db, { productId, serialNumber, sourceType, sourceId, sourceItemId, at = nowIso() }) {
+  const number = String(serialNumber || '').trim();
+  if (!number) throw new HttpError(400, '序列号必填');
+  const existing = db.prepare('SELECT * FROM inventory_serials WHERE product_id=? AND serial_number=?').get(productId, number);
+  if (existing) {
+    if (!['DELIVERED', 'CONSUMED'].includes(existing.lifecycle_state)) {
+      throw trackingError(409, 'SERIAL_DUPLICATE', '序列号已在库或不可重复入库', '更正重复序列号后重试');
+    }
+    return existing;
+  }
+  const serialId = id();
+  db.prepare(`INSERT INTO inventory_serials(id, product_id, serial_number, lifecycle_state, current_warehouse_id, created_source_type, created_source_id, created_source_item_id, updated_at, created_at)
+    VALUES(?,?,?,'AVAILABLE',NULL,?,?,?,?,?)`).run(serialId, productId, number, sourceType, sourceId, sourceItemId, at, at);
+  return db.prepare('SELECT * FROM inventory_serials WHERE id=?').get(serialId);
+}
+
 export function postTrackedMovement(db, { sourceType, sourceId, sourceItemId, productId, warehouseId, quantity, direction, businessDate, returnToHold = false }) {
   const product = productTracking(db, productId);
   if (product.tracking_policy === 'NONE') return [];
