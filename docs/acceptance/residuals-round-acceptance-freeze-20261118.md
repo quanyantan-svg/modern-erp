@@ -82,10 +82,13 @@ Release Readiness。**已执行**：客户测试环境部署（授权见 §3.2�
 | **权威结账** | **`INVENTORY_VALUE_TO_GL` 差额 = 0**；`LEGACY_UNVALUED_MOVEMENTS` = 0；委外发料的总账分录 `Dr 1406 200000 / Cr 1403 200000` 存在 |
 | 环境复原 | 临时验收探针账号已删除；`/tmp` 与 `/opt/modern-erp/.tmp` 的临时脚本已清理 |
 
-**本轮新发现的残余（必须随交付披露）**：**VMI 收货只有存货入账、没有对应的总账应付腿**（Requirement
-§32.18.5 开放项 3）。实测每次 VMI 收货使总账与价值子账差一个收货账面价值（本次 100,000 分/次）。
-该腿的确认时点属 `D-P01` 未决范围，**不**自行补；因此**在 D-P01 裁定前，VMI 收货流程不能通过
-权威结账**。为避免给客户留下一个必然失配的案例，演示数据**只建 VMI 协议、不建 VMI 收货**。
+**本轮新发现的残余与其闭合**：**VMI 收货只有存货入账、没有对应的总账应付腿** —— 实测每次 VMI 收货
+使总账与价值子账差一个收货账面价值（100,000 分/次）。业务所有者 2026-11-18 裁定
+**A「物权在收货时转移」**，并由 Procurement & Outsourcing 域 §31.23 `PRC-VGL-01..08` /
+Design §26.44 实施：收货确认存货与应付（`Dr 存货 / Cr 应付账款`）、消耗对称冲销
+（`Dr 应付账款 / Cr 存货`）。闭合后收货后与消耗后 `AP_TO_GL` 与 `INVENTORY_VALUE_TO_GL`
+**均为 0**（合同测试 `server/vmi-gl-integration.test.js`）。`D-P01` 的其余子题（结算窗口、
+结算数量口径、结算账单与付款机制）与 VMI 物权释放**仍然开放**。
 
 ### 3.4 已知的门禁回归及其处置（不降级断言）
 
@@ -102,7 +105,7 @@ Release Readiness。**已执行**：客户测试环境部署（授权见 §3.2�
    而是把验收残留数据从交付环境中移除。
 2. **VMI 收货不登记 LOT / SERIAL 身份**：跟踪口径货品的入库价值无法归属到具体身份，
    本轮只对移动加权口径计值（Requirement §32.18 §32.18.5 开放项 1）。
-3. **VMI 收货的总账对方腿缺失**：见 §3.3。`D-P01` 裁定前 VMI 收货不能通过权威结账。
+3. **VMI 结算机制（账单 / 付款 / 结算数量口径）与物权释放**：`D-P01` / `VMI-05` 仍然开放；本轮只闭合了收货与消耗两处的总账结果（§31.23），`D-P01` 落地时**必须**一并处置「结算后消耗」与「消耗对方科目归属」两个子题（§31.23.5）。
 4. **步进调拨「退回来源仓」入库腿当前无 HTTP 路由**（`returnToSource` 为 zero-caller）：
    本轮的自持计值修复是**预防性**的（Requirement §32.18 §32.18.4 第 1 项）。
 5. **既有违规手工凭证不得再被冲销或改分录**（Requirement §35.13 `AA-VAL-12` 能力收缩）：
@@ -135,7 +138,7 @@ OUTSOURCING_GL_VOUCHER=Dr 1406 / Cr 1403
 ASSEMBLY_INBOUND_LEG=VALUED(+1381 = 组件出库账面价)
 LEGACY_UNVALUED_MOVEMENTS=0
 MANUAL_VOUCHER_GUARD=409 MANUAL_VOUCHER_CANONICAL_SUBJECT + 零副作用
-AUTHORITATIVE_CLOSE=PASS(清库重播种后差额 0；VMI 收货流程因缺总账应付腿仍不能结账，见 §3.3)
+AUTHORITATIVE_CLOSE=PASS(清库重播种后差额 0；VMI 收货与消耗的总账接线已由 §31.23 闭合)
 CUSTOMER_ENV=RESET_AND_RESEEDED(424 表 + 1 视图 + 5 触发器；DIFF=0；LEGACY=0)
 DEMO_ACCOUNTS=6(口令已重置，登录实测 200)；ADMIN_PASSWORD=客户原值(未改)
 VMI_GL_LEG=MISSING(开放项，绑定 D-P01)

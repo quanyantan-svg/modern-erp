@@ -2920,3 +2920,58 @@ canonical 写入器的幂等键 `OUTSOURCING_BACKFLUSH:{receiptId}:{materialId}:
 Requirement §31.22：`APPROVED` → `IMPLEMENTED`（2026-11-18）；
 本节 Design：`APPROVED` → `IMPLEMENTED`（2026-11-18）。
 真实 MySQL 连接与目标环境部署、Acceptance / Freeze 签发**待本轮定向验收后**由业务所有者执行。
+
+### 26.44 VMI 收货与消耗的总账接线设计（2026-11-18；`APPROVED` → `IMPLEMENTED`）
+
+> **授权来源**：业务所有者 2026-11-18「现在修复这个真实缺陷 …」并裁定 VMI **物权在收货时转移**。
+> 对应 Requirement §31.23（`PRC-VGL-01..08`）。
+>
+> **未授权**：真实 MySQL 的结构变更（本节**无** schema 变更）、Manual Closure 与 Release Readiness。
+
+#### 26.44.1 分录映射
+
+| 事件 | 分录 | 金额 | 凭证 `source_type` | 应付侧 |
+|---|---|---|---|---|
+| VMI 收货生效 | 借 `<该货品的存货角色>` / 贷 `ACCOUNTS_PAYABLE` | `V`（实际写入权威估值流水的价值） | `VMI_RECEIPT` | `recognizeFinanceExposure(side:'AP', recognitionMode:DIRECT)` → FINAL 开项 |
+| VMI 消耗 | 借 `ACCOUNTS_PAYABLE` / 贷 `<该货品的存货角色>` | `V`（本次消耗的权威账面价值） | `VMI_CONSUMPTION` | `applyCreditAdjustment(side:'AP', sourceType:'VMI_CONSUMPTION')` 冲减开项 |
+
+- 存货角色由既有 canonical 推导 `inventoryAccountRole(db, productId)`（按
+  `products.inventory_classification` → `RAW_MATERIAL_INVENTORY` / `FINISHED_GOODS_INVENTORY` /
+  `OTHER_INVENTORY`），**不**硬编码科目号。
+- 应付侧**只**用 Finance Operations 域的既有 canonical 原语（`recognizeFinanceExposure` /
+  `applyCreditAdjustment`），**不**直接写 `account_payables`。
+
+#### 26.44.2 调用与数据流
+
+```text
+VMI 收货确认 (procurement-vmi.js::confirmVmiReceipt)
+  ├─ applyInventoryMutation(IN)                 既有：物理位置
+  ├─ receivePositiveSourceValue(...)            既有（§27.63）：写入权威估值流水
+  ├─ recognizeFinanceExposure(AP, DIRECT)       新增：FINAL 应付开项
+  └─ createSystemVoucher(VMI_RECEIPT)          新增：借 存货 / 贷 应付
+
+VMI 消耗 (procurement-vmi.js::createVmiConsumption)
+  ├─ applyInventoryMutation(OUT)                既有：物理位置 + 发出价值
+  ├─ applyCreditAdjustment(AP)                  新增：冲减应付开项
+  └─ createSystemVoucher(VMI_CONSUMPTION)       新增：借 应付 / 贷 存货
+```
+
+#### 26.44.3 事务、幂等、错误、审计与兼容
+
+- **事务**：两个事件都在既有 `transaction(db, …)` 内；凭证、估值流水、应付开项同生共死
+  （`PRC-VGL-05`）。
+- **幂等**：凭证靠 `createSystemVoucher` 的 `(voucher_origin, source_type, source_id)` 唯一；
+  应付冲减靠 `applyCreditAdjustment` 的 `(side, source_type, source_id)` 唯一 ✓。
+- **错误**：应付开项缺失 → 409 `VMI_PAYABLE_OPEN_ITEM_MISSING`；余额不足 → 409
+  `VMI_PAYABLE_BALANCE_INSUFFICIENT`（**不得**部分冲减）；期间闸门不满足 → canonical 期间错误。
+- **审计**：`recognizeFinanceExposure` 与 `applyCreditAdjustment` 自带审计行；VMI 既有审计事件不变。
+- **Schema**：**无变更、无 migration**。
+- **兼容性与能力收缩**：期间闸门扩展到应付轴（`PRC-VGL-08`）；VMI 的数量、身份、协议绑定、
+  容量守卫、状态机与 API 契约**全部不变**（`PRC-VGL-07`）。
+
+#### 26.44.4 测试与状态
+
+- **合同测试**：`server/vmi-gl-integration.test.js`（新增，登记 FULL）——收货的凭证与 FINAL 应付开项、
+  消耗的对称凭证与开项冲减、两个权威对账检查在两个时点均为 0、余额不足固定拒绝。
+- **状态**：Requirement §31.23 `APPROVED`（2026-11-18）；本节 Design `APPROVED`（同日）；
+  Implementation **已实施**（2026-11-18）。真实 MySQL 复核、Acceptance / Freeze 签发、发布与部署**待执行**。

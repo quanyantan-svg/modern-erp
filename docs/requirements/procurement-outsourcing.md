@@ -1565,3 +1565,74 @@ M1-Core §7.5 对 `M1C-G03/G06` 的首期合同保留**数量归属守恒**、�
    中间态。若客户长期不过账加工费账单，`6408` 将长期挂贷方余额。是否需要额外健康检查项
    （如 `OUTSOURCING_FEE_SUSPENSE`）留待后续裁定，本节**不**新增检查项。
 4. **委外发出商品的期末结转**：委外成品入库后 `1406` 的余额如何在期末与销售成本对账，本节未覆盖。
+
+### 31.23 VMI 收货与消耗的总账接线合同（2026-11-18；`APPROVED` → `IMPLEMENTED`）
+
+> **用途 / Owner / 状态 / 权威关系**：本节固化「VMI 收货只入存货、不过账总账」这一**权威结账
+> BLOCKING 残余**的会计合同与边界。Owner 为 Procurement & Outsourcing Domain Owner；总账凭证生产方为
+> Accounting & Analytics 域的 canonical `createSystemVoucher`，应付开项与核销经 Finance Operations
+> 域的 canonical 结算原语。生命周期状态 `IMPLEMENTED`（2026-11-18：合同已获批准并按已批准合同实施，
+> **尚未验收**）。对应 Design 见 `docs/design/procurement-outsourcing.md` §26.44。
+> 本节**不取代** §31.1～§31.22 的任何正文。
+>
+> **授权来源**：业务所有者 2026-11-18「现在修复这个真实缺陷 修复完成后将最新项目进行部署 然后交付
+> 客户测试」，并就 VMI 的物权时点作出裁定：**A —— 物权在收货时转移**（收货即确认存货与应付；
+> 消耗时对称冲销）。
+>
+> **本节不裁定**：`D-P01` 的其余子题（结算窗口、结算数量口径、结算账单与付款机制）与
+> `VMI-05`（物权释放）继续开放；本节只定「收货与消耗」两处的总账结果。
+
+#### 31.23.1 事实基础（客户测试环境真实 MySQL 8 实测，2026-11-18）
+
+| # | 事实 | 证据 |
+|---|---|---|
+| V1 | VMI 收货只产生**存货入账**（价值子账 + 账面价），**没有任何总账分录** | 客户环境实测：一次 100,000 分的 VMI 收货后，`INVENTORY_VALUE_TO_GL` 差 **−100,000**，`LEGACY_UNVALUED_MOVEMENTS` 为 0 |
+| V2 | 缺应付侧，总账无法配平 | 存货入账必须有对方科目；VMI 收货的对方是**对供应商的应付**（物权在收货时转移 → 我们拥有这批货） |
+| V3 | 收货的价值来源已有权威口径 | `server/modules/procurement-vmi.js` 的 `receivePositiveSourceValue`：该仓位上产品的既有账面单价，无则冻结标准制造成本 |
+| V4 | 消耗同样只改子账 | `applyInventoryMutation` 的单腿 OUT 分支发出价值（`issueValue`），总账侧无分录 |
+| V5 | 应付开项与核销有 canonical 原语 | `recognizeFinanceExposure`（DIRECT 模式 → FINAL 开项）与 `applyCreditAdjustment`（冲减开项）；`AP_TO_GL` 只认 `item_class='SOURCE' AND item_kind='FINAL' AND conversion_state='OPEN'` 的开项 |
+| V6 | 本轮之前的 VMI 收货无法通过权威结账 | 客户环境演示数据因此**只建 VMI 协议、不建 VMI 收货**（避免给客户留下必然失配的案例） |
+
+#### 31.23.2 合同条款
+
+| ID | 条款 |
+|---|---|
+| `PRC-VGL-01` | **物权在收货时转移**：VMI 收货生效**必须**同时确认**存货**与**应付**——`借 <该货品的存货角色> V` / `贷 应付账款(2202) V`。V 必须是该次收货**实际写入权威估值流水**的价值（`receivePositiveSourceValue` 的返回值），**不得**用标准成本或估算值替代。 |
+| `PRC-VGL-02` | 应付开项**必须**经 canonical 识别通道建立（`recognizeFinanceExposure`，`recognitionMode = DIRECT` → `item_kind='FINAL'`），使 `AP_TO_GL` 的子账侧与总账侧同域；**不得**直接写 `account_payables` 行。 |
+| `PRC-VGL-03` | 收货凭证**必须**是**一张** canonical 系统凭证（`voucher_origin='SYSTEM'`，`source_type='VMI_RECEIPT'`，`source_id=收货单 id`），借贷**必须**相等；金额为 0（该货品**未进入估值口径**）时**不**产生凭证，也**不**产生应付开项。 |
+| `PRC-VGL-04` | **消耗对称冲销**：VMI 消耗**必须**产生 `借 应付账款(2202) V` / `贷 <该货品的存货角色> V`，并按本次消耗的**权威账面价值**冲减该收货的应付开项（`applyCreditAdjustment`，`source_type='VMI_CONSUMPTION'`）。应付开项余额**不足**时固定拒绝（`VMI_PAYABLE_BALANCE_INSUFFICIENT`），**不得**产生只减一部分的半成品账。 |
+| `PRC-VGL-05` | 凭证**必须**与对应的库存位移、估值流水、应付开项处于**同一事务**：任一环节失败**必须**整体回滚，**不得**留下「存货入账了、应付没确认」或反之的半成品。 |
+| `PRC-VGL-06` | **幂等**：同一收货 / 消耗重复执行**不得**产生第二张系统凭证（`createSystemVoucher` 以 `(voucher_origin, source_type, source_id)` 唯一）；消耗的应付冲减**必须**以 `(side, source_type, source_id)` 幂等（`applyCreditAdjustment` 的既有语义）。 |
+| `PRC-VGL-07` | **不改变** VMI 的数量、身份、协议绑定、容量守卫（`VMI_CONSUMPTION_CAPACITY_EXCEEDED` / `VMI_CONSUMPTION_POSITION_INSUFFICIENT`）、状态机与 API 契约；本节**只**新增总账与应付结果。 |
+| `PRC-VGL-08` | **期间闸门收窄（能力收缩，必须登记）**：VMI 收货与消耗现在**必须**满足 canonical 应付动作的期间闸门（`FINANCE_AP_BILL` 轴：应付 / 存货 / 法定三轴）。此前这两条路径只受存货轴约束。该收窄与采购入库 / 采购收货的既有口径一致。 |
+
+#### 31.23.3 明确不在本节范围内的事项
+
+1. **VMI 结算账单与付款机制**、**结算窗口**、**可结算数量口径**：属 `D-P01`，本节**不**裁定。
+2. **VMI 物权释放**（`transferVmiOwnership`）：继续固定拒绝（`VMI_SETTLEMENT_POLICY_PENDING`），本节**不**改动。
+3. **VMI 收货的跟踪身份**：VMI 收货仍**不**登记 LOT / SERIAL 身份，跟踪口径货品的入库价值仍无法归属
+   （Inventory & Warehouse 域 §32.18 开放项 1）——本节**不**跨域补齐。
+4. **历史 VMI 收货的补记**：本轮**不追认、不补记**任何历史凭证。
+
+#### 31.23.4 可验收条件
+
+| ID | 验收条件 |
+|---|---|
+| `PRC-VGL-AC-01` | VMI 收货生效后存在**一张** `source_type='VMI_RECEIPT'` 的系统凭证，分录为「借 该货品的存货角色 = 贷 应付账款(2202)」，金额等于该次收货的权威入库价值。 |
+| `PRC-VGL-AC-02` | 收货后存在一条该收货的 `FINAL` 应付开项，`open_amount_cents` 等于该次收货的权威入库价值。 |
+| `PRC-VGL-AC-03` | 收货后 `AP_TO_GL` 与 `INVENTORY_VALUE_TO_GL` 的差额**均为 0**。 |
+| `PRC-VGL-AC-04` | VMI 消耗后存在**一张** `source_type='VMI_CONSUMPTION'` 的系统凭证，分录为「借 应付账款(2202) = 贷 该货品的存货角色」；该收货的应付开项 `open_amount_cents` 等于「收货价值 − 消耗价值」。 |
+| `PRC-VGL-AC-05` | 消耗后 `AP_TO_GL` 与 `INVENTORY_VALUE_TO_GL` 的差额**均为 0**。 |
+| `PRC-VGL-AC-06` | 应付开项余额不足时消耗固定拒绝（`VMI_PAYABLE_BALANCE_INSUFFICIENT`），且**不**产生凭证、不产生核销、不改库存。 |
+| `PRC-VGL-AC-07` | 回归：VMI 既有测试（数量、身份、协议绑定、容量守卫、状态机）全部保持通过。 |
+
+#### 31.23.5 未解决矛盾（需业务所有者裁定，本节不自行决定）
+
+1. **结算后消耗的应付处理**：若将来应付开项已被结算账单 / 付款核销（`D-P01` 实现后），
+   本节的「消耗对称冲销」将没有可冲减的余额。当前 VMI **没有**任何结算路径（物权释放固定拒绝），
+   故该情形暂不可达；`D-P01` 落地时**必须**一并处置。
+2. **消耗的对方科目归属**：本节按裁定 A 把消耗的对方定为应付账款；「消耗即结转生产成本」是另一种
+   读法（对方为生产成本 / 在制），属 `D-P01` 的结算口径，留待裁定。
+
+**Requirement 状态：`APPROVED`（2026-11-18，业务所有者授权并裁定物权时点）。Design §26.44：`APPROVED`（同日）。
+Implementation：已实施（2026-11-18）；真实 MySQL 复核、Acceptance / Freeze 签发、发布与部署**待执行**。**

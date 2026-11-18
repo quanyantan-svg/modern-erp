@@ -432,6 +432,10 @@ const FULL = [
   // 单腿入库异动的自持计值（Requirement §32.18 `IW-VAL-05` 修订清单）：组装成品入库腿、
   // 拆卸组件回收入库腿、步进调拨入库腿、VMI 收货入库腿的价值来源与估值池数量守恒。
   'server/inventory-single-leg-valuation.test.js',
+  // VMI 收货与消耗的总账接线（Requirement §31.23 `PRC-VGL-01..06`）：物权在收货时转移 ——
+  // 收货确认存货与应付（Dr 存货 / Cr 应付账款）、消耗对称冲销；AP_TO_GL 与
+  // INVENTORY_VALUE_TO_GL 在收货后与消耗后均为 0。
+  'server/vmi-gl-integration.test.js',
   // 存货与成本科目的手工凭证守卫 + GRNI 检查口径统一（F-06 附属；Requirement §35.12
   // `AA-VAL-01..04`）：受控科目 409 且零副作用、非受控科目仍可用、GRNI 三处实现同口径、
   // 存货价值对账两侧同域。

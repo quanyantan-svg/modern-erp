@@ -7219,9 +7219,10 @@ Manual Closure 与 Release Readiness **未签发**。
 2. **VMI 收货不登记 LOT / SERIAL 身份**：跟踪口径货品的入库价值无法归属到具体身份（§32.18 开放项 1）。
 3. **步进调拨「退回来源仓」入库腿当前无 HTTP 路由**（zero-caller），本轮修复是预防性的（§32.18 范围外 1）。
 4. **既有违规手工凭证不得再被冲销或改分录**（§35.13 `AA-VAL-12` 能力收缩；客户环境实测该类凭证为 0）。
-5. **VMI 收货只有存货入账、没有对应的总账应付腿**（2026-11-18 客户环境实测新增）：差额恒等于每次 VMI
-   收货的账面价值（实测 100,000 分/次）。该腿的确认时点属 `D-P01` 未决范围，**不**自行补；
-   **在 D-P01 裁定前，VMI 收货流程不能通过权威结账**。演示数据因此只建 VMI 协议、不建 VMI 收货。
+5. **VMI 收货的总账对方腿**（2026-11-18 实测新增 → 同日闭合）：业务所有者裁定 **A「物权在收货时
+   转移」**，由 Procurement & Outsourcing 域 §31.23 `PRC-VGL-01..08` / Design §26.44 实施
+   （收货 `Dr 存货 / Cr 应付账款`；消耗 `Dr 应付账款 / Cr 存货`）。`D-P01` 的其余子题
+   （结算窗口、结算数量口径、结算账单与付款机制）与 VMI 物权释放**仍然开放**。
 6. 客户环境已**清库重播种**（2026-11-18 晚，§82.8）：424 表 + 1 视图 + 5 触发器；权威结账差额 **0**、
    未估值移动 **0**；`admin` 口令沿用客户原值未改；6 个角色演示账号口令已重置为交付用已知值。
    客户环境尚未配置 TLS（仅 HTTP 80）与自动备份 timer。
@@ -7270,5 +7271,25 @@ CUSTOMER_ENV=RESET_AND_RESEEDED(424 表 + 1 视图 + 5 触发器)
 AUTHORITATIVE_CLOSE_GAP=0；LEGACY_UNVALUED_MOVEMENTS=0
 OUTSOURCING_GL_VOUCHER=Dr 1406 200000 / Cr 1403 200000
 DEMO_ACCOUNTS=6(口令已重置，登录实测 200)；ADMIN_PASSWORD=客户原值(未改)
-VMI_GL_LEG=MISSING(开放项，绑定 D-P01；VMI 收货流程在裁定前不能通过权威结账)
+VMI_GL_LEG=CLOSED(§31.23，裁定 A「物权在收货时转移」)；VMI_SETTLEMENT=OPEN(绑定 D-P01)
+```
+
+### 82.9 VMI 总账接线闭合（§31.23）与 v1.7.0-rc.4 交付（2026-11-18 夜）
+
+业务所有者 2026-11-18「现在修复这个真实缺陷 修复完成后将最新项目进行部署 然后交付客户测试」，
+并裁定 VMI **物权在收货时转移**（A）。
+
+| 项 | 结果 |
+|---|---|
+| 合同 | Procurement & Outsourcing 域 Requirement §31.23 `PRC-VGL-01..08` / Design §26.44；Inventory & Warehouse 域 §32.18 开放项 3 **闭合** |
+| 实现 | `server/modules/procurement-vmi.js`：收货 `Dr 存货 / Cr 应付账款`（+ `recognizeFinanceExposure` DIRECT 模式的 FINAL 应付开项）；消耗 `Dr 应付账款 / Cr 存货`（+ `applyCreditAdjustment` 冲减开项）；余额不足固定 409 |
+| 合同测试 | `server/vmi-gl-integration.test.js`（登记 FULL）：收货后与消耗后 `AP_TO_GL` 与 `INVENTORY_VALUE_TO_GL` **均为 0** |
+| 能力收缩 | VMI 收货与消耗的期间闸门扩展到应付轴（`FINANCE_AP_BILL`：应付 / 存货 / 法定），与采购入库口径一致（§31.23 `PRC-VGL-08`） |
+| 仍然开放 | `D-P01` 的结算窗口 / 结算数量口径 / 结算账单与付款机制；`VMI-05` 物权释放；VMI 收货的跟踪身份（§32.18 开放项 1） |
+
+```text
+VMI_GL_INTEGRATION=CLOSED(§31.23 PRC-VGL-01..08，裁定 A「物权在收货时转移」)
+VMI_RECEIPT_AP=FINAL 开项；VMI_CONSUMPTION=对称冲销 + 开项冲减
+AP_TO_GL=0(收货后与消耗后)；INVENTORY_VALUE_TO_GL=0(收货后与消耗后)
+VMI_SETTLEMENT=OPEN(D-P01)；VMI_OWNERSHIP_RELEASE=OPEN(VMI-05)
 ```

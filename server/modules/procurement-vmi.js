@@ -5,7 +5,10 @@ import {
   HttpError, allow, allowAny, assertAllowedFields, readJson, send,
 } from '../lib/http.js';
 import { applyInventoryMutation } from '../lib/inventory-mutation.js';
-import { receivePositiveSourceValue } from './financial-inventory.js';
+import { createSystemVoucher, inventoryAccountRole, receivePositiveSourceValue } from './financial-inventory.js';
+import { recognizeFinanceExposure } from './finance-recognition.js';
+import { RECOGNITION_MODES } from './finance-recognition-policy.js';
+import { applyCreditAdjustment } from './settlement-core.js';
 import { listCanonicalInventoryPositions } from '../lib/inventory-compat-read.js';
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 import { assertSupplierQualification } from './procurement-sourcing.js';
@@ -227,8 +230,9 @@ export async function confirmVmiReceipt(db, req, res, actor, receiptId) {
     // 只有移动加权估值口径能在收货时确定价值：跟踪口径需要身份级分配，而 VMI 收货
     // 目前不登记身份（开放项，见 Requirement §32.18）。
     const vmiProduct = db.prepare('SELECT tracking_policy, valuation_method FROM products WHERE id=?').get(locked.product_id);
+    let receivedValueCents = 0;
     if (vmiProduct?.tracking_policy === 'NONE' && vmiProduct?.valuation_method === 'MOVING_AVERAGE') {
-      receivePositiveSourceValue(db, {
+      const written = receivePositiveSourceValue(db, {
         businessDate: locked.received_date || now.slice(0, 10),
         productId: locked.product_id,
         warehouseId: locked.warehouse_id,
@@ -238,6 +242,37 @@ export async function confirmVmiReceipt(db, req, res, actor, receiptId) {
         sourceId: locked.id,
         sourceItemId: locked.id,
         inventoryTransactionId: applied.movements.find((movement) => movement.direction === 'IN')?.transactionId || null,
+      });
+      receivedValueCents = written.reduce((sum, movement) => sum + Number(movement.valueDeltaCents || 0), 0);
+    }
+    // 总账接线（Requirement §31.23 `PRC-VGL-01..04`）：业务所有者 2026-11-18 裁定
+    // **物权在收货时转移** —— 收货即确认存货与应付（`Dr 存货 / Cr 应付账款`）。
+    // 应付开项经 canonical 识别通道建立（DIRECT 模式 → FINAL 开项），使
+    // `AP_TO_GL` 的子账侧与总账侧同域；否则 VMI 收货只入存货、不入应付，
+    // 总账与价值子账必然失配（差额 = 每次收货的账面价值）。
+    if (receivedValueCents > 0) {
+      recognizeFinanceExposure(db, {
+        side: 'AP',
+        source: { sourceType: 'VMI_RECEIPT', sourceId: locked.id, sourceNo: locked.receipt_no },
+        invoice: null,
+        recognitionMode: RECOGNITION_MODES.DIRECT,
+        amountCents: receivedValueCents,
+        businessDate: locked.received_date || now.slice(0, 10),
+        partyId: locked.supplier_id,
+        paymentTermsDays: 0,
+        actorId: actor.id,
+        createdAt: now,
+      });
+      createSystemVoucher(db, {
+        sourceType: 'VMI_RECEIPT',
+        sourceId: locked.id,
+        businessDate: locked.received_date || now.slice(0, 10),
+        actorId: actor.id,
+        entries: [
+          { role: inventoryAccountRole(db, locked.product_id), direction: 'DEBIT', amountCents: receivedValueCents, summary: 'VMI 收货' },
+          { role: 'ACCOUNTS_PAYABLE', direction: 'CREDIT', amountCents: receivedValueCents, summary: 'VMI 应付' },
+        ],
+        remark: `VMI 收货 ${locked.receipt_no}`,
       });
     }
     db.prepare('UPDATE vmi_receipts SET business_status=?,updated_at=? WHERE id=?').run('CONFIRMED', now, receiptId);
@@ -317,6 +352,39 @@ export async function createVmiConsumption(db, req, res, actor) {
     });
     db.prepare(`INSERT INTO vmi_consumptions(id,consumption_no,vmi_receipt_id,quantity,consumed_date,destination,remark,business_status,creator_id,created_at,updated_at)
       VALUES(?,?,?,?,?,?,?,'CONFIRMED',?,?,?)`).run(id, consumptionNo, locked.id, quantity, consumedDate, body.destination || 'PRODUCTION', body.remark || '', actor.id, now, now);
+    // 总账接线（Requirement §31.23 `PRC-VGL-05..06`）：消耗 → `Dr 应付账款 / Cr 存货`
+    // （对称冲销）。应付开项按本次消耗的**权威账面价值**冲减，
+    // 使 `AP_TO_GL` 与 `INVENTORY_VALUE_TO_GL` 同时保持 0。
+    const consumedValueCents = -Number(db.prepare(
+      "SELECT COALESCE(SUM(value_delta_cents),0) n FROM inventory_valuation_movements WHERE status='POSTED' AND source_type='VMI_CONSUMPTION' AND source_id=?",
+    ).get(id).n);
+    if (consumedValueCents > 0) {
+      const openItem = db.prepare(
+        "SELECT id, open_amount_cents FROM account_payables WHERE source_type='VMI_RECEIPT' AND source_id=? AND item_class='SOURCE' AND item_kind='FINAL' AND conversion_state='OPEN'",
+      ).get(locked.id);
+      if (!openItem) {
+        throw new HttpError(409, '该 VMI 收货没有可冲减的应付开项', { code: 'VMI_PAYABLE_OPEN_ITEM_MISSING' });
+      }
+      if (Number(openItem.open_amount_cents) < consumedValueCents) {
+        throw new HttpError(409, '应付开项余额不足以冲减本次消耗', { code: 'VMI_PAYABLE_BALANCE_INSUFFICIENT' });
+      }
+      applyCreditAdjustment(db, {
+        side: 'AP', adjustmentType: 'OTHER', sourceType: 'VMI_CONSUMPTION', sourceId: id, sourceNo: consumptionNo,
+        targetOpenItemId: openItem.id, partyId: locked.supplier_id,
+        businessDate: consumedDate, amountCents: consumedValueCents, actorId: actor.id, createdAt: now,
+      });
+      createSystemVoucher(db, {
+        sourceType: 'VMI_CONSUMPTION',
+        sourceId: id,
+        businessDate: consumedDate,
+        actorId: actor.id,
+        entries: [
+          { role: 'ACCOUNTS_PAYABLE', direction: 'DEBIT', amountCents: consumedValueCents, summary: 'VMI 消耗核销' },
+          { role: inventoryAccountRole(db, locked.product_id), direction: 'CREDIT', amountCents: consumedValueCents, summary: 'VMI 消耗发出' },
+        ],
+        remark: `VMI 消耗 ${consumptionNo}`,
+      });
+    }
     saveIdempotency(db, VMI_CONSUMPTION_OPERATION, locked.id, idempotencyKey, fingerprint, { id, consumptionNo });
     audit(db, actor.id, 'CREATE', 'VMI_CONSUMPTION', id, consumptionNo);
   });
