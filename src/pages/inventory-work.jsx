@@ -45,6 +45,7 @@ import {
 import {
   effectiveInventoryWorkTab, permittedInventoryWorkTabs,
 } from '../lib/inventoryWorkTabs.js';
+import { yuanToCents } from '../lib/money.js';
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
@@ -2131,13 +2132,20 @@ export function InventoryInitialization({ user, notify, references }) {
 }
 
 function InventoryOpeningEditor({ warehouses, products, notify, onClose, onSaved }) {
-  const [form, setForm] = useState({ businessDate: todayIso(), notes: '', items: [{ productId: '', warehouseId: '', quantity: '' }] });
+  const [form, setForm] = useState({ businessDate: todayIso(), notes: '', items: [{ productId: '', warehouseId: '', quantity: '', unitCost: '' }] });
   const update = (index, patch) => setForm({ ...form, items: form.items.map((row, i) => (i === index ? { ...row, ...patch } : row)) });
   const save = async (event) => {
     event.preventDefault();
     const items = form.items
       .filter((row) => row.productId && row.warehouseId && row.quantity !== '')
-      .map((row) => ({ productId: row.productId, warehouseId: row.warehouseId, quantity: Number(row.quantity) }));
+      .map((row) => ({
+        productId: row.productId,
+        warehouseId: row.warehouseId,
+        quantity: Number(row.quantity),
+        // 期初必须计价（F-02）：没有成本的单据确认后永远停在未估值状态，会永久
+        // 阻断权威结账。成本以元录入，按精确十进制换算成整数分。
+        unitCostCents: yuanToCents(row.unitCost),
+      }));
     if (!items.length) { notify('请至少填写一行有效期初明细', 'error'); return; }
     try {
       await api('/api/inventory/opening-documents', {
@@ -2157,7 +2165,7 @@ function InventoryOpeningEditor({ warehouses, products, notify, onClose, onSaved
       <section className="inv-work-subsection">
         <header className="inv-work-section__head">
           <h4>期初明细</h4>
-          <button type="button" className="secondary" onClick={() => setForm({ ...form, items: [...form.items, { productId: '', warehouseId: '', quantity: '' }] })}>添加一行</button>
+          <button type="button" className="secondary" onClick={() => setForm({ ...form, items: [...form.items, { productId: '', warehouseId: '', quantity: '', unitCost: '' }] })}>添加一行</button>
         </header>
         {form.items.map((row, index) => (
           <article key={index} className="inv-work-line">
@@ -2166,6 +2174,7 @@ function InventoryOpeningEditor({ warehouses, products, notify, onClose, onSaved
               <InventoryWorkSelect label="货品" required value={row.productId} onChange={(v) => update(index, { productId: v })} options={productOptions(products)} />
               <InventoryWorkSelect label="仓库" required value={row.warehouseId} onChange={(v) => update(index, { warehouseId: v })} options={warehouseOptions(warehouses)} />
               <InventoryWorkInput label="期初数量" type="number" min="0.01" step="0.01" required value={row.quantity} onChange={(v) => update(index, { quantity: v })} />
+              <InventoryWorkInput label="期初成本单价（元）" type="number" min="0.01" step="0.01" required value={row.unitCost} onChange={(v) => update(index, { unitCost: v })} />
             </div>
           </article>
         ))}
