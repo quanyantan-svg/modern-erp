@@ -38,7 +38,7 @@ import {
 import { Icon } from '../components/icons.jsx';
 import TrackingAllocationEditor from '../components/TrackingAllocationEditor.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
-import { withProductTracking } from '../lib/tracking.js';
+import { trackingPolicyOf, withProductTracking } from '../lib/tracking.js';
 import {
   inventoryWorkReferenceAccess, loadInventoryWorkReferences,
 } from '../lib/inventoryWorkReferences.js';
@@ -2111,6 +2111,7 @@ export function InventoryInitialization({ user, notify, references }) {
       </InventoryWorkState>
       {creating && (
         <InventoryOpeningEditor
+          user={user}
           warehouses={warehouses}
           products={products}
           notify={notify}
@@ -2131,22 +2132,86 @@ export function InventoryInitialization({ user, notify, references }) {
   );
 }
 
-function InventoryOpeningEditor({ warehouses, products, notify, onClose, onSaved }) {
-  const [form, setForm] = useState({ businessDate: todayIso(), notes: '', items: [{ productId: '', warehouseId: '', quantity: '', unitCost: '' }] });
+function InventoryOpeningEditor({ user, warehouses, products, notify, onClose, onSaved }) {
+  // F-05 —— 期初跟踪身份（Requirement §32.15 IW-OPEN-04）。
+  // 服务端要求跟踪物料的期初行引用**已存在**的批次 / 序列号身份；期初是这些身份的第一次
+  // 事实，所以登记入口由期初编辑器自己提供：选已有身份，或直接登记一个新批号 / 序列号。
+  const [form, setForm] = useState({ businessDate: todayIso(), notes: '', items: [{ productId: '', warehouseId: '', quantity: '', unitCost: '', lotId: '', serialId: '' }] });
+  const [identities, setIdentities] = useState({});
+  const [drafts, setDrafts] = useState({});
   const update = (index, patch) => setForm({ ...form, items: form.items.map((row, i) => (i === index ? { ...row, ...patch } : row)) });
+  const policyOf = (productId) => trackingPolicyOf(products.find((product) => product.id === productId));
+  const canReadIdentities = can(user, 'INVENTORY_VIEW');
+
+  // 已有身份主档按货品懒加载；无权读取时一次请求都不发（Requirement §32.13 IW-EXPOSURE-02）。
+  const loadIdentities = async (productId, policy) => {
+    if (!canReadIdentities || !productId || !['LOT', 'SERIAL'].includes(policy)) return;
+    if (identities[productId]) return;
+    const endpoint = policy === 'LOT' ? '/api/inventory-lots' : '/api/inventory-serials';
+    try {
+      const data = await api(`${endpoint}?productId=${encodeURIComponent(productId)}`);
+      const rows = policy === 'LOT' ? (data.lots || []) : (data.serials || []);
+      setIdentities((current) => ({ ...current, [productId]: rows }));
+    } catch {
+      // 无权或为空：行内不提供可选身份，但「登记新身份」仍然可用。
+    }
+  };
+
+  const onProductChange = (index, productId) => {
+    const policy = policyOf(productId);
+    update(index, { productId, lotId: '', serialId: '', quantity: policy === 'SERIAL' ? '1' : form.items[index].quantity });
+    void loadIdentities(productId, policy);
+  };
+
+  const registerIdentity = async (index) => {
+    const row = form.items[index];
+    const policy = policyOf(row.productId);
+    const code = String(drafts[index]?.code || '').trim();
+    if (!code) { notify(policy === 'LOT' ? '请输入批号' : '请输入序列号', 'error'); return; }
+    try {
+      const result = await api('/api/inventory/opening-identities', {
+        method: 'POST',
+        body: { productId: row.productId, kind: policy, code },
+      });
+      update(index, policy === 'LOT' ? { lotId: result.id, serialId: '' } : { serialId: result.id, lotId: '' });
+      // 刚登记的身份必须立刻出现在「已有身份」里，否则下拉框选不中它。
+      setIdentities((current) => {
+        const list = current[row.productId] || [];
+        if (list.some((item) => item.id === result.id)) return current;
+        const registered = policy === 'LOT'
+          ? { id: result.id, lotCode: result.code }
+          : { id: result.id, serialNumber: result.code };
+        return { ...current, [row.productId]: [...list, registered] };
+      });
+      setDrafts((current) => ({ ...current, [index]: { code: '' } }));
+      const label = policy === 'LOT' ? '批号' : '序列号';
+      notify(result.existing ? `${label} ${result.code} 已存在，已直接引用` : `${label} ${result.code} 已登记`);
+    } catch (e) { notify(e.message || '身份登记失败', 'error'); }
+  };
+
   const save = async (event) => {
     event.preventDefault();
-    const items = form.items
-      .filter((row) => row.productId && row.warehouseId && row.quantity !== '')
-      .map((row) => ({
+    const rows = form.items.filter((row) => row.productId && row.warehouseId && row.quantity !== '');
+    if (!rows.length) { notify('请至少填写一行有效期初明细', 'error'); return; }
+    const items = [];
+    for (const row of rows) {
+      const policy = policyOf(row.productId);
+      if (policy === 'SERIAL' && Number(row.quantity) !== 1) { notify('序列号物料每次只能期初 1 件', 'error'); return; }
+      if (policy !== 'NONE' && !row.lotId && !row.serialId) {
+        notify(policy === 'LOT' ? '批次物料必须登记批号' : '序列号物料必须登记序列号', 'error');
+        return;
+      }
+      items.push({
         productId: row.productId,
         warehouseId: row.warehouseId,
         quantity: Number(row.quantity),
         // 期初必须计价（F-02）：没有成本的单据确认后永远停在未估值状态，会永久
         // 阻断权威结账。成本以元录入，按精确十进制换算成整数分。
         unitCostCents: yuanToCents(row.unitCost),
-      }));
-    if (!items.length) { notify('请至少填写一行有效期初明细', 'error'); return; }
+        ...(row.lotId ? { lotId: row.lotId } : {}),
+        ...(row.serialId ? { serialId: row.serialId } : {}),
+      });
+    }
     try {
       await api('/api/inventory/opening-documents', {
         method: 'POST',
@@ -2165,19 +2230,47 @@ function InventoryOpeningEditor({ warehouses, products, notify, onClose, onSaved
       <section className="inv-work-subsection">
         <header className="inv-work-section__head">
           <h4>期初明细</h4>
-          <button type="button" className="secondary" onClick={() => setForm({ ...form, items: [...form.items, { productId: '', warehouseId: '', quantity: '', unitCost: '' }] })}>添加一行</button>
+          <button type="button" className="secondary" onClick={() => setForm({ ...form, items: [...form.items, { productId: '', warehouseId: '', quantity: '', unitCost: '', lotId: '', serialId: '' }] })}>添加一行</button>
         </header>
-        {form.items.map((row, index) => (
-          <article key={index} className="inv-work-line">
-            <header><b>第 {index + 1} 行</b><button type="button" className="ghost" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== index) })}>移除</button></header>
-            <div className="inv-work-form-grid">
-              <InventoryWorkSelect label="货品" required value={row.productId} onChange={(v) => update(index, { productId: v })} options={productOptions(products)} />
-              <InventoryWorkSelect label="仓库" required value={row.warehouseId} onChange={(v) => update(index, { warehouseId: v })} options={warehouseOptions(warehouses)} />
-              <InventoryWorkInput label="期初数量" type="number" min="0.01" step="0.01" required value={row.quantity} onChange={(v) => update(index, { quantity: v })} />
-              <InventoryWorkInput label="期初成本单价（元）" type="number" min="0.01" step="0.01" required value={row.unitCost} onChange={(v) => update(index, { unitCost: v })} />
-            </div>
-          </article>
-        ))}
+        {form.items.map((row, index) => {
+          const policy = policyOf(row.productId);
+          const known = identities[row.productId] || [];
+          const identityOptions = policy === 'LOT'
+            ? known.map((lot) => ({ value: lot.id, label: lot.lotCode }))
+            : known.map((serial) => ({ value: serial.id, label: serial.serialNumber }));
+          const identityValue = policy === 'LOT' ? row.lotId : row.serialId;
+          return (
+            <article key={index} className="inv-work-line">
+              <header><b>第 {index + 1} 行</b><button type="button" className="ghost" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== index) })}>移除</button></header>
+              <div className="inv-work-form-grid">
+                <InventoryWorkSelect label="货品" required value={row.productId} onChange={(v) => onProductChange(index, v)} options={productOptions(products)} />
+                <InventoryWorkSelect label="仓库" required value={row.warehouseId} onChange={(v) => update(index, { warehouseId: v })} options={warehouseOptions(warehouses)} />
+                <InventoryWorkInput label="期初数量" type="number" min="0.01" step="0.01" required value={row.quantity} disabled={policy === 'SERIAL'} onChange={(v) => update(index, { quantity: v })} />
+                <InventoryWorkInput label="期初成本单价（元）" type="number" min="0.01" step="0.01" required value={row.unitCost} onChange={(v) => update(index, { unitCost: v })} />
+              </div>
+              {policy === 'LOT' || policy === 'SERIAL' ? (
+                <div className="inv-work-form-grid">
+                  <InventoryWorkSelect
+                    label={policy === 'LOT' ? '已有批号' : '已有序列号'}
+                    value={identityValue}
+                    onChange={(v) => update(index, policy === 'LOT' ? { lotId: v, serialId: '' } : { serialId: v, lotId: '' })}
+                    options={identityOptions}
+                    placeholder={policy === 'LOT' ? '选择已有批号' : '选择已有序列号'}
+                  />
+                  <label className="inv-work-field">
+                    <span>{policy === 'LOT' ? '登记新批号' : '登记新序列号'}</span>
+                    <input
+                      value={drafts[index]?.code || ''}
+                      onChange={(event) => setDrafts((current) => ({ ...current, [index]: { code: event.target.value } }))}
+                      placeholder={policy === 'LOT' ? '输入批号' : '输入序列号'}
+                    />
+                    <button type="button" className="secondary" onClick={() => void registerIdentity(index)}>登记</button>
+                  </label>
+                </div>
+              ) : null}
+            </article>
+          );
+        })}
       </section>
     </InventoryWorkEditorShell>
   );

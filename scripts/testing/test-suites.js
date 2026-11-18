@@ -418,6 +418,10 @@ const FULL = [
   // 期初库存计价（F-02）：期初行必须带成本单价、确认后形成权威估值与身份级估值池、
   // 总账期初权益同步、缺成本固定拒绝、跟踪物料必须带已存在身份。
   'server/inventory-opening-cost.test.js',
+  // 期初跟踪身份的登记入口（F-05）：期初流程自己拥有身份登记、守卫是既有权限码、
+  // 同码重复登记不产生第二条身份、无权 403 且零副作用、跟踪方式不匹配固定拒绝、
+  // 端到端登记后按该身份期初并形成身份级估值池。
+  'server/inventory-opening-identity.test.js',
   // 委外跟踪物料身份（F-03）新增套件与期初计价（F-02）新增套件的 FULL 登记。
 
   // ----- V21 Inventory & Warehouse Domain Closure — Wave A foundation -----

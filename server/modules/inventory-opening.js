@@ -63,8 +63,8 @@ export function reopenInitialization(db, actor, reason) {
 }
 
 export async function createOpeningDocument(db, req, res, actor) {
-  allow(actor, 'INVENTORY_OPENING_MANAGE');
   const body = await readJson(req);
+
   assertAllowedFields(body, ['businessDate','items','notes']);
   const init = getOrCreateInitialization(db);
   if (init.status !== 'OPEN') throw new HttpError(409, `初始化状态 ${init.status}，不可录入期初`);
@@ -201,6 +201,62 @@ export function confirmOpeningDocument(db, res, actor, docId) {
     audit(db, actor.id, 'CONFIRM', 'OPENING_INVENTORY', docId, `Confirm opening ${doc.doc_no}`);
   });
   return send(res, 200, { ok: true, status: 'CONFIRMED' });
+}
+
+// F-05 —— 期初跟踪身份的登记（Requirement §32.15 `IW-OPEN-04`）。
+//
+// `IW-OPEN-04` 要求跟踪物料的期初行携带**已存在**的批次 / 序列号身份。但期初恰恰是这些
+// 身份在系统里的**第一次事实**：此前没有任何业务单据能带出它，而界面没有登记入口时，
+// 跟踪物料的期初在界面上根本录不出来（只有 API 能做）。
+//
+// 本端点是期初流程**自己**的身份登记入口：守卫是期初的既有权限码
+// `INVENTORY_OPENING_MANAGE`，不新增权限码、不改任何角色的权限集合。
+// 身份主档登记后，其投影（批次余额 / 序列号位置）仍由 canonical 位移写入器维护。
+export async function createOpeningIdentity(db, req, res, actor) {
+  allow(actor, 'INVENTORY_OPENING_MANAGE');
+  const body = await readJson(req);
+  assertAllowedFields(body, ['productId', 'kind', 'code', 'manufactureDate', 'expiryDate']);
+  const productId = String(body.productId ?? '').trim();
+  const kind = String(body.kind ?? '').trim().toUpperCase();
+  const code = String(body.code ?? '').trim();
+  if (!productId) throw new HttpError(400, '缺少货品');
+  if (!['LOT', 'SERIAL'].includes(kind)) throw new HttpError(400, '身份类型必须是 LOT 或 SERIAL');
+  if (!code) throw new HttpError(400, kind === 'LOT' ? '缺少批号' : '缺少序列号');
+  const product = db.prepare('SELECT id, code, name, tracking_policy FROM products WHERE id=?').get(productId);
+  if (!product) throw new HttpError(404, '货品不存在');
+  const policy = String(product.tracking_policy || 'NONE').toUpperCase();
+  if (policy !== kind) {
+    throw new HttpError(409, `货品 ${product.code} 的跟踪方式是 ${policy}，与所选身份类型不一致`, {
+      code: 'TRACKING_POLICY_MISMATCH',
+      resolution: policy === 'NONE' ? '该货品不跟踪批次 / 序列号，期初行不得携带身份' : '请选择与货品跟踪方式一致的身份类型',
+    });
+  }
+  const now = nowIso();
+  if (kind === 'LOT') {
+    const existing = db.prepare('SELECT id FROM inventory_lots WHERE product_id=? AND lot_code=?').get(productId, code);
+    if (existing) return send(res, 200, { id: existing.id, kind, code, existing: true });
+    const identityId = genId();
+    transaction(db, () => {
+      db.prepare(`INSERT INTO inventory_lots(id, product_id, lot_code, manufacture_date, expiry_date,
+        created_source_type, created_source_id, created_source_item_id, status, created_at)
+        VALUES(?,?,?,?,?,'OPENING_INVENTORY',?,NULL,'AVAILABLE',?)`)
+        .run(identityId, productId, code, body.manufactureDate || null, body.expiryDate || null, identityId, now);
+      audit(db, actor.id, 'CREATE', 'INVENTORY_LOT', identityId, `登记期初批次 ${code}`);
+    });
+    return send(res, 201, { id: identityId, kind, code, existing: false });
+  }
+  const existing = db.prepare('SELECT id FROM inventory_serials WHERE product_id=? AND serial_number=?').get(productId, code);
+  if (existing) return send(res, 200, { id: existing.id, kind, code, existing: true });
+  const identityId = genId();
+  transaction(db, () => {
+    db.prepare(`INSERT INTO inventory_serials(id, product_id, serial_number, manufacture_date, expiry_date,
+      created_source_type, created_source_id, created_source_item_id, lifecycle_state, current_warehouse_id,
+      updated_at, created_at)
+      VALUES(?,?,?,?,?,'OPENING_INVENTORY',?,NULL,'AVAILABLE',NULL,?,?)`)
+      .run(identityId, productId, code, body.manufactureDate || null, body.expiryDate || null, identityId, now, now);
+    audit(db, actor.id, 'CREATE', 'INVENTORY_SERIAL', identityId, `登记期初序列号 ${code}`);
+  });
+  return send(res, 201, { id: identityId, kind, code, existing: false });
 }
 
 // The canonical read model of the opening inventory documents.

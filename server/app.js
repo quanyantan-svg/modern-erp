@@ -150,7 +150,7 @@ import {
 } from './modules/inventory-lock.js';
 import {
   closeInitialization, getOrCreateInitialization, openInitialization, reopenInitialization,
-  createOpeningDocument, confirmOpeningDocument, listOpeningDocuments,
+  createOpeningDocument, confirmOpeningDocument, listOpeningDocuments, createOpeningIdentity,
 } from './modules/inventory-opening.js';
 import {
   createNativeDocument, confirmNativeDocument, listNativeDocuments,
@@ -3806,6 +3806,16 @@ const inventoryQueryFilters = (params) => ({
     path: '/api/inventory-serials',
     handler: ({ db, res, actor, url }) => listSerialsHandler(db, res, actor, url),
     owner: 'server/modules/traceability-quality.js',
+  });
+
+  // F-05 —— 期初跟踪身份的登记（Requirement §32.15 IW-OPEN-04）。
+  // 跟踪物料的期初行必须引用**已存在**的批次 / 序列号身份，而期初是这些身份的第一次
+  // 事实：登记入口归期初流程自己所有，守卫是期初的既有权限码，不新增权限码。
+  ownedRouteTable.register({
+    method: 'POST',
+    path: '/api/inventory/opening-identities',
+    handler: ({ db, req, res, actor }) => createOpeningIdentity(db, req, res, actor),
+    owner: 'server/modules/inventory-opening.js',
   });
 
   // INV-15 - direct transfer. The canonical module owns the document write

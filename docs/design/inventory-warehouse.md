@@ -2334,3 +2334,72 @@ POST /api/inventory/opening-documents/:id/confirm
 Requirement §32.15：`APPROVED`（2026-11-18）；本节 Design：`APPROVED`（同日）；
 Implementation：**已实施**（2026-11-18）。真实 MySQL 连接、数据库写操作、Acceptance / Freeze
 签发、发布与部署**未授权**。
+
+---
+
+## 27.61 期初跟踪身份的登记入口设计（F-05，`APPROVED` → `IMPLEMENTED`，2026-11-18）
+
+> 对应 Requirement §32.16（`IW-OPEN-07..10`）。授权来源：业务所有者 2026-11-18 指令
+> （Requirement → Design → Implementation 连续授权，承 AGENTS.md §4.0）。
+
+### 27.61.1 模块与职责
+
+| 模块 | 职责 | 本节变化 |
+|---|---|---|
+| `server/modules/inventory-opening.js` | 期初初始化 / 期初单据（`IW-OPEN-01..06`） | 新增 `createOpeningIdentity`：登记期初流程自己的跟踪身份主档 |
+| `server/app.js` | HTTP 生命周期与 dispatch | 注册 `POST /api/inventory/opening-identities`，owner = `server/modules/inventory-opening.js` |
+| `src/pages/inventory-work.jsx` | 库存作业工作面 / 期初录入 | 期初行按货品跟踪方式呈现「已有身份」与「登记新身份」两条路径 |
+| `server/modules/traceability-quality.js` | 跟踪身份主档列表（`IW-TRACE-01`） | **不变**：登记后的身份立即出现在既有主档列表里 |
+
+### 27.61.2 端点与数据流
+
+```text
+POST /api/inventory/opening-identities
+  body: { productId, kind: 'LOT'|'SERIAL', code, manufactureDate?, expiryDate? }
+  → createOpeningIdentity(db, req, res, actor)
+      → allow(actor, 'INVENTORY_OPENING_MANAGE')          // 既有权限码，fail closed
+      → assertAllowedFields(只接受 5 个字段)
+      → 货品跟踪方式校验（IW-OPEN-08）
+      → 已存在？返回 200 { id, existing: true }（不产生第二条身份）
+      → 否则 INSERT 身份主档 → 201 { id, existing: false } + audit
+```
+
+- **身份主档的来源标记**：`created_source_type='OPENING_INVENTORY'`（库存期初既有来源词表），
+  `created_source_id` 指向身份自身（登记发生在期初单据建单之前，尚无单据可引用）。
+- **身份主档的投影**（批次余额 / 序列号位置）仍由 canonical 位移写入器维护（§32.14 `IW-TRACE-04`）；
+  本节**不新增**第二条投影写入路径，也不新建表、不做迁移。
+- **幂等**：依赖既有唯一约束 `UNIQUE(product_id,lot_code)` / `UNIQUE(product_id,serial_number)`；
+  登记前先查后写，同码返回既有身份。
+
+### 27.61.3 界面
+
+- 期初行的**货品**决定身份形态：普通料不出现身份控件；批次料出现「已有批号」选择与
+  「登记新批号」；序列号料出现「已有序列号」选择与「登记新序列号」。
+- 序列号物料的数量固定为 1（服务端既有合同：序列号物料每次只能期初 1 件），界面据此锁定输入。
+- 「已有身份」列表按货品懒加载 `GET /api/inventory-lots` / `GET /api/inventory-serials`；
+  **无权读取身份主档时一次请求都不发**（承 §32.13 `IW-EXPOSURE-02`）。
+- 「登记」动作调用期初身份登记端点，成功后该行即携带已登记身份 id；提交时随期初单一起发送。
+- 跟踪物料行未登记身份时，界面在提交前给出明确提示，不依赖后端 400 作为唯一提示。
+
+### 27.61.4 权限、错误、审计、兼容
+
+- **权限**：守卫是既有权限码 `INVENTORY_OPENING_MANAGE`；不新增权限码、不改 `role_permissions`、
+  不改任何角色的权限集合、不改 `inventory` route 的 exposure（承 §32.13 `IW-EXPOSURE-04`）。
+- **错误**：缺货品 / 缺批号 / 缺序列号 / 身份类型非法 → 400；货品不存在 → 404；
+  跟踪方式不一致 → 409 `TRACKING_POLICY_MISMATCH`（带 `resolution`）；无权 → 403。
+  错误语义沿用既有 `HttpError` 分类与载荷，不新增跨域错误码耦合。
+- **审计**：登记写审计（`CREATE` / `INVENTORY_LOT` 或 `INVENTORY_SERIAL`）；重复登记不写新事实，
+  只返回既有身份。
+- **兼容**：`IW-OPEN-04` 不变（期初行仍必须引用**已存在**身份）；既有身份主档、投影、报表、
+  结算清单全部不变；无数据迁移、无回填。
+
+### 27.61.5 测试与状态
+
+- **合同测试**（`server/inventory-opening-identity.test.js`，已登记 FULL）：登记成功、同码幂等、
+  无权 403 且零副作用、跟踪方式不匹配与缺码固定拒绝、端到端（登记 → 期初 → 确认 →
+  身份级估值池成立且移动为 `VALUED`）。
+- **变异对照**：去掉 `allow(actor, 'INVENTORY_OPENING_MANAGE')` → 「无权 403」断言必须转红
+  （已实测：4 项中 1 项转红）。
+- **状态**：Requirement §32.16 `APPROVED`（2026-11-18）；本节 Design `APPROVED`（同日）；
+  Implementation **已实施**（2026-11-18）。真实 MySQL 连接、数据库写操作、Acceptance / Freeze
+  签发、发布与部署**未授权**。
