@@ -84,7 +84,7 @@ export function forbiddenHits(text, permissions) {
 export function collectCopyFindings() {
   const permissions = permissionCodes();
   const findings = [];
-  for (const entry of collectUserVisibleTexts()) {
+  for (const entry of collectUserVisibleTexts({ includeExpressionLiterals: true })) {
     const hits = forbiddenHits(entry.text, permissions);
     if (hits.length === 0) continue;
     findings.push({ file: entry.file, line: entry.line, text: entry.text, source: entry.source, hits });

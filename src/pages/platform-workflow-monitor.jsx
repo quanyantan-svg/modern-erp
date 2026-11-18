@@ -184,7 +184,7 @@ function InstanceDetailSheet({ detail, canControl, canRedeploy, notify, onClose,
               <input value={reason} onChange={(event) => setReason(event.target.value)}/>
             </FormRow>
             <InlineAlert tone="info">
-              {canRedeploy ? '重新部署需要选择目标版本，会终止旧实例并启动新实例。' : '重新部署需要 WORKFLOW_REDEPLOY 权限。'}
+              {canRedeploy ? '重新部署需要选择目标版本，会终止旧实例并启动新实例。' : '当前账号没有流程重新部署权限。'}
             </InlineAlert>
           </>
         )}

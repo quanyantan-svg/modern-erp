@@ -276,8 +276,8 @@ export function InventoryInstantQuery({ user, notify, references }) {
         {access && !(access.bins && access.stockStatuses) && (
           <InlineAlert tone="info">
             当前账号缺少部分库存参照读取权限
-            {!access.bins ? '（仓位 WAREHOUSE_BIN_VIEW）' : ''}
-            {!access.stockStatuses ? '（库存状态 STOCK_STATUS_VIEW）' : ''}
+            {!access.bins ? '（仓位读取）' : ''}
+            {!access.stockStatuses ? '（库存状态读取）' : ''}
             ，对应的筛选项不可用；按仓库 / 货品查询不受影响。
           </InlineAlert>
         )}

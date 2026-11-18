@@ -88,7 +88,12 @@ function inspect(out, file, line, text, source) {
   out.push({ file: relative(root, file).replace(/\\/g, '/'), line, text: text.trim(), source });
 }
 
-function scanFrontend(file, out) {
+// JSX 表达式容器里的字符串字面量：`{cond ? '提示文案' : ''}`。这类文案会渲染到
+// 页面，但既不是 JSX 文本节点，也不是展示 prop，因此单独识别。
+const FRONTEND_JSX_EXPRESSION = /\{([^{}]*)\}/g;
+const FRONTEND_EXPRESSION_STRING = /'([^']*)'|"([^"]*)"|`([^`]*)`/g;
+
+function scanFrontend(file, out, options = {}) {
   const text = readFileSync(file, 'utf8');
   for (const pattern of [FRONTEND_PROP, FRONTEND_OBJECT_FIELD]) {
     pattern.lastIndex = 0;
@@ -108,6 +113,19 @@ function scanFrontend(file, out) {
     FRONTEND_JSX_TEXT.lastIndex = 0;
     for (const match of text.matchAll(FRONTEND_JSX_TEXT)) {
       inspect(out, file, lineOf(text, match.index), match[1], 'jsx-text');
+    }
+    FRONTEND_JSX_EXPRESSION.lastIndex = 0;
+    if (!options.includeExpressionLiterals) return;
+    for (const match of text.matchAll(FRONTEND_JSX_EXPRESSION)) {
+      const segment = match[1];
+      FRONTEND_EXPRESSION_STRING.lastIndex = 0;
+      for (const literal of segment.matchAll(FRONTEND_EXPRESSION_STRING)) {
+        const value = literal[1] ?? literal[2] ?? literal[3];
+        // 表达式容器里的标识符与代码片段不是文案：纯标识符形态（含点号、斜杠、
+        // 连字符）一律跳过，只看带空格或中文的可见文本。
+        if (!value || !/[\s㐀-鿿]/.test(value)) continue;
+        inspect(out, file, lineOf(text, match.index), value, 'jsx-expression');
+      }
     }
   }
 }
@@ -145,11 +163,16 @@ export function backendFiles() {
 /**
  * 采集全部用户可见文案位。
  *
+ * 两个守卫的**已批准扫描范围**不同：界面语言守卫沿用 §36.19 `PL-LANG-04` 的范围；
+ * 用户可见文案守卫按 §36.22 `PL-UX-01/02` 追加 JSX 表达式容器里的字面量。位置
+ * 识别只有这一处实现，范围由调用方按各自合同显式选择。
+ *
+ * @param {{ includeExpressionLiterals?: boolean }} [options]
  * @returns {{ file: string, line: number, text: string, source: string }[]}
  */
-export function collectUserVisibleTexts() {
+export function collectUserVisibleTexts(options = {}) {
   const out = [];
-  for (const file of frontendFiles()) scanFrontend(file, out);
+  for (const file of frontendFiles()) scanFrontend(file, out, options);
   for (const file of backendFiles()) scanBackend(file, out);
   const grouped = new Map();
   for (const entry of out) {
