@@ -9,6 +9,7 @@ import { setInventoryQuantity } from '../lib/stock.js';
 import { discoverInvoiceSourcePlan, lockInvoiceSourcePlan, recognizeFinanceExposure } from './finance-recognition.js';
 import { RECOGNITION_MODES } from './finance-recognition-policy.js';
 import { assertSupplierBillGlPostable } from './outsourcing-gl-policy.js';
+import { VMI_SETTLEMENT_LINE_SOURCE } from './vmi-settlement.js';
 import { allocateDocumentNumber as allocatePlatformNumber } from './platform-numbering.js';
 import { guardPeriodAction } from './period-control.js';
 import { financeActionCode } from './period-action-registry.js';
@@ -260,12 +261,20 @@ function prepareBillLines(db, supplierId, date, mode, inputs) {
   if (!Array.isArray(inputs) || !inputs.length) throw new HttpError(400, '供应商账单至少需要一行');
   return inputs.map((input, index) => {
     const source = input.receiptItemId ? db.prepare(`SELECT i.*,r.supplier_id,r.status receipt_status FROM purchase_receipt_items i JOIN purchase_receipts r ON r.id=i.receipt_id WHERE i.id=?`).get(input.receiptItemId) : null;
-    const productId = source?.product_id || input.productId; const qty = quantitySnapshot(db, productId, input, date); const tax = taxSnapshot(db, input.taxCode, date);
+    // VMI 结算来源（Requirement §31.24 `VMI-SET-11`）：结算行是权威来源，
+    // 不是采购收货明细。它不 JOIN `purchase_receipts`，也不做收货容量检查。
+    const settlementLine = input.vmiSettlementLineId
+      ? db.prepare(`SELECT l.*,p.supplier_id period_supplier_id,p.period_key,p.status period_status
+          FROM vmi_settlement_lines l JOIN vmi_settlement_periods p ON p.id=l.period_id
+          WHERE l.id=?`).get(input.vmiSettlementLineId) : null;
+    const productId = source?.product_id || settlementLine?.product_id || input.productId;
+    const qty = quantitySnapshot(db, productId, input, date); const tax = taxSnapshot(db, input.taxCode, date);
     if (source && source.supplier_id !== supplierId) throw new HttpError(409, '收货与账单供应商不一致');
+    if (settlementLine && settlementLine.period_supplier_id !== supplierId) throw new HttpError(409, '结算行与账单供应商不一致');
     if (source) { const billed = db.prepare(`SELECT COALESCE(SUM(i.base_quantity_num*1.0/i.base_quantity_den),0) n FROM supplier_bill_items i JOIN supplier_bills h ON h.id=i.bill_id WHERE i.receipt_item_id=? AND h.status IN ('POSTED','DRAFT','WAITING_MATCH')`).get(source.id).n; if (Number(billed) + qty.base.num / qty.base.den > Number(source.quantity) + 1e-9) throw new HttpError(409, '账单数量超过已收货剩余数量'); }
-    const unit = int(input.unitPriceCents ?? source?.unit_price_cents, '单价'); const amount = lineAmount(qty.doc, unit); const calculated = calculateLineTax({ amountCents: amount, mode, rateNumerator: tax.rateNumerator, rateDenominator: tax.rateDenominator });
+    const unit = int(input.unitPriceCents ?? source?.unit_price_cents ?? settlementLine?.unit_price_cents, '单价'); const amount = lineAmount(qty.doc, unit); const calculated = calculateLineTax({ amountCents: amount, mode, rateNumerator: tax.rateNumerator, rateDenominator: tax.rateDenominator });
     const grni = source ? roundRational(BigInt(source.unit_price_cents) * BigInt(qty.base.num), qty.base.den) : 0;
-    return { id: randomUUID(), source, productId, qty, tax, unitPriceCents: unit, grniCents: grni, ...calculated, lineNo: index + 1 };
+    return { id: randomUUID(), source, settlementLine, productId, qty, tax, unitPriceCents: unit, grniCents: grni, ...calculated, lineNo: index + 1 };
   });
 }
 
@@ -273,18 +282,38 @@ export function createSupplierBill(db, input) {
   return atomic(db, () => {
     const existing = input.idempotencyKey && db.prepare('SELECT * FROM supplier_bills WHERE idempotency_key=?').get(input.idempotencyKey); if (existing) return existing;
     guardPeriodAction(db, { actionCode: 'FINANCE_AP_BILL', businessDate: input.billDate });
-    const lines = prepareBillLines(db, input.supplierId, input.billDate, input.taxMode || 'NO_TAX', input.items); const totals = sumLines(lines); const grni = lines.reduce((sum, x) => sum + x.grniCents, 0); const matched = lines.every(x => x.source?.receipt_status === 'CONFIRMED');
+    const lines = prepareBillLines(db, input.supplierId, input.billDate, input.taxMode || 'NO_TAX', input.items); const totals = sumLines(lines); const grni = lines.reduce((sum, x) => sum + x.grniCents, 0); const matched = lines.every(x => x.source?.receipt_status === 'CONFIRMED' || x.settlementLine);
     const id = randomUUID(); const now = stamp(); const no = allocateDocumentNumber(db, 'PB', input.billDate, input.idempotencyKey || `PB:${id}`);
     db.prepare(`INSERT INTO supplier_bills(id,bill_no,supplier_id,supplier_invoice_no,bill_date,status,tax_mode,net_cents,tax_cents,gross_cents,grni_cents,variance_cents,tax_snapshot_json,creator_id,created_at,idempotency_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(id, no, input.supplierId, input.supplierInvoiceNo, input.billDate, matched ? 'DRAFT' : 'WAITING_MATCH', input.taxMode || 'NO_TAX', totals.netCents, totals.taxCents, totals.grossCents, grni, totals.netCents - grni, JSON.stringify(lines.map(x => x.tax)), input.actorId, now, input.idempotencyKey || null);
     db.prepare('UPDATE supplier_bills SET remaining_creditable_amount_cents=? WHERE id=?').run(totals.grossCents, id);
-    const insert = db.prepare(`INSERT INTO supplier_bill_items(id,bill_id,receipt_id,receipt_item_id,purchase_order_item_id,product_id,document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den,unit_price_cents,matched_unit_price_cents,net_cents,tax_cents,gross_cents,tax_code,tax_rate_numerator,tax_rate_denominator,line_no) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-    for (const x of lines) insert.run(x.id, id, x.source?.receipt_id || null, x.source?.id || null, x.source?.purchase_order_item_id || null, x.productId, x.qty.conversion.uomCode, x.qty.doc.num, x.qty.doc.den, x.qty.conversion.numerator, x.qty.conversion.denominator, x.qty.base.num, x.qty.base.den, x.unitPriceCents, x.source?.unit_price_cents ?? null, x.netCents, x.taxCents, x.grossCents, x.tax.code, x.tax.rateNumerator, x.tax.rateDenominator, x.lineNo);
+    const insert = db.prepare(`INSERT INTO supplier_bill_items(id,bill_id,receipt_id,receipt_item_id,purchase_order_item_id,product_id,document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den,unit_price_cents,matched_unit_price_cents,net_cents,tax_cents,gross_cents,tax_code,tax_rate_numerator,tax_rate_denominator,line_no,commercial_source_type,commercial_source_id,commercial_source_item_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    // 来源三元组（Requirement §31.24 `VMI-SET-11`）：VMI 结算账单行必须携带
+    // `VMI_SETTLEMENT_LINE` / 结算期间 id / 结算行 id。普通采购账单行写 NULL。
+    for (const x of lines) insert.run(x.id, id, x.source?.receipt_id || null, x.source?.id || null, x.source?.purchase_order_item_id || null, x.productId, x.qty.conversion.uomCode, x.qty.doc.num, x.qty.doc.den, x.qty.conversion.numerator, x.qty.conversion.denominator, x.qty.base.num, x.qty.base.den, x.unitPriceCents, x.source?.unit_price_cents ?? null, x.netCents, x.taxCents, x.grossCents, x.tax.code, x.tax.rateNumerator, x.tax.rateDenominator, x.lineNo, x.settlementLine ? VMI_SETTLEMENT_LINE_SOURCE : null, x.settlementLine ? x.settlementLine.period_id : null, x.settlementLine ? x.settlementLine.id : null);
     return db.prepare('SELECT * FROM supplier_bills WHERE id=?').get(id);
   });
 }
 
 function supplierBillRecognitionSources(db, billId) {
+  // VMI 结算来源（Requirement §31.24 `VMI-SET-11`）：结算账单行不是采购收货，
+  // 它的权威来源是结算行本身。混在一起 JOIN `purchase_receipts` 会把 VMI 行
+  // 丢掉，从而 409「供应商账单缺少已确认收货来源」。
+  const vmiLines = db.prepare(`SELECT i.commercial_source_id period_id,i.commercial_source_item_id source_line_id,
+      i.base_quantity_num,i.base_quantity_den,i.gross_cents,p.period_key,p.status period_status,l.commercial_released_qty,l.settled_qty
+    FROM supplier_bill_items i JOIN vmi_settlement_lines l ON l.id=i.commercial_source_item_id
+      JOIN vmi_settlement_periods p ON p.id=i.commercial_source_id
+    WHERE i.bill_id=? AND i.commercial_source_type=? ORDER BY i.line_no`).all(billId, VMI_SETTLEMENT_LINE_SOURCE);
+  const sources = vmiLines.map((line) => {
+    const quantity = Number(line.base_quantity_num) / Number(line.base_quantity_den || 1);
+    // 应付的**业务事实**是结算行（`VMI_SETTLEMENT_LINE` + 结算行 id）：
+    // 应付开项的 `source_type` / `source_id` 与本来源必须一致，否则
+    // `recognizeFinanceExposure` 的 DIRECT 分支找不到对应的 FINAL 开项。
+    // 结算期间 id 仍由来源三元组的 `commercial_source_id` 承载。
+    return { sourceType: VMI_SETTLEMENT_LINE_SOURCE, sourceId: line.source_line_id, sourceNo: line.period_key, sourceLineId: line.source_line_id,
+      invoicedQuantity: Number.isSafeInteger(quantity) ? quantity : 0, invoicedAmountCents: Number(line.gross_cents), fullyInvoiced: true };
+  });
+  if (sources.length) return sources;
   const lines = db.prepare(`SELECT i.receipt_id source_id,i.receipt_item_id source_line_id,i.base_quantity_num,i.base_quantity_den,i.gross_cents,r.receipt_no source_no
     FROM supplier_bill_items i JOIN purchase_receipts r ON r.id=i.receipt_id WHERE i.bill_id=? ORDER BY i.line_no`).all(billId);
   return lines.map((line) => {

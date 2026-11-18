@@ -10,11 +10,22 @@ import { createProcurementFixture } from './test-support/procurement-http-fixtur
 //   - 收货与消耗必须绑定协议并使用外部幂等键；
 //   - 消耗容量必须同时满足「本收货剩余」与「canonical 供应商物权库存」两个不变量；
 //   - 汇总只暴露未调整毛余额与对账差额，不暴露物权转移或结算口径。
+//
+// 2026-11-18 合同变更（Requirement §31.24 `VMI-SET-03` / `VMI-SET-04`）：
+//   - 协议新增**协议单价**；收货与消耗的**金额**改为协议单价 × 数量。
+//     本套件的**数量**口径、容量守卫、幂等键与 API 契约**完全不变**
+//     （`VMI-SET-18`），因此协议必须带上协议单价，否则收货会按新合同
+//     fail closed（409 `VMI_AGREEMENT_PRICE_MISSING`）。
+//   - VMI-05 的拒绝形态由「409 政策尚未批准」改为「410 业务性退役」
+//     （`VMI-SET-02`）：D-2a 物理模型下不再存在独立的物权转移业务事件。
 describe('Procurement Wave E VMI business layer with owner-dimension canonical path', () => {
   let fixture;
 
   before(async () => { fixture = await createProcurementFixture('modern-erp-prc-wavee-'); });
   after(async () => fixture.close());
+
+  // 协议单价（分）：收货与消耗的权威金额 = 协议单价 × 数量。
+  const VMI_UNIT_PRICE_CENTS = 1000;
 
   function isoDate(offsetDays = 0) {
     const d = new Date();
@@ -68,6 +79,7 @@ describe('Procurement Wave E VMI business layer with owner-dimension canonical p
     const valid = await fixture.request('POST', '/api/procurement/vmi/agreements', fixture.tokens.admin, {
       supplierId: 'supplier-001', warehouseId: 'warehouse-001', productId: 'product-001',
       minStock: 10, maxStock: 100, reorderLevel: 20, effectiveFrom: isoDate(0), effectiveTo: isoDate(30),
+      unitPriceCents: VMI_UNIT_PRICE_CENTS,
     });
     assert.equal(valid.status, 201, valid.data.error);
 
@@ -81,6 +93,7 @@ describe('Procurement Wave E VMI business layer with owner-dimension canonical p
     const nonOverlapping = await fixture.request('POST', '/api/procurement/vmi/agreements', fixture.tokens.admin, {
       supplierId: 'supplier-001', warehouseId: 'warehouse-001', productId: 'product-001',
       minStock: 10, maxStock: 100, reorderLevel: 20, effectiveFrom: isoDate(31), effectiveTo: isoDate(60),
+      unitPriceCents: VMI_UNIT_PRICE_CENTS,
     });
     assert.equal(nonOverlapping.status, 201, JSON.stringify(nonOverlapping.data));
   });
@@ -194,7 +207,7 @@ describe('Procurement Wave E VMI business layer with owner-dimension canonical p
     assert.equal(row.settlementAmountCents, undefined, '不得暴露结算金额');
   });
 
-  test('VMI-05 物权释放与结算在政策批准前一律拒绝且零副作用', async () => {
+  test('VMI-05 物权释放接口已按 D-2a 结算模型退役：410 业务性拒绝且零副作用', async () => {
     const supplierBefore = supplierOwnedTotal();
     const enterpriseBefore = enterpriseOwnedTotal();
     const receipt = fixture.db.prepare(
@@ -202,11 +215,20 @@ describe('Procurement Wave E VMI business layer with owner-dimension canonical p
     ).get();
     assert.ok(receipt, 'precondition: a CONFIRMED VMI receipt must exist');
 
-    const transfer = await fixture.request('POST', '/api/procurement/vmi/ownership-transfers', fixture.tokens.admin, {
+    // 客户端金额由协议单价决定（`VMI-SET-05`）：传金额 → 400。
+    const withAmount = await fixture.request('POST', '/api/procurement/vmi/ownership-transfers', fixture.tokens.admin, {
       vmiReceiptId: receipt.id, settlementQuantity: 10, settlementAmountCents: 10000, transferDate: isoDate(0),
     });
-    assert.equal(transfer.status, 409, JSON.stringify(transfer.data));
-    assert.equal(transfer.data.code, 'VMI_SETTLEMENT_POLICY_PENDING');
+    assert.equal(withAmount.status, 400, JSON.stringify(withAmount.data));
+
+    // 物权转移业务路径已退役（`VMI-SET-02`）：410 + 业务文案 + 零副作用。
+    const transfer = await fixture.request('POST', '/api/procurement/vmi/ownership-transfers', fixture.tokens.admin, {
+      vmiReceiptId: receipt.id, settlementQuantity: 10, transferDate: isoDate(0),
+    });
+    assert.equal(transfer.status, 410, JSON.stringify(transfer.data));
+    assert.equal(transfer.data.code, 'VMI_OWNERSHIP_TRANSFER_RETIRED');
+    assert.ok(!/尚未批准|政策未批准/.test(String(transfer.data.error || transfer.data.message || '')),
+      '拒绝文案不得出现内部治理措辞');
     assert.equal(supplierOwnedTotal(), supplierBefore);
     assert.equal(enterpriseOwnedTotal(), enterpriseBefore);
     assert.equal(fixture.db.prepare('SELECT COUNT(*) n FROM vmi_ownership_transfers WHERE vmi_receipt_id=?').get(receipt.id).n, 0);

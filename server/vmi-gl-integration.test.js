@@ -24,6 +24,12 @@ const SEED_QUANTITY = 50;
 const RECEIVE_QUANTITY = 10;
 const CONSUME_QUANTITY = 4;
 
+// 协议单价（Requirement §31.24 `VMI-SET-03` / `VMI-SET-04`）：VMI 的权威金额
+// 来源。收货与消耗的存货 / 应付金额**必须** = 协议单价 × 数量，不得回落到
+// 估值池单价或冻结标准制造成本。本套件把协议单价设成与既有 `UNIT_COST_CENTS`
+// 相同的值，因此「收货 / 消耗金额 = 协议单价 × 数量」与既有断言同时成立。
+const VMI_AGREEMENT_PRICE_CENTS = 1000;
+
 describe('VMI 收货与消耗的总账接线（§31.23 PRC-VGL-01..06）', () => {
   let fixture;
 
@@ -81,6 +87,7 @@ describe('VMI 收货与消耗的总账接线（§31.23 PRC-VGL-01..06）', () =>
     const agreement = await fixture.request('POST', '/api/procurement/vmi/agreements', fixture.tokens.admin, {
       supplierId: 'supplier-001', warehouseId: 'warehouse-001', productId: 'product-001',
       minStock: 10, maxStock: 100, reorderLevel: 20, effectiveFrom: isoDate(-1),
+      unitPriceCents: VMI_AGREEMENT_PRICE_CENTS,
     });
     assert.equal(agreement.status, 201, JSON.stringify(agreement.data));
 
@@ -93,7 +100,8 @@ describe('VMI 收货与消耗的总账接线（§31.23 PRC-VGL-01..06）', () =>
     assert.equal(confirmed.status, 200, JSON.stringify(confirmed.data));
 
     // 收货：一张系统凭证，借 存货 / 贷 应付账款；应付开项为 FINAL。
-    const receivedValueCents = RECEIVE_QUANTITY * UNIT_COST_CENTS;
+    // 金额口径 = 协议单价 × 数量（`VMI-SET-04`）。
+    const receivedValueCents = RECEIVE_QUANTITY * VMI_AGREEMENT_PRICE_CENTS;
     const receiptEntries = voucherEntries('VMI_RECEIPT', receipt.data.id);
     assert.equal(receiptEntries.length, 2, 'VMI 收货必须产生一张两行凭证');
     const receiptDebit = receiptEntries.find((entry) => entry.direction === 'DEBIT');
@@ -118,7 +126,7 @@ describe('VMI 收货与消耗的总账接线（§31.23 PRC-VGL-01..06）', () =>
       destination: 'PRODUCTION', idempotencyKey: 'vmi-gl-consumption',
     });
     assert.equal(consumption.status, 201, JSON.stringify(consumption.data));
-    const consumedValueCents = CONSUME_QUANTITY * UNIT_COST_CENTS;
+    const consumedValueCents = CONSUME_QUANTITY * VMI_AGREEMENT_PRICE_CENTS;
     const consumptionEntries = voucherEntries('VMI_CONSUMPTION', consumption.data.id);
     assert.equal(consumptionEntries.length, 2, 'VMI 消耗必须产生一张两行凭证');
     assert.equal(consumptionEntries.find((entry) => entry.direction === 'DEBIT').subjectCode, '2202', '消耗必须借记应付账款');

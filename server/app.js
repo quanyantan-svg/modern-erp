@@ -289,6 +289,7 @@ import {
 } from './modules/credit-special-approval.js';
 import { getCreditException, getCreditExposure, listCreditExceptions } from './modules/credit-query.js';
 import { listCreditQueryOptions } from './modules/credit-query-options.js';
+import { listCreditWorkReferences } from './modules/credit-work-references.js';
 import {
   applyCreditEvaluationResult, createCreditEvaluationIndicator, createCreditEvaluationModel,
   createCreditEvaluationScheme, createCreditEvaluationSheet, finalizeCreditEvaluationSheet,
@@ -435,12 +436,16 @@ import {
   postReturnRequest,
 } from './modules/procurement-returns.js';
 import {
+  closeVmiSettlementPeriod,
   confirmVmiReceipt,
   createVmiAgreement,
   createVmiConsumption,
   createVmiReceipt,
+  createVmiSettlementBill,
+  getVmiSettlementPeriod,
   getVmiSummary,
   listVmiAgreements,
+  openVmiSettlementPeriod,
   transferVmiOwnership,
 } from './modules/procurement-vmi.js';
 import {
@@ -787,6 +792,7 @@ function decodeCreditExceptionHttpId(rawValue) {
 ownedRouteTable.register({ method: 'GET', path: /^\/api\/credit\/exceptions\/([^/]+)$/, handler: ({ db,res,actor,params }) => getCreditException(db,res,actor,decodeCreditExceptionHttpId(params[0])), owner: 'server/modules/credit-query.js' });
 // W11-A U3-A — minimal CREDIT_VIEW-only query-context projection.
 ownedRouteTable.register({ method: 'GET', path: '/api/credit/query-options', handler: ({ db,res,actor,url }) => listCreditQueryOptions(db,res,actor,url), owner: 'server/modules/credit-query-options.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/credit/work-references', handler: ({ db,res,actor,url }) => listCreditWorkReferences(db,res,actor,url), owner: 'server/modules/credit-work-references.js' });
 ownedRouteTable.register({ method: 'GET', path: '/api/sales/groups', handler: ({ db, res, actor }) => listSalesGroups(db, res, actor), owner: 'server/modules/sales-foundation.js' });
 ownedRouteTable.register({ method: 'POST', path: '/api/sales/groups', handler: ({ db, req, res, actor }) => saveSalesGroup(db, req, res, actor), owner: 'server/modules/sales-foundation.js' });
 ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/sales\/groups\/([^/]+)$/, handler: ({ db, req, res, actor, params }) => saveSalesGroup(db, req, res, actor, params[0]), owner: 'server/modules/sales-foundation.js' });
@@ -1259,6 +1265,30 @@ ownedRouteTable.register({
   method: 'GET',
   path: /^\/api\/procurement\/vmi\/summary\/([^/]+)$/,
   handler: ({ db, res, actor, params }) => getVmiSummary(db, res, actor, params[0]),
+  owner: 'server/modules/procurement-vmi.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/vmi/settlement-periods',
+  handler: ({ db, req, res, actor }) => openVmiSettlementPeriod(db, req, res, actor),
+  owner: 'server/modules/procurement-vmi.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/procurement\/vmi\/settlement-periods\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getVmiSettlementPeriod(db, res, actor, params[0]),
+  owner: 'server/modules/procurement-vmi.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/vmi\/settlement-periods\/([^/]+)\/close$/,
+  handler: ({ db, req, res, actor, params }) => closeVmiSettlementPeriod(db, req, res, actor, params[0]),
+  owner: 'server/modules/procurement-vmi.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/vmi\/settlement-periods\/([^/]+)\/bills$/,
+  handler: ({ db, req, res, actor, params }) => createVmiSettlementBill(db, req, res, actor, params[0]),
   owner: 'server/modules/procurement-vmi.js',
 });
 ownedRouteTable.register({

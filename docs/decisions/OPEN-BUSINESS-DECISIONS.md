@@ -34,8 +34,8 @@
 | C-P02 | C | 加工费会计科目/资本化、价差与税务（进项税适用性） | 不预设 `NO_TAX` 永久正确；不允许伪造凭证模板 | Finance + Accounting Owner，GL Implementation HARD STOP | `PENDING` |
 | C-P03 | C | 过账后红冲/贷项与历史无原始凭证数据的处理 | 禁止自动补记不明来源的历史总账 | Finance + Accounting Owner，历史处理 HARD STOP | `PENDING` |
 | C-P04 | C | Accounting Domain 未 Domain Closure 时，委外 Source→Canonical Voucher 的有界接入边界 | GL Owner 固定为 Accounting；不创建委外专用第二 GL | 跨域需求批准后设计 | `PENDING` |
-| D-P01 | D | VMI 结算窗口（周期/自定义）、消耗与物权转移的前后顺序、可结算数量口径 | 企业仓供应商所有权 + 数量守恒已批准；触发策略未批准 | Procurement/VMI + Finance Owner，结算 Implementation HARD STOP | `PENDING` |
-| D-P02 | D | VMI 物权释放数量的协议价格、税与账单日期以及部分结算规则 | 必须产生 Canonical Supplier Bill，不得仅保存客户端传入 ID | Procurement/VMI + Finance Owner，账单 Implementation HARD STOP | `PENDING` |
+| D-P01 | D | VMI 结算窗口（周期/自定义）、消耗与物权转移的前后顺序、可结算数量口径 | **2026-11-18 业务所有者裁定**：采用 **D-2a**（消耗直接扣 SUPPLIER 位单腿物理 OUT，商业释放 = 实际消耗量）；`M1-F-07` 双扣**结构性消失**（不再存在独立的物权转移物理路径）；`M1-P-04` 调整容差**严格 0**；首期**不开放**部分结算 / 多账单 | Procurement/VMI + Finance Owner | `APPROVED`（2026-11-18；落地见 Procurement & Outsourcing 域 §31.24 / §26.45） |
+| D-P02 | D | VMI 物权释放数量的协议价格、税与账单日期以及部分结算规则 | **2026-11-18 业务所有者裁定**：价格取 **VMI 协议单价**（`vmi_agreements` 增协议价列）；客户端**一律不得**传金额 / 账单 ID（移除 `settlementAmountCents` / `supplierBillId`，传入即 400）；账单走 **canonical Supplier Bill**（`supplier_bill_items.commercial_source_type='VMI_SETTLEMENT_LINE'`）；税按 NO_TAX 或协议约定；账单日期取消耗日期 | Procurement/VMI + Finance Owner | `APPROVED`（2026-11-18；落地见 §31.24 / §26.45） |
 
 **影响**：C 组与 D 组政策未裁定时，委外与 VMI 的 GL / 结算实现必须 fail closed；
 不得以"先实现再补政策"的方式推进。
@@ -55,8 +55,8 @@
 | `C-P02` | 设计只落实 `tax_mode` 的**显式**选择与 `NO_TAX` 的显式声明；资本化与进项税留待裁定 | 是（WP-7） | `PENDING` |
 | `C-P03` | 明确**禁止**自动补记不明来源的历史总账；给出 `accountingProfile` 的兼容式扩展机制；历史缺口登记为 `M1-F-10` | 是（WP-7） | `PENDING` |
 | `C-P04` | 界定边界为**只**接入 `createSystemVoucher` 的既有接口，不新建委外专用 GL；角色映射在裁定前不存在 | 是（WP-7） | `PENDING` |
-| `D-P01` | 给出 **D-1 / D-2a / D-2b / D-3 四个有界备选**（D-2 按"是否先做 Owner Change"拆为两个子形态）及各自的物理与商业恒等式，**推荐 D-2a**；**不得自动采用任一模型** | 是（WP-4 的触发模型部分、WP-8） | `PENDING` |
-| `D-P02` | 明确移除客户端金额与账单 ID；价格必须来自权威源；账单走 canonical Supplier Bill | 是（WP-8 的价格部分） | `PENDING` |
+| `D-P01` | 给出 **D-1 / D-2a / D-2b / D-3 四个有界备选**（D-2 按"是否先做 Owner Change"拆为两个子形态）及各自的物理与商业恒等式，**推荐 D-2a**；**不得自动采用任一模型** | 是（WP-4 的触发模型部分、WP-8） | **已裁定（2026-11-18）**：采用 **D-2a**；容差严格 0；首期不开放部分结算 / 多账单 |
+| `D-P02` | 明确移除客户端金额与账单 ID；价格必须来自权威源；账单走 canonical Supplier Bill | 是（WP-8 的价格部分） | **已裁定（2026-11-18）**：协议单价为权威价格源；移除客户端金额与账单 ID；账单走 canonical Supplier Bill |
 
 ### 1.2 候选设计**新增**登记的开放业务政策（`M1-P-xx`）
 
@@ -80,7 +80,7 @@
 |---|---|---|---|
 | `M1-F-05` | 历史验收与当前源码的**时序协调**（§31.11 由 `09abeb4` 记录，`consumePlanningHandoff` 由 `4e035c5` 落地，晚约 3 小时 48 分）；§31.11 的历史结论**不得被覆盖** | 本轮 Design 已更正事实陈述；剩余为运行时 + MySQL 并发证据（WP-6 / `M1-GT01`） | 待运行验证 |
 | `M1-F-06` | canonical `createSupplierBill` 与委外路径共享「缺 `supplierInvoiceNo` → 500」缺陷；canonical 侧（`commercial-golive.js:283`）**不在** §31.12 范围 | **Finance 域独立授权**；本轮不修改 canonical 侧 | 跨域阻塞 |
-| `M1-F-07` | VMI 消耗与物权转移对同一 SUPPLIER 位的**双扣路径**（`procurement-vmi.js:155-173` / `:195-220`） | 依赖 `D-P01` 的模型选择（见 §1） | 依赖 §1 的 `D-P01` |
+| `M1-F-07` | VMI 消耗与物权转移对同一 SUPPLIER 位的**双扣路径**（登记时引用的 `procurement-vmi.js:155-173` / `:195-220` 为过时行号；当前消耗路径在 `:334-352`，物权转移路径 `:394-401` 固定 409） | 依赖 `D-P01` 的模型选择（见 §1） | **已解**（2026-11-18 裁定 D-2a：消耗即 SUPPLIER 位单腿 OUT，不再有独立的物权转移物理腿，双扣路径消失） |
 | `M1-F-08` | `src/pages/inventory-hub.jsx`、`src/pages/inventory-overview.jsx` 调用**不存在**的 `apiClient` 导出 | **Inventory 域独立授权**；本轮不修改 | 跨域阻塞 |
 | `M1-F-09` | `quality-gates.js:147-153` 的「可检状态」白名单缺 `PENDING_INSPECTION` | 本轮 Design 已指定技术合同（§26.33.5.1），实现归 WP-3 | 已归入 WP-3 |
 | `M1-F-10` | 委外退货会写无原始委外凭证对应的普通采购贷项凭证 | 依赖 `C-P03`（见 §1） | 依赖 §1 的 `C-P03` |

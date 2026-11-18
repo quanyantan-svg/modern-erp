@@ -2975,3 +2975,298 @@ VMI 消耗 (procurement-vmi.js::createVmiConsumption)
   消耗的对称凭证与开项冲减、两个权威对账检查在两个时点均为 0、余额不足固定拒绝。
 - **状态**：Requirement §31.23 `APPROVED`（2026-11-18）；本节 Design `APPROVED`（同日）；
   Implementation **已实施**（2026-11-18）。真实 MySQL 复核、Acceptance / Freeze 签发、发布与部署**待执行**。
+
+### 26.45 VMI 结算机制设计（2026-11-18；`APPROVED` → `IMPLEMENTED`）
+
+> **授权来源**：业务所有者 2026-11-18「我决定还是补齐再交付」并就 `D-P01` / `D-P02` 作出裁定
+> （`APPROVED`，原文见 [`docs/decisions/OPEN-BUSINESS-DECISIONS.md`](../decisions/OPEN-BUSINESS-DECISIONS.md) §1）。
+> 对应 Requirement §31.24（`VMI-SET-01..18` + `VMI-SET-AC-01..10`）。
+> 候选设计素材库：[`docs/reviews/m1/procurement-outsourcing-critical-chain-design.md`](../reviews/m1/procurement-outsourcing-critical-chain-design.md)
+> `:1531-1591`（七量与五组恒等式）、`:1619-1639`（四个物理模型）、`:1669-1674`（容差）、
+> `:1711-1768`（三张结算表 DDL）、`:1773-1778`（期间重叠 / 期初证据 / 部分结算边界）、
+> `:1802-1805`（`M1-D-19` / `M1-D-20`）。
+>
+> **本节裁定的三项口径**（与素材库不同，以本节为准）：
+> 1. **物理模型 = D-2a**（消耗即 SUPPLIER 位单腿物理 OUT，商业释放 = 实际消耗量）；
+> 2. **调整容差 = 0（严格）**；
+> 3. **首期不开放部分结算 / 多账单**（一期间一账单，`settled_qty` 一次性等于 `commercial_released_qty`）。
+>
+> **未授权**：真实 MySQL 的结构变更与数据写入、Manual Closure、Release Readiness、Acceptance / Freeze 签发。
+> **不在本节范围**：VMI 界面（只交付读模型字段，`VMI-SET-15`）、VMI 供应商资格政策（`SCP-11`）、委外加工费政策（`C-P01..04`）。
+
+#### 26.45.1 模块与职责
+
+| 模块 | 职责 | 本轮新增 |
+|---|---|---|
+| `server/migrations/v28-vmi-settlement.js` | 三张结算表 + `vmi_agreements.unit_price_cents` 的**纯加性**、幂等、双引擎 DDL | 新增 |
+| `server/modules/procurement-vmi.js` | 协议单价；结算期开启 / 关闭；结算账单生成；物权转移接口退役；读模型可结算量 | 扩展 |
+| `server/modules/vmi-settlement.js`（NEW） | 结算链的**纯业务计算与写入**：七量聚合、五组恒等式断言、期初快照、分配事实 | 新增 |
+| `server/modules/commercial-golive.js` | canonical `createSupplierBill` / `postSupplierBill`；**必须**识别 VMI 来源三元组 | 修改 |
+| `server/modules/outsourcing-gl-policy.js` | `assertSupplierBillGlPostable` **必须**识别 VMI 来源并放行 | 修改 |
+| `server/db.js` | 新增权限码与迁移挂载 | 修改 |
+
+- 结算链的**唯一** canonical owner 是 `server/modules/vmi-settlement.js`；
+  `procurement-vmi.js` 只做 HTTP 边界（解析、权限、字段白名单）与委派。
+- 应付与总账**不新建**第二套通道：一律走 Finance Operations 的
+  `recognizeFinanceExposure` / `applyCreditAdjustment` 与 Accounting 的 `createSystemVoucher`。
+
+#### 26.45.2 Schema / Migration（纯加性、幂等、双引擎）
+
+`server/migrations/v28-vmi-settlement.js` 一次完成下列五项，全部**加性**：
+
+1. `vmi_agreements.unit_price_cents INTEGER NULL` —— **可空**。历史协议没有协议单价，
+   迁移**不回填 0、不回填任何虚构值**（`M1-D-17`）；缺价时业务路径 fail closed。
+2. `vmi_settlement_periods`（结算期头）
+3. `vmi_settlement_lines`（结算行：七量 + closing + 商业量）
+4. `vmi_settlement_bill_allocations`（分配事实：权威的「结算行 ↔ 账单行」关系）
+5. `vmi_settlement_periods(agreement_id, period_key)` 唯一索引 + 重叠查询所需的索引
+
+**双引擎差异的处理**（依据 `server/database/mysql-schema.js` 与 `server/migrations/sales-customer-wave11-credit-reconciliation.js` 的既有约定）：
+
+- SQLite 与 MySQL **各写一份 DDL**，不依赖 SQLite 快照派生。MySQL 侧显式声明
+  `VARCHAR(128)` / `BIGINT` / `DECIMAL(24,6)` / `LONGTEXT` / `CHAR(67)`，与
+  `mysql-schema.js` 的 `mysqlType()` 家族一致
+  （`id` / `*_id` → `VARCHAR(128)`、`INTEGER` → `BIGINT`、`REAL` → `DECIMAL(24,6)`、
+  其它 `TEXT` → `LONGTEXT`）。
+- **MySQL 列类型必须 PINNED**（`VMI_SETTLEMENT_MYSQL_COLUMN_TYPES`，
+  登记在 `server/database/mysql-schema.js` 的 `PINNED_MYSQL_COLUMN_TYPES`）。
+  全新 MySQL bootstrap 走「SQLite 快照 → 启发式推导」路径，本迁移走「手写 MySQL DDL」
+  路径；同一条事实的两份手工副本必然漂移，而漂移**只在真实 MySQL 上**才看得见。
+  Pinning 消除第二份副本。
+- **被索引的文本列固定为 `VARCHAR(128)`，不得退化为 `LONGTEXT`**：
+  InnoDB 拒绝在没有前缀长度的情况下索引 `LONGTEXT` 列。本迁移的索引文本列是
+  `period_key` / `status` / `window_start` / `window_end` / `idempotency_key`
+  （它们的 `UNIQUE` / 索引成员资格是**表级**约束，通用启发式会给出 `LONGTEXT`）。
+  这与 `mysql-schema.js` 里 `scope_mode` 的既有处理同源。
+- `CHECK` 约束在两端都写，但 MySQL 8.0.16+ 才真正强制；因此**业务断言不依赖 CHECK**，
+  CHECK 只是形状声明（`VMI-SET-*` 的门禁在代码里）。
+- 索引两端分别用 `CREATE INDEX IF NOT EXISTS`（SQLite）与
+  `information_schema.STATISTICS` 探测（MySQL）保证幂等。
+- 迁移用 `runMigrationStep` 的 `inspect / apply / verify` 三段式：**已满足即 replay**，
+  失败**向上传播**（不吞错）。
+- **类型契约的机器守卫**：`server/vmi-settlement-mysql-parity.test.js`（FULL）
+  离线证明三件事 —— ① pinned 类型表 == 快照 bootstrap 物化的类型；
+  ② 手写 MySQL DDL 的每一列 == pinned 类型表；
+  ③ 被索引的文本列不得是 `LONGTEXT`。
+  同时断言迁移**幂等**（重复执行不产生第二列 / 第二个索引）与
+  **历史协议价不得回填**（`unit_price_cents` 可空且全为 NULL）。
+
+**字段语义**（与素材库 `:1711-1768` 一致，列名不改）：
+
+- `vmi_settlement_periods`：`period_key` / `window_kind`(`CALENDAR_MONTH|CUSTOM`) /
+  `window_start` / `window_end` / `opening_source`(`PRIOR_CLOSED_PERIOD|CANONICAL_INVENTORY_POSITION`) /
+  `opening_snapshot_at` / `opening_evidence_hash` / `opening_audit_ref` / `status`(`OPEN|CLOSED`) /
+  `closed_at`。
+- `vmi_settlement_lines`：七量按素材库分列
+  （`opening_supplier_qty` / `opening_enterprise_qty` / `received_qty` /
+  `supplier_consumed_qty` / `enterprise_consumed_qty` / `owner_changed_qty` / `returned_qty` /
+  `adjusted_supplier_qty` / `adjusted_enterprise_qty` / `unallocated_adjusted_qty` /
+  `closing_supplier_qty` / `closing_enterprise_qty` / `closing_qty` /
+  `commercial_released_qty` / `settled_qty`）+ `unit_price_cents` + `bill_id`。
+- `vmi_settlement_bill_allocations`：`settlement_line_id` / `supplier_bill_id` /
+  `supplier_bill_item_id` / `allocation_event_id` / `allocated_qty` / `allocated_amount_cents` /
+  `idempotency_key` / `request_fingerprint`。
+
+> **`bill_id` 是兼容派生字段**（素材库 R4-6 已定）：零分配时 NULL；恰好一张账单时投影该 bill；
+> 多张时必须 NULL。本轮只允许一张，因此投影恒等于该账单。**权威关系只在分配表**。
+
+#### 26.45.3 调用与数据流
+
+```text
+协议单价：POST /api/procurement/vmi/agreements  { ..., unitPriceCents }
+  └─ vmi_agreements.unit_price_cents（NULL = 无价 → 后续 fail closed）
+
+VMI 收货确认 confirmVmiReceipt
+  ├─ resolveEffectiveVmiAgreement(...)                  既有
+  ├─ assertVmiAgreementPrice(agreement)                 新增：409 VMI_AGREEMENT_PRICE_MISSING
+  ├─ applyInventoryMutation(IN, SUPPLIER 位)            既有（物理量不变）
+  ├─ recognizeFinanceExposure(AP, DIRECT)               既有；金额源改为 协议单价 × 数量
+  └─ createSystemVoucher(VMI_RECEIPT)                  既有；金额源同上
+
+VMI 消耗 createVmiConsumption
+  ├─ assertVmiAgreementPrice(agreement)                 新增
+  ├─ applyInventoryMutation(OUT, SUPPLIER 位单腿)       既有（D-2a）
+  ├─ applyCreditAdjustment(AP)                         既有；金额源改为 协议单价 × 释放数量
+  └─ createSystemVoucher(VMI_CONSUMPTION)              既有；金额源同上
+
+结算期开启 POST /api/procurement/vmi/settlement-periods
+  └─ vmi-settlement.js::openSettlementPeriod
+     ├─ 锁 vmi_agreements 行（MySQL FOR UPDATE）
+     ├─ 检查全部期间窗口重叠（OPEN + CLOSED 都参与）     → 409
+     ├─ 期初证据：首期 = canonical inventory position 快照 → 409 VMI_OPENING_BALANCE_UNPROVEN
+     │             非首期 = 紧邻上一已关闭期间的 closing
+     ├─ 写 vmi_settlement_periods + vmi_settlement_lines（七量快照）
+     └─ audit(VMI_SETTLEMENT_PERIOD, OPEN, …)
+
+结算期关闭 POST /api/procurement/vmi/settlement-periods/:id/close
+  └─ vmi-settlement.js::closeSettlementPeriod
+     ├─ 重算七量（读权威 vmi_receipts / vmi_consumptions / inventory）
+     ├─ 五组恒等式断言 VMI-P / VMI-S / VMI-E / VMI-C / VMI-R → 409
+     ├─ |unallocated_adjusted_qty| > 0 → 409（容差严格 0）
+     ├─ 写 closing_* 与 status='CLOSED'
+     └─ audit(…, CLOSE, …)
+
+结算账单 POST /api/procurement/vmi/settlement-periods/:id/bills
+  └─ vmi-settlement.js::createSettlementBill
+     ├─ 期间必须 CLOSED；行必须满足 settled_qty = commercial_released_qty（一次性）
+     ├─ createSupplierBill(...)                          canonical 通道（写来源三元组）
+     ├─ 写 vmi_settlement_bill_allocations + settled_qty + bill_id
+     └─ postSupplierBill(billId)                         canonical 通道
+```
+
+**canonical 供应商账单的 VMI 分支**（`commercial-golive.js` / `outsourcing-gl-policy.js`）：
+
+- `createSupplierBill` 的 INSERT **必须**写 `commercial_source_type` /
+  `commercial_source_id` / `commercial_source_item_id`（三列已存在于 `server/db.js:797-799`，
+  本轮补写），值分别为 `'VMI_SETTLEMENT_LINE'` / 结算期间 id / 结算行 id。
+- `supplierBillRecognitionSources` **必须**增加 VMI 分支：当账单行是 VMI 来源时，
+  来源类型为 `'VMI_SETTLEMENT_LINE'`，数量与金额取结算行，**不 JOIN `purchase_receipts`**。
+- `assertSupplierBillGlPostable` **必须**识别 VMI 来源并放行（VMI 账单不是委外加工费账单，
+  不受 `OUTSOURCING_GL_POLICY_NOT_APPROVED` 约束）；委外来源的既有拒绝行为**完全不变**。
+
+#### 26.45.4 事务、幂等、期间守卫与错误
+
+- **事务**：结算期开启 / 关闭、账单生成、分配写入**全部**在单一 `transaction(db, …)` 内完成，
+  并在事务内**重读权威状态**（期间状态、结算行、七量来源）。
+- **幂等键**（确定性业务键，**不含随机或时间成分**）：
+  - 结算期开启：`VMI_SETTLEMENT_PERIOD_OPEN:{agreementId}:{periodKey}`
+  - 结算账单生成：`VMI_SETTLEMENT_BILL:{periodId}`
+  - 分配：`VMI_SETTLEMENT_ALLOCATION:{settlementLineId}`
+  重复请求**精确重放**（返回首次结果），不产生第二张账单、不重复写分配。
+- **期间守卫**：结算期开 / 闭与账单过账**必须**经 `guardPeriodAction`，
+  动作码 `FINANCE_AP_BILL`（= `FINANCE_AP` + `INVENTORY` + `LEGAL_ACCOUNTING` 三轴，
+  见 `server/modules/period-action-registry.js:49`）。守卫要求事务内调用，故所有守卫调用点
+  都在 `transaction(db, …)` 之内。
+- **错误码**（新增，均先确认仓库内无同名）：
+
+| 码 | HTTP | 含义 |
+|---|---|---|
+| `VMI_AGREEMENT_PRICE_MISSING` | 409 | 协议无单价或单价非法 → fail closed，零副作用 |
+| `VMI_SETTLEMENT_PERIOD_OVERLAP` | 409 | 同一协议窗口重叠 |
+| `VMI_OPENING_BALANCE_UNPROVEN` | 409 | 首期期初不可证明（不得默认为 0） |
+| `VMI_SETTLEMENT_IDENTITY_MISMATCH` | 409 | 五组恒等式不成立 |
+| `VMI_SETTLEMENT_UNALLOCATED_ADJUSTMENT` | 409 | `|unallocated_adjusted_qty| > 0`（容差严格 0） |
+| `VMI_SETTLEMENT_PARTIAL_NOT_ALLOWED` | 409 | 首期不允许部分结算 / 多账单 |
+| `VMI_SETTLEMENT_PERIOD_STATE_INVALID` | 409 | 期间状态不允许该动作 |
+| `VMI_SETTLEMENT_BILL_EXISTS` | 409 | 该期间已存在结算账单 |
+| `VMI_OWNERSHIP_TRANSFER_RETIRED` | 410 | 物权转移接口已退役 |
+
+- **物权转移接口退役**（`VMI-SET-02`）：`POST /api/procurement/vmi/ownership-transfers`
+  **必须**返回 **410 + 业务文案**（「VMI 物权转移已按 D-2a 结算模型退役，请走结算期结算」），
+  **不得**出现「政策尚未批准」这类内部治理措辞；`vmi_ownership_transfers` 表**保留但不写入**
+  （计数恒为 0）。请求体若带 `settlementAmountCents` / `supplierBillId` → **400**（`VMI-SET-05`）。
+
+#### 26.45.5 金额口径与读模型
+
+- **协议单价是 VMI 的唯一权威价格**（`VMI-SET-03` / `VMI-SET-04`）：
+  收货确认金额 = 协议单价 × 数量；消耗冲减金额 = 协议单价 × 释放数量；
+  结算账单金额 = 协议单价 × 可结算量（= 商业释放量）。
+  **不得**回落到估值池单价 / 冻结标准制造成本 / 0。
+- **客户端不得决定金额**（`VMI-SET-05`）：结算相关接口**移除** `settlementAmountCents` 与
+  `supplierBillId`；传入即 **400**（由 `assertAllowedFields` 的白名单机制产生）。
+- **可结算量口径**（`VMI-SET-08`）：`billable_qty = commercial_released_qty`；
+  有效上限 `commercial_released_qty ≤ owner_changed_qty + supplier_consumed_direct_qty`。
+- **五组恒等式**（符号约定见素材库 `:1544-1551`；`adjusted_*` 与 `unallocated_adjusted_qty`
+  是**有符号量**，来源侧在等式左端）：
+
+```text
+VMI-P: opening_S + opening_E + received + adjusted_S + adjusted_E + unallocated
+     = supplierOnHand + enterpriseOnHand + supplierConsumedDirect + enterpriseConsumed + returned
+VMI-S: opening_S + received + adjusted_S = supplierOnHand + supplierConsumedDirect + ownerChanged + returned
+VMI-E: opening_E + ownerChanged + adjusted_E = enterpriseOnHand + enterpriseConsumed
+VMI-C: billable = commercialReleased;  settled ≤ commercialReleased;
+       commercialReleased ≤ ownerChanged + supplierConsumedDirect
+VMI-R: closing_S = opening_S + received − supplier_consumed − owner_changed − returned + adjusted_S
+       closing_E = opening_E + owner_changed − enterprise_consumed + adjusted_E
+       closing   = closing_S + closing_E
+```
+
+- **读模型**（`VMI-SET-15`）：`getVmiSummary` 新增
+  `billableQuantity`（= 商业释放量 − 已结算量，未开票部分）与 `billable`（是否可开票的标注）。
+  **不得**新增「本期已开票金额」「结算金额」这类字段（§31.12.6 既有约束继续有效）。
+
+#### 26.45.6 权限、审计与职责分离
+
+- **独立权限码**（新增，**不复用 `VMI_MANAGE`**）：
+  `VMI_SETTLEMENT_PERIOD_VIEW`（读结算期）、`VMI_SETTLEMENT_PERIOD_MANAGE`（开 / 闭）、
+  `VMI_SETTLEMENT_BILL_MANAGE`（生成账单并过账）。三者由 `server/db.js` 的 `PERMISSIONS`
+  播种；`role-admin` 获得全部（`all`）。
+- **审计**（`VMI-SET-16`）：结算期开启 / 关闭、账单生成 / 过账各写一条 `audit` 行，
+  内容含动作、期间 id、行 id、金额、证据摘要；**不得**包含凭据（token / 密码 / 连接串）。
+
+#### 26.45.7 兼容与迁移策略
+
+- **纯加性**：只新增表与可空列；不改既有列、不改既有表语义、不删任何表。
+- **不回填**：`vmi_agreements.unit_price_cents` 历史行保持 NULL（未知不是 0）。
+- **既有行为不变**（`VMI-SET-18`）：VMI-01 协议 / VMI-02 收货 / VMI-03 消耗 / VMI-04 汇总的
+  **数量口径、容量守卫、幂等键与 API 契约**保持；仅收货与消耗的**金额来源**按
+  `VMI-SET-04` 改为协议单价。协议**没有**单价时，收货 / 消耗固定 409 且零副作用。
+- **回滚**：迁移只加表 / 加列，回滚 = 删除本轮新增的三张表与一列（历史数据不依赖它们）；
+  已生成的结算账单是 canonical 供应商账单，走既有冲红 / 作废路径，不需特制回滚。
+
+#### 26.45.8 测试矩阵
+
+| 合同 | 测试点 |
+|---|---|
+| `VMI-SET-AC-01` | 协议无单价 → 收货 409 `VMI_AGREEMENT_PRICE_MISSING`，存货 / 应付 / 凭证**零行** |
+| `VMI-SET-AC-02` | 收货金额 = 协议单价 × 数量；消耗冲减 = 协议单价 × 释放数量；`AP_TO_GL` 与 `INVENTORY_VALUE_TO_GL` 差额为 0 |
+| `VMI-SET-AC-03` | 期间重叠 409；首期期初不可证明 409 且**不写 0**；可证明时写入快照时间 / 证据摘要 / 审计引用 |
+| `VMI-SET-AC-04` | 五组恒等式全成立才可关期；存在未分配调整量 → 409 且**不**关闭 |
+| `VMI-SET-AC-05` | 账单金额 = 协议单价 × 可结算量；来源三元组 `VMI_SETTLEMENT_LINE`；`postSupplierBill` **不再** 409；产生 canonical 凭证 |
+| `VMI-SET-AC-06` | 客户端传 `settlementAmountCents` / `supplierBillId` → 400；不传按协议单价计算 |
+| `VMI-SET-AC-07` | 重复提交开期 / 生成账单 → **精确重放**，不产生第二张账单、不重复写分配 |
+| `VMI-SET-AC-08` | 物权转移接口 410 + 业务文案（无「政策尚未批准」措辞）；`vmi_ownership_transfers` 计数为 0 |
+| `VMI-SET-AC-09` | `getVmiSummary` 有 `billableQuantity` 且**无**结算金额字段 |
+| `VMI-SET-AC-10` | 既有 VMI 套件保持通过；权威结账 24 项 BLOCKING 全部 PASS |
+
+- **合同测试文件**：`server/vmi-settlement.test.js`（新增，登记 FULL）。
+- **迁移类型契约测试文件**：`server/vmi-settlement-mysql-parity.test.js`（新增，登记 FULL）。
+- **既有测试调整**：`server/procurement-vmi.test.js` 的 VMI-05 断言由
+  「409 `VMI_SETTLEMENT_POLICY_PENDING`」改为「410 `VMI_OWNERSHIP_TRANSFER_RETIRED` +
+  零副作用」，**断言不删除**；其余 VMI-01..04 的数量口径断言保持不变。
+
+#### 26.45.9 本轮新发现的未解决矛盾（需业务所有者裁定，本节不自行决定）
+
+> **AGENTS.md §4.4**：实现过程中发现新的会计语义，必须回到 Requirement / Design 层裁定，
+> 不得在实现里自行决定。本节登记两处，均**未**在实现中擅自改变口径。
+
+1. **结算账单与收货开项的应付叠加（`VMI-SET-11` / `VMI-SET-12` 与 §31.23 的算术后果）**
+   - §31.23 `PRC-VGL-01` 裁定**物权在收货时转移** → 收货确认 `Dr 存货 / Cr 应付账款`，
+     金额 = 协议单价 × 收货数量（`VMI-SET-04` 只改金额来源，不改确认时点）。
+   - §31.23 `PRC-VGL-04` 裁定**消耗对称冲销** → 消耗 `Dr 应付账款 / Cr 存货`，
+     并按消耗金额冲减**该收货**的应付开项。
+   - §31.24 `VMI-SET-12` 裁定结算账单的过账经 `recognizeFinanceExposure` 建立应付开项。
+   - 三条同时成立的算术后果：**应付余额 = 收货金额 − 消耗金额 + 结算金额**。
+     以收货 10、消耗 4、单价 1200 分为例：结算后应付开项合计为 **12000**
+     （收货开项剩余 7200 + 结算开项 4800），而商业上「已消耗并已开票」只有 4800。
+     **未被消耗的 6 件（7200）仍挂在应付上，且没有任何结算账单会覆盖它**
+     （`VMI-SET-08` 的可结算量 = 商业释放量 = 消耗量）。
+   - **后果**：结算账单自己的应付开项**永远不会被消耗冲减**（消耗只冲减收货开项），
+     因此该开项无法被后续消耗核销；而收货开项被冲减到 0 之后，若还有未开票的收货余额，
+     应付侧会出现**与任何账单都不对应**的余额。
+   - **本轮未擅自决定**：该余额是「未消耗的供应商所有存货」的正确表示（应当保留），
+     还是「应收未结算」的错误表示（应当冲销或改为其它科目），属**业务政策**。
+     修正它必然改动 §31.23 的确认时点或 §31.24 的账单应付口径，二者都超出本节授权。
+   - **待裁定后必须一并处置的项**（§31.23.5 第 1 项已预告）：
+     结算后的消耗应冲减**哪一个**应付开项（收货开项 / 结算开项 / 二者按分配关系分摊）。
+   - **当前可观测性**：结算后 `AP_TO_GL` 与 `INVENTORY_VALUE_TO_GL` 差额**仍为 0**
+     （子账侧与总账侧同步变化），因此权威结账**不会**因此失败；
+     矛盾体现在**应付的业务构成**，不在对账差额。
+
+2. **结算期开启后的消耗（§31.23.5 第 1 项点名要求「D-P01 落地时必须一并处置」）**
+   - §31.23.5(1) 的原始情形是「应付开项已被结算账单 / 付款核销 ⇒ 消耗没有可冲减的余额」。
+     本轮实现下，消耗冲减的目标**始终是收货开项**，结算账单另立自己的开项，
+     因此该情形**不直接发生**（收货开项被消耗冲减到 0 时，容量守卫先行拒绝）。
+   - 但由此产生的**结构性后果**是上条第 1 项：结算账单的开项与消耗之间**没有核销关系**。
+   - 本轮只做**可观测性固化**（把当前口径写进合同测试），**未**改变冲减目标 ——
+     改目标就是改会计语义，必须先有裁定。
+
+3. **已在本轮闭合、不再开放的项**：`vmi_agreements` 的协议单价缺失、
+   期间重叠、期初不可证明、五组恒等式、容差严格 0、来源三元组、幂等精确重放、
+   物权转移接口退役、读模型可结算量 —— 均由 `VMI-SET-AC-01..10` 覆盖。
+
+#### 26.45.10 状态
+
+- Requirement §31.24 `APPROVED`（2026-11-18，业务所有者裁定并授权实施）。
+- 本节 Design `APPROVED`（同日）；Implementation **已实施**（2026-11-18）。
+- 真实 MySQL 复核、Acceptance / Freeze 签发、发布与部署**待执行**。

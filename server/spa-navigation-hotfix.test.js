@@ -135,7 +135,10 @@ describe('navigation state and regression contracts', () => {
     // 2026-11-13: Platform domain closure adds five generic workflow engine
     // codes (WORKFLOW_TASK_VIEW / WORKFLOW_TASK_ACT / WORKFLOW_INSTANCE_VIEW /
     // WORKFLOW_CONTROL / WORKFLOW_REDEPLOY) → 252.
-    assert.equal(PERMISSIONS.length, 266);
+    // 2026-11-18: VMI 结算机制（Requirement §31.24 `VMI-SET-16`）新增**独立**的
+    // 三个结算权限码（VMI_SETTLEMENT_PERIOD_VIEW / VMI_SETTLEMENT_PERIOD_MANAGE /
+    // VMI_SETTLEMENT_BILL_MANAGE），不复用 `VMI_MANAGE` → 269。
+    assert.equal(PERMISSIONS.length, 269);
     assert.equal(PERMISSIONS.filter(([code]) => code === 'CREDIT_VIEW').length, 1);
     assert.equal(PERMISSIONS.filter(([code]) => code === 'CREDIT_MANAGE').length, 1);
     assert.equal(PERMISSIONS.filter(([code]) => code === 'CREDIT_EVALUATE').length, 1);

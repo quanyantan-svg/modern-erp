@@ -6,6 +6,7 @@ import { WAVE10_MYSQL_COLUMN_TYPES } from '../migrations/sales-customer-wave10-c
 import { WAVE11_EVALUATION_FOUNDATION_MYSQL_COLUMN_TYPES } from '../migrations/sales-customer-wave11-credit-evaluation-foundation.js';
 import { WAVE11_EVALUATION_RESULT_MYSQL_COLUMN_TYPES } from '../migrations/sales-customer-wave11-credit-evaluation-result-application.js';
 import { WAVE11_RECONCILIATION_MYSQL_COLUMN_TYPES } from '../migrations/sales-customer-wave11-credit-reconciliation.js';
+import { VMI_SETTLEMENT_MYSQL_COLUMN_TYPES } from '../migrations/v28-vmi-settlement.js';
 
 // The tables that carry a hand-written canonical MySQL DDL. Their physical
 // type is fixed by that DDL and NOT by the generic heuristic below, so both
@@ -22,6 +23,7 @@ const PINNED_MYSQL_COLUMN_TYPES = Object.freeze({
   ...WAVE11_EVALUATION_FOUNDATION_MYSQL_COLUMN_TYPES,
   ...WAVE11_EVALUATION_RESULT_MYSQL_COLUMN_TYPES,
   ...WAVE11_RECONCILIATION_MYSQL_COLUMN_TYPES,
+  ...VMI_SETTLEMENT_MYSQL_COLUMN_TYPES,
 });
 
 const quote = (name) => `\`${String(name).replaceAll('`', '``')}\``;

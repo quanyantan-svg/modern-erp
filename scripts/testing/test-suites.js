@@ -207,6 +207,10 @@ const FULL = [
   // selector authorization/projection/zero-write path; Vite/static UI cases
   // cover registry, deep-link, API mapping and responsive behavior.
   'server/sales-customer-wave11-a-credit-query-ui.test.js',
+  // Approved §29.54 / §32.22 — bounded credit work-reference projection,
+  // scope-first authorization and removal of raw identifier entry from the
+  // customer-facing credit workflows. Uses a disposable SQLite fixture.
+  'server/credit-work-references.test.js',
   // W11-A U3 Search Semantics — the script-aware fold, literal LIKE,
   // additive search-key migration, four writer paths and deterministic
   // Selector ordering. Database-backed and therefore FULL-only.
@@ -436,6 +440,15 @@ const FULL = [
   // 收货确认存货与应付（Dr 存货 / Cr 应付账款）、消耗对称冲销；AP_TO_GL 与
   // INVENTORY_VALUE_TO_GL 在收货后与消耗后均为 0。
   'server/vmi-gl-integration.test.js',
+  // VMI 结算机制（Requirement §31.24 `VMI-SET-01..18` / `VMI-SET-AC-01..10`）：
+  // 协议单价缺价 fail closed、收货与消耗金额同源、结算期间重叠与期初证据门禁、
+  // 五组恒等式与严格 0 容差、canonical 结算账单与来源三元组、幂等精确重放、
+  // 物权转移接口退役、读模型可结算量字段。
+  'server/vmi-settlement.test.js',
+  // VMI 结算迁移的 MySQL 物理类型契约（Requirement §31.24 `VMI-SET-17`：纯加性、
+  // 幂等、双引擎）：pinned 类型表 == 快照 bootstrap 物化的类型 == 手写 MySQL DDL；
+  // 被索引的文本列不得退化为 LONGTEXT（真实 MySQL 会拒绝建表）；历史协议价不得回填。
+  'server/vmi-settlement-mysql-parity.test.js',
   // 存货与成本科目的手工凭证守卫 + GRNI 检查口径统一（F-06 附属；Requirement §35.12
   // `AA-VAL-01..04`）：受控科目 409 且零副作用、非受控科目仍可用、GRNI 三处实现同口径、
   // 存货价值对账两侧同域。

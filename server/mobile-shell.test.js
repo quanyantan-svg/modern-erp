@@ -319,7 +319,11 @@ describe('Permissions — canonical registry count', () => {
     // remain. 2026-11-13: the Platform domain closure adds five generic
     // workflow engine codes (WORKFLOW_TASK_VIEW / WORKFLOW_TASK_ACT /
     // WORKFLOW_INSTANCE_VIEW / WORKFLOW_CONTROL / WORKFLOW_REDEPLOY) → 252.
-    assert.equal(perms.length, 266, `PERMISSIONS array must include the approved Wave 10 family, M1-Core M-17, the Accounting & Analytics AA-W1 family, the Platform workflow engine family and the Platform lifecycle permission family (got ${perms.length})`);
+    // 2026-11-18: the VMI settlement mechanism (Requirement §31.24
+    // `VMI-SET-16`) adds three **independent** settlement permission codes
+    // (VMI_SETTLEMENT_PERIOD_VIEW / VMI_SETTLEMENT_PERIOD_MANAGE /
+    // VMI_SETTLEMENT_BILL_MANAGE) → 269.
+    assert.equal(perms.length, 269, `PERMISSIONS array must include the approved Wave 10 family, M1-Core M-17, the Accounting & Analytics AA-W1 family, the Platform workflow engine family, the Platform lifecycle permission family and the VMI settlement permission family (got ${perms.length})`);
     assert.equal(perms.filter(([code]) => code === 'CREDIT_VIEW').length, 1);
     assert.equal(perms.filter(([code]) => code === 'CREDIT_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'CREDIT_EVALUATE').length, 1);

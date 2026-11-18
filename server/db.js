@@ -43,6 +43,7 @@ import { migrateV24InventoryWarehouseClosure } from './migrations/v24-inventory-
 import { migrateV24InventoryAssemblyAbc } from './migrations/v24-inventory-assembly-abc.js';
 import { migrateV26OpeningInventoryCost } from './migrations/v26-opening-inventory-cost.js';
 import { migrateV27OutsourcingReceiptPlannedIdentity } from './migrations/v27-outsourcing-receipt-planned-identity.js';
+import { migrateV28VmiSettlement } from './migrations/v28-vmi-settlement.js';
 import { migratePlanningDomainSchema } from './migrations/planning-domain-schema.js';
 import { migrateProcurementOutsourcingSchema } from './migrations/procurement-outsourcing-schema.js';
 import { migrateProcurementSourcingSchema } from './migrations/procurement-sourcing-schema.js';
@@ -313,6 +314,12 @@ export const PERMISSIONS = [
   ['RETURN_REQUEST_MANAGE', '管理采购退货申请'],
   ['VMI_VIEW', '查看 VMI 业务'],
   ['VMI_MANAGE', '管理 VMI 业务'],
+  // VMI 结算机制（Requirement §31.24 `VMI-SET-16`）：**独立**权限码，
+  // 不复用 `VMI_MANAGE` —— 结算期的开 / 闭与账单过账是财务动作，
+  // 必须能与 VMI 日常业务维护分离。
+  ['VMI_SETTLEMENT_PERIOD_VIEW', '查看 VMI 结算期'],
+  ['VMI_SETTLEMENT_PERIOD_MANAGE', '开启与关闭 VMI 结算期'],
+  ['VMI_SETTLEMENT_BILL_MANAGE', '生成与过账 VMI 结算账单'],
   ['OUTSOURCING_VIEW', '查看委外业务'],
   ['OUTSOURCING_MANAGE', '管理委外订单'],
   ['OUTSOURCING_RELEASE', '下达与关闭委外订单'],
@@ -715,6 +722,9 @@ function initializeSqliteDatabase(db, filename) {
   migrateV26OpeningInventoryCost(db);
   // F-03 · 委外收货成品的计划身份（批次号 / 序列号）。
   migrateV27OutsourcingReceiptPlannedIdentity(db);
+  // V28 · VMI 结算机制（Requirement §31.24 / Design §26.45）：三张结算表 +
+  // vmi_agreements.unit_price_cents（纯加性、幂等、历史不回填）。
+  migrateV28VmiSettlement(db);
   migrateR4PurchaseSourceCardinality(db);
   // V1.4-E2: authoritative business-date columns + canonical CONFIRM
   // permission. Order matters: schema columns first so the permission

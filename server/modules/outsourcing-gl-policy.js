@@ -48,10 +48,26 @@ export const OUTSOURCING_GL_PROFILE_CODE = 'OUTSOURCING_GL_PROFILE_NOT_APPROVED'
 
 const OUTSOURCING_SOURCE_TYPE = 'OUTSOURCING_RECEIPT_ITEM';
 
+/**
+ * VMI 结算来源（Requirement §31.24 `VMI-SET-11` / `VMI-SET-12`）。
+ *
+ * VMI 结算账单走**同一套** canonical 财务通道，但它**不是**委外加工费账单：
+ * 它的分录口径由协议单价与结算行决定，不受委外会计档案约束。因此本 Guard
+ * 必须把它识别出来并**放行**，否则 VMI 账单会被委外策略误拒。
+ */
+const VMI_SETTLEMENT_SOURCE_TYPE = 'VMI_SETTLEMENT_LINE';
+
 export function isOutsourcingSourcedSupplierBill(db, billId) {
   return Boolean(db.prepare(
     'SELECT 1 FROM supplier_bill_items WHERE bill_id=? AND commercial_source_type=? LIMIT 1',
   ).get(billId, OUTSOURCING_SOURCE_TYPE));
+}
+
+/** 该账单是否由 VMI 结算行派生。 */
+export function isVmiSettlementSourcedSupplierBill(db, billId) {
+  return Boolean(db.prepare(
+    'SELECT 1 FROM supplier_bill_items WHERE bill_id=? AND commercial_source_type=? LIMIT 1',
+  ).get(billId, VMI_SETTLEMENT_SOURCE_TYPE));
 }
 
 /**
@@ -110,6 +126,9 @@ export function resolveProcessingFeeAccountingProfile(db, bill) {
  * 两种模式的**拒绝**都发生在任何写入之前，判定依据完全相同。
  */
 export function assertSupplierBillGlPostable(db, billId, actorId, action) {
+  // VMI 结算账单不是委外加工费账单：它走 canonical 通道，但不受委外会计档案
+  // 约束（Requirement §31.24 `VMI-SET-12`）。必须在委外判定**之前**放行。
+  if (isVmiSettlementSourcedSupplierBill(db, billId)) return;
   if (!isOutsourcingSourcedSupplierBill(db, billId)) return;
   if (action === 'POST_PROCESSING_FEE_BILL') {
     const bill = db.prepare('SELECT id,supplier_id,bill_date FROM supplier_bills WHERE id=?').get(billId);

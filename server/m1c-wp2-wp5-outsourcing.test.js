@@ -427,17 +427,20 @@ describe('M1C WP2-WP5 outsourcing core', () => {
   });
 
   // ---------------------------------------------------------------- WP5 ----
-  test('WP5 延期能力与 VMI 危险写入一律 409 且拒绝审计恰好一次', async () => {
+  test('WP5 延期能力与 VMI 危险写入一律被拒且拒绝审计恰好一次', async () => {
     const orderId = await releaseOrder(20);
     const cases = [
-      { path: '/api/procurement/outsourcing/finished-returns', body: { outsourcingReceiptId: 'receipt-x', quantity: 1 }, code: 'OUTSOURCING_FINISHED_RETURN_NOT_APPROVED' },
-      { path: `/api/procurement/outsourcing/orders/${orderId}/difference-apply`, body: { materialListId: 'mat-x' }, code: 'OUTSOURCING_DIFFERENCE_APPROVAL_PENDING' },
-      { path: '/api/procurement/vmi/ownership-transfers', body: { vmiReceiptId: 'vmi-x' }, code: 'VMI_SETTLEMENT_POLICY_PENDING' },
+      { path: '/api/procurement/outsourcing/finished-returns', body: { outsourcingReceiptId: 'receipt-x', quantity: 1 }, code: 'OUTSOURCING_FINISHED_RETURN_NOT_APPROVED', status: 409 },
+      { path: `/api/procurement/outsourcing/orders/${orderId}/difference-apply`, body: { materialListId: 'mat-x' }, code: 'OUTSOURCING_DIFFERENCE_APPROVAL_PENDING', status: 409 },
+      // VMI 物权转移接口已按 D-2a 结算模型退役（Requirement §31.24 `VMI-SET-02`）：
+      // 拒绝形态从「409 政策尚未批准」改为「410 业务性退役」，零副作用与拒绝审计
+      // 断言保持不变。
+      { path: '/api/procurement/vmi/ownership-transfers', body: { vmiReceiptId: 'vmi-x' }, code: 'VMI_OWNERSHIP_TRANSFER_RETIRED', status: 410 },
     ];
     for (const item of cases) {
       const rejectsBefore = fixture.db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='REJECT'").get().n;
       const response = await fixture.request('POST', item.path, fixture.tokens.admin, item.body);
-      assert.equal(response.status, 409, `${item.path} 必须 409`);
+      assert.equal(response.status, item.status, `${item.path} 必须 ${item.status}`);
       assert.equal(response.data.code, item.code);
       const rejectsAfter = fixture.db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='REJECT'").get().n;
       assert.equal(rejectsAfter, rejectsBefore + 1, `${item.path} 必须恰好新增 1 条拒绝审计`);
