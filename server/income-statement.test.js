@@ -208,7 +208,7 @@ describe('Income Statement — Empty / Single Type', () => {
   test('expense-only period aggregates correctly', async () => {
     const date = '2099-03-15';
     await createAndPostVoucher(date, [
-      { subjectId: 'subject-007', direction: 'DEBIT', amountCents: 50000, summary: '主营业务成本' },
+      { subjectId: 'subject-6603', direction: 'DEBIT', amountCents: 50000, summary: '主营业务成本' },
       { subjectId: 'subject-002', direction: 'CREDIT', amountCents: 50000, summary: '银行存款' },
     ]);
 
@@ -223,7 +223,7 @@ describe('Income Statement — Empty / Single Type', () => {
     const expenseSection = data.sections.find(s => s.type === 'EXPENSE');
     assert.equal(expenseSection.subtotal, 50000);
     assert.equal(expenseSection.subjects.length, 1);
-    assert.equal(expenseSection.subjects[0].code, '6401');
+    assert.equal(expenseSection.subjects[0].code, '6603');
     assert.equal(expenseSection.subjects[0].amount, 50000);
   });
 });
@@ -236,7 +236,7 @@ describe('Income Statement — Mixed / Multiple Subjects', () => {
       { subjectId: 'subject-006', direction: 'CREDIT', amountCents: 200000, summary: '主营业务收入' },
     ]);
     await createAndPostVoucher(date, [
-      { subjectId: 'subject-007', direction: 'DEBIT', amountCents: 80000, summary: '主营业务成本' },
+      { subjectId: 'subject-6603', direction: 'DEBIT', amountCents: 80000, summary: '主营业务成本' },
       { subjectId: 'subject-002', direction: 'CREDIT', amountCents: 80000, summary: '银行存款' },
     ]);
 
@@ -271,7 +271,7 @@ describe('Income Statement — Mixed / Multiple Subjects', () => {
   test('multiple expense subjects summed in section', async () => {
     const date = '2099-06-15';
     await createAndPostVoucher(date, [
-      { subjectId: 'subject-007', direction: 'DEBIT', amountCents: 60000, summary: '主营业务成本' },
+      { subjectId: 'subject-6603', direction: 'DEBIT', amountCents: 60000, summary: '主营业务成本' },
       { subjectId: EXPENSE_EXTRA_ID, direction: 'DEBIT', amountCents: 40000, summary: '销售费用' },
       { subjectId: 'subject-002', direction: 'CREDIT', amountCents: 100000, summary: '银行存款' },
     ]);
@@ -377,12 +377,12 @@ describe('Income Statement — Direction / Reversal', () => {
   test('EXPENSE credit reversal reduces expense (not adds)', async () => {
     const date = '2099-12-15';
     await createAndPostVoucher(date, [
-      { subjectId: 'subject-007', direction: 'DEBIT', amountCents: 80000, summary: '主营业务成本' },
+      { subjectId: 'subject-6603', direction: 'DEBIT', amountCents: 80000, summary: '主营业务成本' },
       { subjectId: 'subject-002', direction: 'CREDIT', amountCents: 80000, summary: '银行存款' },
     ]);
     await createAndPostVoucher(date, [
       { subjectId: 'subject-002', direction: 'DEBIT', amountCents: 5000, summary: '银行存款' },
-      { subjectId: 'subject-007', direction: 'CREDIT', amountCents: 5000, summary: '成本冲回' },
+      { subjectId: 'subject-6603', direction: 'CREDIT', amountCents: 5000, summary: '成本冲回' },
     ]);
 
     const res = await fetch(`${baseUrl}/api/reports/income-statement?period=2099-12`, {

@@ -2466,3 +2466,70 @@ applyInventoryMutation(...)
 - **状态**：Requirement §32.17 `APPROVED`（2026-11-18）；本节 Design `APPROVED`（同日）；
   Implementation **已实施**（2026-11-18）。真实 MySQL 的结构变更、Acceptance / Freeze 签发、
   发布与部署**未授权**。
+
+### 27.63 单腿入库异动的入库价值设计（`APPROVED` → `IMPLEMENTED`，2026-11-18）
+
+> **授权来源**：业务所有者 2026-11-18「将三项收口 然后将三项残余修复」并就两项口径裁定
+> （VMI 复用 `receivePositiveSourceValue`；穷尽枚举的两条同缺陷类流程一并修复）。
+> 对应 Requirement §32.18（`IW-SLV-01..10`）。
+>
+> **未授权**：真实 MySQL 的结构变更、Acceptance / Freeze 签发、发布与部署。
+
+#### 27.63.1 单一 canonical 原语
+
+新增 `server/modules/inventory-single-leg-valuation.js`，是自持计值的**唯一**实现点
+（`IW-SLV-10`）：
+
+```text
+issuedCarryingValueCentsByItems(db, { sourceType, sourceId, sourceItemIds })
+    -> 某来源下若干明细行已发出的权威账面价值合计（负数 = 价值离开）
+issuedCarryingValueCentsByPosition(db, { sourceType, sourceId, productId, warehouseId })
+    -> 某来源下、某货品在某仓位已发出的权威账面价值合计（负数 = 价值离开）
+receiveSingleLegInboundValue(db, { businessDate, productId, warehouseId, quantity,
+    valueCents, valuationBasis, sourceType, sourceId, sourceItemId,
+    inventoryTransactionId, movementType, lotId, serialId })
+    -> 写入权威估值流水 + 身份级估值池；valueCents 为 0 时**不写**（`IW-SLV-08`）
+```
+
+- 「已发出的权威账面价值」**只**从 `inventory_valuation_movements` 的 `status='POSTED'` 流水读取，
+  **不**重算、不用标准成本、不接受客户端传入值。
+- `movementType` 参与估值流水的唯一索引
+  `UNIQUE(source_type, source_id, source_item_id, lot_id, serial_id, movement_type)`，
+  因此每条入库腿的 `movement_type` **必须**与同来源的出库腿**不同**；同一分步调拨行多次入库 /
+  退回时，序号后缀（`..._IN_{n}` / `..._RETURN_{n}`）保证唯一。
+
+#### 27.63.2 各流程的接线
+
+| 流程 | 模块 | 价值来源 | `valuation_basis` | `movement_type` |
+|---|---|---|---|---|
+| 组装成品入库腿 | `inventory-assembly-disassembly.js` | 本次**组件出库**的账面价值合计 | `ASSEMBLY_COMPONENT_COST` | `{sourceType}_PRODUCED_IN` |
+| 拆卸组件回收入库腿 | 同上 | **母件出库**的账面价值按数量分摊（尾差由最后一行吸收） | `DISASSEMBLY_PARENT_COST` | `{sourceType}_COMPONENT_IN` |
+| 步进调拨入库腿 | `inventory-step-transfer.js` | **调出腿**的账面单价 × 本次数量 | `STEP_TRANSFER_CARRYING` | `INVENTORY_STEP_TRANSFER_IN_{n}` |
+| 步进调拨退回入库腿 | 同上（`returnToSource`，当前无路由） | 同上 | `STEP_TRANSFER_CARRYING` | `INVENTORY_STEP_TRANSFER_RETURN_{n}` |
+| VMI 收货入库腿 | `procurement-vmi.js` | canonical `receivePositiveSourceValue`（既有账面单价 → 冻结标准成本） | 由该原语决定 | `VMI_RECEIPT` |
+
+#### 27.63.3 事务、错误、审计与兼容
+
+- **组装 / 拆卸**：整段位移与其自持计值**必须**同事务。原先各次 mutation 各自开事务（SQLite
+  不允许同句柄嵌套事务）；现改为外层 `transaction(db, …)`，`applyInventoryMutation` 检测到已开启
+  的事务时会加入外层事务（`server/lib/inventory-mutation.js` 的 `inOpenTransaction`），
+  因此计值失败时整段回滚（`IW-SLV-07`）。
+- **步进调拨 / VMI**：原本已在 `transaction(db, …)` 内，自持计值加入同一事务 ✓。
+- **失败零副作用**：计值失败（金额非法、数量非法、期间关闭、角色缺失）时整段回滚，不留半成品。
+- **审计、权限、状态机、API 契约**：全部**不变**（`IW-SLV-09`）。自持计值不产生新的审计事件
+  类型、权限码或状态。
+- **Schema / Migration**：**无变更、无 migration**。只读 `inventory_valuation_movements`，
+  只写既有 `inventory_valuation_movements` / `inventory_valuation_balances` /
+  `inventory_transactions`。
+- **兼容性与能力收缩**：跟踪口径的 VMI 收货**仍**维持未估值（`IW-SLV-05` 与 §32.18.5 开放项 1）；
+  步进调拨退回入库腿当前无路由（§32.18.4 第 1 项）。
+
+#### 27.63.4 测试与状态
+
+- **合同测试**：`server/inventory-single-leg-valuation.test.js`（新增，登记 FULL）——
+  组装 / 拆卸 / 步进调拨 / VMI 四条可达流程的入库腿 `VALUED` 与金额、估值池数量变化守恒；
+  步进调拨退回入库腿的路由缺失登记为开放项。
+- **回归**：组装 / 拆卸 / 步进调拨 / VMI / 委外 / 库存域既有测试保持通过。
+- **状态**：Requirement §32.18 `APPROVED`（2026-11-18）；本节 Design `APPROVED`（同日）；
+  Implementation **已实施**（2026-11-18）。真实 MySQL 连接、Acceptance / Freeze 签发、
+  发布与部署**未授权**。

@@ -3,6 +3,7 @@ import { HttpError } from '../lib/http.js';
 import { applyInventoryMutation } from '../lib/inventory-mutation.js';
 import { postCanonicalTrackedLeg, resolveInboundLot, resolveInboundSerial } from './traceability-quality.js';
 import { issueValue, receiveValue } from './financial-inventory.js';
+import { buildOutsourcingGlEntries, outsourcingMoveKind } from './outsourcing-gl-integration.js';
 
 const EPS = 1e-9;
 const nowIso = () => new Date().toISOString();
@@ -258,7 +259,15 @@ export function executeOutsourcingMove(db, {
   const effect = direction === 'SUPPLY'
     ? recordSupply(db, { material, identity, eventType, eventId, eventItemId: material.id, quantity, businessDate, idempotencyKey: effectKey })
     : recordConsumption(db, { material, identity, eventType, eventId, eventItemId: material.id, quantity, businessDate, idempotencyKey: effectKey });
-  return { mutation, valuation, effect, identity, fromWarehouseId, toWarehouseId };
+  // 总账分录（Requirement §31.22 `PRC-GL-03` / `PRC-GL-04`）：金额取该次出库的
+  // 权威账面价值。重放时 `issuedValueCents` 为 0，不产生分录。
+  const glEntries = valuation.replayed ? [] : buildOutsourcingGlEntries(db, {
+    kind: outsourcingMoveKind(sourceType),
+    productId: material.product_id,
+    valueCents: valuation.issuedValueCents,
+    summary: `${sourceType} ${eventId}`,
+  });
+  return { mutation, valuation, effect, identity, fromWarehouseId, toWarehouseId, glEntries };
 }
 
 export function executeOutsourcingBackflush(db, {
@@ -288,7 +297,16 @@ export function executeOutsourcingBackflush(db, {
     material, identity, eventType: 'BACKFLUSH', eventId: receipt.id, eventItemId: material.id,
     quantity, businessDate, idempotencyKey: `BACKFLUSH:${receipt.id}:${material.id}:${identity.identityKey}`,
   });
-  return { mutation, valuation, effect, identity, wipWarehouseId };
+  // 倒冲的估值池出账没有对位入账，因此总账侧必须镜像这 −V 的净变化
+  // （Requirement §31.22 `PRC-GL-05`）。凭证定位键取「收货单 + 物料行 + 身份」：
+  // canonical 写入器的幂等键保证该三元组至多实际执行一次。
+  const glEntries = valuation.replayed ? [] : buildOutsourcingGlEntries(db, {
+    kind: 'BACKFLUSH',
+    productId: material.product_id,
+    valueCents: valuation.issuedValueCents,
+    summary: `OUTSOURCING_BACKFLUSH ${receipt.id}`,
+  });
+  return { mutation, valuation, effect, identity, wipWarehouseId, glEntries, glSourceId: `${receipt.id}:${material.id}:${identity.identityKey}` };
 }
 
 /**
@@ -386,6 +404,7 @@ export function receiveOutsourcingFinishedGoods(db, {
     toPosition: { productId: item.product_id, warehouseId: receipt.warehouse_id, ownerType: 'ENTERPRISE', ownerId: null, stockStatus: 'AVAILABLE', lotId: identity.lotId, serialId: identity.serialId },
     trackingMode: 'EXTERNAL', valuationMode: 'EXTERNAL',
   });
+  let glEntries = [];
   if (!mutation.replayed) {
     const inbound = mutation.movements.find((movement) => movement.direction === 'IN');
     postCanonicalTrackedLeg(db, {
@@ -393,7 +412,7 @@ export function receiveOutsourcingFinishedGoods(db, {
       productId: item.product_id, warehouseId: receipt.warehouse_id, lotId: identity.lotId, serialId: identity.serialId,
       quantity: Number(item.quantity), direction: 'IN', businessDate,
     });
-    receiveValue(db, {
+    const received = receiveValue(db, {
       businessDate, productId: item.product_id, warehouseId: receipt.warehouse_id,
       lotId: identity.lotId, serialId: identity.serialId, quantity: Number(item.quantity), valueCents,
       movementType: 'OUTSOURCING_RECEIPT', sourceType: 'OUTSOURCING_RECEIPT', sourceId: receipt.id,
@@ -402,6 +421,14 @@ export function receiveOutsourcingFinishedGoods(db, {
     const tx = db.prepare('SELECT valuation_status FROM inventory_transactions WHERE id=?').get(inbound.transactionId);
     const valuation = db.prepare("SELECT status FROM inventory_valuation_movements WHERE inventory_transaction_id=? AND status='POSTED'").get(inbound.transactionId);
     if (tx?.valuation_status !== 'VALUED' || !valuation) throw codedConflict('OUTSOURCING_VALUATION_UNVERIFIED', '委外成品入库未完成权威估值');
+    // 收货的总账分录（Requirement §31.22 `PRC-GL-06`）：金额取**实际写入估值流水**的
+    // 价值，不取调用方传入值。
+    glEntries = buildOutsourcingGlEntries(db, {
+      kind: 'RECEIPT',
+      productId: item.product_id,
+      valueCents: received.valueDeltaCents,
+      summary: `OUTSOURCING_RECEIPT ${receipt.receipt_no || receipt.id}`,
+    });
   }
-  return { mutation, identity };
+  return { mutation, identity, glEntries };
 }

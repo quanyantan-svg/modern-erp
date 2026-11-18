@@ -1266,3 +1266,69 @@ HARD STOP，须业务所有者明确批准后方可实施（加列 migration + �
 - **状态**：Requirement §35.12 `APPROVED`（2026-11-18）；本节 Design `APPROVED`（同日）；
   Implementation **已实施**（2026-11-18）。真实 MySQL 的结构变更、Acceptance / Freeze 签发、
   发布与部署**未授权**。
+
+### 31.18 手工凭证守卫的受控科目族扩展与旁路闭合（`APPROVED` → `IMPLEMENTED`，2026-11-18）
+
+> **授权来源**：业务所有者 2026-11-18「将三项收口 然后将三项残余修复」并就本节两项口径裁定
+> （受控族扩展到成本与差异族；一并封住改分录与冲销两个旁路）。对应 Requirement §35.13。
+>
+> **未授权**：真实 MySQL 的结构变更、Acceptance / Freeze 签发、发布与部署。
+
+#### 31.18.1 单一 canonical 原语
+
+新增 `server/modules/accounting-manual-voucher-guard.js`，作为**唯一**的守卫实现：
+
+```text
+MANUAL_VOUCHER_CONTROLLED_ROLES = [
+  // 存货族（§35.12 既有）
+  'RAW_MATERIAL_INVENTORY', 'FINISHED_GOODS_INVENTORY', 'OTHER_INVENTORY', 'WIP', 'GRNI',
+  // 成本与差异族（§35.13 `AA-VAL-05` 新增）
+  'COGS', 'INVENTORY_GAIN_LOSS', 'INVENTORY_SCRAP_EXPENSE', 'MATERIAL_PRICE_VARIANCE',
+  'MANUFACTURING_VARIANCE', 'PURCHASE_RETURN_VARIANCE', 'PURCHASE_PRICE_VARIANCE',
+  'LABOR_ABSORPTION', 'OVERHEAD_ABSORPTION', 'OUTSOURCING_PROCESSING_FEE',
+]
+
+manualVoucherControlledSubjectIds(db)   -> Set<subject_id>
+assertManualVoucherSubjectsAllowed(db, entries, { action })
+```
+
+- 受控科目集合**始终**由 `account_role_mappings.role_code` 推导（`SELECT subject_id ... WHERE
+  role_code IN (...)`），**不硬编码科目号**；科目目录调整时守卫自动跟随。
+- `assertManualVoucherSubjectsAllowed` 在命中时抛 `HttpError(409, …, { code:
+  'MANUAL_VOUCHER_CANONICAL_SUBJECT', resolution })`；错误码与既有合同**完全一致**，
+  跨域消费方无需改口径。
+- `resolution` 文案随受控范围扩展（受控科目不再只有存货），但**错误码不变**。
+
+#### 31.18.2 三条写路径的接线
+
+| 路径 | 处理器 | 校验对象 | 时点 |
+|---|---|---|---|
+| 创建 | `server/app.js::createAccountingVoucher` | 请求的**完整**分录集合 | 进入 `transaction()` **之前** |
+| 改分录 | `server/app.js::updateAccountingVoucher` | 请求的**完整**分录集合（将要写入的那一份） | 进入 `transaction()` **之前** |
+| 冲销 | `server/app.js::reverseManualVoucher` | **原凭证**的既有分录（冲销凭证即其镜像） | 调用 `reverseVoucher()` **之前** |
+
+- 改分录路径校验的是「将要写入的完整分录集合」：处理器会先 `DELETE` 旧分录再整体重写，
+  因此不存在「旧分录残留」的问题；请求若只提交部分行，删除旧行后写入的就是请求的那几行。
+- 冲销路径只对**手工凭证**生效：系统凭证冲销走 `reverseVoucher` 的 `SYSTEM_REVERSAL` 分支，
+  **不**经过本守卫（`AA-VAL-07`）。`reverseVoucher` 本身**不被修改**。
+- 提交 `submit` / 审核 `approve` / 删除 `delete` 不新增或删除分录，**不**接入守卫。
+
+#### 31.18.3 事务、错误、审计与兼容
+
+- 守卫一律在写事务**之前**执行，命中即 409，**零副作用**（不产生凭证与分录）。
+- 审计事件类型与既有手工凭证流程**不变**（`CREATE` / `UPDATE` / 冲销沿用既有事件）。
+- 权限码**不变**（`VOUCHER_SUBMIT`）；本节**不**新增权限码，也**不**新增 SOD 决策点。
+- Schema：**无变更、无 migration**。受控集合只**读** `account_role_mappings`。
+- 兼容性与能力收缩：见 Requirement §35.13 `AA-VAL-12`（历史违规手工凭证不再可冲销 / 改分录）。
+  客户环境实测该类凭证数为 0。
+
+#### 31.18.4 测试与状态
+
+- **合同测试**：`server/accounting-manual-voucher-guard.test.js`（新增，登记 FULL）——
+  存货族命中 409 + 零副作用；成本与差异族命中 409 + 零副作用；改分录路径命中 409 且原分录未变；
+  冲销路径对违规既有凭证拒绝、对合法凭证放行；非受控科目仍可录入；守卫抛出点唯一（静态断言）。
+- **变异对照**：清空受控集合 → 命中断言转红；移除改分录路径的守卫调用 → 改分录断言转红；
+  移除冲销路径的守卫调用 → 冲销断言转红。
+- **状态**：Requirement §35.13 `APPROVED`（2026-11-18）；本节 Design `APPROVED`（同日）；
+  Implementation **已实施**（2026-11-18）。真实 MySQL 的结构变更、Acceptance / Freeze 签发、
+  发布与部署**未授权**。

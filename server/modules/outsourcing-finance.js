@@ -8,6 +8,7 @@ import { ensurePayableSource, applyCreditAdjustment, openItemSnapshot } from './
 import { assertQualityGate } from './quality-gates.js';
 import { assertSupplierBillGlPostable, resolveProcessingFeeAccountingProfile } from './outsourcing-gl-policy.js';
 import { executeOutsourcingBackflush, receiveOutsourcingFinishedGoods, recordWipTransferIdentity } from './outsourcing-inventory.js';
+import { OUTSOURCING_GL_SOURCE_TYPES, postOutsourcingGlVoucher } from './outsourcing-gl-integration.js';
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 import { recognizeFinanceExposure } from './finance-recognition.js';
 import { RECOGNITION_MODES } from './finance-recognition-policy.js';
@@ -377,6 +378,9 @@ export async function confirmOutsourcingReceipt(db, req, res, actor, receiptId) 
       const materialValue = backflush.valuation.issuedValueCents;
       totalMaterialValue += materialValue;
       db.prepare('UPDATE outsourcing_material_list SET backflushed_quantity=backflushed_quantity+?, updated_at=? WHERE id=?').run(incremental, now, m.id);
+      // 倒冲的总账分录（Requirement §31.22 `PRC-GL-05`）：每次倒冲执行一张凭证，
+      // 定位键为「收货单 + 物料行 + 身份」。
+      postOutsourcingGlVoucher(db, { sourceType: OUTSOURCING_GL_SOURCE_TYPES.BACKFLUSH, sourceId: backflush.glSourceId, businessDate: lockedReceipt.business_date || lockedReceipt.received_date, actorId: actor.id, entries: backflush.glEntries, remark: `委外倒冲 ${lockedReceipt.receipt_no || lockedReceipt.id}` });
       incrementalRows.push({ materialListId: m.id, incremental, carryingValueCents: materialValue });
     }
     const totalFinishedValue = totalMaterialValue + Number(lockedReceipt.processing_fee_cents);
@@ -385,13 +389,17 @@ export async function confirmOutsourcingReceipt(db, req, res, actor, receiptId) 
       throw new HttpError(409, '委外收货成品成本金额溢出安全整数分', { code: 'OUTSOURCING_RECEIPT_AMOUNT_OVERFLOW' });
     }
     let remainingValue = totalFinishedValue;
+    const receiptGlEntries = [];
     lockedItems.forEach((item, index) => {
       const itemValue = index === lockedItems.length - 1
         ? remainingValue
         : Math.round(totalFinishedValue * Number(item.quantity) / Number(lockedReceipt.quantity));
       remainingValue -= itemValue;
-      receiveOutsourcingFinishedGoods(db, { actor, order: lockedOrder, receipt: lockedReceipt, item, valueCents: itemValue, businessDate: lockedReceipt.business_date || lockedReceipt.received_date });
+      const received = receiveOutsourcingFinishedGoods(db, { actor, order: lockedOrder, receipt: lockedReceipt, item, valueCents: itemValue, businessDate: lockedReceipt.business_date || lockedReceipt.received_date });
+      receiptGlEntries.push(...received.glEntries);
     });
+    // 收货的总账分录（Requirement §31.22 `PRC-GL-06`）：整张收货单一张凭证。
+    postOutsourcingGlVoucher(db, { sourceType: OUTSOURCING_GL_SOURCE_TYPES.RECEIPT, sourceId: lockedReceipt.id, businessDate: lockedReceipt.business_date || lockedReceipt.received_date, actorId: actor.id, entries: receiptGlEntries, remark: `委外收货 ${lockedReceipt.receipt_no || lockedReceipt.id}` });
     // Update receipt with cost evidence: consumed material value + processing fee provisional.
     db.prepare(`UPDATE outsourcing_receipts SET business_status='EFFECTED', backflush_material_value_cents=?, total_cost_cents=?, version=version+1, updated_at=? WHERE id=? AND business_status='PENDING_INSPECTION'`).run(totalMaterialValue, totalFinishedValue, now, receiptId);
     db.prepare(`INSERT INTO outsourcing_cost_evidences(

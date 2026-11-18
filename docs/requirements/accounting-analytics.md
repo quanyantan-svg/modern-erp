@@ -679,3 +679,95 @@ Finance 或库存轴由各自 owner 显式决定，法定反结账不得隐式�
 
 **Requirement 状态：`APPROVED`（2026-11-18，业务所有者授权）。Design §31.17：`APPROVED`（同日）。
 Implementation：已实施（2026-11-18）；真实 MySQL 连接、数据库写操作、发布与部署**未授权**。**
+
+### 35.13 手工凭证守卫的受控科目族扩展与旁路闭合（`APPROVED` → `IMPLEMENTED`，2026-11-18）
+
+> **用途 / Owner / 状态 / 权威关系**：本节修订 §35.12 `AA-VAL-01` 的受控科目集合边界，并把守卫
+> 从「只覆盖凭证创建路径」扩展到「覆盖全部手工凭证写路径」。Owner 为 Accounting & Analytics
+> Domain Owner。生命周期状态 `IMPLEMENTED`（2026-11-18：合同已获批准并按已批准合同实施，
+> **尚未验收**）。
+> 对应 Design 见 `solution.md §31` → `docs/design/accounting-analytics.md` §31.18。
+> 本节**不取代** §35.1～§35.12 的任何正文。
+>
+> **授权来源**：业务所有者 2026-11-18「将三项收口 然后将三项残余修复」（AGENTS.md §4.0
+> 连续阶段授权），并就本节两项口径作出裁定：
+> 1. 受控科目族扩展到**成本与差异族**（本节 §35.13.2 的 10 个角色码）；
+> 2. **一并封住**改分录与冲销两个旁路（只扩科目集合封不住它们）。
+>
+> **显式有界解冻**：本节**有界解冻** §35.12 的 `AA-VAL-01..04` 四项，仅覆盖
+> 「受控科目集合」与「守卫生效路径」两处；`AA-VAL-02`（GRNI 子账侧口径）、
+> `AA-VAL-03`（GRNI 总账侧口径）与 `AA-VAL-04`（存货价值对账两侧同域）**未被修改**，
+> 其正文与既有断言继续有效。AC2 轮次 Acceptance 记录 §2 表中的 17 个冻结合同项中，
+> `AA-VAL-01..04` 被本节有界解冻，其余 13 项**不受影响**。
+
+#### 35.13.1 事实基础（仓库代码取证 + 客户测试环境真实 MySQL 8 实测，2026-11-18）
+
+| # | 事实 | 证据 |
+|---|---|---|
+| H1 | 守卫**只有一处实现**，内联在凭证创建处理器内 | `server/app.js:6229-6239`（`createAccountingVoucher` 内） |
+| H2 | 改分录路径**没有**守卫 | `server/app.js:6260` `updateAccountingVoucher`（`PATCH /api/accounting-vouchers/:id`）在写入分录前**不**校验受控科目 |
+| H3 | 冲销路径**没有**守卫 | `server/app.js:8199` `reverseManualVoucher`（`POST /api/accounting-vouchers/:id/reverse`）经 `accounting-posting.js::reverseVoucher` 镜像原凭证分录，**不**校验受控科目 |
+| H4 | 受控科目集合由角色码推导，未硬编码科目号 | `server/app.js:6230-6232`：`SELECT subject_id FROM account_role_mappings WHERE role_code IN (...)` |
+| H5 | 科目表**没有**科目族字段 | `accounting_subjects` 只有 `type ∈ {ASSET, LIABILITY, EQUITY, REVENUE, EXPENSE}` 五值，粒度不足以表达「存货科目族」；`account_role_mappings.role_code` 是 PRIMARY KEY，一角色码只能对一个科目 |
+| H6 | 成本与差异族已有角色码，**无需**新增科目或角色码 | `COGS` 6401、`INVENTORY_GAIN_LOSS` 6402、`INVENTORY_SCRAP_EXPENSE` 6403、`MATERIAL_PRICE_VARIANCE` 6404、`MANUFACTURING_VARIANCE` 6405、`PURCHASE_RETURN_VARIANCE` 6406、`PURCHASE_PRICE_VARIANCE` 6407、`LABOR_ABSORPTION` 5101、`OVERHEAD_ABSORPTION` 5102、`OUTSOURCING_PROCESSING_FEE` 6408 |
+| H7 | 这些科目同样由权威事实驱动 | 生产领料 `Dr WIP / Cr 存货 / 差异`、生产吸收 `Dr WIP / Cr 5101 / Cr 5102`、销售出库成本 `Dr 6401 / Cr 存货`、委外加工费账单 `Dr 6408 / Cr 2202` —— 全部是 `createSystemVoucher` 产出的**系统凭证** |
+| H8 | 受控科目会影响多个 BLOCKING 对账检查 | `/api/system-health` 的 `COGS_TO_GL` 取 `COGS`（6401）；`INVENTORY_VALUE_TO_GL` 取存货角色集合；`WIP_TO_GL` 取 `WIP`（1404） |
+| H9 | 客户环境**没有**触碰受控科目的手工凭证 | 实测：`accounting_vouchers.source_type='MANUAL'` 共 1 张，其分录科目为 6603 / 6609，均**不在**本节受控集合内；触碰受控科目的手工凭证数为 **0** |
+| H10 | 冲销的 canonical 路径同时服务手工与系统凭证 | `server/modules/accounting-posting.js:139-145`：系统凭证冲销用 `SYSTEM_REVERSAL`、手工凭证冲销用 `MANUAL_REVERSAL`，二者共用 `reverseVoucher` |
+
+**根因**：H1 说明守卫是一个**单点实现**，而不是「一条写路径上的约束」。H2、H3 是同一根因的两个
+实例：守卫只挂在创建路径上，其余手工凭证写路径不受约束，于是「先建一张违规凭证再改分录」与
+「对违规凭证冲销」都能绕过守卫 —— 受控科目依然可以被自由手工凭证触碰，`AA-VAL-01` 的保护目标
+在实现层并不成立。
+
+#### 35.13.2 合同条款
+
+| ID | 条款 |
+|---|---|
+| `AA-VAL-05` | 受控科目集合**必须**扩展到成本与差异族，与存货族合并为同一受控集合：`RAW_MATERIAL_INVENTORY`、`FINISHED_GOODS_INVENTORY`、`OTHER_INVENTORY`、`WIP`、`GRNI`、`COGS`、`INVENTORY_GAIN_LOSS`、`INVENTORY_SCRAP_EXPENSE`、`MATERIAL_PRICE_VARIANCE`、`MANUFACTURING_VARIANCE`、`PURCHASE_RETURN_VARIANCE`、`PURCHASE_PRICE_VARIANCE`、`LABOR_ABSORPTION`、`OVERHEAD_ABSORPTION`、`OUTSOURCING_PROCESSING_FEE`。集合仍**必须**由 `account_role_mappings` 的角色码推导，**不得**硬编码科目号；**不得**为扩展本守卫而新增科目或角色码。 |
+| `AA-VAL-06` | 守卫**必须**覆盖**全部**手工凭证写路径：创建（`POST /api/accounting-vouchers`）、改分录（`PATCH /api/accounting-vouchers/:id`）、冲销（`POST /api/accounting-vouchers/:id/reverse`）。改分录路径**必须**校验**将要写入的完整分录集合**，**不得**只校验「变更后的分录」而放过「既有分录」。 |
+| `AA-VAL-07` | 冲销路径的守卫**只**适用于**手工凭证**的冲销：冲销一张手工凭证时**必须**校验**原凭证**的分录科目（原凭证的分录即冲销凭证的分录）；**系统凭证**的冲销（`SYSTEM_REVERSAL`，含采购退货、销售退货等业务单据的冲销）**不受**本守卫约束，**不得**因此被阻断。 |
+| `AA-VAL-08` | 守卫**必须**只有**一处**实现（单一 canonical 原语），创建、改分录、冲销三条路径**必须**调用同一实现；**不得**在处理器内各自内联一份科目集合。 |
+| `AA-VAL-09` | 命中受控科目时**必须**固定拒绝：`409` + 错误码 `MANUAL_VOUCHER_CANONICAL_SUBJECT` + 明确的 `resolution`；**必须**零副作用（不产生凭证与分录）。错误码**保持不变**（既有合同事实，跨域消费方按 §35.12 的既有口径引用）。 |
+| `AA-VAL-10` | **能力不回退**：**非**受控科目**必须**仍可自由录入（如费用类 6602 / 6603、现金 1001、收入 6001、税金 222101 / 222102）。本节**不得**把守卫扩大为「除现金外的一切」。 |
+| `AA-VAL-11` | 系统凭证**不得**受本守卫约束：生产领料、生产吸收、销售出库成本、采购入库、委外加工费账单、期初库存等由业务事实驱动的凭证**必须**继续正常产生。 |
+| `AA-VAL-12` | **历史更正路径收窄（能力收缩，必须登记）**：既有触碰受控科目的手工凭证**不得**再被冲销，也**不得**再被改分录；其更正**必须**经业务单据（库存调整单 / 成本调整）或系统凭证产生。客户环境实测该类凭证数为 **0**（H9），故本收缩在交付环境无实际影响。 ||
+| `AA-VAL-13` | **既有合同测试的夹具调整**：既有报表类合同测试（试算平衡 / 资产负债表 / 损益表 / 财务摘要）以自由手工凭证构造**费用侧**事实，而费用侧原先使用 `6401 主营业务成本`；该科目本轮纳入受控集合后，自由手工凭证不得触碰它，故这些测试的**费用侧夹具改用非受控科目 `6603 处置资产损益`**（EXPENSE 类型，口径等价）。**断言的强度与语义不变**，仅科目引用随夹具调整；科目目录断言（目录中仍含 `6401`）不变。 |
+
+#### 35.13.3 明确不在本节范围内的事项
+
+1. **应收 / 应付 / 现金 / 银行 / 税金 / 收入科目纳入守卫**：本轮**不**纳入。它们属 Finance Operations
+   与本域的其余合同（`AR_TO_GL` / `AP_TO_GL` / `CASH_BANK_TO_GL` / 税金检查），纳入会改变既有
+   权限与操作结果，需单独裁定（登记为开放项，见 §35.13.5）。
+2. **科目族字段**：**不**给 `accounting_subjects` 增加族字段，**不**改动
+   `account_role_mappings.role_code` 的主键约束；受控集合仍由角色码清单表达。
+3. **系统凭证冲销**：**不**改动 `reverseVoucher` 的系统冲销行为（`AA-VAL-07`）。
+4. **历史凭证的追认或补记**：**不**追认、**不**补记任何历史违规手工凭证。
+5. **手工凭证的其它写路径**（提交 `submit`、审核 `approve`、删除 `delete`）：这些路径**不新增或删除
+   分录**，因此**不**受本守卫约束；状态流转**不变**。
+
+#### 35.13.4 可验收条件
+
+| ID | 验收条件 |
+|---|---|
+| `AA-VAL-AC-01` | 手工凭证命中**存货族**科目 → 409 + `MANUAL_VOUCHER_CANONICAL_SUBJECT`，且凭证与分录计数**不变**。 |
+| `AA-VAL-AC-02` | 手工凭证命中**成本与差异族**科目（至少覆盖 6401 / 6404 / 6408 三类）→ 409 + 同一错误码，零副作用。 |
+| `AA-VAL-AC-03` | **改分录**路径：把一张合法手工凭证的分录改成命中受控科目 → 409 + 同一错误码，原凭证的分录与状态**均未改变**。 |
+| `AA-VAL-AC-04` | **冲销**路径：一张命中受控科目的**既有**手工凭证 → 冲销被拒（409 + 同一错误码），**不得**产生冲销凭证；一张**合法**手工凭证 → 冲销**仍然成功**。 |
+| `AA-VAL-AC-05` | **系统凭证不受约束**：生产领料、销售出库成本、采购入库、委外加工费账单等既有流程**全部**保持通过，且其系统凭证正常产生。 |
+| `AA-VAL-AC-06` | **能力不回退**：非受控科目（6603 / 1001 / 6001 等）的手工凭证**仍然**录入成功（201）。 |
+| `AA-VAL-AC-07` | 守卫实现唯一：全仓 `MANUAL_VOUCHER_CANONICAL_SUBJECT` 的抛出点**有且仅有一处**（静态断言）。 |
+| `AA-VAL-AC-08` | 变异对照：清空受控科目集合 → `AA-VAL-AC-01/02/03` 必须转红；移除改分录路径的守卫调用 → `AA-VAL-AC-03` 必须转红；移除冲销路径的守卫调用 → `AA-VAL-AC-04` 必须转红。 |
+
+#### 35.13.5 未解决矛盾（需业务所有者裁定，本节不自行决定）
+
+1. **应收 / 应付 / 现金 / 银行 / 税金 / 收入科目是否纳入守卫**：本轮明确不纳入。这些科目同样有
+   权威事实驱动方（AR / AP 开项、结算流水、发票与账单），纳入后 `AR_TO_GL` / `AP_TO_GL` /
+   `CASH_BANK_TO_GL` 的失配也会被挡住；但现金与收入科目的人工调整（手续费、红字冲销）在实务中
+   常见，全面封锁的可用性代价最高。留待后续裁定。
+2. **历史违规手工凭证的更正路径收窄**（`AA-VAL-12`）：本轮按 fail closed 收窄。若客户环境出现
+   此类凭证，只能走业务单据或系统凭证，**不**提供人工绕过。
+
+**Requirement 状态：`APPROVED`（2026-11-18，业务所有者授权）。Design §31.18：`APPROVED`（同日）。
+Implementation：已实施（2026-11-18）；真实 MySQL 连接、数据库写操作、Acceptance / Freeze 签发、
+发布与部署**未授权**。**

@@ -8,6 +8,7 @@ import {
   executeOutsourcingBackflush, executeOutsourcingMove,
   recordOpeningWipSupply, resolveOutsourcingIdentity,
 } from './outsourcing-inventory.js';
+import { OUTSOURCING_GL_SOURCE_TYPES, postOutsourcingGlVoucher } from './outsourcing-gl-integration.js';
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 import { createPurchaseOrderDraftCanonical } from './procurement-orders.js';
 import { assertSupplierQualification } from './procurement-sourcing.js';
@@ -980,6 +981,7 @@ export async function issueMaterial(db, req, res, actor, orderId) {
       const movement = executeOutsourcingMove(db, { actor, order, material, sourceType: 'OUTSOURCING_ISSUE', eventType: 'ISSUE', eventId: id, quantity: qty, businessDate, identityInput: body, direction: 'SUPPLY' });
       db.prepare(`INSERT INTO outsourcing_issues(id,order_id,material_list_id,quantity,issued_date,from_warehouse_id,to_warehouse_id,business_status,idempotency_key,creator_id,created_at,updated_at)
         VALUES(?,?,?,?,?,?,?,'CONFIRMED',?,?,?,?)`).run(id, orderId, body.materialListId, qty, businessDate, movement.fromWarehouseId, movement.toWarehouseId, body.idempotencyKey, actor.id, now, now);
+      postOutsourcingGlVoucher(db, { sourceType: OUTSOURCING_GL_SOURCE_TYPES.ISSUE, sourceId: id, businessDate, actorId: actor.id, entries: movement.glEntries, remark: `委外发料 ${order.order_no}` });
       db.prepare("UPDATE outsourcing_material_list SET issued_quantity=issued_quantity+?,identity_evidence_state='VERIFIED',updated_at=? WHERE id=?").run(qty, now, body.materialListId);
       audit(db, actor.id, 'ISSUE', 'OUTSOURCING_ISSUE', id, `${orderId}:${body.materialListId}:${qty}`);
       saveIdempotency(db, operation, orderId, body.idempotencyKey, fingerprint, { id });
@@ -1018,6 +1020,7 @@ export async function supplementMaterial(db, req, res, actor, orderId) {
     const movement = executeOutsourcingMove(db, { actor, order, material, sourceType: 'OUTSOURCING_SUPPLEMENT', eventType: 'SUPPLEMENT', eventId: id, quantity: qty, businessDate, identityInput: body, direction: 'SUPPLY' });
     db.prepare(`INSERT INTO outsourcing_supplements(id,order_id,material_list_id,quantity,reason,supplement_date,business_status,creator_id,created_at)
       VALUES(?,?,?,?,?,?,'CONFIRMED',?,?)`).run(id, orderId, body.materialListId, qty, body.reason || '', businessDate, actor.id, now);
+    postOutsourcingGlVoucher(db, { sourceType: OUTSOURCING_GL_SOURCE_TYPES.SUPPLEMENT, sourceId: id, businessDate, actorId: actor.id, entries: movement.glEntries, remark: `委外补料 ${order.order_no}` });
     db.prepare("UPDATE outsourcing_material_list SET supplemented_quantity=supplemented_quantity+?,identity_evidence_state='VERIFIED',updated_at=? WHERE id=?").run(qty, now, body.materialListId);
     audit(db, actor.id, 'SUPPLEMENT', 'OUTSOURCING_SUPPLEMENT', id, body.reason || '');
     saveIdempotency(db, operation, orderId, body.idempotencyKey, fingerprint, { id });
@@ -1060,6 +1063,7 @@ export async function returnMaterial(db, req, res, actor, orderId) {
     const movement = executeOutsourcingMove(db, { actor, order, material, sourceType: 'OUTSOURCING_RETURN', eventType: 'RETURN', eventId: id, quantity: qty, businessDate, identityInput: body, direction: 'CONSUME' });
     db.prepare(`INSERT INTO outsourcing_returns(id,order_id,material_list_id,quantity,from_warehouse_id,to_warehouse_id,return_date,business_status,creator_id,created_at)
       VALUES(?,?,?,?,?,?,?,'CONFIRMED',?,?)`).run(id, orderId, body.materialListId, qty, movement.fromWarehouseId, movement.toWarehouseId, businessDate, actor.id, now);
+    postOutsourcingGlVoucher(db, { sourceType: OUTSOURCING_GL_SOURCE_TYPES.RETURN, sourceId: id, businessDate, actorId: actor.id, entries: movement.glEntries, remark: `委外退料 ${order.order_no}` });
     db.prepare('UPDATE outsourcing_material_list SET returned_quantity=returned_quantity+?, updated_at=? WHERE id=?').run(qty, now, body.materialListId);
     audit(db, actor.id, 'RETURN', 'OUTSOURCING_RETURN', id, `${orderId}:${body.materialListId}:${qty}`);
     saveIdempotency(db, operation, orderId, body.idempotencyKey, fingerprint, { id });
@@ -1122,6 +1126,7 @@ export async function backflushMaterial(db, req, res, actor, orderId) {
       }
       const execution = executeOutsourcingBackflush(db, { actor, order, material: m, receipt: lockedReceipt, quantity: incremental, businessDate: lockedReceipt.business_date || lockedReceipt.received_date || now.slice(0, 10), identityInput: identities.get(m.id) || {} });
       db.prepare('UPDATE outsourcing_material_list SET backflushed_quantity=backflushed_quantity+?, updated_at=? WHERE id=?').run(incremental, now, m.id);
+      postOutsourcingGlVoucher(db, { sourceType: OUTSOURCING_GL_SOURCE_TYPES.BACKFLUSH, sourceId: execution.glSourceId, businessDate: lockedReceipt.business_date || lockedReceipt.received_date || now.slice(0, 10), actorId: actor.id, entries: execution.glEntries, remark: `委外倒冲复核 ${order.order_no}` });
       audit(db, actor.id, 'BACKFLUSH', 'OUTSOURCING_BACKFLUSH', m.id, `+${incremental}`);
       results.push({ materialListId: m.id, incremental, carryingValueCents: execution.valuation.issuedValueCents });
     }

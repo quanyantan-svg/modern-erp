@@ -12,6 +12,9 @@ import { ensureIndex } from '../lib/schema-ensure.js';
 import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, assertAllowedFields, readJson, send } from '../lib/http.js';
 import { applyInventoryMutation } from '../lib/inventory-mutation.js';
+import {
+  issuedCarryingValueCentsByPosition, receiveSingleLegInboundValue,
+} from './inventory-single-leg-valuation.js';
 
 function nowIso() { return new Date().toISOString(); }
 
@@ -117,7 +120,7 @@ export async function transferIn(db, req, res, actor) {
       });
     }
     const stepItemId = stepRow.id;
-    applyInventoryMutation({
+    const applied = applyInventoryMutation({
       db,
       sourceType: 'INVENTORY_STEP_TRANSFER_IN',
       sourceId: transferId,
@@ -134,6 +137,27 @@ export async function transferIn(db, req, res, actor) {
         stockStatus: 'AVAILABLE',
       },
       idempotencyKey: `STEP_IN:${stepItemId}:${quantity}:${now}`,
+    });
+    // 单腿入库腿的自持计值（Requirement §32.18 `IW-VAL-05`）：入库价值 = **调出腿**
+    // 的权威账面价值（同一批货在途前的账面单价 × 本次入库数量）。
+    const issuedCents = issuedCarryingValueCentsByPosition(db, {
+      sourceType: 'INVENTORY_STEP_TRANSFER_OUT', sourceId: transferId,
+      productId: body.productId, warehouseId: body.fromWarehouseId,
+    });
+    const issuedQuantity = Number(stepRow.issued_qty);
+    const inbound = applied.movements.find((movement) => movement.direction === 'IN');
+    receiveSingleLegInboundValue(db, {
+      businessDate,
+      productId: body.productId,
+      warehouseId: body.toWarehouseId,
+      quantity,
+      valueCents: issuedQuantity > 0 ? Math.round((-issuedCents) * quantity / issuedQuantity) : 0,
+      valuationBasis: 'STEP_TRANSFER_CARRYING',
+      sourceType: 'INVENTORY_STEP_TRANSFER_IN',
+      sourceId: transferId,
+      sourceItemId: stepItemId,
+      inventoryTransactionId: inbound?.transactionId || null,
+      movementType: `INVENTORY_STEP_TRANSFER_IN_${Number(stepRow.received_qty) + 1}`,
     });
     db.prepare(`UPDATE inventory_step_transfer_in_transit SET received_qty=received_qty+? WHERE id=?`).run(quantity, stepRow.id);
     // If fully received → CLOSED
@@ -173,7 +197,7 @@ export function returnToSource(db, res, actor, sourceTransferId, productId, from
     if (!stepRow) throw new HttpError(404, '分步调拨单不存在');
     const inTransit = computeInTransit(stepRow);
     if (q > inTransit) throw new HttpError(409, `在途库存不足以退回来源仓：${inTransit} < ${q}`);
-    applyInventoryMutation({
+    const applied = applyInventoryMutation({
       db,
       sourceType: 'INVENTORY_STEP_TRANSFER_IN',
       sourceId: sourceTransferId,
@@ -191,6 +215,27 @@ export function returnToSource(db, res, actor, sourceTransferId, productId, from
       },
       idempotencyKey: `STEP_RETURN:${stepRow.id}:${q}:${now}`,
       remark: 'Return to source',
+    });
+    // 退回来源仓的单腿入库腿：价值同样取**调出腿**的权威账面价值
+    // （Requirement §32.18 `IW-VAL-05`）——退回的是同一批货。
+    const issuedCents = issuedCarryingValueCentsByPosition(db, {
+      sourceType: 'INVENTORY_STEP_TRANSFER_OUT', sourceId: sourceTransferId,
+      productId, warehouseId: fromWh,
+    });
+    const issuedQuantity = Number(stepRow.issued_qty);
+    const inbound = applied.movements.find((movement) => movement.direction === 'IN');
+    receiveSingleLegInboundValue(db, {
+      businessDate: bizDate,
+      productId,
+      warehouseId: fromWh,
+      quantity: q,
+      valueCents: issuedQuantity > 0 ? Math.round((-issuedCents) * q / issuedQuantity) : 0,
+      valuationBasis: 'STEP_TRANSFER_CARRYING',
+      sourceType: 'INVENTORY_STEP_TRANSFER_IN',
+      sourceId: sourceTransferId,
+      sourceItemId: stepRow.id,
+      inventoryTransactionId: inbound?.transactionId || null,
+      movementType: `INVENTORY_STEP_TRANSFER_RETURN_${Number(stepRow.returned_qty) + 1}`,
     });
     db.prepare(`UPDATE inventory_step_transfer_in_transit SET returned_qty=returned_qty+? WHERE id=?`).run(q, stepRow.id);
     const updated = getStepRow(db, sourceTransferId, productId, fromWh, toWh);

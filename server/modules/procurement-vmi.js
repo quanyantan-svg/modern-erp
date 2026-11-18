@@ -5,6 +5,7 @@ import {
   HttpError, allow, allowAny, assertAllowedFields, readJson, send,
 } from '../lib/http.js';
 import { applyInventoryMutation } from '../lib/inventory-mutation.js';
+import { receivePositiveSourceValue } from './financial-inventory.js';
 import { listCanonicalInventoryPositions } from '../lib/inventory-compat-read.js';
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 import { assertSupplierQualification } from './procurement-sourcing.js';
@@ -200,7 +201,7 @@ export async function confirmVmiReceipt(db, req, res, actor, receiptId) {
       supplierId: locked.supplier_id, warehouseId: locked.warehouse_id, productId: locked.product_id,
       date: locked.received_date, agreementId: locked.agreement_id,
     });
-    applyInventoryMutation({
+    const applied = applyInventoryMutation({
       db,
       sourceType: 'VMI_RECEIPT',
       sourceId: locked.id,
@@ -220,6 +221,25 @@ export async function confirmVmiReceipt(db, req, res, actor, receiptId) {
       idempotencyKey: `VMI_RECEIPT:${locked.id}`,
       remark: `VMI receipt ${locked.receipt_no} agreement ${agreement.id}`,
     });
+    // 单腿入库腿的自持计值（Requirement §32.18 `IW-VAL-05`）：VMI 收货的价值取
+    // 产品自身的既有账面单价；该仓位没有既有账面值时用冻结标准成本
+    // （canonical 原语 `receivePositiveSourceValue`，与库存调整单正向调整同一口径）。
+    // 只有移动加权估值口径能在收货时确定价值：跟踪口径需要身份级分配，而 VMI 收货
+    // 目前不登记身份（开放项，见 Requirement §32.18）。
+    const vmiProduct = db.prepare('SELECT tracking_policy, valuation_method FROM products WHERE id=?').get(locked.product_id);
+    if (vmiProduct?.tracking_policy === 'NONE' && vmiProduct?.valuation_method === 'MOVING_AVERAGE') {
+      receivePositiveSourceValue(db, {
+        businessDate: locked.received_date || now.slice(0, 10),
+        productId: locked.product_id,
+        warehouseId: locked.warehouse_id,
+        quantity: Number(locked.quantity),
+        movementType: 'VMI_RECEIPT',
+        sourceType: 'VMI_RECEIPT',
+        sourceId: locked.id,
+        sourceItemId: locked.id,
+        inventoryTransactionId: applied.movements.find((movement) => movement.direction === 'IN')?.transactionId || null,
+      });
+    }
     db.prepare('UPDATE vmi_receipts SET business_status=?,updated_at=? WHERE id=?').run('CONFIRMED', now, receiptId);
     audit(db, actor.id, 'CONFIRM', 'VMI_RECEIPT', receiptId, locked.receipt_no);
   });

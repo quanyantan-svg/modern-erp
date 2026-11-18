@@ -21,6 +21,10 @@ import { ensureIndex } from '../lib/schema-ensure.js';
 import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, assertAllowedFields, readJson, send } from '../lib/http.js';
 import { applyInventoryMutation } from '../lib/inventory-mutation.js';
+import {
+  issuedCarryingValueCentsByItems, receiveSingleLegInboundValue,
+} from './inventory-single-leg-valuation.js';
+import { allocateProportionalCents } from './financial-inventory.js';
 import { resolveEffectiveBomForCaller } from './engineering-bom.js';
 
 const SOURCE_ASSEMBLY = 'INVENTORY_ASSEMBLY';
@@ -354,133 +358,181 @@ function confirmDocument(db, res, actor, id, orderType) {
   // authoritative writer and re-verifies the same bound.
   assertDocumentStockAvailable(db, doc, items, orderType);
 
-  // Each mutation opens its own transaction (SQLite forbids nested
-  // transactions on the same handle), so the document status flip and the
-  // movement are guarded by the mutation idempotency key, not by an outer
-  // transaction. The status gate above refuses a second confirm before any
-  // movement is attempted.
-  for (const item of items) {
-    const required = Number(item.required_quantity);
-    if (!Number.isFinite(required) || required <= 0) {
-      throw new HttpError(409, `组件行 ${item.line_no} 的应耗数量无效`);
+  // 组件出库、母件出库与各入库腿必须与它们的**自持计值**同生共死：计值失败时
+  // 整段回滚，不得留下「值离开来源池却不到目标池」的半成品。因此整段位移与其估值
+  // 写入在同一个事务里（`applyInventoryMutation` 检测到已开启的事务时会加入外层事务，
+  // 见 server/lib/inventory-mutation.js 的 inOpenTransaction）。
+  transaction(db, () => {
+    for (const item of items) {
+      const required = Number(item.required_quantity);
+      if (!Number.isFinite(required) || required <= 0) {
+        throw new HttpError(409, `组件行 ${item.line_no} 的应耗数量无效`);
+      }
+      if (orderType === 'ASSEMBLY') {
+        // Consume the component (OUT) …
+        applyInventoryMutation({
+          db,
+          sourceType,
+          sourceId: id,
+          sourceItemId: item.id,
+          sourceNo: doc.doc_no,
+          businessDate,
+          actor: { id: actor.id },
+          movementKind: 'OUT',
+          quantity: required,
+          fromPosition: {
+            productId: item.component_product_id,
+            warehouseId: doc.warehouse_id,
+            binId: item.bin_id ?? null,
+            ownerType: 'ENTERPRISE',
+            ownerId: null,
+            stockStatus: 'AVAILABLE',
+            lotId: item.lot_id ?? null,
+            serialId: item.serial_id ?? null,
+          },
+          toPosition: null,
+          movementGroupId,
+          idempotencyKey: `${sourceType}:${id}:${item.id}:ISSUE`,
+          remark: `Assembly component issue ${doc.doc_no}`,
+        });
+        // … and produce the assembly (IN) once for the whole document.
+      }
+      // Disassembly consumes the assembled parent ONCE for the whole document
+      // (below) and receives every component back (further below).
     }
-    if (orderType === 'ASSEMBLY') {
-      // Consume the component (OUT) …
+
+    if (orderType === 'DISASSEMBLY') {
+      // Consume the assembled parent exactly once for the whole document.
       applyInventoryMutation({
         db,
         sourceType,
         sourceId: id,
-        sourceItemId: item.id,
+        sourceItemId: `${id}:PRODUCED`,
         sourceNo: doc.doc_no,
         businessDate,
         actor: { id: actor.id },
         movementKind: 'OUT',
-        quantity: required,
+        quantity: docQuantity,
         fromPosition: {
-          productId: item.component_product_id,
+          productId: doc.product_id,
           warehouseId: doc.warehouse_id,
-          binId: item.bin_id ?? null,
+          binId: null,
           ownerType: 'ENTERPRISE',
           ownerId: null,
           stockStatus: 'AVAILABLE',
-          lotId: item.lot_id ?? null,
-          serialId: item.serial_id ?? null,
+          lotId: null,
+          serialId: null,
         },
         toPosition: null,
         movementGroupId,
-        idempotencyKey: `${sourceType}:${id}:${item.id}:ISSUE`,
-        remark: `Assembly component issue ${doc.doc_no}`,
+        idempotencyKey: `${sourceType}:${id}:PRODUCED:ISSUE`,
+        remark: `Disassembly issue ${doc.doc_no}`,
       });
-      // … and produce the assembly (IN) once for the whole document.
     }
-    // Disassembly consumes the assembled parent ONCE for the whole document
-    // (below) and receives every component back (further below).
-  }
 
-  if (orderType === 'DISASSEMBLY') {
-    // Consume the assembled parent exactly once for the whole document.
-    applyInventoryMutation({
-      db,
-      sourceType,
-      sourceId: id,
-      sourceItemId: `${id}:PRODUCED`,
-      sourceNo: doc.doc_no,
-      businessDate,
-      actor: { id: actor.id },
-      movementKind: 'OUT',
-      quantity: docQuantity,
-      fromPosition: {
-        productId: doc.product_id,
-        warehouseId: doc.warehouse_id,
-        binId: null,
-        ownerType: 'ENTERPRISE',
-        ownerId: null,
-        stockStatus: 'AVAILABLE',
-        lotId: null,
-        serialId: null,
-      },
-      toPosition: null,
-      movementGroupId,
-      idempotencyKey: `${sourceType}:${id}:PRODUCED:ISSUE`,
-      remark: `Disassembly issue ${doc.doc_no}`,
-    });
-  }
-
-  if (orderType === 'ASSEMBLY') {
-    // Produce the assembled parent exactly once for the document.
-    applyInventoryMutation({
-      db,
-      sourceType,
-      sourceId: id,
-      sourceItemId: `${id}:PRODUCED`,
-      sourceNo: doc.doc_no,
-      businessDate,
-      actor: { id: actor.id },
-      movementKind: 'IN',
-      quantity: docQuantity,
-      toPosition: {
-        productId: doc.product_id,
-        warehouseId: doc.warehouse_id,
-        binId: null,
-        ownerType: 'ENTERPRISE',
-        ownerId: null,
-        stockStatus: 'AVAILABLE',
-        lotId: null,
-        serialId: null,
-      },
-      movementGroupId,
-      idempotencyKey: `${sourceType}:${id}:PRODUCED:RECEIPT`,
-      remark: `Assembly receipt ${doc.doc_no}`,
-    });
-  } else {
-    // Receive every component back once.
-    for (const item of items) {
-      applyInventoryMutation({
-        db,
-        sourceType,
-        sourceId: id,
-        sourceItemId: `${item.id}:PRODUCED`,
-        sourceNo: doc.doc_no,
-        businessDate,
-        actor: { id: actor.id },
-        movementKind: 'IN',
-        quantity: Number(item.required_quantity),
-        toPosition: {
-          productId: item.component_product_id,
+      if (orderType === 'ASSEMBLY') {
+        // Produce the assembled parent exactly once for the document.
+        const produced = applyInventoryMutation({
+          db,
+          sourceType,
+          sourceId: id,
+          sourceItemId: `${id}:PRODUCED`,
+          sourceNo: doc.doc_no,
+          businessDate,
+          actor: { id: actor.id },
+          movementKind: 'IN',
+          quantity: docQuantity,
+          toPosition: {
+            productId: doc.product_id,
+            warehouseId: doc.warehouse_id,
+            binId: null,
+            ownerType: 'ENTERPRISE',
+            ownerId: null,
+            stockStatus: 'AVAILABLE',
+            lotId: null,
+            serialId: null,
+          },
+          movementGroupId,
+          idempotencyKey: `${sourceType}:${id}:PRODUCED:RECEIPT`,
+          remark: `Assembly receipt ${doc.doc_no}`,
+        });
+        // 单腿入库腿的自持计值（Requirement §32.18 `IW-VAL-05`）：成品入库价值 =
+        // 本次**组件出库**的权威账面价值合计。写入器不得「出库计值」来推导它
+        // （那会从成品池扣掉价值）。
+        const issuedCents = issuedCarryingValueCentsByItems(db, {
+          sourceType, sourceId: id, sourceItemIds: items.map((item) => item.id),
+        });
+        const producedInbound = produced.movements.find((movement) => movement.direction === 'IN');
+        receiveSingleLegInboundValue(db, {
+          businessDate,
+          productId: doc.product_id,
           warehouseId: doc.warehouse_id,
-          binId: item.bin_id ?? null,
-          ownerType: 'ENTERPRISE',
-          ownerId: null,
-          stockStatus: 'AVAILABLE',
-          lotId: item.lot_id ?? null,
-          serialId: item.serial_id ?? null,
-        },
-        movementGroupId,
-        idempotencyKey: `${sourceType}:${id}:${item.id}:RECEIPT`,
-        remark: `Disassembly receipt ${doc.doc_no}`,
-      });
-    }
-  }
+          quantity: docQuantity,
+          valueCents: -issuedCents,
+          valuationBasis: 'ASSEMBLY_COMPONENT_COST',
+          sourceType,
+          sourceId: id,
+          sourceItemId: `${id}:PRODUCED`,
+          inventoryTransactionId: producedInbound?.transactionId || null,
+          movementType: `${sourceType}_PRODUCED_IN`,
+        });
+      } else {
+      // Receive every component back once.
+        // 母件出库的权威账面价值按组件数量分摊给各组件（Requirement §32.18 `IW-VAL-05`）。
+        const parentValueCents = -issuedCarryingValueCentsByItems(db, {
+          sourceType, sourceId: id, sourceItemIds: [`${id}:PRODUCED`],
+        });
+        const totalComponentQuantity = items.reduce((sum, item) => sum + Number(item.required_quantity), 0);
+        let remainingValueCents = parentValueCents;
+        items.forEach((item, index) => {
+          const componentQuantity = Number(item.required_quantity);
+          const shareCents = index === items.length - 1
+            ? remainingValueCents
+            : allocateProportionalCents(parentValueCents, componentQuantity, totalComponentQuantity);
+          remainingValueCents -= shareCents;
+          const applied = applyInventoryMutation({
+            db,
+            sourceType,
+            sourceId: id,
+            sourceItemId: `${item.id}:PRODUCED`,
+            sourceNo: doc.doc_no,
+            businessDate,
+            actor: { id: actor.id },
+            movementKind: 'IN',
+            quantity: Number(item.required_quantity),
+            toPosition: {
+              productId: item.component_product_id,
+              warehouseId: doc.warehouse_id,
+              binId: item.bin_id ?? null,
+              ownerType: 'ENTERPRISE',
+              ownerId: null,
+              stockStatus: 'AVAILABLE',
+              lotId: item.lot_id ?? null,
+              serialId: item.serial_id ?? null,
+            },
+            movementGroupId,
+            idempotencyKey: `${sourceType}:${id}:${item.id}:RECEIPT`,
+            remark: `Disassembly receipt ${doc.doc_no}`,
+          });
+          const componentInbound = applied.movements.find((movement) => movement.direction === 'IN');
+          receiveSingleLegInboundValue(db, {
+            businessDate,
+            productId: item.component_product_id,
+            warehouseId: doc.warehouse_id,
+            quantity: componentQuantity,
+            valueCents: shareCents,
+            valuationBasis: 'DISASSEMBLY_PARENT_COST',
+            sourceType,
+            sourceId: id,
+            sourceItemId: `${item.id}:PRODUCED`,
+            inventoryTransactionId: componentInbound?.transactionId || null,
+            movementType: `${sourceType}_COMPONENT_IN`,
+            lotId: item.lot_id ?? null,
+            serialId: item.serial_id ?? null,
+          });
+        });
+      }
+  });
 
   // Record the movement result on the document lines, then flip the status.
   transaction(db, () => {

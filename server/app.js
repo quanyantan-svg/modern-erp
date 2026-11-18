@@ -210,6 +210,9 @@ import {
   createSystemVoucher, generalLedgerHandler, inventoryAccountRole, inventoryRollForwardHandler, inventoryValuationReport,
   issueSourceValue, postWipMovement, receivePositiveSourceValue, receiveSourceValue, receiveValue, restoreSourceValue, reverseSystemVoucher, reverseValuationSource, systemHealthHandler, wipRollForwardHandler,
 } from './modules/financial-inventory.js';
+import {
+  assertManualVoucherExistingEntriesAllowed, assertManualVoucherSubjectsAllowed,
+} from './modules/accounting-manual-voucher-guard.js';
 import { allocateDocumentNumber, autoBillReceipt, autoInvoiceDelivery, commercialApiHandler, quantitySnapshot, rational, roundRational } from './modules/commercial-golive.js';
 import {
   HttpError,
@@ -6224,19 +6227,10 @@ async function createAccountingVoucher(db, req, res, actor) {
 
   // 存货科目由**权威估值事实**驱动：自由手工凭证不得直接改这些科目。
   // 否则总账与存货子账被静默拆开，`INVENTORY_VALUE_TO_GL` / `INVENTORY_QUANTITY_VS_VALUATION`
-  // 等 BLOCKING 检查会永远失败且无法归因（Requirement §35.12 `AA-VAL-01`）。
-  // 更正路径：库存调整 / 成本调整（自动过账），或对既有凭证做补记 / 冲销。
-  const canonicalRoles = ['RAW_MATERIAL_INVENTORY', 'FINISHED_GOODS_INVENTORY', 'OTHER_INVENTORY', 'WIP', 'GRNI'];
-  const canonicalSubjects = new Set(db.prepare(
-    `SELECT subject_id FROM account_role_mappings WHERE role_code IN (${canonicalRoles.map(() => '?').join(',')})`,
-  ).all(...canonicalRoles).map((row) => row.subject_id));
-  if (entries.some((entry) => canonicalSubjects.has(entry.subjectId))) {
-    throw new HttpError(409, '手工凭证不得直接调整存货科目', {
-      code: 'MANUAL_VOUCHER_CANONICAL_SUBJECT',
-      resolution: '请通过库存调整单 / 成本调整过账，或对既有凭证做补记 / 冲销',
-    });
-  }
-  
+  // 等 BLOCKING 检查会永远失败且无法归因（Requirement §35.12 `AA-VAL-01`、§35.13 `AA-VAL-05`）。
+  // 守卫的唯一实现在 accounting-manual-voucher-guard.js；创建、改分录、冲销三条写路径共用它。
+  assertManualVoucherSubjectsAllowed(db, entries);
+
   const voucherId = id();
   const now = new Date().toISOString();
   const voucherNo = makeVoucherNo();
@@ -6299,6 +6293,10 @@ async function updateAccountingVoucher(db, req, res, actor, voucherId) {
   if (debitTotal !== creditTotal) {
     throw new HttpError(400, '借贷不平衡');
   }
+
+  // 改分录同样不得把受控科目带进来（Requirement §35.13 `AA-VAL-06`）：
+  // 本路径会先删除既有分录再整体重写，因此校验对象是**将要写入的完整分录集合**。
+  assertManualVoucherSubjectsAllowed(db, entries);
 
   const now = new Date().toISOString();
   const newVoucherDate = voucherDate || voucher.voucher_date;
@@ -8204,6 +8202,10 @@ async function reverseManualVoucher(db,req,res,actor,voucherId){
   const body=await readJson(req);
   const reason=requiredText(body.reason,'冲销原因',500);
   const businessDate=normalizeDocumentDate(body.businessDate||new Date().toISOString().slice(0,10),'冲销日期');
+  // 冲销凭证是原凭证分录的镜像，因此守卫对象是**原凭证**本身
+  // （Requirement §35.13 `AA-VAL-07`）。系统凭证的冲销走 SYSTEM_REVERSAL 分支，
+  // 不经过本守卫。
+  assertManualVoucherExistingEntriesAllowed(db, voucherId);
   // AA-W3.2 — manual and system reversals share the single canonical path.
   // The response shape is preserved; the reversal itself is now produced by
   // the domain implementation so the mirroring semantics cannot drift.

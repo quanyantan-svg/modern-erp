@@ -2788,3 +2788,135 @@ Requirement §31.15 `OUT-WB-REQ-04/05` 明确：受限收货岗**不得**看到 
 Requirement §31.15：`FROZEN`（既有）；本节 Design：`APPROVED`（2026-11-18）；
 Implementation：**已实施**（2026-11-18）。真实 MySQL 连接、数据库写操作、Acceptance / Freeze
 签发、发布与部署**未授权**。
+
+### 26.43 委外库存异动的总账接线设计（2026-11-18；`APPROVED` → `IMPLEMENTED`）
+
+> **授权来源**：业务所有者 2026-11-18「将三项收口 然后将三项残余修复」（AGENTS.md §4.0
+> 连续阶段授权）。对应 Requirement §31.22（`PRC-GL-01..13`）。本节**只**设计总账接线，
+> 不改动委外的数量、身份、估值、状态机、权限码与 API 契约。
+>
+> **未授权**：生产环境部署、`push` / `tag` / `release`、Manual Closure 与 Release Readiness。
+
+#### 26.43.1 模块与职责
+
+| 模块 | 责任 |
+|---|---|
+| `server/modules/outsourcing-gl-integration.js`（**新增**） | 委外库存异动 → 总账分录的**唯一**映射处：角色码常量、分录构造、凭证投递。**不得**在其它模块内重复写这套映射 |
+| `server/modules/outsourcing-inventory.js` | 委外库存位移的 canonical 写入器（既有）：`executeOutsourcingMove`（发料 / 补料 / 退料）与 `executeOutsourcingBackflush`（倒冲）在完成估值后**返回**对应的总账分录条目（不直接写凭证） |
+| `server/modules/outsourcing-finance.js` | 委外收货生效的编排方：收集倒冲分录与收货分录，按事件分别投递两张系统凭证 |
+| `server/modules/outsourcing.js` | 委外发料 / 补料 / 退料 / 倒冲复核的编排方：收集分录并投递凭证 |
+| `server/modules/financial-inventory.js` | `createSystemVoucher`（既有，Accounting & Analytics 域 canonical）：凭证生产、幂等、期间闸门；本节**不**修改它 |
+
+#### 26.43.2 分录映射（唯一事实源）
+
+`outsourcing-gl-integration.js` 导出的角色码常量：
+
+```text
+OUTSOURCING_GOODS_IN_TRANSIT_ROLE = 'OTHER_INVENTORY'            // 1406 委外发出商品
+OUTSOURCING_PROCESSING_FEE_ROLE  = 'OUTSOURCING_PROCESSING_FEE'  // 6408 委外加工费（过桥）
+```
+
+| 事件 | 分录 | 金额 | 凭证 `source_type` | 凭证 `source_id` |
+|---|---|---|---|---|
+| 发料 / 补料 | 借 `OTHER_INVENTORY` / 贷 `inventoryAccountRole(product)` | `V` | `OUTSOURCING_ISSUE` / `OUTSOURCING_SUPPLEMENT` | 发料 / 补料行 id |
+| 退料 | 借 `inventoryAccountRole(product)` / 贷 `OTHER_INVENTORY` | `V` | `OUTSOURCING_RETURN` | 退料行 id |
+| 倒冲 | 借 `OUTSOURCING_PROCESSING_FEE` / 贷 `OTHER_INVENTORY` | `V` | `OUTSOURCING_BACKFLUSH` | `` `${receiptId}:${materialId}:${identityKey}` `` |
+| 收货生效 | 借 `inventoryAccountRole(product)` / 贷 `OUTSOURCING_PROCESSING_FEE` | `F` | `OUTSOURCING_RECEIPT` | 收货单 id |
+
+- `V` = 该次出库的**权威账面价值**（`issueValue` 返回的 `valueDeltaCents` 取负），
+  **不是**标准成本、不是客户端传入值。
+- `F` = 该收货的成品账面价值（材料价值 + 加工费），由收货生效编排方按既有分摊口径给出。
+- `inventoryAccountRole` 是既有 canonical 推导（`financial-inventory.js:181`，按
+  `products.inventory_classification` → `RAW_MATERIAL_INVENTORY` / `FINISHED_GOODS_INVENTORY` /
+  `OTHER_INVENTORY`），**不得**硬编码科目号。
+
+**倒冲 `source_id` 为复合值的理由**：一次倒冲执行 = 一个 `(收货单, 物料行, 身份)` 三元组。
+canonical 写入器的幂等键 `OUTSOURCING_BACKFLUSH:{receiptId}:{materialId}:OUT:{identityKey}`
+保证同一三元组**至多执行一次**（数量不同会先被 canonical 写入器以
+`INVENTORY_MUTATION_UNEXPECTED_REPLAY` 拒绝），因此该复合值对每一次**实际发生**的倒冲都唯一，
+且可回溯到收货单。
+
+#### 26.43.3 调用与数据流
+
+```text
+发料 / 补料 / 退料
+  outsourcing.js::issueMaterial / supplementMaterial / returnMaterial
+    └─ executeOutsourcingMove()                       [outsourcing-inventory.js]
+         ├─ applyInventoryMutation()                   既有：物理位移 + 幂等
+         ├─ postTrackingAndValuation()                 既有：跟踪身份 + issueValue / receiveValue
+         └─ buildOutsourcingGlEntries(kind)           新增：返回分录（不发凭证）
+    └─ postOutsourcingGlVoucher()                     新增：投递一张系统凭证
+
+倒冲（收货生效内）
+  outsourcing-finance.js::confirmOutsourcingReceipt
+    ├─ executeOutsourcingBackflush() × N              既有：估值；新增：返回分录
+    ├─ receiveOutsourcingFinishedGoods() × M          既有：成品估值；新增：返回分录
+    ├─ postOutsourcingGlVoucher(BACKFLUSH, receiptId) 新增：一张凭证，汇总本次全部倒冲
+    └─ postOutsourcingGlVoucher(RECEIPT,  receiptId) 新增：一张凭证，汇总本次全部成品行
+
+倒冲复核（独立操作）
+  outsourcing.js::backflushMaterial
+    ├─ executeOutsourcingBackflush() × N
+    └─ postOutsourcingGlVoucher(BACKFLUSH, receiptId) 新增：一张凭证
+```
+
+**为什么倒冲按「收货单」汇总成一张凭证**：一次收货生效可能涉及多物料行、多身份；
+逐条投递会产生大量碎片凭证。汇总后一张凭证的 `source_id` 仍是收货单 id，可回溯；
+而**逐身份的唯一性**由 §26.43.2 的复合键在**分录层**保证（同一三元组不会被重复计入）。
+
+#### 26.43.4 事务、幂等与错误行为
+
+- 凭证写入**必须**与对应的库存位移、跟踪身份、估值流水处于**同一事务**。既有委外事件全部已在
+  `transaction(db, …)` 内（`outsourcing.js` 的发 / 补 / 退、`outsourcing-finance.js` 的收货生效），
+  本节**不新增**事务边界。
+- 失败**零副作用**：凭证写入失败（科目角色缺失、借贷不平、期间关闭）时，整个委外事件回滚，
+  不留库存 position、库存流水、跟踪移动、估值流水或凭证的半成品。
+- **期间闸门无新增收窄**：`issueValue` / `receiveValue` 已调用 `guardPeriodAction('INVENTORY_VALUATION')`，
+  其轴集合为 `[INVENTORY, LEGAL_ACCOUNTING]`（`server/modules/period-action-registry.js:27`）；
+  `createSystemVoucher` 的 `guardVoucherAction('LEGAL_VOUCHER')` 轴集合为 `[LEGAL_ACCOUNTING]`
+  （同文件 `:35`），是既有轴的**子集**。因此委外事件可用的期间轴**不变**。
+- **幂等**：`createSystemVoucher` 以 `(voucher_origin='SYSTEM', source_type, source_id)` 唯一性
+  作为幂等依据；重复执行同一事件命中既有凭证并直接返回其 id，**不**产生第二张凭证
+  （`SERVER_VOUCHER_UNIQUENESS` 健康项保持 0）。
+- **零金额**：分录金额为 0 时 `createSystemVoucher` 归一化后为空并返回 `null`，不产生空凭证。
+  倒冲复核的增量若为 0（`incremental <= 0`）本就在既有代码里 `continue`，不会进入本节。
+
+#### 26.43.5 Schema / Migration / MySQL Parity
+
+- **无 schema 变更、无 migration**：`1406` 与 `6408` 的角色码映射均已存在
+  （`account_role_mappings`），本节只**读**映射、**写**既有 `accounting_vouchers` /
+  `accounting_entries` / `inventory_valuation_movements` 表。
+- SQLite 与 MySQL 双路径：`createSystemVoucher` 是既有 canonical 实现，其 SQL 不含方言分支；
+  本节新增代码不引入任何方言相关 SQL。
+- 客户环境**不需要**结构变更，故本节部署**不**触发任何迁移。
+
+#### 26.43.6 RBAC / SOD / 审计
+
+- **权限码不变**：委外发 / 补 / 退 / 倒冲 / 收货的既有权限码（`OUTSOURCING_MATERIAL_EXECUTE` /
+  `OUTSOURCING_RECEIVING_MANAGE` 等）继续生效；凭证由服务端在既有事件事务内**自动**产生，
+  不引入新的用户可调用入口，因此**不**需要新权限码，也**不**引入新的 SOD 决策点。
+- **审计**：既有委外事件的审计行（`CREATE` / `ISSUE` / `CONFIRM` / `BACKFLUSH`）**保持不变**；
+  凭证与业务事件同事务落库，可经 `accounting_vouchers.source_type` + `source_id` 回溯到事件，
+  **不**新增审计事件类型（与生产领料、生产入库的既有做法一致）。
+
+#### 26.43.7 兼容性
+
+- **数量 / 身份 / 估值**：完全不变。本节只读取 `issueValue` / `receiveValue` 已算出的权威价值。
+- **委外加工费账单过账**：`PRC-GL-11` 要求不变（`借 6408 / 贷 2202`）。本节**不**修改该路径。
+- **既有委外测试**：`server/outsourcing*.test.js`、`server/m1c-*.test.js` 等既有断言**不降级**；
+  若某条既有断言因新增凭证而需要调整，只能是「断言总账结果不存在」这类**新增能力**的过时断言，
+  且须在 Requirement 中登记能力变化。
+- **历史数据**：**不追认、不补记**任何历史委外异动的凭证。历史差额按既有健康检查口径显示。
+
+#### 26.43.8 测试与 Design 状态
+
+合同测试：`server/outsourcing-gl-integration.test.js`（新增，登记进 FULL）——
+发料 / 补料 / 退料 / 倒冲 / 收货各产生一张系统凭证且分录方向与金额符合 §26.43.2；
+四个时点（发料后 / 倒冲后 / 收货后 / 账单后）的 `INVENTORY_VALUE_TO_GL` 与
+`accounting-reconciliation.runChecks` 的同名检查**同时**为 0；
+`6408` 的余额轨迹符合 `PRC-GL-12`；重复执行不产生第二张凭证（`SERVER_VOUCHER_UNIQUENESS` 保持 0）；
+凭证写入失败时零副作用。
+
+Requirement §31.22：`APPROVED` → `IMPLEMENTED`（2026-11-18）；
+本节 Design：`APPROVED` → `IMPLEMENTED`（2026-11-18）。
+真实 MySQL 连接与目标环境部署、Acceptance / Freeze 签发**待本轮定向验收后**由业务所有者执行。

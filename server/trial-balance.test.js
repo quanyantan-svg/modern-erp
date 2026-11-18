@@ -306,9 +306,11 @@ describe('Phase E — Trial Balance end-to-end', () => {
     assert.equal(periodWritten, '2026-09',
       `createAccountingVoucher must populate period = voucherDate.slice(0, 7); got '${periodWritten}'`);
 
-    // SMOKE-E02: 借 6401 ¥4,000 / 贷 1001 ¥4,000 (400000 cents)
+    // SMOKE-E02: 借 6603 ¥4,000 / 贷 1001 ¥4,000 (400000 cents)
+    // 6603 处置资产损益（非受控 EXPENSE）：6401 主营业务成本已按 AA-VAL-01 纳入守卫，
+    // 自由手工凭证不得触碰它，故费用侧改用非受控科目（断言强度不变）。
     const e02 = await createSubmitApprove(accountingToken, '2026-09-02', [
-      { subjectId: 'subject-007', direction: 'DEBIT', amountCents: 400000, summary: '成本' },
+      { subjectId: 'subject-6603', direction: 'DEBIT', amountCents: 400000, summary: '成本' },
       { subjectId: 'subject-001', direction: 'CREDIT', amountCents: 400000, summary: '现金' },
     ]);
     const periodWritten2 = database.prepare(`SELECT period FROM accounting_vouchers WHERE id=?`).get(e02).period;
@@ -321,7 +323,7 @@ describe('Phase E — Trial Balance end-to-end', () => {
     // All three subjects must appear
     assert.ok(row(tb, '1001'), '1001 库存现金 must appear');
     assert.ok(row(tb, '6001'), '6001 主营业务收入 must appear');
-    assert.ok(row(tb, '6401'), '6401 主营业务成本 must appear');
+    assert.ok(row(tb, '6603'), '6603 处置资产损益 must appear');
 
     // 1001: debit 1000000 (E01), credit 400000 (E02), net +600000
     const r1001 = row(tb, '1001');
@@ -340,12 +342,12 @@ describe('Phase E — Trial Balance end-to-end', () => {
     assert.equal(r6001.closingDirection, 'CREDIT', '6001 closingDirection must be CREDIT (REVENUE positive = CREDIT)');
 
     // 6603 处置资产损益: debit 400000（自由手工凭证不得挂存货 / 成本科目，AA-VAL-01）
-    const r6401 = row(tb, '6401');
-    assert.equal(r6401.periodDebit, 400000, '6401 periodDebit must equal 400000');
+    const r6401 = row(tb, '6603');
+    assert.equal(r6401.periodDebit, 400000, '6603 periodDebit must equal 400000');
     assert.equal(r6401.periodCredit, 0);
-    assert.equal(r6401.closingBalance, 400000, '6401 closingBalance (EXPENSE: +debit-credit) must be 400000');
-    assert.equal(r6401.openingDirection, null, '6401 openingDirection must be null (zero opening)');
-    assert.equal(r6401.closingDirection, 'DEBIT', '6401 closingDirection must be DEBIT (EXPENSE positive = DEBIT)');
+    assert.equal(r6401.closingBalance, 400000, '6603 closingBalance (EXPENSE: +debit-credit) must be 400000');
+    assert.equal(r6401.openingDirection, null, '6603 openingDirection must be null (zero opening)');
+    assert.equal(r6401.closingDirection, 'DEBIT', '6603 closingDirection must be DEBIT (EXPENSE positive = DEBIT)');
 
     // Debit/Credit totals must match production smoke expectation (14,000,000 cents = ¥140,000.00)
     const totalDebit = tb.reduce((s, r) => s + r.periodDebit, 0);
@@ -471,7 +473,7 @@ describe('Phase E — Trial Balance end-to-end', () => {
       `6001.periodCredit in 2026-09 must reflect only POSTED September vouchers; got ${r6001.periodCredit}`);
 
     // 6603 only has E02 = 400000
-    const r6401 = row(res.data.trialBalance, '6401');
+    const r6401 = row(res.data.trialBalance, '6603');
     assert.equal(r6401.periodDebit, 400000);
   });
 
@@ -555,7 +557,7 @@ describe('Phase E — Other reports unaffected by Trial Balance fix', () => {
     const e02 = await post('/api/accounting-vouchers', {
       voucherDate: '2026-09-02', remark: 'regress',
       entries: [
-        { subjectId: 'subject-007', direction: 'DEBIT', amountCents: 400000, summary: '成本' },
+        { subjectId: 'subject-6603', direction: 'DEBIT', amountCents: 400000, summary: '成本' },
         { subjectId: 'subject-001', direction: 'CREDIT', amountCents: 400000, summary: '现金' },
       ],
     });
@@ -763,7 +765,7 @@ describe('Phase E — Production smoke: closing debit = closing credit = 1000000
       { subjectId: 'subject-006', direction: 'CREDIT', amountCents: 1000000, summary: '收入' },
     ]);
     await env.createSubmitApprove(env.accountingToken, '2026-09-02', [
-      { subjectId: 'subject-007', direction: 'DEBIT', amountCents: 400000, summary: '成本' },
+      { subjectId: 'subject-6603', direction: 'DEBIT', amountCents: 400000, summary: '成本' },
       { subjectId: 'subject-001', direction: 'CREDIT', amountCents: 400000, summary: '现金' },
     ]);
 
@@ -827,18 +829,18 @@ describe('Phase E — 6001 closing direction = CREDIT (REVENUE)', () => {
   });
 });
 
-describe('Phase E — 6401 closing direction = DEBIT (EXPENSE)', () => {
+describe('Phase E — 6603 closing direction = DEBIT (EXPENSE)', () => {
   let env;
   before(async () => { env = await setupDirectionTestEnvironment(); });
   after(async () => { await env.teardown(); });
 
   test('费用科目 closing direction = DEBIT (EXPENSE, positive closing = DEBIT)', async () => {
     await env.createSubmitApprove(env.accountingToken, '2026-09-02', [
-      { subjectId: 'subject-007', direction: 'DEBIT', amountCents: 400000, summary: '成本' },
+      { subjectId: 'subject-6603', direction: 'DEBIT', amountCents: 400000, summary: '成本' },
       { subjectId: 'subject-001', direction: 'CREDIT', amountCents: 400000, summary: '现金' },
     ]);
     const res = await env.api('/api/reports/trial-balance?period=2026-09', {}, env.approverToken);
-    const r6401 = row(res.data.trialBalance, '6401');
+    const r6401 = row(res.data.trialBalance, '6603');
     assert.equal(r6401.closingDirection, 'DEBIT',
       `6603 (EXPENSE) positive closing must be DEBIT; got '${r6401.closingDirection}'`);
     assert.equal(r6401.closingBalance, 400000);

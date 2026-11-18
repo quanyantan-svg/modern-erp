@@ -175,7 +175,7 @@ describe('Financial Summary — Direction Correctness', () => {
 
   test('expense normal debit is counted as positive expense', async () => {
     await createAndPostVoucher('2098-03-15', [
-      { subjectId: 'subject-007', direction: 'DEBIT', amountCents: 50000, summary: '主营业务成本' },
+      { subjectId: 'subject-6603', direction: 'DEBIT', amountCents: 50000, summary: '主营业务成本' },
       { subjectId: 'subject-002', direction: 'CREDIT', amountCents: 50000, summary: '银行存款' },
     ]);
     const { data } = await getFinancialSummary('2098-03');
@@ -184,12 +184,12 @@ describe('Financial Summary — Direction Correctness', () => {
 
   test('expense credit reversal reduces expense (does NOT inflate)', async () => {
     await createAndPostVoucher('2098-04-15', [
-      { subjectId: 'subject-007', direction: 'DEBIT', amountCents: 80000, summary: '主营业务成本' },
+      { subjectId: 'subject-6603', direction: 'DEBIT', amountCents: 80000, summary: '主营业务成本' },
       { subjectId: 'subject-002', direction: 'CREDIT', amountCents: 80000, summary: '银行存款' },
     ]);
     await createAndPostVoucher('2098-04-20', [
       { subjectId: 'subject-002', direction: 'DEBIT', amountCents: 5000, summary: '银行存款' },
-      { subjectId: 'subject-007', direction: 'CREDIT', amountCents: 5000, summary: '成本冲回' },
+      { subjectId: 'subject-6603', direction: 'CREDIT', amountCents: 5000, summary: '成本冲回' },
     ]);
     const { data } = await getFinancialSummary('2098-04');
     assert.equal(data.expense, 75000, `expected 75000, got ${data.expense}`);
@@ -201,7 +201,7 @@ describe('Financial Summary — Direction Correctness', () => {
       { subjectId: 'subject-006', direction: 'CREDIT', amountCents: 200000, summary: '主营业务收入' },
     ]);
     await createAndPostVoucher('2098-05-20', [
-      { subjectId: 'subject-007', direction: 'DEBIT', amountCents: 60000, summary: '主营业务成本' },
+      { subjectId: 'subject-6603', direction: 'DEBIT', amountCents: 60000, summary: '主营业务成本' },
       { subjectId: 'subject-002', direction: 'CREDIT', amountCents: 60000, summary: '银行存款' },
     ]);
     const { data } = await getFinancialSummary('2098-05');

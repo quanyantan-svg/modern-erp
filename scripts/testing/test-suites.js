@@ -415,6 +415,10 @@ const FULL = [
   // 固定 409、带身份 201 并按该身份记账、收货生效由服务端继承已登记的供给身份、
   // 收货明细的计划身份由 canonical 跟踪写入器登记。
   'server/outsourcing-tracked-identity.test.js',
+  // 委外库存异动的总账接线（Requirement §31.22 `PRC-GL-01..13`）：发料 / 倒冲 / 收货
+  // 各产生一张 canonical 系统凭证、总账存货角色与估值流水逐步同域、
+  // 过桥科目余额轨迹、重复执行不产生第二张凭证、凭证写入失败时零副作用。
+  'server/outsourcing-gl-integration.test.js',
   // 期初库存计价（F-02）：期初行必须带成本单价、确认后形成权威估值与身份级估值池、
   // 总账期初权益同步、缺成本固定拒绝、跟踪物料必须带已存在身份。
   'server/inventory-opening-cost.test.js',
@@ -425,10 +429,17 @@ const FULL = [
   // 异动腿的计值归属（F-06；Requirement §32.17 `IW-VAL-01..06`）：配对异动的两条腿都必须
   // VALUED、入账腿承接出账腿的价值、估值流水逐腿归属自己的事务行、计值失败零副作用。
   'server/inventory-valuation-leg-attribution.test.js',
+  // 单腿入库异动的自持计值（Requirement §32.18 `IW-VAL-05` 修订清单）：组装成品入库腿、
+  // 拆卸组件回收入库腿、步进调拨入库腿、VMI 收货入库腿的价值来源与估值池数量守恒。
+  'server/inventory-single-leg-valuation.test.js',
   // 存货与成本科目的手工凭证守卫 + GRNI 检查口径统一（F-06 附属；Requirement §35.12
   // `AA-VAL-01..04`）：受控科目 409 且零副作用、非受控科目仍可用、GRNI 三处实现同口径、
   // 存货价值对账两侧同域。
   'server/accounting-canonical-subject-guard.test.js',
+  // 手工凭证守卫的受控科目族扩展与旁路闭合（Requirement §35.13 `AA-VAL-05..12`）：
+  // 成本与差异族纳入守卫；创建 / 改分录 / 冲销三条写路径共用唯一守卫；
+  // 非受控科目能力不回退；守卫抛出点唯一。
+  'server/accounting-manual-voucher-guard.test.js',
   // 委外跟踪物料身份（F-03）新增套件与期初计价（F-02）新增套件的 FULL 登记。
 
   // ----- V21 Inventory & Warehouse Domain Closure — Wave A foundation -----

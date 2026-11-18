@@ -213,7 +213,7 @@ describe('Balance Sheet — Direction / Sign', () => {
       { subjectId: 'subject-006', direction: 'CREDIT', amountCents: 100000, summary: '主营业务收入' },
     ]);
     await createAndPostVoucher(date, [
-      { subjectId: 'subject-007', direction: 'DEBIT', amountCents: 30000, summary: '主营业务成本' },
+      { subjectId: 'subject-6603', direction: 'DEBIT', amountCents: 30000, summary: '主营业务成本' },
       { subjectId: 'subject-002', direction: 'CREDIT', amountCents: 30000, summary: '银行存款减少' },
     ]);
     const { data } = await getBalanceSheet('2098-02');
@@ -381,7 +381,7 @@ describe('Balance Sheet — Unclosed Accumulated Profit', () => {
       { subjectId: 'subject-006', direction: 'CREDIT', amountCents: 50000, summary: '主营业务收入' },
     ]);
     await createAndPostVoucher(date, [
-      { subjectId: 'subject-007', direction: 'DEBIT', amountCents: 20000, summary: '主营业务成本' },
+      { subjectId: 'subject-6603', direction: 'DEBIT', amountCents: 20000, summary: '主营业务成本' },
       { subjectId: 'subject-002', direction: 'CREDIT', amountCents: 20000, summary: '银行存款' },
     ]);
     const { data } = await getBalanceSheet('2097-07');
@@ -409,12 +409,12 @@ describe('Balance Sheet — Unclosed Accumulated Profit', () => {
       { subjectId: 'subject-006', direction: 'CREDIT', amountCents: 60000, summary: '主营业务收入' },
     ]);
     await createAndPostVoucher(date, [
-      { subjectId: 'subject-007', direction: 'DEBIT', amountCents: 40000, summary: '主营业务成本' },
+      { subjectId: 'subject-6603', direction: 'DEBIT', amountCents: 40000, summary: '主营业务成本' },
       { subjectId: 'subject-002', direction: 'CREDIT', amountCents: 40000, summary: '银行存款' },
     ]);
     await createAndPostVoucher(date, [
       { subjectId: 'subject-002', direction: 'DEBIT', amountCents: 5000, summary: '银行存款' },
-      { subjectId: 'subject-007', direction: 'CREDIT', amountCents: 5000, summary: '成本冲回' },
+      { subjectId: 'subject-6603', direction: 'CREDIT', amountCents: 5000, summary: '成本冲回' },
     ]);
     const { data } = await getBalanceSheet('2097-05');
     assert.equal(data.equity.unclosedProfit, 25000);
@@ -428,7 +428,7 @@ describe('Balance Sheet — Multi-Month Accumulation (Critical)', () => {
       { subjectId: 'subject-006', direction: 'CREDIT', amountCents: 100000, summary: '主营业务收入' },
     ]);
     await createAndPostVoucher('2096-01-20', [
-      { subjectId: 'subject-007', direction: 'DEBIT', amountCents: 60000, summary: '主营业务成本' },
+      { subjectId: 'subject-6603', direction: 'DEBIT', amountCents: 60000, summary: '主营业务成本' },
       { subjectId: 'subject-002', direction: 'CREDIT', amountCents: 60000, summary: '银行存款' },
     ]);
     await createAndPostVoucher('2096-02-15', [
@@ -436,7 +436,7 @@ describe('Balance Sheet — Multi-Month Accumulation (Critical)', () => {
       { subjectId: 'subject-006', direction: 'CREDIT', amountCents: 50000, summary: '主营业务收入' },
     ]);
     await createAndPostVoucher('2096-02-20', [
-      { subjectId: 'subject-007', direction: 'DEBIT', amountCents: 20000, summary: '主营业务成本' },
+      { subjectId: 'subject-6603', direction: 'DEBIT', amountCents: 20000, summary: '主营业务成本' },
       { subjectId: 'subject-002', direction: 'CREDIT', amountCents: 20000, summary: '银行存款' },
     ]);
 
