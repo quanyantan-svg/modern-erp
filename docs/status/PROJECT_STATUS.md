@@ -7293,3 +7293,24 @@ VMI_RECEIPT_AP=FINAL 开项；VMI_CONSUMPTION=对称冲销 + 开项冲减
 AP_TO_GL=0(收货后与消耗后)；INVENTORY_VALUE_TO_GL=0(收货后与消耗后)
 VMI_SETTLEMENT=OPEN(D-P01)；VMI_OWNERSHIP_RELEASE=OPEN(VMI-05)
 ```
+
+### 82.10 v1.7.0-rc.4 部署与交付终态（2026-11-18 夜）
+
+| 项 | 结果 |
+|---|---|
+| 部署 | commit `d570c4d`（tag `v1.7.0-rc.4`，已 push 到 GitHub）；`git bundle` 传输 → 停 `modern-erp.service` → checkout → `pnpm install --frozen-lockfile` → `pnpm build`（`✓ built in 7.14s`）→ 启动；**无 schema 变更**；MySQL 未重启；同机 `calculator` / `pairbook-web` 未受影响 |
+| VMI 复核 | 客户环境跑通完整 VMI 链：协议 → 收货单 → 收货生效（确认存货与应付）→ 消耗（对称冲销）；产生 **2 张** VMI 系统凭证；应付开项余额 **15,000** 分（收 20,000 − 耗 5,000）逐分相符 |
+| 权威结账 | `/api/system-health` **BLOCKING 24 项全部 PASS、FAILING = 0**；`INVENTORY_VALUE_TO_GL` = 0；`LEGACY_UNVALUED_MOVEMENTS` = 0 |
+| 环境终态 | 7 个账号（`admin` 原口令未改 + 6 个角色演示账号）；演示数据：2 货品、4 个库存仓位、1 张委外订单、1 张 VMI 收货、1 笔 VMI 消耗、1 张组装单、期初原材料 1000 件 |
+| 复原 | 临时验收探针账号已删除；`/tmp` 与 `/opt/modern-erp/.tmp` 临时脚本已清理；`admin` 口令原值已恢复 |
+
+```text
+DELIVERABLE=v1.7.0-rc.4(d570c4d，已 push GitHub；tag v1.7.0-rc.4)
+CUSTOMER_ENV_COMMIT=d570c4d2；SERVICE=active；nginx80=200；api=401
+AUTHORITATIVE_CLOSE=PASS(BLOCKING 24/24 PASS，FAILING=0)
+INVENTORY_VALUE_TO_GL=0；LEGACY_UNVALUED_MOVEMENTS=0；AP_TO_GL=0
+VMI_GL_VOUCHERS=2(收货 Dr 存货/Cr 应付 + 消耗 Dr 应付/Cr 存货)；VMI_AP_OPEN=15000
+ADMIN_PASSWORD=客户原值(未改)；DEMO_ACCOUNTS=6(口令已重置，登录实测 200)
+VMI_SETTLEMENT=OPEN(D-P01)；VMI_OWNERSHIP_RELEASE=OPEN(VMI-05)
+TLS=无(仅 80)；AUTO_BACKUP=无(仅 3 份手工 dump)
+```
