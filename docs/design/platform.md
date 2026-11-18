@@ -2063,3 +2063,142 @@ Implementation：**已实施**（`PL-DDL-01`、`PL-DDL-02`、`PL-GROUP-01`、`PL
 
 Requirement §36.21：`APPROVED`（2026-11-17）；本节 Design：`APPROVED`（同日）。
 Implementation：**已实施**（`PL-SEED-01..05`）。
+
+### 32.22 客户测试交付可用性与用户手册设计（`IMPLEMENTED`，2026-11-18）
+
+#### 32.22.1 设计身份、授权与边界
+
+| 项 | 内容 |
+|---|---|
+| 上游合同 | Requirement §36.22 `PL-UX-01..10`（`APPROVED`，2026-11-18） |
+| 授权来源 | 业务所有者批准 §36.22 / §34.17，对相关冻结呈现合同作显式有界解冻，并授权进入 Design |
+| 状态 | `IMPLEMENTED`；仓库内实现与 DRAFT `.docx + PDF` 已完成；Acceptance / Freeze 未授权 |
+| 设计边界 | 不改 route key / 数量 / exposure、权限码、role 种子、既有 API 请求响应、schema、状态机、业务动词、事务、审计、金额 DB 合同或 release tag |
+
+本节只把 93 条 active route 的交付呈现收敛为可验证的用户路径。源码中的 Requirement、Design、
+canonical、legacy 与权限/事务说明继续作为追溯证据保留；用户可见文案和源码注释使用不同守卫，
+不得通过删除注释来满足 UI 文案检查。
+
+#### 32.22.2 模块与单一责任
+
+| 目标 | 文件 / 模块 | 责任与约束 |
+|---|---|---|
+| route 任务上下文 | `src/navigation/applicationRegistry.js` | 在既有 canonical route 条目增加 `taskContext`；不得新建第二份 route 清单 |
+| 统一上下文条 | `src/components/RouteGuidance.jsx`（新增）、`RouteScreen.jsx` | 从当前 route 元数据渲染「业务域 → 当前任务 → 来源/下一步」；不复制标题，不决定权限 |
+| 异步状态 | `src/components/design-system.jsx`、`MobilePage.jsx` | 统一十类状态；API 错误不得降级为空态 |
+| 业务参照选择 | `src/components/BusinessReferenceSelector.jsx`（新增） | 搜索、分页、键盘/触控和 canonical ID 水合；不拥有业务可见性 |
+| 金额边界 | `src/lib/money.js` | 成为全局 UI 元/分 canonical helper；页面不得复制浮点转换器 |
+| route 呈现适配 | `V16RouteSurface.jsx`、`styles/v16-sitewide-rollout.css` | 390 CSS px 主基线并覆盖 320/430/680；复杂对象保持 LIST → DETAIL → EDITOR/WORKFLOW |
+| 守卫与取证 | `scripts/qa/verify-user-facing-copy.mjs`（新增）、canonical browser gate | 从 registry 枚举 route/角色，检查真实可见 DOM；不扫描或删除源码注释 |
+
+#### 32.22.3 route 上下文与角色发现流
+
+`taskContext` 只承载呈现事实，不承载 access facts：
+
+```text
+applicationRegistry route（现有 canonical source）
+  ├─ access / exposure / screen（既有，不变）
+  └─ taskContext
+       ├─ purpose
+       ├─ upstreamRoute / upstreamLabel
+       ├─ nextRoute / nextLabel
+       └─ helpLevel: STANDARD | HIGH_RISK
+```
+
+上下游 route 必须存在于同一 registry，并再次执行既有 access 判定；无权链接不显示，不能因“下一步”
+提示暴露隐藏 route。启动器仍从 registry exposure 派生，不新增角色硬编码 route 表。HIGH_RISK 页面只说明
+来源、前置条件、操作副作用与失败零副作用，不重新解释或改变 Confirm / Approve / Post / Reverse。
+
+#### 32.22.4 业务参照选择器与后端边界
+
+通用组件只定义 UI 协议：
+
+```text
+descriptor.search({ q, limit, offset, selectedId, signal })
+  → { items:[{ id, code, name, secondaryText, active }], total/hasMore }
+onChange(canonicalId, selectedRow)
+```
+
+后端不存在跨域“万能 lookup”。每种参照由业务域选择以下路径之一：
+
+1. 复用现有、已具正确 actor scope 的列表/lookup endpoint；
+2. 若现有响应过宽或权限不匹配，在该 Domain 新增只读 `*-work-references` endpoint；
+3. 新 endpoint 调用目标 mutation 已有 authorization / scope resolver，先形成 authorized relation，
+   再搜索、计数和分页；禁止先查全表后在 JS 过滤；按 ID 水合使用同一 predicate；
+4. 无权对象沿用该域非枚举结果，不能通过 item、total、排序或错误文本泄露内部 ID。
+
+选择器必须区分加载、空结果、无权与错误；不自动选择第一项，不用自由文本伪造 ID。
+
+#### 32.22.5 金额、页面状态与用户文案
+
+- `yuanToCents()` / `yuanToNonNegativeCents()` 在提交边界转换，`centsToYuanInput()` 在编辑水合时转换；
+  超过安全整数、超过两位小数或非法文本 fail closed。`formatMoney()` 只负责只读展示。
+- API / DB 继续使用安全整数分，不改字段名称和业务计算。
+- 页面状态为 `LOADING / EMPTY / FORBIDDEN / MISSING_CONFIG / ERROR / READ_ONLY / SAVING /
+  SUCCESS / WARNING / CONFIRM`；403 不得呈现为“暂无数据”。
+- 用户可见区域不得以 Wave / Stage / Phase、SC/PL/IW/MQ 合同编号、权限码或数据库 ID 解释操作；
+  真实业务单号、客户/供应商/货品编码不属于内部开发标识。
+
+#### 32.22.6 用户测试手册生成与治理
+
+交付物位于 `docs/operations/`：可编辑 `.docx`、同版 PDF，以及只承载元数据和生成说明的 Markdown 索引。
+用途为客户测试操作指引，Owner 为 Platform，初始状态 `DRAFT`；权威来源为已批准 Requirement / Design、
+当前 registry、release 身份和 `PROJECT_STATUS.md`，不得成为第二份业务合同或状态登记。
+
+内容证据顺序：
+
+1. `package.json`、release tag / commit 与 `PROJECT_STATUS.md` 提供版本、环境和已知边界；
+2. registry 提供 route 名称、exposure、角色可达性和 taskContext；
+3. Requirement / Design 提供术语、状态、前置条件和操作副作用；
+4. 当前构建使用脱敏测试数据截图，不含真实密码、Token、连接串或个人敏感信息；
+5. 按文档渲染流程生成 docx/PDF，逐页检查标题、步骤、表格、页码、截图和断页。
+
+手册覆盖 10 分钟快速上手、五类 canonical 角色、O2C / P2P / Plan-to-Produce /
+Plan-to-Outsource / R2R、关键状态与动词、测试数据纪律、故障排查和问题反馈模板。
+登录信息只写“由管理员另行安全提供”。手册中的 route key 由脚本与 registry 比对：不存在、disabled
+或当前发布身份不可达即失败。
+
+#### 32.22.7 RBAC/SOD、事务、审计、错误、兼容与回滚
+
+- **RBAC/SOD**：前端隐藏不是授权；lookup 和 mutation 继续以后端守卫为最终权威。不得新增权限码、
+  修改 `role_permissions` 或用较弱列表权限替代 mutation scope。
+- **事务/审计**：通用呈现、选择和手册无写事务、无业务 audit；原 mutation 的 transaction、幂等和 audit 不变。
+- **错误**：参照请求失败保留 ERROR 与重试；403 为 FORBIDDEN；缺基础配置为 MISSING_CONFIG；
+  任一状态都不得自动选择第一项或伪造默认 ID。
+- **兼容**：route location、refresh / Back / Forward、deep link、screen owner 与现有 API payload 不变；
+  新增 lookup 是 additive read model，不替代既有业务 API。
+- **回滚**：通用组件、metadata 与页面适配按同一逻辑单元回滚；回滚不删除业务数据或回退 schema，
+  不得用永久豁免掩盖文案守卫回归。
+
+#### 32.22.8 实施顺序与验证矩阵
+
+实施保持每一轮可构建：
+
+1. registry `taskContext`、统一状态和可见文案守卫；
+2. 通用业务参照选择器及各 Domain adapter；
+3. 从审计中存在内部 ID/整数分/错误空态的 active 页面逐 route 迁移，信用页按 §29.54 先闭合；
+4. 运行 93 route × 5 canonical 角色 × 4 宽度取证并修正剩余呈现 Gap；
+5. 以验证后的 UI 制作 DRAFT 手册并完成 docx/PDF 逐页 QA。
+
+| Requirement | 设计证据 |
+|---|---|
+| PL-UX-01/02 | 可见 DOM 守卫 + 93 route 枚举；源码注释明确排除 |
+| PL-UX-03 | descriptor、同 scope 水合、无权/空/错误测试；scope predicate 变异必须转红 |
+| PL-UX-04 | 元/分边界、超范围负向用例和既有 payload 快照 |
+| PL-UX-05/06 | taskContext 完整性、无权 next route 不显示、HIGH_RISK 帮助检查 |
+| PL-UX-07 | 十类状态 focused 渲染与错误不降级为空态 |
+| PL-UX-08 | DOM 与源码注释守卫分离；删除旧实现仍需 zero-caller proof |
+| PL-UX-09/10 | 手册 route 校验、docx/PDF 渲染复核、敏感信息扫描和元数据检查 |
+
+完整门禁：focused tests、`pnpm test`、`pnpm build`、canonical browser gate（5 角色 × 4 宽度）、
+`git diff --check`、文档一致性 current / migration。若实施发现必须新增 schema、权限、状态机或新的跨域
+可见性政策，立即返回 Requirement / Design，不得继续实现。
+
+#### 32.22.9 Design 状态与 HARD STOP
+
+Requirement §36.22：`IMPLEMENTED`（2026-11-18）；本节 Design：`IMPLEMENTED`（同日）。
+仓库内 Implementation 与 DRAFT `.docx + PDF` 手册已完成；Acceptance / Freeze 未授权。
+Implementation 与 DRAFT 手册制作：`AUTHORIZED`。真实数据库操作、部署、Git 写操作与
+Acceptance / Freeze 均未授权。
+获批后实施前发现的**已批准合同与实际代码不一致**及其整改结果，登记在
+`docs/status/PROJECT_STATUS.md` §86.1（当前状态登记的唯一位置）。

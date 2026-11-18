@@ -1637,12 +1637,13 @@ M1-Core §7.5 对 `M1C-G03/G06` 的首期合同保留**数量归属守恒**、�
 **Requirement 状态：`APPROVED`（2026-11-18，业务所有者授权并裁定物权时点）。Design §26.44：`APPROVED`（同日）。
 Implementation：已实施（2026-11-18）；真实 MySQL 复核、Acceptance / Freeze 签发、发布与部署**待执行**。**
 
-### 31.24 VMI 结算机制合同（2026-11-18；`APPROVED` → 待实施）
+### 31.24 VMI 结算机制合同（2026-11-18；`ACCEPTED` + `FROZEN`）
 
 > **用途 / Owner / 状态 / 权威关系**：本节固化 VMI **结算机制**（协议 → 收货 → 消耗 → 结算期 → 账单 →
 > 结算）的业务合同，解除 `D-P01` / `D-P02` 对实现层的 HARD STOP。Owner 为 Procurement & Outsourcing
 > Domain Owner；应付与总账归 Finance Operations 与 Accounting & Analytics 域的既有 canonical 原语。
-> 生命周期状态 `APPROVED`（2026-11-18，业务所有者裁定并授权实施）。
+> 生命周期状态 `ACCEPTED` + `FROZEN`（2026-11-18，业务所有者裁定、授权实施并签发 Acceptance 与
+> Capability Freeze）。
 > 对应 Design 见 `docs/design/procurement-outsourcing.md` §26.45。
 > 本节**不取代** §31.1～§31.23 的任何正文；§31.22（委外总账接线）与 §31.23（VMI 收货与消耗的总账
 > 接线）继续有效，但 §31.23 的**收货价值来源**由本节修正（见 `VMI-SET-06`）。
@@ -1747,5 +1748,8 @@ Implementation：已实施（2026-11-18）；真实 MySQL 复核、Acceptance / 
 - **对应条款**：Accounting & Analytics Requirement §35.14 `AA-COG-01..06`；
   Design §31.19。
 
-**Requirement 状态：`APPROVED`（2026-11-18，业务所有者裁定并授权）。Design §26.45：`APPROVED`（同日）。
-Implementation：授权实施（AGENTS.md §4.0）；真实 MySQL 复核、Acceptance / Freeze 签发、发布与部署**待执行**。**
+**Requirement 状态：`ACCEPTED` + `FROZEN`（2026-11-18，业务所有者签发 Acceptance 与 Capability
+Freeze；验收记录 `docs/acceptance/vmi-settlement-acceptance-freeze-20261118.md`）。Design §26.45：
+`ACCEPTED` + `FROZEN`（同日）。Implementation：已实施（2026-11-18），并在真实 MySQL 8 客户环境
+（`129.204.51.149`，commit `1bde79c2`）复核：权威结账 BLOCKING 24/24 PASS、`FAILING = 0`。
+发布与部署**待执行**。**

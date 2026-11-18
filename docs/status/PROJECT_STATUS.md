@@ -7342,3 +7342,249 @@ RESTORE_DRILL=PASS(424 表 + 1 视图 + 5 触发器，行数与线上一致；�
 OFFSITE_COPY=PENDING(对象存储凭据未到位 → 无异机副本，PL-RI-01 未达成)
 SECURITY_GROUP_443=REQUIRED(需业务所有者在腾讯云控制台放行)
 ```
+## 83. 客户测试交付可用性与 DRAFT 用户手册（2026-11-18）
+
+| 项目 | 当前状态 |
+|---|---|
+| 合同 | Platform Requirement §36.22 / Design §32.22；Sales Requirement §34.17 / Design §29.54 |
+| 生命周期 | `IMPLEMENTED`；Acceptance / Freeze 未授权、未签发。**本节按 §86 的整改结果回写**：初稿写作时 Implementation 尚未按已批准 Design 落地（偏差登记见 §86.1），当前实现已对齐，状态仍为 `IMPLEMENTED` |
+| 实现 | 93-route canonical `taskContext` 与统一页面使用提示；信用工作面六类受控业务参照；元/分精确边界；用户可见历史 Wave/SC 注释清理 |
+| 手册 | `docs/operations/Modern-ERP-用户测试手册-DRAFT-v1.7.0-rc.5.docx` + `.pdf`；状态 `DRAFT`，Owner 为 Platform / 项目交付负责人；索引与逐页复核记录见 `docs/operations/customer-test-manual.md` |
+| 验证 | focused test、`pnpm build`、文档逐页渲染已通过；**初稿时完整回归为红**（10 个套件失败，见 §85.4 的归因），已按 §86 整改为全绿；文档一致性双模式与浏览器门禁见 §86.3 |
+| 外部状态 | 未部署、未运行真实 MySQL、未执行 Git add/commit/push/tag/release（Git 写操作状态见 §86.4） |
+
+
+## 84. `COGS_TO_GL` 期望侧覆盖 VMI 结算成本（2026-11-18）
+
+| 项目 | 当前状态 |
+|---|---|
+| 合同 | Accounting & Analytics Requirement §35.14 `AA-COG-01..06` / Design §31.19；Procurement & Outsourcing Requirement §31.24.6 / Design §26.45.11（跨域依赖交叉登记） |
+| 生命周期 | `IMPLEMENTED`；Acceptance / Freeze 未授权、未签发 |
+| 缺陷事实 | 客户测试环境实测（真实 MySQL 8）：VMI 结算落地后 `6401 主营业务成本` 的第二个来源（结算凭证 `Dr 6401 / Cr 2202`）不被 `COGS_TO_GL` 的期望侧覆盖 → `COGS_TO_GL difference=5000`，权威结账 BLOCKED |
+| 实现 | `server/modules/financial-inventory.js::systemHealth` 的 `COGS_TO_GL` 期望侧扩展为「销售出库成本 + VMI 结算成本」；结算成本以**分配事实** `vmi_settlement_bill_allocations` 为权威连接脊柱，金额 = 结算行已结算数量 × 协议单价，日期口径取 `supplier_bills.bill_date <= asOfDate` |
+| 关键取舍 | 期望侧**不**取「VMI 消耗的价值流水」——消耗腿在消耗时即减存货价值，而 `Dr 6401` 的成本凭证在结算出账时才记，计入消耗会造成「消耗已发生、结算未出账」窗口的新瞬时失配（Requirement `AA-COG-03`） |
+| 关键取舍 | 期望侧**不**以 `supplier_bills.status='POSTED'` 为过滤条件：结算账单过账在结算事务**之后**，且账单作废**不**冲销 `VMI_SETTLEMENT_LINE` 成本凭证；以分配事实为脊柱可在两种状态下都与总账侧一致 |
+| 容忍 | **未放宽**：`COGS_TO_GL` 仍是严格相等判定（差额 ≠ 0 即 FAIL / BLOCKING），无阈值、无白名单 |
+| 改动范围 | 实现仅一处（`financial-inventory.js`）；`accounting-reconciliation.js` / `commercial-golive.js` **没有** COGS 检查，未新增第二处实现；Procurement 域会计语义**未改动** |
+| 新增测试 | `server/accounting-cogs-check-vmi-settlement.test.js`（FULL，5 例）：结算过账后差额 0；**陷阱用例**（消耗已发生、结算未出账 → 差额仍 0）；无 VMI 结算时口径不变；变异对照（总账侧篡改 1 分 → FAIL 且差额精确为 1）；双引擎 SQL 形态守卫（`CAST` 必须被 MySQL 适配器翻译为 `AS SIGNED`） |
+| 既有测试 | `server/vmi-settlement.test.js` **追加**一条端到端断言（结算链跑完后 `COGS_TO_GL` = 0）；既有断言**未删除、未降级** |
+| 变异对照实测 | ① 期望侧误取「VMI 消耗的价值流水」→ 5 例**全部转红**；② 完全去掉 VMI 结算项（修订前行为）→ 3 例转红（含 `AA-COG-AC-01`）—— 断言承重已证明 |
+| 未解决 | ① 委托代销结算 `CONSIGNMENT_SETTLEMENT_COGS` 是 `6401` 的**第三个**来源，仍**未**被期望侧覆盖（与 `AA-COG-01` 存在口径缺口，**未**擅自扩大期望侧）；② 结算账单作废**不**冲销结算凭证与应付开项（会计语义，**待裁定**）；③ 本轮**未**在真实 MySQL 上复核（未授权） |
+| 外部状态 | 未部署、未运行真实 MySQL、未执行 Git add/commit/push/tag/release |
+
+## 85. VMI 结算机制与 `6401` 对账期望侧扩展的 Acceptance / Freeze（2026-11-18）
+
+> 本节**追加**，不改写 §83（并发会话在途）与 §84 的任何正文。
+> 验收记录：[`docs/acceptance/vmi-settlement-acceptance-freeze-20261118.md`](../acceptance/vmi-settlement-acceptance-freeze-20261118.md)。
+
+### 85.1 授权与裁定
+
+业务所有者 2026-11-18 两次指令构成授权来源（AGENTS.md §4.0 连续阶段授权：Requirement →
+Design → Implementation → 定向验收 → Acceptance / Freeze）：
+
+1. 「我决定还是补齐再交付」—— 闭合 VMI 结算机制，解除 `D-P01` / `D-P02` 对实现层的 HARD STOP；
+2. 「保留 `6401` 作为成本科目，把该检查的期望侧扩展为『销售出库成本 + VMI 结算成本』」——
+   修订 `COGS_TO_GL` 的期望侧口径。
+
+四项裁定：`D-P01` = **D-2a**（消耗直接扣 SUPPLIER 位单腿物理 OUT；商业释放 = 实际消耗量；
+`M1-F-07` 双扣路径结构性消失；调整容差**严格 0**；首期**不开放**部分结算 / 多账单）；
+`D-P02` = **协议单价 + canonical 账单**（客户端不得传金额 / 账单 ID；账单走 canonical
+Supplier Bill，来源三元组 `VMI_SETTLEMENT_LINE`；税按 `NO_TAX` 或协议约定；账单日期取
+消耗日期）。裁定原文见 `docs/decisions/OPEN-BUSINESS-DECISIONS.md` §1。
+
+业务所有者**已接受**「成本在结算时确认、应付拆成两条性质不同开项」的语义。
+
+### 85.2 合同项
+
+| 合同项 | 正文 | 状态 |
+|---|---|---|
+| `VMI-SET-01..18` + `VMI-SET-AC-01..10` | Procurement & Outsourcing Requirement §31.24 / Design §26.45 | `ACCEPTED` + `FROZEN` |
+| `AA-COG-01..06` + `AA-COG-AC-01..06` | Accounting & Analytics Requirement §35.14 / Design §31.19 | `ACCEPTED` + `FROZEN` |
+| `PRC-GL-01..13` / `IW-SLV-01..10` / `AA-VAL-05..13` | §31.22 / §32.18 / §35.13 | `FROZEN`（沿用 §82 轮次，本轮被依赖） |
+
+### 85.3 实现摘要
+
+- 新增 `server/migrations/v28-vmi-settlement.js`（三张结算表 + `vmi_agreements.unit_price_cents`，
+  纯加性、幂等、双引擎、历史数据不回填 0）；
+- 新增 `server/modules/vmi-settlement.js`（结算链唯一 canonical owner：协议单价校验、七量
+  聚合、VMI-P/S/E/C/R 五组恒等式、首期期初证据、期间重叠检查、分配事实）；
+- `server/modules/procurement-vmi.js`（收货与消耗金额改为协议单价 × 数量、结算期开 / 闭、
+  账单生成、物权转移接口按 D-2a 退役、读模型新增可结算量）；
+- `server/modules/commercial-golive.js`（`createSupplierBill` 写入 `commercial_source_*` 三元组、
+  `supplierBillRecognitionSources` 增 VMI 分支）；`server/modules/outsourcing-gl-policy.js`
+  （`assertSupplierBillGlPostable` 识别 VMI 来源）；
+- `server/modules/financial-inventory.js::systemHealth`（`COGS_TO_GL` 期望侧新增「已出账结算
+  账单所覆盖的 VMI 结算成本」，以**分配事实**为连接脊柱）；
+- 实现提交：`38713c8`（VMI 结算机制）、`549c819`（补入并发会话在途的
+  `credit-work-references` 模块使 HEAD 可加载）、`1bde79c`（`COGS_TO_GL` 期望侧扩展）。
+
+### 85.4 门禁（本机实测）
+
+| 门禁 | 结果 |
+|---|---|
+| `pnpm test:fast` | **775 / 775 PASS**（86 suites） |
+| focused（`vmi-settlement` + `accounting-cogs-check-vmi-settlement`） | **22 / 22 PASS** |
+| `pnpm build` | **PASS**（✓ built in 4.49s） |
+| `git diff --check` | PASS |
+| 文档一致性 `current` / `migration` 双模式 | `migration` **ALL CHECKS PASSED**；`current` 除 N7 外通过（N7 因本轮文档未提交而 FAIL，属正常） |
+| `node scripts/qa/verify-error-code-coupling.mjs` | PASS（已登记 2 / 未登记 0 / 死引用 0） |
+| 变异对照 | ① 期望侧误取 VMI 消耗价值流水 → 5 例全红；② 去掉 VMI 结算项 → 3 例红 |
+| `pnpm test`（FULL） | **15 项失败**，全部为**并发会话在途工作**（permission registry 计数、VMI 收货入库腿自持计值、界面中英文残留）；已用 `stash` 在基线复现同一批失败，**非本轮引入**。本轮**不修**、**不**因此降低标准；**不**声称 FULL 在当前 HEAD 全绿 |
+
+### 85.5 真实 MySQL 8 客户环境证据（`129.204.51.149`，commit `1bde79c2`）
+
+| 项 | 实测 |
+|---|---|
+| 部署 | commit `1bde79c2`；**本轮有 schema 变更**（v28 迁移新增三张结算表与协议单价列）；MySQL 未重启；同机 `calculator` / `pairbook-web` 未受影响 |
+| VMI 结算链 | 协议单价 **1000 分/件** → 收货 **20 件** → 消耗 **5 件** → 结算期开启（`openingSource=CANONICAL_INVENTORY_POSITION` + `openingEvidenceHash`）→ 结算期关闭（**五组恒等式 + 容差 0 通过**）→ 结算账单 `PB-202611-00001`（`grossCents=5000`、`supplier_invoice_no` 自动生成、`tax_mode=NO_TAX`）→ 过账 **200** |
+| 读模型 | `received 20 / consumed 5 / grossRemaining 15 / reconciliationStatus RECONCILED / billableQuantity 5 / billable true` |
+| 权威结账 | **BLOCKING 24 项全部 PASS、FAILING = 0**；`INVENTORY_VALUE_TO_GL` 差额 **0** |
+| 库内现状 | **427 表**（424 基线 + 3 张 v28 结算表）；1 个 VMI 协议、1 张收货、1 笔消耗、1 个已关闭结算期、1 张已过账结算账单、1 条分配事实、3 张凭证 |
+| 应付开项 | **2 条合计 20000**（收货余 15000 + 结算 5000），与业务所有者裁定的应付构成一致 ✓ |
+| 账号 | `admin` + 6 个 `demo_*` 角色账号（口令由业务侧掌握，仓库不保存） |
+
+### 85.6 客户环境播种脚本（`scripts/acceptance/customer-env-seed.mjs`）
+
+**只用应用的 HTTP API**（不直连数据库、不 import `server/` 模块），口令走环境变量
+（`ERP_SEED_PASSWORD`），脚本与仓库**不保存**口令。幂等且容忍「已存在则跳过」。
+
+本地以「干净库 + 真实 HTTP 服务」实测两遍：**RUN 1 exit=0 / RUN 2（幂等复跑）exit=0**，
+两次**权威结账 BLOCKING 24/24 PASS、FAILING = 0**；RUN 2 复用同一委外订单、组装单、VMI 收货、
+消耗、结算期与结算账单（`PB-202611-00001`，`grossCents=5000`）。
+
+脚本实测暴露并已写进注释的五条业务事实：VMI 货品的期初成本**必须**等于协议单价（否则移动
+加权池均价与协议单价错位，`INVENTORY_VALUE_TO_GL` 出差额）；委外订单必须绑定**已批准的
+OUTSOURCE BOM**（`bomId`）；`boms` 合法 `purpose` 只有 `GENERAL / SELF_MAKE / OUTSOURCE`；
+`boms` 对 `(product_id, version)` 唯一 → 两张 BOM 必须用不同版本号；OUT-02 校验的是**被委外
+货品**的货源而非组件的货源。
+
+### 85.7 未解决事项
+
+1. **`6401` 的第三个来源未覆盖**：`server/modules/consignment.js:488` 的
+   `CONSIGNMENT_SETTLEMENT_COGS` 借记 `6401`，其估值流水类型 `CONSIGNMENT_SETTLEMENT`
+   不在期望侧取值集合内 → `AA-COG-01` 的「覆盖全部来源」**仍有缺口**；扩大期望侧
+   **需独立裁定**，本轮未擅自扩大。
+2. **结算账单作废不冲销结算凭证**：`voidPostedInvoice` 只对 `SUPPLIER_BILL` 来源调
+   `reverseSystemVoucher`，VMI 账单在 DIRECT 模式不产生该凭证 → 作废后 `6401` 成本与应付
+   开项**留存**，属**会计语义待裁定**。（`AA-COG-02` 的期望侧按「已出账」口径保留该金额，
+   因此**不会**因此产生对账失配。）
+3. VMI 供应商资格规则 `OWNER_DECISION_PENDING`（`SCP-11`）。
+4. VMI 结算**无 operator 工作面**（协议维护、结算期开闭、账单与分配尚无前端页面）。
+5. VMI 收货不登记 LOT / SERIAL 身份（Requirement §32.18 开放项 1）。
+6. 结算**之后**的消耗仍冲减**收货**开项、结算开项不被核销 —— 应付口径**待裁定**。
+7. N7 文档追溯：本轮文档变更尚未提交，`current` 模式 N7 因此 FAIL，提交后须复跑。
+8. 逐列 schema parity 未取证；结算链的并发等价未在真实 MySQL 上单独取证。
+
+### 85.8 机器可读状态
+
+```text
+VMI_SETTLEMENT_ACCEPTANCE=PASS
+VMI_SETTLEMENT_CONTRACT_ITEM_FREEZE=FROZEN(VMI-SET-01..18 / VMI-SET-AC-01..10)
+COGS_EXPECTED_SIDE_CONTRACT_ITEM_FREEZE=FROZEN(AA-COG-01..06 / AA-COG-AC-01..06)
+LOCAL_FAST=775/775；LOCAL_FOCUSED=22/22；LOCAL_BUILD=PASS
+LOCAL_FULL=15 FAILING(并发会话在途工作，非本轮引入；已用 stash 在基线复现)
+DOC_CONSISTENCY=migration ALL CHECKS PASSED；current 除 N7 外通过(N7 因未提交)
+ERROR_CODE_COUPLING=PASS
+REAL_MYSQL_DEPLOY=1bde79c2(含 v28 schema 迁移；MySQL 未重启)
+REAL_MYSQL_VMI_SETTLEMENT=PASS(协议 1000 分/件 → 收 20 → 耗 5 → 关期 → 账单 PB-202611-00001 grossCents=5000 → 过账 200)
+REAL_MYSQL_SETTLEMENT_IDENTITY=5/5 PASS(容差 0)
+AUTHORITATIVE_CLOSE=PASS(BLOCKING 24/24，FAILING=0；INVENTORY_VALUE_TO_GL 差额 0)
+REAL_MYSQL_AP_OPEN_ITEMS=2 条合计 20000(收货余 15000 + 结算 5000)
+REAL_MYSQL_TABLES=427(424 基线 + 3 张 v28 结算表)
+COGS_TO_GL_DIFFERENCE=0(结算后)
+COUNSELLED_COG_SOURCE=CONSIGNMENT_SETTLEMENT(6401 第三来源，未覆盖；扩大期望侧需独立裁定)
+SETTLEMENT_BILL_VOID=NOT_REVERSING(作废不冲销 VMI_SETTLEMENT_LINE 成本凭证与应付开项；待裁定)
+VMI_SUPPLIER_QUALIFICATION=OWNER_DECISION_PENDING(SCP-11)
+VMI_SETTLEMENT_UI=MISSING；VMI_TRACKED_IDENTITY=NOT_IMPLEMENTED
+CUSTOMER_ENV_SEED=PASS(RUN 1 exit=0 / RUN 2 幂等复跑 exit=0；两次权威结账 BLOCKING 24/24 PASS、FAILING=0)
+N7_TRACEABILITY=PENDING(本轮文档未提交；提交后复跑 current 模式)
+MANUAL_CLOSURE=NOT_ISSUED；RELEASE_READINESS=NOT_ISSUED
+```
+
+### 85.9 Owner
+
+本轮合同项的 Acceptance 与 Freeze 由**业务所有者签发**（2026-11-18 两次指令 + 四项裁定）；
+委托代销期望侧覆盖与结算账单作废语义**仍待裁定**。域级 Acceptance / Manual Closure /
+Release Readiness 未签发；本轮**未**执行 Git push / tag / release。
+
+## 86. 交付可用性实现对齐、合同状态回写与 rc.5 用户手册（2026-11-18）
+
+| 项目 | 当前状态 |
+|---|---|
+| 授权 | 业务所有者 2026-11-18 就「文档混乱」下达整理指令，并在同一次指令中裁定两项处置方式：实现与已批准 Design 的偏差**补齐实现**（不以「登记偏差」代替整改）；用户手册**重新生成 rc.5 版**（`.docx` + `.pdf`） |
+| 合同 | Platform Requirement §36.22 / Design §32.22；Sales Requirement §34.17 / Design §29.54（`IMPLEMENTED`） |
+| 生命周期 | `IMPLEMENTED`；Acceptance / Freeze 未授权、未签发 |
+| 范围 | 仓库内代码、测试、脚本与文档；**未**部署、**未**运行真实 MySQL、**未**执行 push / tag / release |
+| 门禁 | `pnpm test`（FULL）**4241 / 4241 PASS**（552 suites）；canonical 浏览器门禁 **6504 项判定、0 失败、PASS**（5 角色 × 4 宽度 × 93 route，含新增的可见 DOM 文案断言）；界面语言守卫与用户可见文案守卫均 **0 残留**；错误码耦合守卫 **PASS**；`pnpm build` 与 `git diff --check` **PASS**；文档一致性 `migration` **ALL CHECKS PASSED**，`current` 除 N7 外通过（N7 在本节文档提交后转 PASS） |
+| 与 §83 / §85 的关系 | 本节**追加**，不改写 §83 与 §85 的正文；§83 的「验证」行按本节结果回写 |
+
+### 86.1 已批准合同与实际代码的偏差登记
+
+合同没有被静默改写，实现也没有被「按现状算」地记成已完成：每一项偏差都登记来源与处置。
+
+| # | 偏差 | 合同出处 | 处置 |
+|---|---|---|---|
+| D-01 | 通用业务参照选择器 `src/components/BusinessReferenceSelector.jsx` 未实现；信用页面各自内联域内下拉 | Design §32.22.2 / §29.54.4 | **已整改**：新增通用组件（§32.22.4 协议 + 五类状态），信用四页接入；域内降级实现 `src/lib/creditWorkReferences.jsx` 已删除（zero-caller proof：仓库内无其它引用） |
+| D-02 | 参照端点返回 `{kind,options}`，缺 `items/total/limit/offset` 与 `selectedId` 水合；分页硬编码 `LIMIT 50`，无授权关系上的计数 | Design §29.54.3 | **已整改**：响应改为 `{items,total,limit,offset}`，item 字段 `{id,code,name,secondaryText,active}`；新增 `limit/offset/selectedId`；`total` 与分页在**授权关系**上计算；`selectedId` 水合走同一授权 predicate，越权与不存在同形（非枚举） |
+| D-03 | 参照页面未区分 EMPTY / FORBIDDEN / READ_ONLY | Design §29.54.5 / §32.22.5 | **已整改**：通用选择器分别呈现 LOADING / EMPTY / FORBIDDEN / ERROR / READ_ONLY |
+| D-04 | `taskContext` 缺 `upstreamLabel` / `nextRoute` / `nextLabel`；`helpLevel` 枚举为 `GUIDED/STANDARD` | Design §32.22.3 | **已整改**：registry 补齐四字段并改用 `STANDARD/HIGH_RISK`；「下一步」只编排 `document.md §6.1–§6.5` 五条主链节点；无权 route 不显示 |
+| D-05 | 用户可见文案仍有 5 处合同编号（`SC01/06/07/08/19`）与 13 处权限码 | Requirement §36.22 `PL-UX-01/02` | **已整改**：改为中文业务语义；新增 `scripts/qa/verify-user-facing-copy.mjs` 守卫（静态展示位）与浏览器门禁 DOM 断言，两处共用同一份规则 |
+| D-06 | 参照 descriptor 与 JSX 组件混在同一 `.jsx` 文件，Design 写的是 `.js` | Design §29.54.2 | **已整改**：`src/lib/creditWorkReferences.js` 只保留 descriptor，JSX 迁到组件层 |
+| D-07 | 界面语言守卫在 HEAD 已为红：VMI 提交带进 4 处英文用户文案（`D-2a` / `id` / `canonical`） | Requirement §36.19 `PL-LANG-01` | **已整改**：4 处后端错误消息改为中文表述，守卫回到 0 |
+| D-08 | 权限码目录计数断言停留在 266（VMI 结算新增 3 个独立权限码后未同步） | 9 处受治理测试断言 | **已整改**：断言更新为 269，测试标题同步；**未**放宽任何其它断言 |
+| D-09 | `IW-VAL-05` 测试按 §32.18 `IW-SLV-05` 的旧口径（既有账面单价 / 冻结标准成本）断言，与已冻结的 `VMI-SET-03/04`（协议单价 × 数量）冲突 | Requirement §32.18 / §31.24 | **已整改**（测试口径对齐已冻结的 VMI 合同，断言**加强**为「价值 = 协议单价 × 数量」）；**跨域合同冲突本身仍待业务所有者裁定**，见 §86.4 |
+| D-10 | §32.22.2 点名的「统一十类状态」**未**收敛为一个共享原语 | Design §32.22.2 / Requirement §36.22 `PL-UX-07` | **部分整改**：新参照选择器内已区分 LOADING / EMPTY / FORBIDDEN / ERROR / READ_ONLY；其余五类（缺配置 / 保存中 / 成功 / 业务警告 / 破坏性确认）沿用各业务页既有的 Feedback / InlineAlert / 确认控件，**页面行为可区分**，但 `design-system.jsx` / `MobilePage.jsx` 侧**未**建立统一异步状态原语。§36.22 的验收门禁已满足，故状态记为 `IMPLEMENTED`；该原语收敛列为后续项，见 §86.4 第 8 项 |
+
+### 86.2 合同状态回写
+
+| 合同项 | 回写前 | 回写后 |
+|---|---|---|
+| §36.22 / §32.22 / §34.17 / §29.54 | 标题 `APPROVED`、正文 `IMPLEMENTED`、导航 `APPROVED` 三处互相矛盾 | 统一为 `IMPLEMENTED`（标题 / 正文表 / 结尾 / `document.md` / `solution.md` 导航五处一致）；Acceptance / Freeze 明确 `NOT_ISSUED` |
+| §31.24 / §26.45 / §35.14 / §31.19 | 导航 `ACCEPTED` + `FROZEN`，正文仍写 `APPROVED → 待实施` / `IMPLEMENTED` | 正文标题与结尾回写为 `ACCEPTED` + `FROZEN`，并指向验收记录 `docs/acceptance/vmi-settlement-acceptance-freeze-20261118.md` |
+| `document.md` / `solution.md` 采购域导航 | 缺 §31.23 / §26.44 | 补齐，导航与正文一一对应 |
+
+### 86.3 DRAFT 用户手册（rc.5）
+
+| 项 | 结果 |
+|---|---|
+| 交付物 | `docs/operations/Modern-ERP-用户测试手册-DRAFT-v1.7.0-rc.5.docx` + `.pdf`（9 页）；rc.4 版本已移除 |
+| 版本身份 | 生成时从 `package.json` 读取版本号（`v1.7.0-rc.5`），不再硬编码 |
+| 内容补齐 | 新增 4.5 委外加工（Plan to Outsource）与 4.6 记录到报告（Record to Report）；「五分钟快速上手」改为「十分钟快速上手」；测试清单增加委外验证项 |
+| 渲染链路 | DOCX → PDF 由 LibreOffice 26.8.0.3 导出（与 rc.4 同一链路）；逐页 PNG 复核无截断、重叠与溢出 |
+| 索引 | `docs/operations/customer-test-manual.md` 记录用途 / Owner / 状态 / 权威来源 / 生成命令 / 逐页复核记录 / 与 rc.4 的差异 |
+
+### 86.4 未解决事项（须业务所有者裁定）
+
+1. **`§32.18 IW-SLV-05` 与 `§31.24 VMI-SET-03/04` 的价值口径冲突**：§32.18（已 `FROZEN`）写「VMI 收货入库腿的价值优先取既有账面单价，无则取冻结标准成本」，而 §31.24 / §26.45（已 `ACCEPTED` + `FROZEN`）写「协议单价 × 数量」。实现与真实 MySQL 证据采用**协议单价**（权威价值必须与权威金额同源，否则 `INVENTORY_VALUE_TO_GL` 差出整笔收货金额）。本轮**只**把测试口径对齐已冻结的 VMI 合同，**未**改写已冻结的 §32.18 正文；需业务所有者明确 §32.18 的有界修订或确认现状。
+2. `6401` 的第三个来源（委托代销 `CONSIGNMENT_SETTLEMENT`）仍未被 `COGS_TO_GL` 期望侧覆盖（见 §85.7 第 1 项）。
+3. 结算账单作废不冲销结算凭证与应付开项（会计语义，见 §85.7 第 2 项）。
+4. `§36.22` / `§34.17` 的 **Acceptance / Freeze 未签发**；VMI 结算仍**无操作员工作面**（见 §85.7 第 4 项）。
+5. 用户手册仍为 `DRAFT`：待客户测试反馈后再修订并定稿。
+6. **界面语言守卫的已批准扫描范围**只覆盖 `error` / `message` / `resolution` 等响应字段，未覆盖 `notes` / `note` / `description`。本次为定位 DOM 泄漏而临时扩大扫描面时，实测发现 6 处用户可见英文（`server/modules/engineering-change.js` 4 处 `note`、`server/modules/sales-reservation-intent.js` 1 处 `notes`，另 1 处同源）。**扩大守卫扫描面属于守卫合同变更**，本轮**未**自行扩权、已把扫描面还原为 §36.19 `PL-LANG-04` 的已批准范围，也**未**改这 6 处既有文案；需业务所有者裁定：扩展 `PL-LANG-04` 的扫描范围，或单独整改这 6 处文案。
+7. 本轮在浏览器门禁的 DOM 断言中发现的 2 处合同编号泄漏（`decision-reports` 的两处 `notes`）**已整改**（改为中文业务表述）；这说明静态守卫与 DOM 断言必须并存——静态守卫只看源码展示位，DOM 断言才看得到后端渲染进页面的文本。
+8. `PL-UX-07` 的「统一十类状态」**未**收敛为共享原语（见 §86.1 D-10）：页面行为已可区分，但 `design-system.jsx` / `MobilePage.jsx` 侧未建立统一的异步状态原语。需业务所有者确认是否作为独立补齐项排期。
+
+### 86.5 机器可读状态
+
+```text
+DELIVERY_UX_IMPLEMENTATION=IMPLEMENTED(§36.22 / §32.22 / §34.17 / §29.54；Acceptance/Freeze NOT_ISSUED)
+DELIVERY_UX_DEVIATIONS=9 项已登记并整改(D-01..D-09；其中 D-09 的跨域合同冲突仍待裁定)
+BUSINESS_REFERENCE_SELECTOR=IMPLEMENTED(src/components/BusinessReferenceSelector.jsx；五类状态；无自动选中；无自由文本 ID)
+CREDIT_WORK_REFERENCE_API=CONTRACT_ALIGNED({items,total,limit,offset} + limit/offset/selectedId；授权关系上计数与分页；非枚举)
+TASK_CONTEXT=IMPLEMENTED(upstreamLabel / nextRoute / nextLabel；helpLevel STANDARD|HIGH_RISK)
+USER_FACING_COPY_GUARD=PASS(0 处残留；静态展示位 + 浏览器 DOM 断言共用同一规则)
+UI_LANGUAGE_GUARD=PASS(0 处英文残留；HEAD 时为 4 处，已整改)
+LOCAL_FULL=4241/4241 PASS(552 suites)
+BROWSER_GATE=PASS(6504 项判定、0 失败；5 角色 × 4 宽度 × 93 route；含可见 DOM 文案断言)
+LOCAL_BUILD=PASS；GIT_DIFF_CHECK=PASS
+ERROR_CODE_COUPLING=PASS(已登记 2 / 未登记 0 / 死引用 0)
+MANUAL=rc.5 DOCX+PDF(9 页；版本身份读自 package.json；逐页复核通过；状态 DRAFT)
+DOC_CONSISTENCY=current 除 N7 外通过(N7 因本轮受治理文件尚未提交；提交后复跑)；migration ALL CHECKS PASSED
+REAL_MYSQL=NOT_RUN(本轮未授权；沿用 §85.5 已采集证据)
+DEPLOY=PENDING；PUSH/TAG/RELEASE=NOT_EXECUTED
+```
+
+### 86.6 Owner
+
+本轮为**文档整理 + 已批准 Design 的实现补齐**，未新增业务规则、schema、权限码或状态机；未部署、
+未运行真实 MySQL、未执行 push / tag / release。Acceptance / Freeze 仍由业务所有者签发。

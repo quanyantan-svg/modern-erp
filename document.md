@@ -23,12 +23,12 @@
 | Master & Engineering | [`docs/requirements/master-engineering.md`](docs/requirements/master-engineering.md) | §28 |
 | Manufacturing & Quality | [`docs/requirements/manufacturing-quality.md`](docs/requirements/manufacturing-quality.md) | §29（§29.11 = route exposure 与页面自身 API 权限一致性有界增补，`APPROVED`，2026-11-15；该 route 合同**显式有界解冻**，Implementation 已授权） |
 | Planning | [`docs/requirements/planning.md`](docs/requirements/planning.md) | §30 |
-| Procurement & Outsourcing | [`docs/requirements/procurement-outsourcing.md`](docs/requirements/procurement-outsourcing.md) | §31（§31.12 = M1 全范围历史批准合同；§31.13 = M1-Core 首期已批准；§31.14 = Package A1 产品范围 Requirement，待业务所有者验收；§31.15 = 委外核心执行工作面有界 Requirement，已验收冻结；§31.16 = 完整 Active Contract 域级交付整改 Requirement，已批准并实施（`IMPLEMENTED`，待域级 Acceptance）；§31.17 = 受托裁定与补充合同（`IMPLEMENTED`）；§31.18 = 参数接线、商业快照与 PRC-26 范围裁定（`IMPLEMENTED`）；§31.19 = 域级交付整改第四轮：残余能力闭合与合同固化（`IMPLEMENTED`）；§31.20 = 域级交付收口补充：维护面、界面可达性与三项裁定（`IMPLEMENTED`）；§31.21 = 采购入库确认的跟踪物料合同与物理写入器收敛，`APPROVED`，2026-11-17，Design `APPROVED`，Implementation 未授权） ；§31.22 = 委外库存异动的总账接线合同，`APPROVED` → `IMPLEMENTED`，2026-11-18 |
+| Procurement & Outsourcing | [`docs/requirements/procurement-outsourcing.md`](docs/requirements/procurement-outsourcing.md) | §31（§31.12 = M1 全范围历史批准合同；§31.13 = M1-Core 首期已批准；§31.14 = Package A1 产品范围 Requirement，待业务所有者验收；§31.15 = 委外核心执行工作面有界 Requirement，已验收冻结；§31.16 = 完整 Active Contract 域级交付整改 Requirement，已批准并实施（`IMPLEMENTED`，待域级 Acceptance）；§31.17 = 受托裁定与补充合同（`IMPLEMENTED`）；§31.18 = 参数接线、商业快照与 PRC-26 范围裁定（`IMPLEMENTED`）；§31.19 = 域级交付整改第四轮：残余能力闭合与合同固化（`IMPLEMENTED`）；§31.20 = 域级交付收口补充：维护面、界面可达性与三项裁定（`IMPLEMENTED`）；§31.21 = 采购入库确认的跟踪物料合同与物理写入器收敛，`APPROVED`，2026-11-17，Design `APPROVED`，Implementation 未授权） ；§31.22 = 委外库存异动的总账接线合同，`APPROVED` → `IMPLEMENTED`，2026-11-18 ；§31.23 = VMI 收货与消耗的总账接线合同，`APPROVED` → `IMPLEMENTED`，2026-11-18 ；§31.24 = VMI 结算机制合同，`ACCEPTED` + `FROZEN`，2026-11-18（验收记录 `docs/acceptance/vmi-settlement-acceptance-freeze-20261118.md`） |
 | Inventory & Warehouse | [`docs/requirements/inventory-warehouse.md`](docs/requirements/inventory-warehouse.md) | §32（§32.12 = 期间控制一致性修订，`APPROVED`，2026-11-14；Design 已授权；§32.13 = route exposure 与页面自身 API 权限一致性有界增补，`APPROVED`，2026-11-15；该 route 合同**显式有界解冻**，Implementation 已授权；§32.14 = 批次 / 序列号跟踪列表端点与跟踪维度投影一致性修订（D4），`APPROVED`，2026-11-17，Design `APPROVED`、Implementation 已实施） ；§32.18 = 单腿入库异动的入库价值，`APPROVED` → `IMPLEMENTED`，2026-11-18 |
 | Finance Operations | [`docs/requirements/finance-operations.md`](docs/requirements/finance-operations.md) | §33（§33.51 = FO51–FO53 与跨域期间守卫修订，`APPROVED`，2026-11-14；Design 已授权） |
-| Sales & Customer | [`docs/requirements/sales-customer/README.md`](docs/requirements/sales-customer/README.md) | §34 + Wave 8/9/10/11 修订；`W10-INV-RISK-01` 生产库存正确性闭合 Requirement 见 `04-wave-10-amendments.md` 末节（`APPROVED`，Design `APPROVED`，Implementation 已授权）；§34.16 = route exposure 与页面自身 API 权限一致性有界增补，见 `01-domain-closure.md`（`APPROVED`，2026-11-15；该 route 合同**显式有界解冻**，Implementation 已授权；`SC-EXPOSURE-05` 裁定暂不收紧、延期处理） |
-| Accounting & Analytics | [`docs/requirements/accounting-analytics.md`](docs/requirements/accounting-analytics.md) | §35（Accounting & Analytics Domain Closure Requirement；§35.11 = 法定／经营期间一致性修订，`APPROVED`，2026-11-14（含同日增补：经营关账职责分离与归属字段）；Design 已授权） ；§35.13 = 手工凭证守卫的受控科目族扩展与旁路闭合，`APPROVED` → `IMPLEMENTED`，2026-11-18 |
-| Platform | [`docs/requirements/platform.md`](docs/requirements/platform.md) | §36（Platform 平台层域 Domain Closure Requirement；§36.15 = PL-13 期间控制收敛修订，`APPROVED`；§36.16 = Release Infrastructure 有界增补，`APPROVED`、Design `APPROVED`、Implementation 已授权；§36.17 = Migration 风险工作包，`PENDING_APPROVAL`（含同日业务所有者技术复核修订五项与第二轮对抗性复核修正五处）、Design 已授权并 HARD STOP；§36.18 = Route 首屏 API 授权一致性通用合同 `PL-EXPOSURE-01..07`，`APPROVED`，2026-11-15，Design `APPROVED`、Implementation 已授权；§36.19 = 导航分组完整性与界面语言一致性通用合同 `PL-NAVI-01..06` / `PL-LANG-01..07`，`APPROVED`，2026-11-17，Design `APPROVED`、Implementation 已授权；§36.20 = MySQL 8 方言兼容与追踪估值一致性 `PL-DDL-01/02`、`PL-GROUP-01`、`PL-VALUATION-01/02`、`PL-EMPTY-01`，`APPROVED`，2026-11-17，Implementation 已实施（§36.19 D4 列表端点未实施，已由 §36.21 / §32.14 接续）；§36.21 = 生产前提播种合同 `PL-SEED-01..05`，`APPROVED`，2026-11-17，Design `APPROVED`、Implementation 已实施） |
+| Sales & Customer | [`docs/requirements/sales-customer/README.md`](docs/requirements/sales-customer/README.md) | §34 + Wave 8/9/10/11 修订；`W10-INV-RISK-01` 生产库存正确性闭合 Requirement 见 `04-wave-10-amendments.md` 末节（`APPROVED`，Design `APPROVED`，Implementation 已授权）；§34.16 = route exposure 与页面自身 API 权限一致性有界增补，见 `01-domain-closure.md`（`APPROVED`，2026-11-15；该 route 合同**显式有界解冻**，Implementation 已授权；`SC-EXPOSURE-05` 裁定暂不收紧、延期处理）；§34.17 = 信用工作面交付可用性有界修订 `SC-UX-01..05`（`IMPLEMENTED`，2026-11-18；相关冻结呈现合同已显式有界解冻；Acceptance / Freeze 未授权） |
+| Accounting & Analytics | [`docs/requirements/accounting-analytics.md`](docs/requirements/accounting-analytics.md) | §35（Accounting & Analytics Domain Closure Requirement；§35.11 = 法定／经营期间一致性修订，`APPROVED`，2026-11-14（含同日增补：经营关账职责分离与归属字段）；Design 已授权） ；§35.13 = 手工凭证守卫的受控科目族扩展与旁路闭合，`APPROVED` → `IMPLEMENTED`，2026-11-18 ；§35.14 = `6401 主营业务成本` 对账期望侧覆盖 VMI 结算成本（`COGS_TO_GL`），`ACCEPTED` + `FROZEN`，2026-11-18（验收记录 `docs/acceptance/vmi-settlement-acceptance-freeze-20261118.md`） |
+| Platform | [`docs/requirements/platform.md`](docs/requirements/platform.md) | §36（Platform 平台层域 Domain Closure Requirement；§36.15 = PL-13 期间控制收敛修订，`APPROVED`；§36.16 = Release Infrastructure 有界增补，`APPROVED`、Design `APPROVED`、Implementation 已授权；§36.17 = Migration 风险工作包，`PENDING_APPROVAL`（含同日业务所有者技术复核修订五项与第二轮对抗性复核修正五处）、Design 已授权并 HARD STOP；§36.18 = Route 首屏 API 授权一致性通用合同 `PL-EXPOSURE-01..07`，`APPROVED`，2026-11-15，Design `APPROVED`、Implementation 已授权；§36.19 = 导航分组完整性与界面语言一致性通用合同 `PL-NAVI-01..06` / `PL-LANG-01..07`，`APPROVED`，2026-11-17，Design `APPROVED`、Implementation 已授权；§36.20 = MySQL 8 方言兼容与追踪估值一致性 `PL-DDL-01/02`、`PL-GROUP-01`、`PL-VALUATION-01/02`、`PL-EMPTY-01`，`APPROVED`，2026-11-17，Implementation 已实施（§36.19 D4 列表端点未实施，已由 §36.21 / §32.14 接续）；§36.21 = 生产前提播种合同 `PL-SEED-01..05`，`APPROVED`，2026-11-17，Design `APPROVED`、Implementation 已实施；§36.22 = 客户测试交付可用性与用户手册 `PL-UX-01..10`（`IMPLEMENTED`，2026-11-18；Acceptance / Freeze 未授权）） |
 
 ### 0.2 章节编号迁移规则
 
@@ -439,6 +439,21 @@ AR/AP open item、收付款、分配、退款、write-off、reversal 必须保�
 - 8 个 Domain 不等于 8 个底部 Tab；
 - MobileShell 全局入口保持任务导向；
 - UI 现代化不得修改业务术语、API、权限、状态机、审批/确认语义和上下游关系。
+
+### 10.1 客户测试交付可用性修订（`IMPLEMENTED`，2026-11-18）
+
+> 用途：把「页面能打开」与「首次使用者能理解并完成测试」分开验收。
+> Owner：Platform 负责跨域呈现合同与交付手册；各业务域仍负责本域术语与流程真实性。
+> 状态：`IMPLEMENTED`；业务所有者于 2026-11-18 批准 §36.22 与 §34.17，
+> 并对所涉及的冻结呈现合同作显式有界解冻；仓库内 Implementation 与 DRAFT 用户手册已按已批准合同实施，
+> Acceptance / Freeze 未授权。
+> 权威来源：本节为全局已批准补充合同；详细条款见 Platform §36.22，Sales 信用工作面的域内语义修订见 §34.17。
+
+- 用户可见文案必须描述**当前已发布业务行为**，不得展示 Wave / Stage / SC / PL 等研发批次或合同编号，不得声称与当前实现相反的「尚未启用」。
+- 最终用户完成常规业务任务时，不得以手工输入内部主键、权限码、枚举码或 JSON 作为默认交互；必须使用受权限限制的业务对象选择与中文展示。
+- 用户界面金额默认以元展示与输入；API / DB 的安全整数分合同保持不变。
+- 每个工作面必须让用户判断所在位置、当前对象、状态、前置条件与下一个有效动作；空态、无权、错误、只读与未配置必须明确区分。
+- 客户测试版必须有与实际发布身份一致的用户测试手册；手册按角色和端到端任务组织，不得只复制菜单清单。
 
 ---
 

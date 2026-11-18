@@ -6,6 +6,10 @@ backups/
 .tmp/
 example/
 
+# 渲染与排查中间产物（用户手册逐页 PNG、探针脚本、门禁原始输出）：
+# 不是交付物，不入库；手册正本在 docs/operations/。
+tmp/
+
 .env
 .env.*
 !.env.example

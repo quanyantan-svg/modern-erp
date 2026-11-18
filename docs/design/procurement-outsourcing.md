@@ -2976,7 +2976,7 @@ VMI 消耗 (procurement-vmi.js::createVmiConsumption)
 - **状态**：Requirement §31.23 `APPROVED`（2026-11-18）；本节 Design `APPROVED`（同日）；
   Implementation **已实施**（2026-11-18）。真实 MySQL 复核、Acceptance / Freeze 签发、发布与部署**待执行**。
 
-### 26.45 VMI 结算机制设计（2026-11-18；`APPROVED` → `IMPLEMENTED`）
+### 26.45 VMI 结算机制设计（2026-11-18；`ACCEPTED` + `FROZEN`）
 
 > **授权来源**：业务所有者 2026-11-18「我决定还是补齐再交付」并就 `D-P01` / `D-P02` 作出裁定
 > （`APPROVED`，原文见 [`docs/decisions/OPEN-BUSINESS-DECISIONS.md`](../decisions/OPEN-BUSINESS-DECISIONS.md) §1）。
@@ -3267,8 +3267,10 @@ VMI-R: closing_S = opening_S + received − supplier_consumed − owner_changed 
 
 #### 26.45.10 状态
 
-- Requirement §31.24 `APPROVED`（2026-11-18，业务所有者裁定并授权实施）。
-- 本节 Design `APPROVED`（同日）；Implementation **已实施**（2026-11-18）。
+- Requirement §31.24 `ACCEPTED` + `FROZEN`（2026-11-18，业务所有者签发 Acceptance 与 Capability
+  Freeze；验收记录 `docs/acceptance/vmi-settlement-acceptance-freeze-20261118.md`）。
+- 本节 Design `ACCEPTED` + `FROZEN`（同日）；Implementation **已实施**（2026-11-18），并在真实
+  MySQL 8 客户环境复核通过。
 - 真实 MySQL 复核、Acceptance / Freeze 签发、发布与部署**待执行**。
 
 #### 26.45.11 跨域依赖登记：Accounting & Analytics 的 `COGS_TO_GL` 消费 VMI 结算事实

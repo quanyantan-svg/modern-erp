@@ -774,12 +774,12 @@ Implementation：已实施（2026-11-18）；真实 MySQL 连接、数据库写�
 
 ---
 
-### 35.14 `6401 主营业务成本` 的对账期望侧覆盖 VMI 结算成本（`APPROVED` → `IMPLEMENTED`，2026-11-18）
+### 35.14 `6401 主营业务成本` 的对账期望侧覆盖 VMI 结算成本（`ACCEPTED` + `FROZEN`，2026-11-18）
 
 > **用途 / Owner / 状态 / 权威关系**：本节修正 `COGS_TO_GL` 权威结账检查的**期望侧口径**，
 > 使其覆盖 `6401 主营业务成本` 的**全部**来源。Owner 为 Accounting & Analytics
-> Domain Owner（对账检查与关账门禁）。生命周期状态 `IMPLEMENTED`（2026-11-18：合同已获批准并按
-> 已批准合同实施，**尚未验收**）。对应 Design 见 `solution.md §31` →
+> Domain Owner（对账检查与关账门禁）。生命周期状态 `ACCEPTED` + `FROZEN`（2026-11-18：合同已获批准、
+> 按已批准合同实施，并已签发 Acceptance 与 Capability Freeze）。对应 Design 见 `solution.md §31` →
 > `docs/design/accounting-analytics.md` §31.19。
 > 本节**不取代** §35.1～§35.13 的任何正文；§35.12 `AA-VAL-04`（存货价值对账的两侧同域）
 > 与 §35.13 的受控科目集合**未被修改**，其正文与既有断言继续有效。
@@ -855,6 +855,8 @@ Implementation：已实施（2026-11-18）；真实 MySQL 连接、数据库写�
 3. **权威结账的其它 BLOCKING 项**：本节**只**修正 `COGS_TO_GL` 一项；`INVENTORY_VALUE_TO_GL` /
    `AP_TO_GL` / `RECEIPT_GRNI_TO_GL` 等的期望侧**不变**。
 
-**Requirement 状态：`APPROVED`（2026-11-18，业务所有者授权）。Design §31.19：`APPROVED`（同日）。
+**Requirement 状态：`ACCEPTED` + `FROZEN`（2026-11-18，业务所有者签发 Acceptance 与 Capability
+Freeze；验收记录 `docs/acceptance/vmi-settlement-acceptance-freeze-20261118.md`）。Design §31.19：
+`ACCEPTED` + `FROZEN`（同日）。
 Implementation：已实施（2026-11-18）；真实 MySQL 连接、数据库写操作、Acceptance / Freeze 签发、
 发布与部署**未授权**。**

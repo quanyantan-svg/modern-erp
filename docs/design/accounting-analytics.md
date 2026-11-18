@@ -1333,7 +1333,7 @@ assertManualVoucherSubjectsAllowed(db, entries, { action })
   Implementation **已实施**（2026-11-18）。真实 MySQL 的结构变更、Acceptance / Freeze 签发、
   发布与部署**未授权**。
 
-### 31.19 `6401 主营业务成本` 对账期望侧覆盖 VMI 结算成本（`APPROVED` → `IMPLEMENTED`，2026-11-18）
+### 31.19 `6401 主营业务成本` 对账期望侧覆盖 VMI 结算成本（`ACCEPTED` + `FROZEN`，2026-11-18）
 
 > **授权来源**：业务所有者 2026-11-18「保留 `6401` 作为成本科目，把该检查的期望侧扩展为
 > 「销售出库成本 + VMI 结算成本」」，并裁定「期望侧不得放宽差额容忍」「期望侧只计已过账结算
@@ -1470,6 +1470,7 @@ SELECT COALESCE(SUM(CAST(r.settled_cents AS INTEGER)),0) n FROM (
 
 #### 31.19.7 状态
 
-- Requirement §35.14 `APPROVED`（2026-11-18，业务所有者授权并裁定口径）。
-- 本节 Design `APPROVED`（同日）；Implementation **已实施**（2026-11-18）。
+- Requirement §35.14 `ACCEPTED` + `FROZEN`（2026-11-18，业务所有者签发 Acceptance 与 Capability
+  Freeze，并裁定口径；验收记录 `docs/acceptance/vmi-settlement-acceptance-freeze-20261118.md`）。
+- 本节 Design `ACCEPTED` + `FROZEN`（同日）；Implementation **已实施**（2026-11-18）。
 - 真实 MySQL 复核、Acceptance / Freeze 签发、发布与部署**待执行**。

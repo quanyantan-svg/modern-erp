@@ -5429,3 +5429,114 @@ Requirement §34.16：`APPROVED`（2026-11-15）；本节 Design：`APPROVED`（
 Acceptance / Freeze 签发、发布、部署、push、tag、Git 历史重写；这些操作仍须逐次单独批准。
 本节的实施**不得**越出 §34.16.3 `SC-EXPOSURE-01..05` 与本节设计的范围 —— 不得改动 route exposure、
 后端守卫、权限目录、role 种子或其它 route；`SC-EXPOSURE-05` 已裁定暂不收紧，不得在实施中顺带收紧。
+
+### 29.54 信用工作面交付可用性有界设计（`IMPLEMENTED`，2026-11-18）
+
+#### 29.54.1 设计身份、冻结边界与单一 owner
+
+| 项 | 内容 |
+|---|---|
+| 上游合同 | Requirement §34.17 `SC-UX-01..05`；Platform Requirement §36.22 / Design §32.22 |
+| 授权 | 业务所有者 2026-11-18 批准 Requirement，对信用冻结基线的呈现与参照交互部分显式有界解冻并授权 Design |
+| 冻结不变量 | §36.16 的 schema、mutation payload、Credit Read Scope、AP1–AP5、信用算法、阻断/警告、特批、评级、锁序、事务、幂等、audit 与 SQLite/MySQL 语义全部保持 |
+| Owner | Sales & Customer：信用业务参照与页面；Platform：通用呈现、选择器协议、金额 helper 与文案守卫 |
+
+#### 29.54.2 模块与责任
+
+| 文件 | 设计改动 |
+|---|---|
+| `src/pages/credit-foundation.jsx` | 删除 Wave 9 与“本阶段不启用阻断”的过时文案；档案客户/销售员/信用对象改为授权参照；额度用元 |
+| `src/pages/credit-check.jsx` | 两个 exported screen 删除 Wave 10；检查来源采用业务单据参照，特批来源采用授权信用检查结果参照；金额用元 |
+| `src/pages/credit-evaluation.jsx` | 删除 Wave 11；客户/销售员/信用对象/评分人采用授权参照，评分人用多选 chip |
+| `src/pages/credit-query.jsx` | 保留现有 actor-scope 搜索/分页作为交互基线，仅统一文案、上下文条和状态组件 |
+| `src/lib/creditWorkReferences.js`（新增） | 五页面的参照 descriptor；不复制授权逻辑，不保存第二份业务事实 |
+| `server/modules/credit-work-references.js`（新增） | 六类只读、分页、搜索、确定排序的参照投影；复用 credit-scope 与 mutation authority，不拥有 mutation |
+| `server/app.js` | 仅登记 `GET /api/credit/work-references` owned route；thin dispatch，不放业务 SQL |
+| `src/lib/money.js` | 复用 Platform 元/分边界；不新建信用专用金额解析器 |
+
+#### 29.54.3 参照 API 合同与授权收敛
+
+`GET /api/credit/work-references?kind=...&q=...&limit=...&offset=...&selectedId=...` 返回：
+
+```text
+{ items: [{ id, code, name, secondaryText, active }], total, limit, offset }
+```
+
+页面不显示 UUID；选中后只向既有 mutation payload 提交 canonical ID。`selectedId` 水合与普通搜索使用同一
+授权 predicate。搜索、计数、分页必须在 authorized relation 上完成，不能先查全表再在 JS 过滤。
+
+| kind | 页面用途 | authorization / scope | 展示事实 |
+|---|---|---|---|
+| `PROFILE_CONTEXT` | 档案、检查、评分表的客户/信用对象 | 读取使用 `resolveCreditProfileReadScope()`；创建档案另先要求 `requireCreditManagementAuthority()` | 客户编码/名称 + 信用对象业务标签 |
+| `SALESPERSON` | 档案、检查、评分表的销售员 | 对应 mutation authority + `resolveCreditReadMode()` 的 self / cross-group 范围 | 销售员编码 + 名称 |
+| `SALES_ORDER` | 信用检查来源 | `requireCreditEvaluationAuthority()`；仅返回 actor 可评估且信用 scope 可见的订单 | 订单号 + 客户 + 状态 |
+| `SALES_DELIVERY` | 出货确认阶段信用检查来源 | 同上；只返回与选定客户/订单一致的可评估出货 | 出货单号 + 客户 + 状态 |
+| `CHECK_RESULT` | 特别审批申请来源 | `requireCreditSpecialApprovalRequestAuthority()` + `resolveCreditReadMode()`；使用与 `listCreditCheckResults()` 同形 scope predicate；不可特批结果不进入候选 | 业务日期 + 阶段 + 结论 + 来源单号 |
+| `EVALUATOR` | 评分表允许评分人 | `requireCreditEvaluationAuthority()`；投影既有 `createCreditEvaluationSheet()` 所允许的用户身份，不新增 active/role 限制，也不复用要求 `USERS_MANAGE` 的管理列表 | 登录名/显示名 + 当前角色名称 |
+
+`PROFILE_CONTEXT` 用于创建新档案时，只能投影现有客户可见范围中的客户身份，不返回任何信用额度、评级或
+子限额。信用对象类型与对象 ID 继续由既有业务合同校验。若实施审计发现当前合同无法确定这一可见客户集合，
+必须停止并返回 Requirement，不得用 `SELECT * FROM customers` 暂代，也不得借 `USERS_MANAGE` 等较宽权限绕过。
+
+#### 29.54.4 页面调用与数据流
+
+```text
+route access（既有 applicationRegistry）
+  → page 根据 user 权限选择只读/可操作模式
+  → creditWorkReferences descriptor
+      → GET /api/credit/work-references（后端 authority + scope）
+      → BusinessReferenceSelector（显示业务编码/名称，保存 canonical ID）
+  → 既有 mutation API（payload、幂等键、事务与 audit 不变）
+```
+
+销售订单与出货参照联动：选择订单后限定客户和可选出货；选择出货时水合来源订单与客户。
+上下文冲突必须清空下游选择并显示 WARNING，不得静默提交由前端推断的不同客户。
+特别审批选中检查结果后只读展示原结论、范围和最大可申请事实；最终仍由原 handler 的
+`authorityCeilingFor()` 约束，前端提示不是授权。
+
+#### 29.54.5 页面呈现与金额边界
+
+- 信用页眉使用“销售与客户 / 当前工作面”，不显示 Wave 9/10/11、Stage、SC 编号或权限码。
+- 信用管理基础准确说明：规则与有效档案是信用检查输入；提交/审批/出货是否阻断或警告，以当前生效规则
+  和权威业务事实为准。不得承诺所有节点必然阻断，也不得声称“尚未启用”。
+- `proposedDeltaCents`、`requestedOverrideCents`、`requestedCeilingCents`、`creditLimitCents`
+  在 UI 以元编辑，提交仍为同名安全整数分字段；列表使用 `formatMoney()`。
+- `maxScoreMilli`、等级区间毫分与权重毫分不是货币；字段旁显示换算含义，数据单位和 API 不变。
+- 评分人使用多选 chip，提交仍为既有 `allowedEvaluatorIds: string[]`，不再让用户编辑逗号字符串。
+- 参照分别呈现 LOADING、EMPTY、FORBIDDEN、ERROR、READ_ONLY；无权不发请求，ERROR 可按原条件重试，
+  EMPTY 不回退到手填 ID。
+
+#### 29.54.6 RBAC/SOD、事务、审计、错误与兼容
+
+- 每个 `kind` 先调用与目标操作同级 authority helper，再把 scope predicate 放进同一 SQL；
+  前端 `user.permissions` 只用于避免无权请求，不是最终授权。
+- lookup 为只读且不写 audit；原信用 mutation、SOD、事务、锁序、幂等记录与 audit 完全不变。
+- 超长搜索、非法 kind/分页/日期返回 400；无权 403；精确水合越权沿用非枚举合同；
+  ambiguous effective profile 继续 409 fail closed，不得取第一条。
+- 新 endpoint 是 additive；原 `/api/credit/query-options`、profiles、check-results、special-approvals、
+  evaluation API 的请求响应不变；route exposure 与 permission seed 不变。
+- 回滚只回退页面、descriptor、read-model endpoint 和 focused tests；不触碰信用表、历史证据或冻结数据。
+
+#### 29.54.7 验证矩阵与变异实验
+
+1. 后端 focused：六个 kind 的正向、无权、空结果、搜索、分页、selectedId 水合与 SQLite/MySQL SQL 兼容；
+   无权对象不可由 total、排序、错误或水合枚举。
+2. 前端 focused：五 route 不出现 Wave/SC/权限码；不出现 UUID 自由输入；元/分精确转换；
+   评分人多选数组；上下文变化清空不一致下游。
+3. 角色矩阵：admin / sales / warehouse / accounting / reviewer，断言请求集合不超出权限，
+   route exposure 和 `role_permissions` 快照不变。
+4. 浏览器：320 / 390 / 430 / 680；加载、空、无权、失败、只读、保存中与成功状态无整页横向滚动。
+5. 变异实验：移除 scope predicate、让 `selectedId` 绕过 scope、把错误改为空态、改回手填 ID、
+   用浮点元转分，均必须使对应 focused 守卫转红，实验后逐字恢复。
+
+完整门禁：focused tests、`pnpm test`、`pnpm build`、canonical browser gate、Platform 可见文案守卫、
+`git diff --check`。本设计无 schema/migration，不授权数据库写入；真实 MySQL campaign 如被判定必要，
+须按 ACK-4 与独立授权处理。
+
+#### 29.54.8 Design 状态与 HARD STOP
+
+Requirement §34.17：`IMPLEMENTED`（2026-11-18）；相关冻结呈现合同已显式有界解冻；
+本节 Design：`IMPLEMENTED`（同日）。仓库内 Implementation 与 DRAFT 手册制作已完成；Acceptance / Freeze 未授权。
+真实数据库、部署、Git 写操作与 Acceptance / Freeze 均未授权。
+获批后实施前发现的**已批准合同与实际代码不一致**及其整改结果，登记在
+`docs/status/PROJECT_STATUS.md` §86.1（当前状态登记的唯一位置）。
