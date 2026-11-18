@@ -1332,3 +1332,144 @@ assertManualVoucherSubjectsAllowed(db, entries, { action })
 - **状态**：Requirement §35.13 `APPROVED`（2026-11-18）；本节 Design `APPROVED`（同日）；
   Implementation **已实施**（2026-11-18）。真实 MySQL 的结构变更、Acceptance / Freeze 签发、
   发布与部署**未授权**。
+
+### 31.19 `6401 主营业务成本` 对账期望侧覆盖 VMI 结算成本（`APPROVED` → `IMPLEMENTED`，2026-11-18）
+
+> **授权来源**：业务所有者 2026-11-18「保留 `6401` 作为成本科目，把该检查的期望侧扩展为
+> 「销售出库成本 + VMI 结算成本」」，并裁定「期望侧不得放宽差额容忍」「期望侧只计已过账结算
+> 账单所覆盖的结算成本」。对应 Requirement §35.14 `AA-COG-01..06`。
+> 交叉依赖：Procurement & Outsourcing 域 Requirement §31.24.6 / Design §26.45.11。
+>
+> **未授权**：真实 MySQL 的结构变更与数据写入、Acceptance / Freeze 签发、发布与部署。
+> 本节**不改动** Procurement & Outsourcing 域的任何会计语义。
+
+#### 31.19.1 模块与职责
+
+| 模块 | 职责 | 本轮变更 |
+|---|---|---|
+| `server/modules/financial-inventory.js` | `systemHealth()` 的 24 项 BLOCKING 检查；`COGS_TO_GL` 的**唯一**实现点 | **修改**：期望侧扩展 |
+| `server/modules/procurement-vmi.js` | VMI 结算链（**不修改**）：结算凭证与分配事实在同一事务内写入 | 无 |
+| `server/modules/vmi-settlement.js` | 结算链的 canonical 业务计算（**不修改**） | 无 |
+| `server/database/mysql-adapter.js` | SQLite SQL → MySQL SQL 翻译（**不修改**）：`CAST(... AS INTEGER)` → `CAST(... AS SIGNED)` | 无 |
+
+- `COGS_TO_GL` 全仓**只有一处**实现（`financial-inventory.js::systemHealth`）。
+  `accounting-reconciliation.js` 与 `commercial-golive.js` **没有** COGS 检查，
+  本节**不**为对称而新增第二处实现（Requirement `AA-COG-05`）。
+
+#### 31.19.2 期望侧口径与「两侧同时移动」的实现保证
+
+```text
+COGS_TO_GL = GL(6401 借 − 贷，business_date <= asOfDate)
+           − 销售出库成本（既有口径：SALES_DELIVERY_COGS / SALES_RETURN_COGS_REVERSAL）
+           − VMI 结算成本（本节新增）
+             = SUM over 已出账结算账单所覆盖的结算行 of (settled_qty × unit_price_cents)
+```
+
+- **权威脊柱 = 分配事实** `vmi_settlement_bill_allocations`。Procurement Requirement §31.24
+  `VMI-SET-10` 规定「权威关系只在分配表」（`vmi_settlement_lines.bill_id` 是兼容派生字段），
+  因此期望侧的连接顺序是
+  `vmi_settlement_bill_allocations` → `vmi_settlement_lines`（结算行）
+  → `supplier_bills`（账单日期口径）。
+- **两侧同时移动的保证**：分配事实与结算凭证（`VMI_SETTLEMENT_LINE`）在
+  `createVmiSettlementBill` 的**同一事务、同一次循环**内相邻写入
+  （`server/modules/procurement-vmi.js:632-650`）。因此「有分配事实」与「有 6401 成本凭证」
+  是**同一时刻**成立的事实，期望侧与总账侧**不可能**错位：
+  - 消耗已发生、结算未出账 → 无分配事实、无成本凭证 → 期望侧 0、总账侧 0 → 差 0；
+  - 结算已出账 → 分配事实与成本凭证同时存在 → 期望侧 = 已出账结算成本、
+    总账侧 = 同额 → 差 0。
+- **为什么不用「VMI 消耗的价值流水」**：消耗腿（`Dr 应付 / Cr 存货`）在**消耗时**就减了存货
+  价值，而 `Dr 6401` 的成本凭证在**结算出账时**才记。若期望侧计入消耗，「消耗已发生、结算
+  未出账」的窗口里期望侧会多算而总账侧还是 0 —— 一个**新的瞬时失配**
+  （Requirement `AA-COG-03`）。
+- **为什么不用 `supplier_bills.status='POSTED'` 作为过滤条件**：结算账单的过账
+  （`postSupplierBill`）在结算事务**之后**执行，且结算账单的作废（`REVERSED`）**不**冲销
+  `VMI_SETTLEMENT_LINE` 的成本凭证（既有实现事实，Requirement §35.14.5 第 2 项）。以账单状态
+  过滤会在「凭证已记、账单尚未过账」与「账单已作废、成本凭证仍在」两种状态下与总账侧错位。
+  以**分配事实**为脊柱则两种状态下都与总账侧一致。
+- **金额口径**：结算行已结算数量 × 协议单价。结算凭证的金额来源是账单行金额
+  （= 协议单价 × 数量，`NO_TAX` 下 gross = net），两者同源同值；账单行金额本身由 canonical 的
+  `roundRational`（BigInt 有理数）算出，不是浮点近似。
+
+#### 31.19.3 SQL 形态与双引擎
+
+期望侧必须同时在 SQLite 与 MySQL 8 上给出**同一整数分**。两处引擎差异与处理：
+
+| 差异 | 处理 |
+|---|---|
+| `settled_qty` 的物理类型 | SQLite `REAL`（float64） vs MySQL `DECIMAL(24,6)` |
+| `ROUND` 语义 | 两端均为**四舍五入远离零**（SQLite `ROUND`、MySQL `ROUND`），一致 |
+| `CAST(... AS INTEGER)` | SQLite 接受；**MySQL 8 不接受该类型名**。适配器 `translateSqliteSql()` 用正则 `/CAST\s*\(([^)]+)\s+AS\s+INTEGER\s*\)/gi` 翻译为 `CAST(... AS SIGNED)`，但该正则**不容许嵌套括号** |
+
+因此期望侧的 SQL **必须**把 `ROUND(...)` 放进派生表，让 `CAST` 的参数保持**无嵌套括号**：
+
+```sql
+SELECT COALESCE(SUM(CAST(r.settled_cents AS INTEGER)),0) n FROM (
+  SELECT ROUND(l.settled_qty * l.unit_price_cents) settled_cents
+  FROM vmi_settlement_bill_allocations a
+  JOIN vmi_settlement_lines l ON l.id=a.settlement_line_id
+  JOIN supplier_bills b ON b.id=a.supplier_bill_id
+  WHERE b.bill_date<=?
+) r
+```
+
+翻译后为 `SUM(CAST(r.settled_cents AS SIGNED))` —— MySQL 8 可执行。派生表内 `ROUND` 的结果
+在 SQLite 是 `REAL`（如 `4800.0`），在 MySQL 是 `DECIMAL(.,0)`；两端的 `CAST` 分别按
+「截断到整数」与「四舍五入到整数」处理，但输入**已是整数值**，因此两端结果**相同**。
+金额单位为**分**（整数），`COALESCE(...,0)` 保证无结算事实时贡献 0。
+
+**日期口径**：`b.bill_date <= asOfDate`，与总账侧的
+`COALESCE(v.business_date, v.voucher_date) <= asOfDate` 对齐 —— 结算凭证的
+`business_date` 就是结算账单的 `bill_date`（同一 `billDate` 变量，
+`server/modules/procurement-vmi.js`）。
+
+#### 31.19.4 事务、幂等、状态机、RBAC / SOD、审计、错误
+
+- **事务**：本节**不引入**任何写路径 —— 期望侧是**只读**聚合查询，运行在 `systemHealth()`
+  的既有只读语义内，不开启事务、不加锁、不写任何行。
+- **幂等**：只读查询天然幂等；重复调用产生同一结果。
+- **状态机**：**不涉及**。本节**不改动**结算期 / 结算账单 / 凭证的任何状态流转。
+- **RBAC / SOD**：**不涉及**。`systemHealth` 的既有权限（`ACCOUNTING_VIEW` /
+  `PERIOD_CLOSE_MANAGE`）与 SOD 决策点**不变**；本节**不**新增权限码。
+- **审计**：**不涉及**（只读检查）。既有审计事件**不变**。
+- **错误**：本节**不新增错误码**。期望侧读到**缺价**的结算行（`unit_price_cents IS NULL`）时，
+  该行的乘积为 `NULL`，被 `SUM` 跳过 → 期望侧偏小 → 检查 **FAIL**（**响亮失败**，
+  fail closed），**不得**用 `COALESCE(...,0)` 把缺价静默补 0。可达路径上缺价不可达
+  （结算账单生成前 `assertVmiAgreementPrice` 已 fail closed），该守卫是防御性的。
+
+#### 31.19.5 兼容与迁移策略
+
+- **Schema**：**无变更、无 migration**。本节只**读** `vmi_settlement_bill_allocations` /
+  `vmi_settlement_lines` / `supplier_bills`（均为 v28 迁移已存在的表）。
+- **数据**：**不回填、不改写**任何历史行。
+- **行为兼容性**：
+  - **无 VMI 结算的环境**：期望侧的 VMI 项恒为 0，行为与修订前**完全一致**
+    （Requirement `AA-COG-AC-03`）；
+  - **有 VMI 结算的环境**：期望侧新增「已出账结算成本」，把原本恒定 BLOCKING 的
+    `COGS_TO_GL` 修正为可归零；**不放宽**任何其它检查的判定。
+- **升级路径**：纯代码变更，无数据迁移，幂等。
+- **回滚**：回滚 = 还原 `financial-inventory.js` 的期望侧一行；无数据残留、无迁移回滚。
+- **跨域依赖**：本检查消费 Procurement & Outsourcing 域的 VMI 结算事实（分配事实、结算行、
+  供应商账单），该依赖在 Procurement Requirement §31.24.6 与 Design §26.45.11 **交叉登记**。
+  既有跨域读取先例：`RECEIPT_GRNI_TO_GL` 同文件内跨域读 `purchase_receipts` /
+  `supplier_bills`。
+
+#### 31.19.6 测试矩阵
+
+| 合同 | 测试点 | 文件 |
+|---|---|---|
+| `AA-COG-AC-01` | 结算过账后 `COGS_TO_GL` 差额 0；期望侧金额精确到分（结算行已结算数量 × 协议单价） | `server/accounting-cogs-check-vmi-settlement.test.js` |
+| `AA-COG-AC-02` | **陷阱用例**：消耗已发生、结算未出账 → 差额仍 0；并断言消耗已产生价值流水（前提承重） | 同上 |
+| `AA-COG-AC-03` | 无 VMI 结算时差额 0；销售出库成本口径的静态断言不被改动 | 同上 |
+| `AA-COG-AC-04` | 变异对照：① 总账侧篡改 1 分 → FAIL 且差额精确为 1；② 期望侧误取消耗价值流水 → 整套转红；③ 去掉 VMI 项 → `AA-COG-AC-01` 转红 | 同上 |
+| `AA-COG-AC-05` | 期望侧 SQL 经 `translateSqliteSql()` 翻译后不含 `AS INTEGER`，且含 `CAST(r.settled_cents AS SIGNED)` | 同上 |
+| `AA-COG-AC-06` | 结算链端到端跑完后 `COGS_TO_GL` 差额 0 | `server/vmi-settlement.test.js` |
+
+- **合同测试文件**：`server/accounting-cogs-check-vmi-settlement.test.js`（**新增**，登记 FULL）。
+- **既有测试调整**：**无**。既有断言**不删除、不降级**；`server/vmi-settlement.test.js`
+  只**追加**一条端到端断言。
+
+#### 31.19.7 状态
+
+- Requirement §35.14 `APPROVED`（2026-11-18，业务所有者授权并裁定口径）。
+- 本节 Design `APPROVED`（同日）；Implementation **已实施**（2026-11-18）。
+- 真实 MySQL 复核、Acceptance / Freeze 签发、发布与部署**待执行**。

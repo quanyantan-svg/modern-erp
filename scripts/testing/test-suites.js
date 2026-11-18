@@ -457,6 +457,11 @@ const FULL = [
   // 成本与差异族纳入守卫；创建 / 改分录 / 冲销三条写路径共用唯一守卫；
   // 非受控科目能力不回退；守卫抛出点唯一。
   'server/accounting-manual-voucher-guard.test.js',
+  // COGS_TO_GL 期望侧覆盖 VMI 结算成本（Requirement §35.14 `AA-COG-01..05`）：
+  // 结算过账后差额为 0；**消耗已发生、结算未出账**的陷阱用例差额仍为 0；
+  // 无 VMI 结算时销售出库成本口径不变；变异对照证明断言承重；
+  // 期望侧 SQL 的 CAST 形态必须被 MySQL 适配器正确翻译。
+  'server/accounting-cogs-check-vmi-settlement.test.js',
   // 委外跟踪物料身份（F-03）新增套件与期初计价（F-02）新增套件的 FULL 登记。
 
   // ----- V21 Inventory & Warehouse Domain Closure — Wave A foundation -----

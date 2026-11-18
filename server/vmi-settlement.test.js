@@ -24,6 +24,7 @@ import { after, before, describe, test } from 'node:test';
 
 import { createProcurementFixture } from './test-support/procurement-http-fixture.js';
 import { runChecks } from './modules/accounting-reconciliation.js';
+import { systemHealth } from './modules/financial-inventory.js';
 
 const UNIT_PRICE_CENTS = 1200;
 const RECEIVE_QUANTITY = 10;
@@ -403,6 +404,24 @@ describe('VMI 结算机制（§31.24 VMI-SET-01..18 / VMI-SET-AC-01..10）', () 
     // 权威对账：结算后两个检查仍为 0。
     assert.equal(Number(check('AP_TO_GL').differenceCents), 0, '结算后 AP_TO_GL 必须为 0');
     assert.equal(Number(check('INVENTORY_VALUE_TO_GL').differenceCents), 0, '结算后 INVENTORY_VALUE_TO_GL 必须为 0');
+  });
+
+  // -------------------------------------------------------------------------
+  // AC-05 增量 · 6401 主营业务成本的权威对账（Accounting & Analytics
+  // Requirement §35.14 `AA-COG-01..04` / Design §31.19）
+  //
+  // 结算凭证是 `Dr 6401 主营业务成本 / Cr 2202 应付账款`。`COGS_TO_GL` 的期望侧
+  // 原本只认销售出库成本，于是结算后总账侧有成本、期望侧没有 → 权威结账
+  // BLOCKING（客户环境实测 difference=5000）。本断言把「结算链跑完后
+  // COGS_TO_GL = 0」端到端固化。
+  // -------------------------------------------------------------------------
+  test('AC-05 结算链跑完后 COGS_TO_GL 差额为 0（6401 期望侧覆盖 VMI 结算成本）', async () => {
+    const health = systemHealth(fixture.db, { asOfDate: '9999-12-31' });
+    const cogs = health.checks.find((item) => item.code === 'COGS_TO_GL');
+    assert.ok(cogs, '系统健康检查必须包含 COGS_TO_GL');
+    assert.equal(Number(cogs.difference), 0,
+      `结算链跑完后 COGS_TO_GL 必须为 0；实际 ${JSON.stringify(cogs)}`);
+    assert.equal(cogs.status, 'PASS');
   });
 
   test('AC-07 重复生成结算账单精确重放，不产生第二张账单、不重复写分配', async () => {

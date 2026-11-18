@@ -3270,3 +3270,42 @@ VMI-R: closing_S = opening_S + received − supplier_consumed − owner_changed 
 - Requirement §31.24 `APPROVED`（2026-11-18，业务所有者裁定并授权实施）。
 - 本节 Design `APPROVED`（同日）；Implementation **已实施**（2026-11-18）。
 - 真实 MySQL 复核、Acceptance / Freeze 签发、发布与部署**待执行**。
+
+#### 26.45.11 跨域依赖登记：Accounting & Analytics 的 `COGS_TO_GL` 消费 VMI 结算事实
+
+> 本节**不修改** §26.45.1～§26.45.10 的任何正文；它**追加**一条跨域依赖登记。
+> 追加来源：业务所有者 2026-11-18 指令修正 `COGS_TO_GL` 的期望侧
+> （`6401 主营业务成本` 的第二个来源是 VMI 结算成本）。
+> 对应 Requirement §31.24.6；Accounting & Analytics 侧为 Requirement §35.14 `AA-COG-01..06`
+> 与 Design §31.19。
+
+**消费方与被消费的事实**
+
+| 项 | 内容 |
+|---|---|
+| 消费方 | Accounting & Analytics 域的权威结账检查 `COGS_TO_GL`，实现于 `server/modules/financial-inventory.js::systemHealth`（**唯一**实现点） |
+| 被消费的事实 | `vmi_settlement_bill_allocations`（分配事实，权威连接脊柱）、`vmi_settlement_lines`（`settled_qty` / `unit_price_cents`）、`supplier_bills`（`bill_date` 日期口径） |
+| 消费动机 | 结算凭证是 `Dr 6401 主营业务成本 / Cr 2202 应付账款`（`VMI-SET-12`），`6401` 的来源不止销售出库成本；期望侧若只认销售出库成本，VMI 结算会让权威结账恒定 BLOCKING（客户环境实测 `difference=5000`） |
+
+**对结算链实现的三项依赖约束**（对既有实现**不构成修改**，仅把既有事实登记为「被依赖」）：
+
+1. **同事务相邻写入**：`createSystemVoucher(VMI_SETTLEMENT_LINE)` 与
+   `INSERT INTO vmi_settlement_bill_allocations` 必须在结算事务的**同一次循环**内相邻执行
+   （现实现：`server/modules/procurement-vmi.js`）。这是「期望侧与总账侧同时移动」的**唯一**
+   依据 —— 任何把二者拆到不同事务的改动都会让 `COGS_TO_GL` 产生瞬时失配。
+2. **结算金额与协议单价同源**：`VMI-SET-03` / `VMI-SET-04` 规定结算金额 = 协议单价 × 数量，
+   且结算凭证金额取账单行金额（`NO_TAX` 下 gross = net）。期望侧取「结算行已结算数量 ×
+   协议单价」，与凭证金额**同源同值**。
+3. **权威关系只在分配表**：`VMI-SET-10` 规定 `vmi_settlement_lines.bill_id` 是兼容派生字段，
+   权威关系只在 `vmi_settlement_bill_allocations`。期望侧因此以分配事实为连接脊柱，
+   不以 `bill_id` 或账单状态为脊柱。
+
+**口径边界（对消费方的约束，不改本域语义）**
+
+- 期望侧只计「**已出账结算账单所覆盖的**结算成本」，**不**计「VMI 消耗的价值流水」
+  （消耗腿在消耗时就减存货价值，而成本凭证在结算出账时才记，两侧会错位）；
+- 期望侧**不放宽**差额容忍：`COGS_TO_GL` 仍是严格相等判定；
+- 本节**不**改动结算金额口径、应付构成、凭证分录方向与金额、幂等键、期间守卫与权限码。
+
+**状态**：Requirement §31.24.6 `APPROVED`（2026-11-18，追加登记）；本节 Design `APPROVED`（同日）。
+真实 MySQL 复核、Acceptance / Freeze 签发、发布与部署**待执行**。

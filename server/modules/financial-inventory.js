@@ -378,7 +378,28 @@ export function systemHealth(db, { asOfDate='9999-12-31' }={}) {
   const uomMismatch=Number(db.prepare("SELECT COUNT(*)n FROM (SELECT base_quantity_num,base_quantity_den,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator FROM sales_invoice_items UNION ALL SELECT base_quantity_num,base_quantity_den,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator FROM supplier_bill_items)x WHERE base_quantity_num*document_quantity_den*conversion_denominator<>document_quantity_num*conversion_numerator*base_quantity_den").get().n); checks.push(check('UOM_DOCUMENT_TO_BASE',uomMismatch));
   const serialFraction=Number(db.prepare("SELECT COUNT(*)n FROM (SELECT i.base_quantity_num n,i.base_quantity_den d,i.product_id FROM sales_invoice_items i UNION ALL SELECT i.base_quantity_num,i.base_quantity_den,i.product_id FROM supplier_bill_items i)x JOIN products p ON p.id=x.product_id WHERE p.tracking_policy='SERIAL' AND x.n%x.d<>0").get().n); checks.push(check('SERIAL_BASE_QUANTITY_INTEGER',serialFraction));
   const cashMovement=Number(db.prepare("SELECT COALESCE(SUM(CASE WHEN direction='IN' THEN amount_cents ELSE -amount_cents END),0) n FROM settlement_account_movements WHERE business_date<=?").get(asOfDate).n); checks.push(check('CASH_BANK_TO_GL',glRoleBalance(db,['CASH','BANK'],asOfDate)-cashMovement));
-  const cogsValue=-Number(db.prepare("SELECT COALESCE(SUM(value_delta_cents),0) n FROM inventory_valuation_movements WHERE movement_type IN ('SALES_DELIVERY_COGS','SALES_RETURN_COGS_REVERSAL') AND business_date<=?").get(asOfDate).n); checks.push(check('COGS_TO_GL',glRoleBalance(db,['COGS'],asOfDate)-cogsValue));
+  const cogsValue=-Number(db.prepare("SELECT COALESCE(SUM(value_delta_cents),0) n FROM inventory_valuation_movements WHERE movement_type IN ('SALES_DELIVERY_COGS','SALES_RETURN_COGS_REVERSAL') AND business_date<=?").get(asOfDate).n);
+  // 6401 主营业务成本的**全部**来源 = 销售出库成本 + VMI 结算成本
+  // （Requirement §35.14 `AA-COG-01..04`；Design §31.19）。
+  //
+  // VMI 结算成本的期望侧**不能**取「VMI 消耗的价值流水」：`Dr 应付 / Cr 存货`
+  // 的消耗腿在**消耗时**就减了存货价值，而 `Dr COGS` 的凭证是**结算出账时**
+  // 才记的。若期望侧计入消耗，「消耗已发生、结算未出账」的窗口里期望侧会多算，
+  // 而总账侧还是 0 —— 那是一个新的瞬时失配。
+  //
+  // 因此期望侧只计**已出账结算账单所覆盖的结算成本**，并以**分配事实**
+  // （`vmi_settlement_bill_allocations`）为权威脊柱：分配事实与结算凭证在
+  // **同一事务、同一次循环**内写入（Procurement Requirement §31.24
+  // `VMI-SET-14`），两侧因此必然同时移动。金额取结算行已结算数量 × 协议单价，
+  // 与结算凭证的金额同源同值（结算凭证金额 = 账单行金额 = 协议单价 × 数量）。
+  const vmiSettlementCogs=Number(db.prepare(`SELECT COALESCE(SUM(CAST(r.settled_cents AS INTEGER)),0) n FROM (
+      SELECT ROUND(l.settled_qty * l.unit_price_cents) settled_cents
+      FROM vmi_settlement_bill_allocations a
+      JOIN vmi_settlement_lines l ON l.id=a.settlement_line_id
+      JOIN supplier_bills b ON b.id=a.supplier_bill_id
+      WHERE b.bill_date<=?
+    ) r`).get(asOfDate).n);
+  checks.push(check('COGS_TO_GL',glRoleBalance(db,['COGS'],asOfDate)-cogsValue-vmiSettlementCogs,[], '6401 主营业务成本应等于销售出库成本与 VMI 结算成本之和'));
   const legacy=db.prepare("SELECT COUNT(*) n FROM inventory_transactions WHERE valuation_status='LEGACY_UNVALUED' AND business_date<=?").get(asOfDate).n;
   checks.push(check('LEGACY_UNVALUED_MOVEMENTS',Number(legacy),[], 'Phase 6E 开账转换前不得权威结账'));
   const duplicate=db.prepare("SELECT COUNT(*) n FROM (SELECT source_type,source_id FROM accounting_vouchers WHERE voucher_origin='SYSTEM' GROUP BY source_type,source_id HAVING COUNT(*)>1) x").get().n;

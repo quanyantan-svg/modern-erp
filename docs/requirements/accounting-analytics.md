@@ -771,3 +771,90 @@ Implementation：已实施（2026-11-18）；真实 MySQL 连接、数据库写�
 **Requirement 状态：`APPROVED`（2026-11-18，业务所有者授权）。Design §31.18：`APPROVED`（同日）。
 Implementation：已实施（2026-11-18）；真实 MySQL 连接、数据库写操作、Acceptance / Freeze 签发、
 发布与部署**未授权**。**
+
+---
+
+### 35.14 `6401 主营业务成本` 的对账期望侧覆盖 VMI 结算成本（`APPROVED` → `IMPLEMENTED`，2026-11-18）
+
+> **用途 / Owner / 状态 / 权威关系**：本节修正 `COGS_TO_GL` 权威结账检查的**期望侧口径**，
+> 使其覆盖 `6401 主营业务成本` 的**全部**来源。Owner 为 Accounting & Analytics
+> Domain Owner（对账检查与关账门禁）。生命周期状态 `IMPLEMENTED`（2026-11-18：合同已获批准并按
+> 已批准合同实施，**尚未验收**）。对应 Design 见 `solution.md §31` →
+> `docs/design/accounting-analytics.md` §31.19。
+> 本节**不取代** §35.1～§35.13 的任何正文；§35.12 `AA-VAL-04`（存货价值对账的两侧同域）
+> 与 §35.13 的受控科目集合**未被修改**，其正文与既有断言继续有效。
+>
+> **授权来源**：业务所有者 2026-11-18 指令「保留 `6401` 作为成本科目，把该检查的期望侧扩展为
+> 「销售出库成本 + VMI 结算成本」」（AGENTS.md §4.0 连续阶段授权：Requirement → Design →
+> Implementation）。业主同时裁定：**期望侧不得放宽差额容忍**，且**期望侧只计已过账结算账单
+> 所覆盖的结算成本**。
+
+#### 35.14.1 事实基础
+
+| # | 事实 | 证据 |
+|---|---|---|
+| C1 | `COGS_TO_GL` 是权威结账的 **BLOCKING** 检查，实现于 `server/modules/financial-inventory.js` 的 `systemHealth()` | `server/modules/financial-inventory.js:381`（修订前） |
+| C2 | 修订前的期望侧**只**认 `SALES_DELIVERY_COGS` / `SALES_RETURN_COGS_REVERSAL` 两类价值流水 | 同上 |
+| C3 | `6401` 的**第二个**来源是 VMI 结算凭证：`Dr 6401 主营业务成本 / Cr 2202 应付账款` | `server/modules/procurement-vmi.js:632-640`（Procurement Requirement §31.24 `VMI-SET-12`） |
+| C4 | VMI 结算**没有**对应的 `SALES_DELIVERY_COGS` 价值流水 → 期望侧永远看不到这笔成本 | 同上；`inventory_valuation_movements.movement_type` 取值集合 |
+| C5 | 客户测试环境实测：`COGS_TO_GL difference=5000`，权威结账因此 BLOCKED | 客户环境真实 MySQL 8 实测（2026-11-18） |
+| C6 | VMI 消耗腿在**消耗时**就减存货价值（`Dr 应付 / Cr 存货`），而 `Dr 6401` 的成本凭证是**结算出账时**才记 | Procurement Requirement §31.23 `PRC-VGL-04` 与 §31.24 `VMI-SET-12` |
+| C7 | 结算凭证与**分配事实**（`vmi_settlement_bill_allocations`）在**同一事务、同一次循环**内写入 | `server/modules/procurement-vmi.js:632-650`；Procurement Requirement §31.24 `VMI-SET-14` |
+| C8 | 结算账单的**权威关系只在分配表**（`bill_id` 是兼容派生字段） | Procurement Requirement §31.24 `VMI-SET-10`；Design §26.45.2 |
+| C9 | 跨域读取已有先例：`RECEIPT_GRNI_TO_GL` 同文件内跨域读 `purchase_receipts` / `supplier_bills` | `server/modules/financial-inventory.js`（`grniExpected`） |
+| C10 | `COGS_TO_GL` 在 `accounting-reconciliation.js` / `commercial-golive.js` 中**没有**第二处实现 | 全仓 grep：唯一实现点为 `financial-inventory.js` |
+
+#### 35.14.2 合同条款
+
+| ID | 条款 |
+|---|---|
+| `AA-COG-01` | **`6401 主营业务成本` 的全部来源**是「**销售出库成本** + **VMI 结算成本**」。`COGS_TO_GL` 的期望侧**必须**覆盖**全部**来源：只覆盖部分来源的检查**必须**视为不合格实现（它会把合法业务判成 BLOCKING）。 |
+| `AA-COG-02` | **期望侧只计「已出账结算账单所覆盖的结算成本」**，即：结算行上已结算数量 × 协议单价，按**已过账账单**归集（`vmi_settlement_lines` / `vmi_settlement_bill_allocations` / `supplier_bills`）。 |
+| `AA-COG-03` | **期望侧不得取「VMI 消耗的价值流水」**。理由：消耗腿（`Dr 应付 / Cr 存货`）在**消耗时**就减了存货价值，而 `Dr 6401` 的成本凭证是**结算出账时**才记的；若期望侧计入消耗，「消耗已发生、结算未出账」的窗口里期望侧会多算而总账侧还是 0 —— 那是一个**新的瞬时失配**。**两侧必须同时移动**：期望侧与总账侧的移动时点必须由同一业务事实驱动。 |
+| `AA-COG-04` | **不得放宽差额容忍**。`COGS_TO_GL` 的判定仍是**严格相等**（差额 ≠ 0 即 FAIL / BLOCKING）；本节**不**引入任何容差、阈值或「已知差异白名单」。 |
+| `AA-COG-05` | **口径对齐的唯一实现点**：期望侧的扩展**只在** `COGS_TO_GL` 的实现处进行（`server/modules/financial-inventory.js::systemHealth`）；`accounting-reconciliation.js` 与 `commercial-golive.js` 中**没有** COGS 检查，**不得**为对称而新增第二处实现。 |
+| `AA-COG-06` | **跨域依赖登记**：本检查消费 Procurement & Outsourcing 域的 VMI 结算事实（分配事实、结算行、供应商账单）。该依赖**必须**在 Procurement & Outsourcing 域的 Requirement 与 Design 中交叉登记（见 §31.24.6 / Design §26.45.11）。 |
+
+#### 35.14.3 明确不在本节范围内的事项
+
+1. **放宽差额容忍 / 引入阈值**：本节**不**做（`AA-COG-04`）。
+2. **新增第二处 `COGS_TO_GL` 实现**：本节**不**做（`AA-COG-05`）。
+3. **其它 6401 来源**：本节只覆盖「销售出库成本」与「VMI 结算成本」两个**已实现**来源。
+   委托代销结算（`CONSIGNMENT_SETTLEMENT_COGS`）同样借记 `6401`，但其估值流水类型
+   （`CONSIGNMENT_SETTLEMENT`）也不在期望侧的取值集合内 —— 该项**登记为开放项**
+   （见 §35.14.5），本节**不**擅自扩大期望侧（扩大即改变该检查的覆盖边界，属独立裁定）。
+4. **VMI 结算链本身的会计语义**：本节**不**改动 Procurement & Outsourcing 域的任何合同
+   （结算金额口径、应付构成、凭证分录方向与金额均**不变**）。
+
+#### 35.14.4 可验收条件
+
+| ID | 验收条件 |
+|---|---|
+| `AA-COG-AC-01` | VMI 结算账单**已过账**后，`COGS_TO_GL` 差额 **0**；且期望侧的结算成本金额**精确等于**「结算行已结算数量 × 协议单价」的**整数分**（断言到分，不接受近似）。 |
+| `AA-COG-AC-02` | **陷阱用例**：VMI 消耗**已发生**但结算**未出账**时，`COGS_TO_GL` 差额**仍为 0**（期望侧 0、总账侧 0）。该用例**必须**证明期望侧**不**依赖消耗的价值流水。 |
+| `AA-COG-AC-03` | **无 VMI 结算时既有行为不变**：期望侧的销售出库成本口径（`SALES_DELIVERY_COGS` / `SALES_RETURN_COGS_REVERSAL`）**不被改动**，且无 VMI 结算时差额仍为 0。 |
+| `AA-COG-AC-04` | **变异对照**：篡改总账侧 6401 金额 1 分 → 检查**必须** FAIL 且差额精确为 1 分（证明断言承重）；还原后差额回到 0。另两组变异对照：① 期望侧误取「VMI 消耗的价值流水」→ `AA-COG-AC-02` **必须**转红；② 完全去掉 VMI 结算项（修订前行为）→ `AA-COG-AC-01` **必须**转红。 |
+| `AA-COG-AC-05` | **双引擎 SQL 形态守卫**：期望侧的 SQL **必须**在真实 MySQL 上可执行 —— `CAST(... AS INTEGER)` 被 MySQL 适配器翻译为 `CAST(... AS SIGNED)` 的正则**不容许嵌套括号**，因此 `ROUND(...)` **必须**置于派生表内、`CAST` 的参数**必须**保持无嵌套括号。断言**必须**经适配器的 `translateSqliteSql()` 证明翻译后不含 `AS INTEGER`。 |
+| `AA-COG-AC-06` | 结算链端到端：`server/vmi-settlement.test.js` 在结算链跑完后断言 `COGS_TO_GL` 差额为 0。 |
+
+#### 35.14.5 未解决矛盾（需业务所有者裁定，本节不自行决定）
+
+1. **委托代销结算也是 6401 的第三个来源**：`server/modules/consignment.js:488` 的
+   `CONSIGNMENT_SETTLEMENT_COGS` 凭证借记 `6401`，其估值流水类型为
+   `CONSIGNMENT_SETTLEMENT`，同样**不在** `COGS_TO_GL` 期望侧的取值集合内。因此
+   `COGS_TO_GL` 的期望侧在本节之后**仍然只覆盖两个来源**，第三个来源**未**被覆盖 ——
+   这与 §35.14.1 的 `AA-COG-01`（「期望侧必须覆盖**全部**来源」）存在**口径缺口**。
+   本节**不**擅自把委托代销纳入期望侧：纳入即改变该检查的覆盖边界，且委托代销的成本确认
+   口径（结算时一次确认 vs 分摊确认）本身需要独立裁定。**待裁定。**
+2. **结算账单作废不冲销结算凭证**：结算凭证的来源是 `VMI_SETTLEMENT_LINE`，而
+   `voidPostedInvoice` 只对 `SUPPLIER_BILL` 来源调 `reverseSystemVoucher`；VMI 结算账单在
+   DIRECT 识别模式下**不**产生 `SUPPLIER_BILL` 凭证，因此**作废结算账单不会冲销 6401 的
+   成本凭证**，其应付开项也不被冲销。`AA-COG-02` 的期望侧按「已出账」口径保留该金额
+   （与总账侧一致），因此**不会**因此产生对账失配；但「作废后成本与应付是否应当冲销」属
+   **会计语义**，**待业务所有者裁定**（不得在本节擅自决定）。
+3. **权威结账的其它 BLOCKING 项**：本节**只**修正 `COGS_TO_GL` 一项；`INVENTORY_VALUE_TO_GL` /
+   `AP_TO_GL` / `RECEIPT_GRNI_TO_GL` 等的期望侧**不变**。
+
+**Requirement 状态：`APPROVED`（2026-11-18，业务所有者授权）。Design §31.19：`APPROVED`（同日）。
+Implementation：已实施（2026-11-18）；真实 MySQL 连接、数据库写操作、Acceptance / Freeze 签发、
+发布与部署**未授权**。**

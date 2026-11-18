@@ -1722,5 +1722,30 @@ Implementation：已实施（2026-11-18）；真实 MySQL 复核、Acceptance / 
 3. **`vmi_receipts.business_status` 的 `'CONSUMED'` / `'TRANSFERRED'` 态**（`M1-F-11`）：
    在 D-2a 下不再需要独立的物权转移态；是否在读模型中启用 `'CONSUMED'` 留待界面轮次。
 
+#### 31.24.6 跨域依赖登记（Accounting & Analytics 域消费 VMI 结算事实）
+
+> 本节**不修改** §31.24.1～§31.24.5 的任何正文；它**追加**一条跨域依赖登记。
+> 追加来源：业务所有者 2026-11-18 指令修正 `COGS_TO_GL` 的期望侧（`6401 主营业务成本` 的
+> 第二个来源是 VMI 结算成本）。
+
+- **消费方**：Accounting & Analytics 域的权威结账检查 `COGS_TO_GL`
+  （实现于 `server/modules/financial-inventory.js::systemHealth`，唯一实现点）。
+- **被消费的事实**：VMI 结算的**分配事实** `vmi_settlement_bill_allocations`、
+  **结算行** `vmi_settlement_lines`（已结算数量 `settled_qty` 与协议单价
+  `unit_price_cents`）、以及**供应商账单** `supplier_bills`（账单日期口径）。
+- **为什么该检查消费 VMI 结算事实**：结算凭证是 `Dr 6401 主营业务成本 / Cr 2202 应付账款`
+  （`VMI-SET-12`），因此 `6401` 的来源**不止**销售出库成本。该检查的期望侧若只认销售出库
+  成本，VMI 结算就会让权威结账恒定 BLOCKING（客户环境实测 `difference=5000`）。
+- **依赖侧的合同约束**（对 Procurement 域的既有事实**不构成修改**，仅登记）：
+  1. 分配事实与结算凭证**必须**在同一事务内相邻写入 —— 这是「期望侧与总账侧同时移动」的
+     前提（`VMI-SET-14` 已要求同一事务；本节把它登记为**被依赖方的事实**）；
+  2. 结算金额**必须** = 协议单价 × 数量（`VMI-SET-03` / `VMI-SET-04`），否则期望侧与
+     总账侧不会同值；
+  3. 权威关系**只在分配表**（`VMI-SET-10`），期望侧因此以分配事实为连接脊柱。
+- **对账口径**：期望侧只计「**已出账结算账单所覆盖的**结算成本」，**不**计「VMI 消耗的
+  价值流水」—— 消耗腿在消耗时就减存货价值，而成本凭证在结算出账时才记，两侧会错位。
+- **对应条款**：Accounting & Analytics Requirement §35.14 `AA-COG-01..06`；
+  Design §31.19。
+
 **Requirement 状态：`APPROVED`（2026-11-18，业务所有者裁定并授权）。Design §26.45：`APPROVED`（同日）。
 Implementation：授权实施（AGENTS.md §4.0）；真实 MySQL 复核、Acceptance / Freeze 签发、发布与部署**待执行**。**
