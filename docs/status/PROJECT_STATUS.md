@@ -7219,7 +7219,11 @@ Manual Closure 与 Release Readiness **未签发**。
 2. **VMI 收货不登记 LOT / SERIAL 身份**：跟踪口径货品的入库价值无法归属到具体身份（§32.18 开放项 1）。
 3. **步进调拨「退回来源仓」入库腿当前无 HTTP 路由**（zero-caller），本轮修复是预防性的（§32.18 范围外 1）。
 4. **既有违规手工凭证不得再被冲销或改分录**（§35.13 `AA-VAL-12` 能力收缩；客户环境实测该类凭证为 0）。
-5. 客户环境残留 AC2 虚构验收数据与本次增量取证的夹具；`ac2_*` 验收账号口令未轮换；
+5. **VMI 收货只有存货入账、没有对应的总账应付腿**（2026-11-18 客户环境实测新增）：差额恒等于每次 VMI
+   收货的账面价值（实测 100,000 分/次）。该腿的确认时点属 `D-P01` 未决范围，**不**自行补；
+   **在 D-P01 裁定前，VMI 收货流程不能通过权威结账**。演示数据因此只建 VMI 协议、不建 VMI 收货。
+6. 客户环境已**清库重播种**（2026-11-18 晚，§82.8）：424 表 + 1 视图 + 5 触发器；权威结账差额 **0**、
+   未估值移动 **0**；`admin` 口令沿用客户原值未改；6 个角色演示账号口令已重置为交付用已知值。
    客户环境尚未配置 TLS（仅 HTTP 80）与自动备份 timer。
 
 ### 82.6 机器可读状态
@@ -7243,3 +7247,28 @@ MANUAL_CLOSURE=NOT_ISSUED；RELEASE_READINESS=NOT_ISSUED；PUSH=NOT_EXECUTED
 | 本轮实现、证据采集与合同项 Acceptance / Freeze | 仓库（执行）+ 业务所有者（授权） | 已签发；见 `docs/acceptance/residuals-round-acceptance-freeze-20261118.md` |
 | 历史委外异动的处置 | 业务所有者 | 待裁定（见 §82.5 第 1 项） |
 | 域级 Acceptance / Manual Closure / Release Readiness / push | 业务所有者 | 域级记录不变；Manual Closure 与 Release Readiness 未签发 |
+
+### 82.8 客户环境清库重播种与交付终态（2026-11-18 晚）
+
+按业务所有者裁定「清库 + 重新用真实 API 造一套演示数据」，客户环境 `129.204.51.149` 已重置：
+
+| 项 | 结果 |
+|---|---|
+| 清库与重建 | 停 `modern-erp.service` → DROP `modern_erp` 全部表与视图 → 启动触发 bootstrap → **424 表 + 1 视图 + 5 触发器**；MySQL 未重启；同机 `calculator` / `pairbook-web` 未受影响；库与授权保留 |
+| 账号 | `admin`（**客户原有口令，全程未改**）+ 6 个角色演示账号 `demo_sales` / `demo_reviewer` / `demo_warehouse` / `demo_accounting` / `demo_outsourcing` / `demo_outsourcingrecv`（口令统一重置为交付用已知值，6 个登录实测 200） |
+| 演示数据 | 2 仓库、2 货品、1 委外供应商（含资质与委外 WIP 仓）、2 个委外货源、期初原材料 1000 件（物理 + 估值 + 总账三者同步）、1 张委外订单（下达 + 发料）、1 张组装单（确认） |
+| 权威结账 | **`INVENTORY_VALUE_TO_GL` = 0**、`LEGACY_UNVALUED_MOVEMENTS` = 0；委外发料总账分录 `Dr 1406 200000 / Cr 1403 200000` |
+| 部署 | commit `2566f758`（无 schema 变更）；服务 active；nginx `:80` → 200；未认证 API → 401 |
+| 复原 | 临时验收探针账号已删除；`/tmp` 与 `/opt/modern-erp/.tmp` 临时脚本已清理 |
+
+**本轮新发现的残余**：**VMI 收货的总账对方腿缺失**（§82.5 第 5 项）——与 §32.18.5 开放项 3 同一事实：
+VMI 收货只产生存货入账，无对应应付确认腿；确认时点属 `D-P01` 未决范围，不自行补。演示数据因此
+只建 VMI 协议、不建 VMI 收货，避免给客户留下必然失配的案例。
+
+```text
+CUSTOMER_ENV=RESET_AND_RESEEDED(424 表 + 1 视图 + 5 触发器)
+AUTHORITATIVE_CLOSE_GAP=0；LEGACY_UNVALUED_MOVEMENTS=0
+OUTSOURCING_GL_VOUCHER=Dr 1406 200000 / Cr 1403 200000
+DEMO_ACCOUNTS=6(口令已重置，登录实测 200)；ADMIN_PASSWORD=客户原值(未改)
+VMI_GL_LEG=MISSING(开放项，绑定 D-P01；VMI 收货流程在裁定前不能通过权威结账)
+```

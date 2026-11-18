@@ -2508,6 +2508,10 @@ receiveSingleLegInboundValue(db, { businessDate, productId, warehouseId, quantit
 | 步进调拨退回入库腿 | 同上（`returnToSource`，当前无路由） | 同上 | `STEP_TRANSFER_CARRYING` | `INVENTORY_STEP_TRANSFER_RETURN_{n}` |
 | VMI 收货入库腿 | `procurement-vmi.js` | canonical `receivePositiveSourceValue`（既有账面单价 → 冻结标准成本） | 由该原语决定 | `VMI_RECEIPT` |
 
+**VMI 的总账边界（2026-11-18 实测补记）**：VMI 收货本节只产生**子账**（估值流水 + 估值池 + 数量），
+**没有**产生对应的总账应付腿。总账存货余额因此与价值子账差一个 VMI 收货的账面价值。该腿的确认时点
+属 `D-P01` 未决范围，本节**不**自行补（Requirement §32.18.5 开放项 3）。
+
 #### 27.63.3 事务、错误、审计与兼容
 
 - **组装 / 拆卸**：整段位移与其自持计值**必须**同事务。原先各次 mutation 各自开事务（SQLite

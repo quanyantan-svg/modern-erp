@@ -70,7 +70,24 @@ Release Readiness。**已执行**：客户测试环境部署（授权见 §3.2�
 客户库保留本次增量取证产生的业务事实（1 笔委外发料、1 张组装单）与夹具（BOM `probe-bom-assy`），
 作为证据留存。
 
-### 3.3 已知的门禁回归及其处置（不降级断言）
+### 3.3 客户环境清库重播种后的终态（2026-11-18 晚，同日第二轮）
+
+按业务所有者裁定「清库后重新播种」，客户环境已重置为**干净且可交付**的状态：
+
+| 项 | 结果 |
+|---|---|
+| 清库 | 停服务 → DROP `modern_erp` 全部表与视图 → 启动触发 bootstrap → **424 表 + 1 视图 + 5 触发器**；MySQL 未重启；同机 `calculator` / `pairbook-web` 未受影响 |
+| 账号 | `admin`（**沿用客户原有口令，全程未改**）+ 6 个角色演示账号（`demo_sales` / `demo_reviewer` / `demo_warehouse` / `demo_accounting` / `demo_outsourcing` / `demo_outsourcingrecv`，口令统一重置为交付用已知值，6 个登录实测全部 200） |
+| 演示数据 | 2 仓库、2 货品、1 委外供应商（含资质与委外 WIP 仓）、2 个委外货源、期初原材料 1000 件（物理 + 估值 + 总账三者同步）、1 张委外订单（已下达 + 已发料）、1 张组装单（已确认） |
+| **权威结账** | **`INVENTORY_VALUE_TO_GL` 差额 = 0**；`LEGACY_UNVALUED_MOVEMENTS` = 0；委外发料的总账分录 `Dr 1406 200000 / Cr 1403 200000` 存在 |
+| 环境复原 | 临时验收探针账号已删除；`/tmp` 与 `/opt/modern-erp/.tmp` 的临时脚本已清理 |
+
+**本轮新发现的残余（必须随交付披露）**：**VMI 收货只有存货入账、没有对应的总账应付腿**（Requirement
+§32.18.5 开放项 3）。实测每次 VMI 收货使总账与价值子账差一个收货账面价值（本次 100,000 分/次）。
+该腿的确认时点属 `D-P01` 未决范围，**不**自行补；因此**在 D-P01 裁定前，VMI 收货流程不能通过
+权威结账**。为避免给客户留下一个必然失配的案例，演示数据**只建 VMI 协议、不建 VMI 收货**。
+
+### 3.4 已知的门禁回归及其处置（不降级断言）
 
 守卫扩到成本与差异族后，**12 个既有报表套件**（试算平衡 / 资产负债表 / 损益表 / 财务摘要）以
 `6401 主营业务成本` 构造费用侧事实的手工凭证被拦截。按 Requirement §35.13 `AA-VAL-13` 登记的
@@ -79,16 +96,18 @@ Release Readiness。**已执行**：客户测试环境部署（授权见 §3.2�
 
 ## 4. 未解决事项与残余风险
 
-1. **历史委外异动仍缺总账分录**（权威结账绝对值 −1600）：按 Requirement §31.22 的边界，
-   本轮**不追认、不补记**历史凭证。要让绝对值归零，需在**干净库**上重跑验收轮次，或由业务所有者
-   就历史数据另行裁定。
+1. ~~**历史委外异动仍缺总账分录**（权威结账绝对值 −1600）~~：**已由清库重播种消除**（见 §3.3）——
+   该差额来自上一轮 AC2 验收的虚构委外数据；客户环境清库重播种后
+   `INVENTORY_VALUE_TO_GL` 差额为 **0**。合同边界不变：历史凭证仍**不追认、不补记**，
+   而是把验收残留数据从交付环境中移除。
 2. **VMI 收货不登记 LOT / SERIAL 身份**：跟踪口径货品的入库价值无法归属到具体身份，
    本轮只对移动加权口径计值（Requirement §32.18 §32.18.5 开放项 1）。
-3. **步进调拨「退回来源仓」入库腿当前无 HTTP 路由**（`returnToSource` 为 zero-caller）：
+3. **VMI 收货的总账对方腿缺失**：见 §3.3。`D-P01` 裁定前 VMI 收货不能通过权威结账。
+4. **步进调拨「退回来源仓」入库腿当前无 HTTP 路由**（`returnToSource` 为 zero-caller）：
    本轮的自持计值修复是**预防性**的（Requirement §32.18 §32.18.4 第 1 项）。
-4. **既有违规手工凭证不得再被冲销或改分录**（Requirement §35.13 `AA-VAL-12` 能力收缩）：
+5. **既有违规手工凭证不得再被冲销或改分录**（Requirement §35.13 `AA-VAL-12` 能力收缩）：
    客户环境实测该类凭证数为 0，无实际影响。
-5. 客户环境残留 AC2 虚构验收数据与本次增量取证的夹具；`ac2_*` 验收账号口令未轮换。
+6. 客户环境已清库重播种（见 §3.3）；旧的 `ac2_*` 验收账号与 AC2 虚构数据已不存在。
 
 ## 5. 冻结范围与解冻
 
@@ -111,12 +130,15 @@ LOCAL_BUILD=PASS
 DOC_CONSISTENCY=ALL CHECKS PASSED(current + migration)
 REAL_MYSQL_DEPLOY=2566f758(git bundle；未 push)
 REAL_MYSQL_GAP_DELTA=0(增量法：新流程对 INVENTORY_VALUE_TO_GL 的贡献为 0)
-REAL_MYSQL_ABS_GAP=-1600(历史委外异动，按合同不追认)
+REAL_MYSQL_ABS_GAP=0(清库重播种后；历史委外异动随验收残留数据移除，不追认)
 OUTSOURCING_GL_VOUCHER=Dr 1406 / Cr 1403
 ASSEMBLY_INBOUND_LEG=VALUED(+1381 = 组件出库账面价)
 LEGACY_UNVALUED_MOVEMENTS=0
 MANUAL_VOUCHER_GUARD=409 MANUAL_VOUCHER_CANONICAL_SUBJECT + 零副作用
-AUTHORITATIVE_CLOSE=BLOCKED(仅剩历史委外异动一项，需干净库重跑或所有者裁定)
+AUTHORITATIVE_CLOSE=PASS(清库重播种后差额 0；VMI 收货流程因缺总账应付腿仍不能结账，见 §3.3)
+CUSTOMER_ENV=RESET_AND_RESEEDED(424 表 + 1 视图 + 5 触发器；DIFF=0；LEGACY=0)
+DEMO_ACCOUNTS=6(口令已重置，登录实测 200)；ADMIN_PASSWORD=客户原值(未改)
+VMI_GL_LEG=MISSING(开放项，绑定 D-P01)
 MANUAL_CLOSURE=NOT_ISSUED
 RELEASE_READINESS=NOT_ISSUED
 ```
@@ -127,5 +149,5 @@ RELEASE_READINESS=NOT_ISSUED
 |---|---|---|
 | 本轮实现与证据采集 | 仓库（执行） | 已完成；证据见 §3 |
 | 本轮合同项的 Acceptance 与 Freeze | 业务所有者 | **已签发**（2026-11-18 指令「将三项收口 然后将三项残余修复」并裁定五项口径） |
-| 历史委外异动的处置（追认 / 干净库重跑 / 裁定保留） | 业务所有者 | **待裁定**（见 §4.1） |
+| 历史委外异动的处置 | 业务所有者 | **已裁定并执行**：清库重播种（见 §3.3），差额归零；历史凭证不追认 |
 | 域级 Acceptance / Manual Closure / Release Readiness / push | 业务所有者 | 域级记录不变；Manual Closure 与 Release Readiness 未签发 |
