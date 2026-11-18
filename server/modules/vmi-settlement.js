@@ -303,7 +303,7 @@ export function resolveOpeningBalances(db, { agreement, productId, snapshotAt, w
     productId, warehouseId, ownerType: 'SUPPLIER', ownerId: supplierId, stockStatus: 'AVAILABLE',
   });
   if (!positions.length) {
-    throw new HttpError(409, '无法从 canonical inventory position 证明 VMI 期初余额', {
+    throw new HttpError(409, '无法从权威库存快照证明 VMI 期初余额', {
       code: VMI_SETTLEMENT_ERROR_CODES.OPENING_UNPROVEN,
     });
   }
@@ -313,7 +313,7 @@ export function resolveOpeningBalances(db, { agreement, productId, snapshotAt, w
   if (supplierQty < -1e-9) {
     // 当前在库小于本期净流入：期初余额无法证明（例如窗口外的历史收货已被
     // 其它路径消耗）。**不得**默认为 0。
-    throw new HttpError(409, '无法从 canonical inventory position 证明 VMI 期初余额', {
+    throw new HttpError(409, '无法从权威库存快照证明 VMI 期初余额', {
       code: VMI_SETTLEMENT_ERROR_CODES.OPENING_UNPROVEN,
     });
   }

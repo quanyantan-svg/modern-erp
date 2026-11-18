@@ -448,7 +448,7 @@ export async function transferVmiOwnership(db, req, res, actor) {
   const body = await readJson(req);
   // 白名单**不含** `settlementAmountCents` / `supplierBillId`：传入即 400。
   assertAllowedFields(body, ['vmiReceiptId', 'settlementQuantity', 'transferDate']);
-  const retired = new HttpError(410, 'VMI 物权转移已按 D-2a 结算模型退役，请通过结算期结算', {
+  const retired = new HttpError(410, 'VMI 物权转移接口已按结算裁定退役，请通过结算期完成结算', {
     code: VMI_SETTLEMENT_ERROR_CODES.OWNERSHIP_TRANSFER_RETIRED,
   });
   // 拒绝审计（`VMI-SET-16`）。共享的 `auditBusinessRejection` 只处理 409；
@@ -472,7 +472,7 @@ export async function openVmiSettlementPeriod(db, req, res, actor) {
   assertSettlementPeriodManagePermission(actor);
   const body = await readJson(req);
   assertAllowedFields(body, ['agreementId', 'periodKey', 'windowKind', 'windowStart', 'windowEnd']);
-  if (!body.agreementId) throw new HttpError(400, 'VMI 协议 id 必填');
+  if (!body.agreementId) throw new HttpError(400, 'VMI 协议标识必填');
   if (!body.periodKey) throw new HttpError(400, '结算期键必填');
   const agreement = db.prepare('SELECT * FROM vmi_agreements WHERE id=?').get(body.agreementId);
   if (!agreement) {

@@ -9,7 +9,9 @@
 //   1. 组装：成品入库腿的价值 = 本次**组件出库**的权威账面价值合计；
 //   2. 拆卸：组件回收入库腿的价值 = **母件出库**的权威账面价值（按数量分摊）；
 //   3. 步进调拨入库腿：价值 = **调出腿**的权威账面价值；
-//   4. VMI 收货入库腿：价值 = 产品自身的既有账面单价或冻结标准成本；
+//   4. VMI 收货入库腿：价值 = **VMI 协议单价 × 数量**（Requirement §31.24
+//      `VMI-SET-03` / `VMI-SET-04` 修正后的权威成本口径：权威价值必须与权威
+//      金额同源，否则 `INVENTORY_VALUE_TO_GL` 会差出整笔收货金额）；
 //   5. 每条入库腿的库存流水必须是 `VALUED`，且估值池数量 = 在库数量。
 
 import assert from 'node:assert/strict';
@@ -21,6 +23,8 @@ import { receiveValue } from './modules/financial-inventory.js';
 
 const UNIT_COST_CENTS = 1000;
 const SEED_QUANTITY = 10;
+/** 协议单价刻意不等于期初账面单价，用来证明入库价值来自协议而不是估值池。 */
+const AGREEMENT_UNIT_PRICE_CENTS = 2500;
 
 describe('单腿入库异动的自持计值（§32.18 IW-VAL-05）', () => {
   let fixture;
@@ -168,7 +172,7 @@ describe('单腿入库异动的自持计值（§32.18 IW-VAL-05）', () => {
     assertPoolDeltaMatchesStock(product, 'warehouse-002', targetBefore);
   });
 
-  test('VMI 收货入库腿：价值 = 产品自身的既有账面单价或冻结标准成本', async () => {
+  test('VMI 收货入库腿：价值 = VMI 协议单价 × 数量', async () => {
     const product = 'product-001';
     await fixture.request('PATCH', '/api/suppliers/supplier-001/profile', fixture.tokens.admin, {
       procurementEnabled: true, outsourcingEnabled: false, category: 'GENERAL',
@@ -176,6 +180,7 @@ describe('单腿入库异动的自持计值（§32.18 IW-VAL-05）', () => {
     const agreement = await fixture.request('POST', '/api/procurement/vmi/agreements', fixture.tokens.admin, {
       supplierId: 'supplier-001', warehouseId: 'warehouse-001', productId: product,
       minStock: 10, maxStock: 100, reorderLevel: 20, effectiveFrom: isoDate(-1),
+      unitPriceCents: AGREEMENT_UNIT_PRICE_CENTS,
     });
     assert.equal(agreement.status, 201, JSON.stringify(agreement.data));
 
@@ -192,6 +197,7 @@ describe('单腿入库异动的自持计值（§32.18 IW-VAL-05）', () => {
     assert.equal(legs[0].valuation_status, 'VALUED', 'VMI 收货腿必须完成权威估值');
     const valuation = postedValuation(legs[0].id);
     assert.ok(valuation, 'VMI 收货腿必须存在已过账估值流水');
-    assert.ok(Number(valuation.value_delta_cents) > 0, 'VMI 收货腿必须有正的权威价值');
+    assert.equal(Number(valuation.value_delta_cents), AGREEMENT_UNIT_PRICE_CENTS * 5,
+      'VMI 收货腿的权威价值必须等于协议单价 × 数量');
   });
 });
