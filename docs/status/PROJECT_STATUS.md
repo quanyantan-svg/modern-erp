@@ -7170,3 +7170,76 @@ MANUAL_CLOSURE=NOT_ISSUED；RELEASE_READINESS=NOT_ISSUED；PUSH=NOT_EXECUTED
 | 本轮实现、证据采集与合同项 Acceptance / Freeze | 仓库（执行）+ 业务所有者（授权） | 已签发；见 §81.5 |
 | 委外总账接线的立项与实施 | Procurement & Outsourcing + 业务所有者 | 待立项 |
 | 域级 Acceptance / Manual Closure / Release Readiness / push | 业务所有者 | 未签发 / 未执行 |
+
+## 82. 三项残余闭合轮次：委外总账接线、单腿入库价值、手工凭证守卫旁路（2026-11-18）
+
+**状态**：三项残余**均已实施、已在真实 MySQL 8 上验收通过**，本轮合同项已 `ACCEPTED` + `FROZEN`。
+本节**不是**域级 Acceptance：三个域既有的域级 Acceptance / Capability Freeze 记录保持不变；
+Manual Closure 与 Release Readiness **未签发**。
+
+### 82.1 授权与边界
+
+业务所有者 2026-11-18「将三项收口 然后将三项残余修复」（AGENTS.md §4.0 连续阶段授权），
+并作出五项裁定：委外发出商品取 `1406 其他存货`（**不**取 `1404 在制品`：其 WIP 价值子账
+`production_order_id` 为 `NOT NULL` 外键，委外写不进去，占用 1404 会使 `WIP_TO_GL` 立即失配）；
+单腿入库的 VMI 目标按代码现状修正为**VMI 收货入库腿**；穷尽枚举另两条同缺陷类单腿入库腿
+（拆卸组件回收入库腿、步进调拨退回入库腿）一并修复；手工凭证守卫的受控族扩到**成本与差异族**；
+守卫**一并封住**改分录与冲销两个旁路。
+
+### 82.2 三项残余的处置
+
+| 残余 | 合同 | 实现 | 真实 MySQL 8 证据 |
+|---|---|---|---|
+| 委外库存异动缺总账分录（历史 −1600） | §31.22 / §26.43 | 新增 `server/modules/outsourcing-gl-integration.js` 作为唯一映射处；发料 / 补料 / 退料 / 倒冲 / 收货各一张 canonical 系统凭证；发出商品取 `OTHER_INVENTORY`、过桥科目取 `OUTSOURCING_PROCESSING_FEE` | 委外发料产生 `Dr 1406 1000 / Cr 1403 1000`；`INVENTORY_VALUE_TO_GL` **增量 = 0** |
+| 单腿入库异动的入库价值（`IW-VAL-05`） | §32.18 / §27.63 | 穷尽枚举 `movementKind='IN'` 全部调用点，得到 **5 条**缺权威价值的单腿入库腿（已登记 3 条 + 新发现 2 条），全部实施；新增 `server/modules/inventory-single-leg-valuation.js` 作为唯一自持计值原语 | 组装成品入库腿 `IN VALUED +1381`（= 组件出库账面价）；`LEGACY_UNVALUED_MOVEMENTS = 0` |
+| 手工凭证守卫只覆盖存货科目族（`AA-VAL-01`） | §35.13 / §31.18 | 新增 `server/modules/accounting-manual-voucher-guard.js` 作为唯一守卫；受控集合扩到成本与差异族（10 个角色码）；创建 / 改分录 / 冲销三条写路径共用 | 自由手工凭证挂 `6401` → **409** `MANUAL_VOUCHER_CANONICAL_SUBJECT` + `resolution`，零副作用 |
+
+### 82.3 门禁与部署证据
+
+| 项 | 结果 |
+|---|---|
+| 本机 | FAST **775/775**；FULL **4205/4205**（546 suites）；build PASS；`git diff --check` PASS；文档一致性 current + migration **ALL CHECKS PASSED** |
+| 新增合同套件 | 委外总账 4/4；手工凭证守卫 5/5；单腿入库价值 4/4 |
+| 变异对照 | 委外总账 4 项、手工凭证守卫 3 项**全部实测转红**，源文件逐字节恢复 |
+| 客户环境部署 | commit `2566f758`（`git bundle`，未 push）→ 停服务 → checkout → `pnpm install --frozen-lockfile` → `pnpm build` → 启动；`server_started`（3001 / mysql）；nginx 200、未认证 API 401；**无 schema 变更**；MySQL 未重启；`calculator` / `pairbook-web` 未受影响 |
+| 真实 MySQL 权威结账 | 基线 −1600；**增量法**：委外发料后差额**增量 = 0**；同轮 `INVENTORY_QUANTITY_VS_VALUATION` / `WIP_TO_GL` / `RECEIPT_GRNI_TO_GL` / `COGS_TO_GL` / `LEGACY_UNVALUED_MOVEMENTS` / `SYSTEM_VOUCHER_UNIQUENESS` **全部为 0** |
+| 环境复原 | 验收探针账号已删除（243 个外键引用改指 `user-admin-init`）；`/tmp` 临时文件已清理；`admin` 账号与口令未触碰 |
+
+### 82.4 门禁回归及其处置（不降级断言）
+
+守卫扩到成本与差异族后，**12 个既有报表套件**（试算平衡 / 资产负债表 / 损益表 / 财务摘要）以
+`6401 主营业务成本` 构造费用侧事实的手工凭证被拦截。按 Requirement §35.13 `AA-VAL-13`，
+这些测试的**费用侧夹具**改用非受控科目 `6603 处置资产损益`（EXPENSE 类型，口径等价）；
+**断言的强度与语义不变**，科目目录断言不变。
+
+### 82.5 未解决事项
+
+1. **历史委外异动仍缺总账分录**（权威结账绝对值 −1600）：按 §31.22 边界，本轮**不追认、不补记**。
+   要让绝对值归零，需在**干净库**上重跑验收轮次，或由业务所有者就历史数据另行裁定。
+2. **VMI 收货不登记 LOT / SERIAL 身份**：跟踪口径货品的入库价值无法归属到具体身份（§32.18 开放项 1）。
+3. **步进调拨「退回来源仓」入库腿当前无 HTTP 路由**（zero-caller），本轮修复是预防性的（§32.18 范围外 1）。
+4. **既有违规手工凭证不得再被冲销或改分录**（§35.13 `AA-VAL-12` 能力收缩；客户环境实测该类凭证为 0）。
+5. 客户环境残留 AC2 虚构验收数据与本次增量取证的夹具；`ac2_*` 验收账号口令未轮换；
+   客户环境尚未配置 TLS（仅 HTTP 80）与自动备份 timer。
+
+### 82.6 机器可读状态
+
+```text
+RESIDUALS_ROUND_ACCEPTANCE=PASS(本轮合同项)
+RESIDUALS_ROUND_CONTRACT_ITEM_FREEZE=FROZEN(PRC-GL-01..13 / IW-SLV-01..10 / AA-VAL-05..13)
+LOCAL_FAST=775/775；LOCAL_FULL=4205/4205；LOCAL_BUILD=PASS；DOC_CONSISTENCY=ALL CHECKS PASSED
+REAL_MYSQL_DEPLOY=2566f758(git bundle；未 push)；REAL_MYSQL_GAP_DELTA=0
+REAL_MYSQL_ABS_GAP=-1600(历史委外异动，不追认)
+OUTSOURCING_GL_VOUCHER=Dr 1406 / Cr 1403；ASSEMBLY_INBOUND_LEG=VALUED(+1381)
+MANUAL_VOUCHER_GUARD=409 MANUAL_VOUCHER_CANONICAL_SUBJECT(零副作用)
+AUTHORITATIVE_CLOSE=BLOCKED(仅剩历史委外异动一项)
+MANUAL_CLOSURE=NOT_ISSUED；RELEASE_READINESS=NOT_ISSUED；PUSH=NOT_EXECUTED
+```
+
+### 82.7 Owner
+
+| 角色 | 承担者 | 说明 |
+|---|---|---|
+| 本轮实现、证据采集与合同项 Acceptance / Freeze | 仓库（执行）+ 业务所有者（授权） | 已签发；见 `docs/acceptance/residuals-round-acceptance-freeze-20261118.md` |
+| 历史委外异动的处置 | 业务所有者 | 待裁定（见 §82.5 第 1 项） |
+| 域级 Acceptance / Manual Closure / Release Readiness / push | 业务所有者 | 域级记录不变；Manual Closure 与 Release Readiness 未签发 |

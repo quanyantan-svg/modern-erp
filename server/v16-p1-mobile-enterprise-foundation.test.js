@@ -363,9 +363,9 @@ describe('P0 — V1.6 style isolation', () => {
 // Version / scope guard
 // ---------------------------------------------------------------------------
 describe('Scope — package version and route guards', () => {
-  test('package.json version identifies the v1.7.0-rc.2 release', () => {
+  test('package.json version identifies the v1.7.0-rc.3 release', () => {
     const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
-    assert.equal(pkg.version, '1.7.0-rc.2');
+    assert.equal(pkg.version, '1.7.0-rc.3');
   });
 
   test('Dashboard route (#dashboard) is still preserved for compatibility', () => {
