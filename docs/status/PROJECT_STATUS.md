@@ -7075,3 +7075,98 @@ ACCEPTANCE_FREEZE=NOT_ISSUED(未授权)
 | F-05 与报表口径的实现、部署与复验 | 仓库（执行）+ 业务所有者（授权） | 已实施并复验；**不是** Acceptance |
 | F-06 候选与 GRNI 检查口径的裁定 | Inventory & Warehouse + Accounting & Analytics + 业务所有者 | 待裁定 |
 | 真实 MySQL 结构变更、Acceptance / Freeze / push / 正式部署 | 业务所有者 | 未授权 |
+
+---
+
+## 81. F-06 异动腿计值归属、GRNI 口径统一与本轮 Acceptance / Freeze（2026-11-18）
+
+### 81.1 授权与边界
+
+业务所有者 2026-11-18 三次指令授权：「修 F-06 界面缺口 + 部署 + 收敛 FO54/FO55 口径」、
+「F-06 与 GRNI 口径立项走 Requirement → Design → Implementation 然后签发 Acceptance / Freeze」、
+「F-02 好像也还有矛盾 能否一并修好」（§4.0 连续阶段授权）。
+
+本轮按连续阶段授权执行 Requirement → Design → Implementation，并签发**本轮合同项**的
+Acceptance 与 Freeze。实现提交：`b9cc6b6`（F-06 + GRNI + 守卫 + 合同）。
+
+**未授权 / 未执行**：真实 MySQL 的结构变更（只做受支持的幂等迁移）、生产环境部署、
+`push` / `tag` / `merge` / `release`、Manual Closure 与 Release Readiness。
+
+### 81.2 缺陷事实与根因（逐笔归因，不是症状修补）
+
+`INVENTORY_VALUE_TO_GL` = −10,219 归因为三个互不相同的来源：
+
+| # | 来源 | 差异 | 归属 |
+|---|---|---|---|
+| 1 | 自由手工凭证贷记存货科目而**无估值流水** | −10,000 | 本轮修复：存货科目族守卫（§35.12 `AA-VAL-01`） |
+| 2 | 库存状态变更 IN 腿**无估值流水**（价值离开来源池却不到目标池） | +1,381 | 本轮修复：§32.17 `IW-VAL-01..06` |
+| 3 | 委外库存异动有估值流水但**无总账分录** | −1,600 → 本轮实测 −800 | **残余**：Procurement & Outsourcing 域 §31.21.4-5 已登记 |
+
+另有 `LEGACY_UNVALUED_MOVEMENTS` = 2（调拨 IN 腿、状态变更 IN 腿）、
+`INVENTORY_QUANTITY_VS_VALUATION` = 1、`RECEIPT_GRNI_TO_GL` = −300000
+（三处实现口径不一：子账侧误用 `FINAL`、总账侧符号相反）。
+
+根因一：canonical 位移写入器的 best-effort 计值分支把**每条** movement 都当「出库计值」，
+IN 腿在目标位找不到来源池即抛错，被 `catch` 静默吞掉。
+根因二：调拨模块把 IN 腿的估值流水挂到 **OUT 腿**的事务 id 上。
+
+### 81.3 已实施
+
+- **§32.17（`IW-VAL-01..06`）/ §27.62**：计值分支按腿归属 —— OUT 腿发出、IN 腿承接同一异动
+  OUT 腿的价值（`CARRYING_VALUE`）；已激活估值口径的货品计值失败即整体失败（零副作用）；
+  未激活估值口径的货品沿用既有未估值行为（由异常清单标记）。
+- **§35.12（`AA-VAL-01..04`）/ §31.17**：自由手工凭证不得以**存货科目族**为对方分录
+  （受控科目由 `account_role_mappings` 的角色码推导）；GRNI 子账侧只取暂估未结转、总账侧取
+  贷 − 借（三处实现同口径）；`INVENTORY_VALUE_TO_GL` 两侧同域（含在制科目）。
+- 既有合同测试的**夹具**按新合同调整（试算平衡 / 资产负债表 / 损益表 / 财务摘要的费用侧改用
+  非受控科目），断言本身不变；能力收窄登记在 Requirement。
+
+### 81.4 门禁与真实 MySQL 证据
+
+| 项 | 结果 |
+|---|---|
+| 本机 | FAST 775/775；FULL **4192/4192**；build PASS；diff --check PASS；文档一致性双模式 PASS |
+| 新增合同套件 | 期初身份 4/4；异动腿归属 3/3；守卫与 GRNI 3/3 |
+| 变异对照 | 4 项全部实测转红（守卫 / 口径 / 承接 / 科目集合） |
+| 客户环境（真实 MySQL 8，commit `b9cc6b6`，git bundle，未 push） | 迁移逐项查库确认；清库 424 表 + 1 视图 + 5 触发器；AC2 **13/13**；跟踪链路 **28/28**；浏览器 93 route × 5 角色；F-05 界面 **9/9** |
+| 权威结账检查 | `LEGACY_UNVALUED_MOVEMENTS` **0**；`INVENTORY_QUANTITY_VS_VALUATION` **0**；`RECEIPT_GRNI_TO_GL` **0**；`INVENTORY_VALUE_TO_GL` **−800（全部归因于委外总账接线，残余）** |
+
+### 81.5 Acceptance 与 Freeze（已签发）
+
+见 [`docs/acceptance/ac2-round-acceptance-freeze-20261118.md`](../acceptance/ac2-round-acceptance-freeze-20261118.md)：
+本轮 **17 个合同项**（`IW-OPEN-01..10`、`FO54-FO55-CALIBER-01..04`、`IW-VAL-01..06`、
+`AA-VAL-01..04`）已 `ACCEPTED` 并 `FROZEN`（修改须走显式解冻）。
+三个域既有的域级 Acceptance / Capability Freeze 记录保持不变；Manual Closure 与 Release
+Readiness **未签发**。
+
+### 81.6 未解决事项
+
+1. **委外库存异动缺总账分录（−800）**：仍挡着权威结账，属 Procurement & Outsourcing 域
+   （其 §31.21.4-5 已登记），需单独立项。
+2. 单腿入库异动的入库价值（组装拆卸 / 步进调拨 / VMI）仍需调用方自持（§32.17 `IW-VAL-05`）。
+3. 手工凭证守卫只覆盖存货科目族；成本 / 差异 / 应收 / 应付 / 现金 / 税金 / 收入科目为残余
+   （§35.12 `AA-VAL-01` 残余登记）。
+4. 客户环境残留 AC2 虚构验收数据与 2 个界面复验用批次身份。
+5. 未 push / tag / merge / release；`master` 领先 `github/master` 14 个提交。
+
+### 81.7 机器可读状态
+
+```text
+AC2_ROUND_ACCEPTANCE=PASS(17 个合同项)
+AC2_ROUND_CONTRACT_ITEM_FREEZE=FROZEN
+LOCAL_FULL=4192/4192
+REAL_MYSQL_DEPLOY=b9cc6b6
+AC2_CLEAN_DB_ROUND=PASS(13/13)；AC2_TRACKED_E2E=PASS(28/28)；F05_UI=PASS(9/9)
+LEGACY_UNVALUED_MOVEMENTS=0；INVENTORY_QUANTITY_VS_VALUATION=0；RECEIPT_GRNI_TO_GL=0
+INVENTORY_VALUE_TO_GL=-800(委外总账接线残余)
+AUTHORITATIVE_CLOSE=BLOCKED(仅剩委外一项)
+MANUAL_CLOSURE=NOT_ISSUED；RELEASE_READINESS=NOT_ISSUED；PUSH=NOT_EXECUTED
+```
+
+### 81.8 Owner
+
+| 角色 | 承担者 | 说明 |
+|---|---|---|
+| 本轮实现、证据采集与合同项 Acceptance / Freeze | 仓库（执行）+ 业务所有者（授权） | 已签发；见 §81.5 |
+| 委外总账接线的立项与实施 | Procurement & Outsourcing + 业务所有者 | 待立项 |
+| 域级 Acceptance / Manual Closure / Release Readiness / push | 业务所有者 | 未签发 / 未执行 |
