@@ -216,6 +216,18 @@ test('T13 对象存储寻址：远端用 virtual-hosted style，本地 sentinel 
   assert.ok(restoreSource.includes('createObjectStoreClient'), '恢复入口必须复用共享客户端');
 });
 
+test('T15 恢复入口把目标身份映射成 runMysqlImport 需要的 name 字段', () => {
+  // 回归：目标身份的字段名是 `database`，而 `runMysqlImport` 读 `database.name`；
+  // 直接展开会把库名传成 undefined，导入落到名为 undefined 的库上。
+  const restoreSource = readFileSync(join(repoRoot, 'scripts', 'admin', 'mysql-restore.mjs'), 'utf8');
+  assert.match(restoreSource, /name:\s*target\.identity\.database/,
+    '恢复入口必须把 target.identity.database 映射为 name');
+
+  const importSource = readFileSync(join(repoRoot, 'scripts', 'admin', 'lib', 'mysql-dr.mjs'), 'utf8');
+  const importFn = importSource.slice(importSource.indexOf('export function runMysqlImport'));
+  assert.match(importFn, /database\.name/, 'runMysqlImport 必须以 database.name 作为目标库名');
+});
+
 test('T14 dump 结果判定与事件到达顺序无关：子进程退出 0 必须判成功', async () => {
   // 回归：此前只看输出流的 'close'，而 stdout 的 end 可能早于子进程退出事件被处理，
   // 此时 child.exitCode 仍是 null，一次成功的备份被误报成「退出码 null」。

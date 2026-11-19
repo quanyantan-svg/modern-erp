@@ -168,7 +168,9 @@ async function main() {
     /* RESTORE_RUNNING */
     state = 'RESTORE_RUNNING';
     await runMysqlImport({
-      database: { ...target.identity, user: process.env.ERP_DB_USER },
+      // `runMysqlImport` 读的是 `database.name`，而目标身份的字段名是 `database`；
+      // 直接展开会把库名传成 undefined，导入落到名为 undefined 的库上。
+      database: { ...target.identity, name: target.identity.database },
       user: process.env.ERP_DB_USER,
       password: process.env.ERP_DB_PASSWORD,
       dumpPath,
