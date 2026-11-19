@@ -19,6 +19,8 @@
 
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
+import BusinessReferenceSelector from '../components/BusinessReferenceSelector.jsx';
+import { engineeringWorkReference } from '../lib/domainWorkReferences.js';
 import { can, Empty, FormActions, Modal, Status } from '../components/ui.jsx';
 import {
   BusinessAction, BusinessActionBar, BusinessPageHeader, BusinessPageShell,
@@ -181,19 +183,19 @@ function calendarFields(kind, body, setBody) {
   if (kind === 'pattern') return <>
     <label>编码<input value={body.code || ''} onChange={set('code')} required /></label>
     <label>名称<input value={body.name || ''} onChange={set('name')} required /></label>
-    <label className="full">班次 ID（逗号分隔）<input value={(body.shiftIds || []).join(',')} onChange={set('shiftIds', (value) => value.split(',').map((item) => item.trim()).filter(Boolean))} required /></label>
+    <BusinessReferenceSelector descriptor={engineeringWorkReference('SHIFT')} label="包含班次" multiple value={body.shiftIds || []} onChange={(shiftIds) => setBody((prev) => ({ ...prev, shiftIds }))} />
   </>;
   if (kind === 'calendar-template') return <>
     <label>编码<input value={body.code || ''} onChange={set('code')} required /></label>
     <label>名称<input value={body.name || ''} onChange={set('name')} required /></label>
-    <label>班制 ID<input value={body.shiftPatternId || ''} onChange={set('shiftPatternId')} /></label>
+    <BusinessReferenceSelector descriptor={engineeringWorkReference('SHIFT_PATTERN')} label="班制" optional value={body.shiftPatternId || ''} onChange={(shiftPatternId) => setBody((prev) => ({ ...prev, shiftPatternId }))} />
   </>;
   return <>
     <label>编码<input value={body.code || ''} onChange={set('code')} required /></label>
     <label>名称<input value={body.name || ''} onChange={set('name')} required /></label>
     <label>起始<input type="date" value={body.startDate || ''} onChange={set('startDate')} required /></label>
     <label>结束<input type="date" value={body.endDate || ''} onChange={set('endDate')} required /></label>
-    <label className="full">日历模板 ID<input value={body.templateId || ''} onChange={set('templateId')} /></label>
+    <BusinessReferenceSelector descriptor={engineeringWorkReference('CALENDAR_TEMPLATE')} label="日历模板" optional value={body.templateId || ''} onChange={(templateId) => setBody((prev) => ({ ...prev, templateId }))} />
   </>;
 }
 
@@ -426,11 +428,11 @@ const REFERENCE_LIFECYCLE = {
 
 const REFERENCE_LIFECYCLE_LABELS = {
   code: '编码', name: '名称', start_minute: '起始（分钟）', end_minute: '结束（分钟）',
-  shift_ids: '班次 ID（JSON 数组）', work_days: '工作日（JSON 数组）', shift_pattern_id: '班制 ID',
-  template_id: '日历模板 ID', start_date: '起始日期', end_date: '结束日期', stage: '阶段',
+  shift_ids: '包含班次', work_days: '工作日（JSON 数组）', shift_pattern_id: '班制',
+  template_id: '日历模板', start_date: '起始日期', end_date: '结束日期', stage: '阶段',
   unit: '单位', default_quantity: '默认数量', formula: '公式', variables: '变量（JSON 数组）',
-  quantity: '数量', category: '类别', work_center_id: '工作中心 ID', model: '型号',
-  serial: '序列号', standard_minutes: '标准工时（分钟）', activity_id: '基础活动 ID',
+  quantity: '数量', category: '类别', work_center_id: '工作中心', model: '型号',
+  serial: '序列号', standard_minutes: '标准工时（分钟）', activity_id: '基础活动',
   policy: '策略', notes: '备注',
 };
 
@@ -456,8 +458,9 @@ const REFERENCE_EDITOR = {
 function ReferenceCreateEditor({ kind, onClose, notify }) {
   const config = REFERENCE_EDITOR[kind];
   const [body, setBody] = useState(config.initial);
-  const labels = { code: '编码', name: '名称', stage: '阶段', unit: '单位', defaultQuantity: '默认数量', category: '类别', quantity: '数量', workCenterId: '工作中心 ID', model: '型号', serial: '序列号', standardMinutes: '标准工时（分钟）', activityId: '基础活动 ID', policy: '策略' };
+  const labels = { code: '编码', name: '名称', stage: '阶段', unit: '单位', defaultQuantity: '默认数量', category: '类别', quantity: '数量', workCenterId: '工作中心', model: '型号', serial: '序列号', standardMinutes: '标准工时（分钟）', activityId: '基础活动', policy: '策略' };
   const field = (name, type = 'text') => <label key={name}>{labels[name] || name}<input type={type} value={body[name]} onChange={(event) => setBody({ ...body, [name]: type === 'number' ? Number(event.target.value) : event.target.value })} required={['code', 'name'].includes(name)} /></label>;
+  const reference = (name, kind) => <BusinessReferenceSelector key={name} descriptor={engineeringWorkReference(kind)} label={labels[name]} optional value={body[name] || ''} onChange={(value) => setBody({ ...body, [name]: value })} />;
   const save = async () => {
     try { await api(config.endpoint, { method: 'POST', body }); notify('已保存'); onClose(); }
     catch (error) { notify(error.message, 'error'); }
@@ -465,11 +468,11 @@ function ReferenceCreateEditor({ kind, onClose, notify }) {
   const fields = kind === 'activity'
     ? [field('code'), field('name'), field('stage'), field('unit'), field('defaultQuantity', 'number')]
     : kind === 'resource'
-    ? [field('code'), field('name'), field('category'), field('quantity', 'number'), field('unit'), field('workCenterId')]
+    ? [field('code'), field('name'), field('category'), field('quantity', 'number'), field('unit'), reference('workCenterId', 'WORK_CENTER')]
     : kind === 'equipment'
-      ? [field('code'), field('name'), field('model'), field('serial'), field('workCenterId')]
+      ? [field('code'), field('name'), field('model'), field('serial'), reference('workCenterId', 'WORK_CENTER')]
       : kind === 'operation'
-        ? [field('code'), field('name'), field('standardMinutes', 'number'), field('activityId'), field('workCenterId')]
+        ? [field('code'), field('name'), field('standardMinutes', 'number'), reference('activityId', 'ACTIVITY'), reference('workCenterId', 'WORK_CENTER')]
         : [field('code'), field('name'), field('category'), field('policy')];
   return <Modal title={config.title} onClose={onClose}>
     <form className="engineering-form" onSubmit={(event) => { event.preventDefault(); void save(); }}>
@@ -495,6 +498,12 @@ function ReferenceLifecycleEditor({ slug, raw, notify, onClose, onChanged }) {
   const [editing, setEditing] = useState(false);
   if (!config) return null;
   const set = (name, value) => setBody({ ...body, [name]: value });
+  const referenceKind = { shift_ids: 'SHIFT', shift_pattern_id: 'SHIFT_PATTERN', template_id: 'CALENDAR_TEMPLATE', work_center_id: 'WORK_CENTER', activity_id: 'ACTIVITY' };
+  const bodyKey = {
+    start_minute: 'startMinute', end_minute: 'endMinute', shift_ids: 'shiftIds', work_days: 'workDays',
+    shift_pattern_id: 'shiftPatternId', template_id: 'templateId', start_date: 'startDate', end_date: 'endDate',
+    default_quantity: 'defaultQuantity', work_center_id: 'workCenterId', standard_minutes: 'standardMinutes', activity_id: 'activityId',
+  };
   const save = async () => {
     try {
       await api(`/api/engineering/${slug}/${raw.id}`, { method: 'PATCH', body });
@@ -517,8 +526,9 @@ function ReferenceLifecycleEditor({ slug, raw, notify, onClose, onChanged }) {
   const isInactive = raw.active === 0 || raw.active === false;
   return <div className="engineering-lifecycle">
     {editing ? <form className="engineering-form" onSubmit={(event) => { event.preventDefault(); void save(); }}>
-      {config.fields.map((name) => <label key={name}>{REFERENCE_LIFECYCLE_LABELS[name] || name}
-        <input value={String(body[name] ?? '')} onChange={(event) => set(name, event.target.value)} required={name === 'code' || name === 'name'} /></label>)}
+      {config.fields.map((name) => referenceKind[name]
+        ? <BusinessReferenceSelector key={name} descriptor={engineeringWorkReference(referenceKind[name])} label={REFERENCE_LIFECYCLE_LABELS[name]} optional={name !== 'shift_ids'} multiple={name === 'shift_ids'} value={body[bodyKey[name]] || (name === 'shift_ids' ? [] : '')} onChange={(value) => set(bodyKey[name], value)} />
+        : <label key={name}>{REFERENCE_LIFECYCLE_LABELS[name] || name}<input value={String(body[bodyKey[name] || name] ?? '')} onChange={(event) => set(bodyKey[name] || name, event.target.value)} required={name === 'code' || name === 'name'} /></label>)}
       <div className="engineering-lifecycle__actions">
         <button type="button" className="secondary" onClick={() => setEditing(false)}>取消</button>
         <button type="submit" className="primary">保存</button>

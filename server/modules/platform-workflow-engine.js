@@ -27,6 +27,7 @@ import {
   evaluateSodCompliance, registerSodInitiatorResolver, writeSodEvaluations,
 } from './platform-sod.js';
 import { notifyEvent } from './platform-notifications.js';
+import { readWorkReferenceInput, referenceItem, sendWorkReferencePage } from '../lib/work-reference.js';
 
 const TEMPLATE_STATUS = ['DRAFT', 'PUBLISHED', 'RETIRED'];
 const VERSION_STATUS = ['DRAFT', 'PUBLISHED', 'RETIRED'];
@@ -35,6 +36,21 @@ const INSTANCE_TERMINAL = new Set(['COMPLETED', 'TERMINATED', 'CANCELLED']);
 
 /** 人工任务可执行的动作。SKIP 属于自动节点，不在此列。 */
 export const WORKFLOW_TASK_ACTIONS = Object.freeze(['APPROVE', 'REJECT', 'RETURN', 'TRANSFER', 'ADD_SIGN']);
+
+export function listWorkflowParticipants(db, res, actor, url) {
+  allow(actor, 'WORKFLOW_TASK_ACT');
+  const input = readWorkReferenceInput(url, new Set(['USER']));
+  return sendWorkReferencePage(db, res, input, {
+    identity: 'u.id',
+    columns: 'u.id,u.username code,u.display_name name,r.name secondaryText,u.active',
+    from: 'FROM users u JOIN roles r ON r.id=u.role_id',
+    where: ['u.active=1'],
+    args: [],
+    search: ['u.username', 'u.display_name', 'r.name'],
+    order: 'u.display_name,u.username,u.id',
+    toItem: referenceItem,
+  });
+}
 
 /** 动作推进语义：哪些动作会推进节点。 */
 const ADVANCING_ACTIONS = new Set(['APPROVE', 'REJECT', 'RETURN']);

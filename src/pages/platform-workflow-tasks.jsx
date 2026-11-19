@@ -7,6 +7,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api.js';
+import BusinessReferenceSelector from '../components/BusinessReferenceSelector.jsx';
+import { workflowWorkReferences } from '../lib/domainWorkReferences.js';
 import { can, Loading, dateTime } from '../components/ui.jsx';
 import {
   BottomActionBar, BusinessPageShell, EmptyState, FormRow, InlineAlert, SegmentedControl,
@@ -147,9 +149,7 @@ function TaskActionSheet({ task, canAct, notify, onClose, onChanged }) {
           </select>
         </FormRow>
         {(action === 'TRANSFER' || action === 'ADD_SIGN') && (
-          <FormRow label="接收人 ID" required>
-            <input value={assigneeId} onChange={(event) => setAssigneeId(event.target.value)}/>
-          </FormRow>
+          <BusinessReferenceSelector descriptor={workflowWorkReferences.participant()} label="接收人" value={assigneeId} onChange={setAssigneeId}/>
         )}
         <FormRow label="处理意见">
           <textarea rows={4} value={comment} onChange={(event) => setComment(event.target.value)}/>

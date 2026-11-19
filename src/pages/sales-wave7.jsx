@@ -18,6 +18,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
+import BusinessReferenceSelector from '../components/BusinessReferenceSelector.jsx';
+import { salesWorkReferences } from '../lib/domainWorkReferences.js';
 import { useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 
 const GATE_STAGES = ['PLANNING_RELEASE', 'RESERVATION', 'DELIVERY'];
@@ -160,10 +162,7 @@ export function PrepaymentGates({ query = {} } = {}) {
       <p className="muted">销售预付款门负责读取财务端预付款余额，按 PLANNING_RELEASE / RESERVATION / DELIVERY 三个阶段评估订单是否能继续推进。所有评估都在同一事务内持有财务父级结算余额锁，避免并发通过陈旧余额放行。</p>
 
       <div className="form-row">
-        <label>
-          <span>销售订单</span>
-          <input value={salesOrderId} onChange={(e) => setSalesOrderId(e.target.value)} placeholder="销售订单 ID" />
-        </label>
+        <BusinessReferenceSelector descriptor={salesWorkReferences.order()} label="销售订单" value={salesOrderId} onChange={setSalesOrderId} />
         <label>
           <span>预付款要求 (分)</span>
           <input type="number" min="0" value={requiredAmount} onChange={(e) => setRequiredAmount(e.target.value)} placeholder="例如 50000" />
@@ -294,7 +293,7 @@ export function ReservationIntents({ query = {} } = {}) {
   }
 
   async function requestIntent() {
-    if (!salesOrderId || !productId || !quantity) {
+    if (!salesOrderId || !productId || !quantity || (mode === 'INVENTORY_LOCK' && !warehouseId)) {
       setFlash({ type: 'error', message: '请填写订单、产品与数量' });
       return;
     }
@@ -346,22 +345,10 @@ export function ReservationIntents({ query = {} } = {}) {
       <p className="muted">销售仅持有预留意图。库存锁定事实由库存域维护，预备量与有限供给由计划域维护。预计供给模式必须提供真实有限容量，缺省时拒绝放行。</p>
 
       <div className="form-row">
-        <label>
-          <span>销售订单</span>
-          <input value={salesOrderId} onChange={(e) => setSalesOrderId(e.target.value)} placeholder="销售订单 ID" />
-        </label>
-        <label>
-          <span>订单行 (可选)</span>
-          <input value={salesOrderItemId} onChange={(e) => setSalesOrderItemId(e.target.value)} placeholder="订单行 ID" />
-        </label>
-        <label>
-          <span>产品</span>
-          <input value={productId} onChange={(e) => setProductId(e.target.value)} placeholder="货品 ID" />
-        </label>
-        <label>
-          <span>仓库</span>
-          <input value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)} placeholder="仓库 ID（可选）" />
-        </label>
+        <BusinessReferenceSelector descriptor={salesWorkReferences.order()} label="销售订单" value={salesOrderId} onChange={(id) => { setSalesOrderId(id); setSalesOrderItemId(''); }} />
+        <BusinessReferenceSelector descriptor={salesWorkReferences.orderItem(salesOrderId)} label="订单行" optional value={salesOrderItemId} onChange={setSalesOrderItemId} />
+        <BusinessReferenceSelector descriptor={salesWorkReferences.product()} label="货品" value={productId} onChange={setProductId} />
+        <BusinessReferenceSelector descriptor={salesWorkReferences.warehouse()} label="仓库" optional={mode !== 'INVENTORY_LOCK'} value={warehouseId} onChange={setWarehouseId} />
         <label>
           <span>预留模式</span>
           <select value={mode} onChange={(e) => setMode(e.target.value)}>
@@ -381,21 +368,14 @@ export function ReservationIntents({ query = {} } = {}) {
         <div className="form-row">
           <label>
             <span>预计量来源类型</span>
-            <select value={expectedSupplySourceType} onChange={(e) => setExpectedSupplySourceType(e.target.value)}>
+            <select value={expectedSupplySourceType} onChange={(e) => { setExpectedSupplySourceType(e.target.value); setExpectedSupplySourceId(''); }}>
               <option value="PLANNED_ORDER">计划订单</option>
               <option value="PURCHASE_ORDER">采购订单</option>
               <option value="PRODUCTION_ORDER">生产订单</option>
-              <option value="EXPECTED">预计</option>
             </select>
           </label>
-          <label>
-            <span>预计量来源 ID</span>
-            <input value={expectedSupplySourceId} onChange={(e) => setExpectedSupplySourceId(e.target.value)} />
-          </label>
-          <label>
-            <span>有限供给容量</span>
-            <input type="number" min="0" step="0.0001" value={expectedSupplyCapacity} onChange={(e) => setExpectedSupplyCapacity(e.target.value)} />
-          </label>
+          <BusinessReferenceSelector descriptor={salesWorkReferences.supply(expectedSupplySourceType)} label="预计量来源" value={expectedSupplySourceId} onChange={setExpectedSupplySourceId} />
+          <label><span>参考容量（系统仍以来源单据为准）</span><input type="number" min="0" step="0.0001" value={expectedSupplyCapacity} onChange={(e) => setExpectedSupplyCapacity(e.target.value)} /></label>
         </div>
       )}
 

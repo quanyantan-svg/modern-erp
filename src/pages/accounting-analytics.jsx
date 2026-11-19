@@ -22,6 +22,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
+import BusinessReferenceSelector from '../components/BusinessReferenceSelector.jsx';
+import { accountingSubjectReference, managementBookReference } from '../lib/domainWorkReferences.js';
 import { Empty, FormActions, Modal, can, money } from '../components/ui.jsx';
 import {
   BusinessAction, BusinessContentSection, BusinessPageHeader, BusinessPageShell,
@@ -381,10 +383,7 @@ function SubjectEditorSheet({ value, notify, onClose, onSaved }) {
             <option value="CREDIT">贷</option>
           </select>
         </label>
-        <label className="full">
-          上级科目 ID
-          <input aria-label="上级科目" value={form.parentId} onChange={(event) => setForm({ ...form, parentId: event.target.value })} />
-        </label>
+        <BusinessReferenceSelector descriptor={accountingSubjectReference(value.subject?.id || '')} label="上级科目" optional value={form.parentId} onChange={(parentId) => setForm({ ...form, parentId })} />
         <FormActions onClose={onClose} saveText={isEdit ? '保存修改' : '创建科目'} />
       </form>
     </Modal>
@@ -1301,10 +1300,7 @@ function ManagementEditorSheet({ value, notify, onClose, onSaved }) {
         </label>
         {value.mode === 'center' ? (
           <>
-            <label>
-              所属经营账簿
-              <input aria-label="所属经营账簿" value={form.managementBookId} onChange={(event) => setForm({ ...form, managementBookId: event.target.value })} required />
-            </label>
+            <BusinessReferenceSelector descriptor={managementBookReference()} label="所属经营账簿" value={form.managementBookId} onChange={(managementBookId) => setForm({ ...form, managementBookId })} />
             <label>
               组织单元
               <input aria-label="组织单元" value={form.orgUnit} onChange={(event) => setForm({ ...form, orgUnit: event.target.value })} />

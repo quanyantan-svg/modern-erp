@@ -8,6 +8,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { formatQuantity } from '../lib/format.js';
 import { api } from '../api.js';
 import { can, Loading } from '../components/ui.jsx';
+import BusinessReferenceSelector from '../components/BusinessReferenceSelector.jsx';
+import { planningWorkReferences } from '../lib/domainWorkReferences.js';
 import {
   BusinessPageShell, ConfirmSheet, DangerSheet, EmptyState, InlineAlert,
   SegmentedControl, Sheet, StatusChip,
@@ -189,7 +191,7 @@ function ReservationCreateSheet({ onClose, notify, onDone }) {
     reservationType: 'STRONG', productId: '', warehouseId: '',
     demandSourceType: 'SALES_ORDER', demandSourceId: '',
     supplySourceType: 'ON_HAND', supplySourceId: '',
-    quantity: '', releaseDate: '', priority: 100, notes: '',
+    expectedSupplyQuantity: '', quantity: '', releaseDate: '', priority: 100, notes: '',
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -201,7 +203,8 @@ function ReservationCreateSheet({ onClose, notify, onDone }) {
   }, []);
 
   const valid = form.productId && form.demandSourceId && Number(form.quantity) > 0
-    && (form.supplySourceType === 'ON_HAND' || form.supplySourceType === 'EXPECTED' || form.supplySourceId);
+    && (form.supplySourceType === 'ON_HAND' || form.supplySourceId)
+    && (form.supplySourceType !== 'EXPECTED' || Number(form.expectedSupplyQuantity) > 0);
 
   const submit = async () => {
     setBusy(true); setError('');
@@ -214,6 +217,7 @@ function ReservationCreateSheet({ onClose, notify, onDone }) {
         demandSourceId: form.demandSourceId,
         supplySourceType: form.supplySourceType,
         supplySourceId: form.supplySourceId || null,
+        ...(form.supplySourceType === 'EXPECTED' ? { expectedSupplyQuantity: Number(form.expectedSupplyQuantity) } : {}),
         quantity: Number(form.quantity),
         releaseDate: form.releaseDate || null,
         priority: Number(form.priority || 100),
@@ -250,13 +254,13 @@ function ReservationCreateSheet({ onClose, notify, onDone }) {
       </label>
       <div className="planning-form__group">
         <label className="form-row"><span className="field-label">需求来源类型 *</span>
-          <select value={form.demandSourceType} onChange={(event) => setForm({ ...form, demandSourceType: event.target.value })}>
+          <select value={form.demandSourceType} onChange={(event) => setForm({ ...form, demandSourceType: event.target.value, demandSourceId: '' })}>
             {Object.keys(DEMAND_SOURCE_LABELS).map((key) => <option key={key} value={key}>{DEMAND_SOURCE_LABELS[key]}</option>)}
           </select>
         </label>
-        <label className="form-row"><span className="field-label">需求来源 ID *</span>
-          <input type="text" value={form.demandSourceId} onChange={(event) => setForm({ ...form, demandSourceId: event.target.value })}/>
-        </label>
+        {form.demandSourceType === 'MANUAL'
+          ? <label className="form-row"><span className="field-label">手动需求编号 *</span><input type="text" value={form.demandSourceId} placeholder="例如：临时需求-20261119-01" onChange={(event) => setForm({ ...form, demandSourceId: event.target.value })}/></label>
+          : <BusinessReferenceSelector descriptor={planningWorkReferences.demand(form.demandSourceType)} label="需求来源" value={form.demandSourceId} onChange={(demandSourceId) => setForm({ ...form, demandSourceId })}/>}
       </div>
       <div className="planning-form__group">
         <label className="form-row"><span className="field-label">供应来源类型 *</span>
@@ -264,9 +268,11 @@ function ReservationCreateSheet({ onClose, notify, onDone }) {
             {Object.keys(SUPPLY_SOURCE_LABELS).map((key) => <option key={key} value={key}>{SUPPLY_SOURCE_LABELS[key]}</option>)}
           </select>
         </label>
-        {form.supplySourceType !== 'ON_HAND' && form.supplySourceType !== 'EXPECTED' && <label className="form-row"><span className="field-label">供应来源 ID *</span>
-          <input type="text" value={form.supplySourceId} onChange={(event) => setForm({ ...form, supplySourceId: event.target.value })}/>
-        </label>}
+        {!['ON_HAND', 'EXPECTED'].includes(form.supplySourceType) && <BusinessReferenceSelector descriptor={planningWorkReferences.supply(form.supplySourceType)} label="供应来源" value={form.supplySourceId} onChange={(supplySourceId) => setForm({ ...form, supplySourceId })}/>}
+        {form.supplySourceType === 'EXPECTED' && <>
+          <label className="form-row"><span className="field-label">预计供应编号 *</span><input type="text" value={form.supplySourceId} placeholder="例如：预计到货-20261119-01" onChange={(event) => setForm({ ...form, supplySourceId: event.target.value })}/></label>
+          <label className="form-row"><span className="field-label">预计供应容量 *</span><input type="number" inputMode="decimal" min="0" step="0.0001" value={form.expectedSupplyQuantity} onChange={(event) => setForm({ ...form, expectedSupplyQuantity: event.target.value })}/></label>
+        </>}
       </div>
       <div className="planning-form__group">
         <label className="form-row"><span className="field-label">数量 *</span>

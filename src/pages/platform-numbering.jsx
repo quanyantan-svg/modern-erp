@@ -9,6 +9,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api.js';
+import BusinessReferenceSelector from '../components/BusinessReferenceSelector.jsx';
+import { platformWorkReferences } from '../lib/domainWorkReferences.js';
 import { can, Loading } from '../components/ui.jsx';
 import {
   BottomActionBar, BusinessPageShell, EmptyState, FormRow, InlineAlert, SegmentedControl,
@@ -213,9 +215,7 @@ function NumberSeriesEditorSheet({ editor, canManage, notify, onClose, onChanged
           </FormRow>
         )}
         {isCreate && (
-          <FormRow label="组织维度" hint="留空表示全局编号段">
-            <input value={form.orgId} onChange={(event) => setForm({ ...form, orgId: event.target.value })}/>
-          </FormRow>
+          <BusinessReferenceSelector descriptor={platformWorkReferences.organization()} label="组织维度" optional value={form.orgId} onChange={(orgId) => setForm({ ...form, orgId })}/>
         )}
         <FormRow label="编号前缀" required>
           <input value={form.prefix} onChange={(event) => setForm({ ...form, prefix: event.target.value })}/>

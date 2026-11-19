@@ -30,7 +30,7 @@ import {
   handleCreateWorkflowTemplate, handleCreateWorkflowVersion, handlePublishWorkflowVersion,
   handleRedeployWorkflowInstances, handleResumeWorkflowInstance, handleRetireWorkflowVersion,
   handleSuspendWorkflowInstance, handleTerminateWorkflowInstance, listWorkflowBindings,
-  listWorkflowInstances, listWorkflowTasks, listWorkflowTemplates, testWorkflowRun,
+  listWorkflowInstances, listWorkflowParticipants, listWorkflowTasks, listWorkflowTemplates, testWorkflowRun,
 } from './modules/platform-workflow-engine.js';
 import {
   listCurrencies, listVoucherWords, createVoucherWord, listVoucherTemplates,
@@ -109,6 +109,8 @@ import {
   updatePlanningParameters, updatePlanningScheme, assertStrongReservationAvailability,
   applyPlannedOrderBatch, getPlanningReservation, previewPlannedOrderBatch,
 } from './modules/planning-domain.js';
+import { listPlanningWorkReferences } from './modules/planning-work-references.js';
+import { listPlatformWorkReferences } from './modules/platform-work-references.js';
 import { applyCreditAdjustment, ensurePayableSource, ensureReceivableSource } from './modules/settlement-core.js';
 import {
   cancelSettlementDocument, confirmSettlementDocument, createSettlementDocument, deleteSettlementDocument,
@@ -290,6 +292,8 @@ import {
 import { getCreditException, getCreditExposure, listCreditExceptions } from './modules/credit-query.js';
 import { listCreditQueryOptions } from './modules/credit-query-options.js';
 import { listCreditWorkReferences } from './modules/credit-work-references.js';
+import { listSalesWorkReferences } from './modules/sales-work-references.js';
+import { listInventoryWorkReferences } from './modules/inventory-work-references.js';
 import {
   applyCreditEvaluationResult, createCreditEvaluationIndicator, createCreditEvaluationModel,
   createCreditEvaluationScheme, createCreditEvaluationSheet, finalizeCreditEvaluationSheet,
@@ -864,6 +868,8 @@ ownedRouteTable.register({ method: 'GET', path: /^\/api\/sales-prepayment-gate-r
 ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-orders\/([^/]+)\/prepayment-gate\/(PLANNING_RELEASE|RESERVATION|DELIVERY)$/, handler: ({ db,req,res,actor,params }) => evaluateSalesPrepaymentGate(db,req,res,actor,params[0],params[1]), owner: 'server/modules/sales-prepayment-gate.js' });
 ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-prepayment-gate-results\/([^/]+)\/override$/, handler: ({ db,req,res,actor,params }) => overridePrepaymentGateResult(db,req,res,actor,params[0]), owner: 'server/modules/sales-prepayment-gate.js' });
 ownedRouteTable.register({ method: 'GET', path: '/api/sales-reservation-intents', handler: ({ db,res,actor,url }) => listReservationIntents(db,res,actor,url), owner: 'server/modules/sales-reservation-intent.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/sales/work-references', handler: ({ db,res,actor,url }) => listSalesWorkReferences(db,res,actor,url), owner: 'server/modules/sales-work-references.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/inventory/work-references', handler: ({ db,res,actor,url }) => listInventoryWorkReferences(db,res,actor,url), owner: 'server/modules/inventory-work-references.js' });
 ownedRouteTable.register({ method: 'POST', path: '/api/sales-reservation-intents', handler: ({ db,req,res,actor }) => requestReservationIntent(db,req,res,actor), owner: 'server/modules/sales-reservation-intent.js' });
 ownedRouteTable.register({ method: 'GET', path: /^\/api\/sales-reservation-intents\/([^/]+)$/, handler: ({ db,res,actor,params }) => getReservationIntent(db,res,actor,params[0]), owner: 'server/modules/sales-reservation-intent.js' });
 ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-reservation-intents\/([^/]+)\/(grant|consume|release)$/, handler: ({ db,req,res,actor,params }) => {
@@ -2871,6 +2877,18 @@ ownedRouteTable.register({
   owner: 'server/modules/platform-workflow-engine.js',
 });
 ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/platform/workflow-participants',
+  handler: ({ db, res, actor, url }) => listWorkflowParticipants(db, res, actor, url),
+  owner: 'server/modules/platform-workflow-engine.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/platform/work-references',
+  handler: ({ db, res, actor, url }) => listPlatformWorkReferences(db, res, actor, url),
+  owner: 'server/modules/platform-work-references.js',
+});
+ownedRouteTable.register({
   method: 'POST',
   path: /^\/api\/platform\/workflow-tasks\/([^/]+)\/complete$/,
   handler: ({ db, req, res, actor, params }) => handleCompleteWorkflowTask(db, req, res, actor, params[0]),
@@ -3398,6 +3416,7 @@ ownedRouteTable.register({
 });
 
 // ============ Planning Domain Closure — canonical decision routes ============
+ownedRouteTable.register({ method: 'GET', path: '/api/planning/work-references', handler: ({ db,res,actor,url }) => listPlanningWorkReferences(db,res,actor,url), owner: 'server/modules/planning-work-references.js' });
 const planningRoutes = [
   ['GET', '/api/planning/parameters', ({ db, res, actor }) => getPlanningParameters(db, res, actor)],
   ['PATCH', '/api/planning/parameters', ({ db, req, res, actor }) => updatePlanningParameters(db, req, res, actor)],

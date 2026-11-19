@@ -211,6 +211,10 @@ const FULL = [
   // scope-first authorization and removal of raw identifier entry from the
   // customer-facing credit workflows. Uses a disposable SQLite fixture.
   'server/credit-work-references.test.js',
+  // Approved Platform §36.22 / §32.22 — advanced Engineering, Planning,
+  // Sales and Inventory work surfaces use actor-scoped business references
+  // instead of free-text canonical identifiers.
+  'server/advanced-business-references.test.js',
   // W11-A U3 Search Semantics — the script-aware fold, literal LIKE,
   // additive search-key migration, four writer paths and deterministic
   // Selector ordering. Database-backed and therefore FULL-only.

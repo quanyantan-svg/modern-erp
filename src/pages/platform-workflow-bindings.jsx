@@ -7,6 +7,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api.js';
+import BusinessReferenceSelector from '../components/BusinessReferenceSelector.jsx';
+import { platformWorkReferences } from '../lib/domainWorkReferences.js';
 import { can, Loading, dateTime } from '../components/ui.jsx';
 import {
   BottomActionBar, BusinessPageShell, EmptyState, FormRow, InlineAlert, Sheet, StatusChip,
@@ -154,9 +156,7 @@ function BindingEditorSheet({ templates, canManage, notify, onClose, onChanged }
         <FormRow label="单据类型" required>
           <input value={form.documentType} onChange={(event) => setForm({ ...form, documentType: event.target.value.toUpperCase() })} placeholder="SALES_ORDER"/>
         </FormRow>
-        <FormRow label="组织" hint="留空表示全局组织">
-          <input value={form.orgId} onChange={(event) => setForm({ ...form, orgId: event.target.value })}/>
-        </FormRow>
+        <BusinessReferenceSelector descriptor={platformWorkReferences.organization()} label="组织" optional value={form.orgId} onChange={(orgId) => setForm({ ...form, orgId })}/>
         <FormRow label="流程模板" required>
           <select
             value={form.templateId}

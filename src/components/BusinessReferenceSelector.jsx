@@ -108,11 +108,12 @@ export default function BusinessReferenceSelector({
     let cancelled = false;
     (async () => {
       try {
-        const result = await descriptorRef.current.search({ q: '', limit: PAGE_SIZE, offset: 0, selectedId: missing[0], signal: undefined });
+        const results = await Promise.all(missing.map((selectedId) => descriptorRef.current.search({ q: '', limit: PAGE_SIZE, offset: 0, selectedId, signal: undefined })));
         if (cancelled) return;
-        const rows = (result.items || []).filter((row) => missing.includes(row.id));
+        const rows = results.flatMap((result) => result.items || []).filter((row, index, all) => missing.includes(row.id) && all.findIndex((entry) => entry.id === row.id) === index);
         if (rows.length === 0) return;
         setItems((current) => [...rows, ...current]);
+        if (multiple) setChosen((current) => [...rows.filter((row) => !current.some((entry) => entry.id === row.id)), ...current]);
       } catch {
         // 水合失败不改变页面状态：当前选中仍以 canonical ID 提交。
       }
@@ -122,20 +123,24 @@ export default function BusinessReferenceSelector({
 
   const choose = (row) => {
     if (multiple) {
-      const next = chosen.some((entry) => entry.id === row.id)
-        ? chosen.filter((entry) => entry.id !== row.id)
-        : [...chosen, row];
-      setChosen(next);
-      onChange(next.map((entry) => entry.id), next);
+      const nextIds = selectedIds.includes(row.id)
+        ? selectedIds.filter((id) => id !== row.id)
+        : [...selectedIds, row.id];
+      const known = [...chosen, ...items];
+      const nextRows = nextIds.map((id) => known.find((entry) => entry.id === id)).filter(Boolean);
+      setChosen(nextRows);
+      onChange(nextIds, nextRows);
       return;
     }
     onChange(row.id, row);
   };
 
   const removeChosen = (id) => {
-    const next = chosen.filter((entry) => entry.id !== id);
+    const nextIds = selectedIds.filter((selectedId) => selectedId !== id);
+    const known = [...chosen, ...items];
+    const next = nextIds.map((selectedId) => known.find((entry) => entry.id === selectedId)).filter(Boolean);
     setChosen(next);
-    onChange(next.map((entry) => entry.id), next);
+    onChange(nextIds, next);
   };
 
   const selectedLabel = (id) => {
@@ -144,7 +149,7 @@ export default function BusinessReferenceSelector({
   };
 
   const selectedRows = multiple
-    ? chosen
+    ? selectedIds.map((id) => items.find((row) => row.id === id) || chosen.find((row) => row.id === id)).filter(Boolean)
     : selectedIds.map((id) => items.find((row) => row.id === id)).filter(Boolean);
 
   if (disabled) {
@@ -172,7 +177,10 @@ export default function BusinessReferenceSelector({
         </span>)}
       </div>
       : <p className="business-reference__current">
-        {selectedIds.length === 0 ? (optional ? '未指定' : '尚未选择') : selectedIds.map(selectedLabel).join('、')}
+        <span>{selectedIds.length === 0 ? (optional ? '未指定' : '尚未选择') : selectedIds.map(selectedLabel).join('、')}</span>
+        {optional && selectedIds.length > 0
+          ? <button type="button" className="business-reference__retry" onClick={() => onChange('', null)}>清除</button>
+          : null}
       </p>}
     {state === LOADING && <p className="business-reference__hint">正在加载可选记录…</p>}
     {state === EMPTY && <p className="business-reference__hint">{emptyHint}</p>}

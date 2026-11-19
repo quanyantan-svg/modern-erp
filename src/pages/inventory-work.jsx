@@ -37,6 +37,7 @@ import {
 } from '../components/design-system.jsx';
 import { Icon } from '../components/icons.jsx';
 import TrackingAllocationEditor from '../components/TrackingAllocationEditor.jsx';
+import BusinessReferenceSelector from '../components/BusinessReferenceSelector.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { trackingPolicyOf, withProductTracking } from '../lib/tracking.js';
 import {
@@ -46,6 +47,7 @@ import {
   effectiveInventoryWorkTab, permittedInventoryWorkTabs,
 } from '../lib/inventoryWorkTabs.js';
 import { yuanToCents } from '../lib/money.js';
+import { inventoryWorkReferences as inventoryBusinessReferences } from '../lib/domainWorkReferences.js';
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
@@ -339,11 +341,11 @@ export function InventoryInstantQuery({ user, notify, references }) {
           <InventoryWorkSelect label="仓库" value={draft.warehouseId} onChange={(value) => setDraft({ ...draft, warehouseId: value })} options={warehouseOptions(warehouses)} />
           <InventoryWorkSelect label="货品" value={draft.productId} onChange={(value) => setDraft({ ...draft, productId: value })} options={productOptions(products)} />
           <InventoryWorkSelect label="仓位" value={draft.binId} onChange={(value) => setDraft({ ...draft, binId: value })} options={bins.map((b) => ({ value: b.id, label: `${b.code} · ${b.name || b.code}` }))} />
-          <InventoryWorkSelect label="所有权类型" value={draft.ownerType} onChange={(value) => setDraft({ ...draft, ownerType: value })} options={OWNER_TYPE_OPTIONS} />
-          <InventoryWorkInput label="所有权对象 ID" value={draft.ownerId} onChange={(value) => setDraft({ ...draft, ownerId: value })} placeholder="供应商 / 客户 ID" />
+          <InventoryWorkSelect label="所有权类型" value={draft.ownerType} onChange={(value) => setDraft({ ...draft, ownerType: value, ownerId: '' })} options={OWNER_TYPE_OPTIONS} />
+          {['SUPPLIER', 'CUSTOMER'].includes(draft.ownerType) && <BusinessReferenceSelector descriptor={inventoryBusinessReferences.owner(draft.ownerType)} label="所有权对象" optional value={draft.ownerId} onChange={(ownerId) => setDraft({ ...draft, ownerId })} />}
           <InventoryWorkSelect label="库存状态" value={draft.stockStatus} onChange={(value) => setDraft({ ...draft, stockStatus: value })} options={statusOptions(stockStatuses)} />
-          <InventoryWorkInput label="批号 ID" value={draft.lotId} onChange={(value) => setDraft({ ...draft, lotId: value })} />
-          <InventoryWorkInput label="序列号 ID" value={draft.serialId} onChange={(value) => setDraft({ ...draft, serialId: value })} />
+          <BusinessReferenceSelector descriptor={inventoryBusinessReferences.lot({ productId: draft.productId, warehouseId: draft.warehouseId })} label="批号" optional value={draft.lotId} onChange={(lotId) => setDraft({ ...draft, lotId })} />
+          <BusinessReferenceSelector descriptor={inventoryBusinessReferences.serial({ productId: draft.productId, warehouseId: draft.warehouseId })} label="序列号" optional value={draft.serialId} onChange={(serialId) => setDraft({ ...draft, serialId })} />
         </FilterSheet>
       )}
     </>
@@ -892,11 +894,11 @@ function InventoryStocktakeEditor({ warehouses, products, stockStatuses, bins, n
               <InventoryWorkSelect label="货品" required value={row.productId} onChange={(v) => update(index, { productId: v })} options={productOptions(products)} />
               <InventoryWorkInput label="实盘数量" type="number" min="0" step="0.01" required value={row.physicalQuantity} onChange={(v) => update(index, { physicalQuantity: v })} />
               <InventoryWorkSelect label="仓位" value={row.binId} onChange={(v) => update(index, { binId: v })} options={bins.map((b) => ({ value: b.id, label: `${b.code} · ${b.name || b.code}` }))} />
-              <InventoryWorkSelect label="所有权" value={row.ownerType} onChange={(v) => update(index, { ownerType: v })} options={OWNER_TYPE_OPTIONS} />
-              {row.ownerType !== 'ENTERPRISE' && <InventoryWorkInput label="所有权对象 ID" value={row.ownerId} onChange={(v) => update(index, { ownerId: v })} />}
+              <InventoryWorkSelect label="所有权" value={row.ownerType} onChange={(v) => update(index, { ownerType: v, ownerId: '' })} options={OWNER_TYPE_OPTIONS} />
+              {row.ownerType !== 'ENTERPRISE' && <BusinessReferenceSelector descriptor={inventoryBusinessReferences.owner(row.ownerType)} label="所有权对象" value={row.ownerId} onChange={(ownerId) => update(index, { ownerId })} />}
               <InventoryWorkSelect label="库存状态" value={row.stockStatus} onChange={(v) => update(index, { stockStatus: v })} options={statusOptions(stockStatuses)} />
-              <InventoryWorkInput label="批号 ID" value={row.lotId} onChange={(v) => update(index, { lotId: v })} />
-              <InventoryWorkInput label="序列号 ID" value={row.serialId} onChange={(v) => update(index, { serialId: v })} />
+              <BusinessReferenceSelector descriptor={inventoryBusinessReferences.lot({ productId: row.productId, warehouseId: form.warehouseId })} label="批号" optional value={row.lotId} onChange={(lotId) => update(index, { lotId })} />
+              <BusinessReferenceSelector descriptor={inventoryBusinessReferences.serial({ productId: row.productId, warehouseId: form.warehouseId })} label="序列号" optional value={row.serialId} onChange={(serialId) => update(index, { serialId })} />
             </div>
           </article>
         ))}
@@ -1355,7 +1357,7 @@ function InventoryAbcClassifyEditor({ warehouses, notify, onClose, onSaved }) {
         <InventoryWorkSelect label="分类基础" value={form.basis} onChange={(v) => setForm({ ...form, basis: v })} options={[{ value: 'USAGE', label: '按真实出库用量' }, { value: 'VALUE', label: '按财务估值快照' }]} />
         <InventoryWorkInput label="生效日期" type="date" required value={form.effectiveFrom} onChange={(v) => setForm({ ...form, effectiveFrom: v })} />
         <InventoryWorkSelect label="仓库" value={form.warehouseId} onChange={(v) => setForm({ ...form, warehouseId: v })} options={warehouseOptions(warehouses)} placeholder="全部仓库" />
-        <InventoryWorkInput label="财务估值快照 ID" value={form.financeValuationSnapshotId} onChange={(v) => setForm({ ...form, financeValuationSnapshotId: v })} placeholder="「basis=VALUE」时必填" />
+        {form.basis === 'VALUE' && <BusinessReferenceSelector descriptor={inventoryBusinessReferences.valuationSnapshot()} label="财务估值证据" value={form.financeValuationSnapshotId} onChange={(financeValuationSnapshotId) => setForm({ ...form, financeValuationSnapshotId })} emptyHint="当前没有可用于 ABC 分类的已过账估值证据" />}
       </div>
       <InlineAlert tone="info">「basis=VALUE」必须引用财务域签发的估值快照；库存域不复制估值引擎。</InlineAlert>
     </InventoryWorkEditorShell>
@@ -1533,7 +1535,7 @@ function InventoryBarcodeGenerateEditor({ products, warehouses, notify, onClose,
         {options.length > 0 ? (
           <InventoryWorkSelect label="对象" required value={form.entityId} onChange={(v) => setForm({ ...form, entityId: v })} options={options} />
         ) : (
-          <InventoryWorkInput label="对象 ID" required value={form.entityId} onChange={(v) => setForm({ ...form, entityId: v })} />
+          <BusinessReferenceSelector descriptor={inventoryBusinessReferences.entity(form.entityType.toUpperCase())} label="对象" value={form.entityId} onChange={(entityId) => setForm({ ...form, entityId })} />
         )}
         <InventoryWorkInput label="自定义条码（可留空）" value={form.barcode} onChange={(v) => setForm({ ...form, barcode: v })} />
         <FormActions onClose={onClose} saveText="生成条码" />
