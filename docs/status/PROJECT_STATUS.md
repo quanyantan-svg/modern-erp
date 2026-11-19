@@ -7588,3 +7588,64 @@ DEPLOY=PENDING；PUSH/TAG/RELEASE=NOT_EXECUTED
 
 本轮为**文档整理 + 已批准 Design 的实现补齐**，未新增业务规则、schema、权限码或状态机；未部署、
 未运行真实 MySQL、未执行 push / tag / release。Acceptance / Freeze 仍由业务所有者签发。
+
+## 87. 客户测试交付前页面复审与操作手册（2026-11-19）
+
+| 项目 | 当前状态 |
+|---|---|
+| 授权 | 业务所有者 2026-11-19 明确授权代理完成客户测试前页面整理、用户操作手册与交付阻塞复查 |
+| 合同 | Platform Requirement §36.22 / Design §32.22，当前状态 `IMPLEMENTED` |
+| 生命周期 | 本轮是已批准实现范围的继续收口；Acceptance / Freeze 未签发 |
+| 范围 | 仓库内前端、用户可见后端文案、静态守卫、DOCX/PDF 手册、状态与日志；未部署、未运行真实 MySQL、未 push / tag / release |
+
+### 87.1 页面审计与实现
+
+- 以 `src/navigation/applicationRegistry.js` 为唯一 route 来源审计 93 个最终用户路由，覆盖 9 个业务域。
+- 页面使用提示改为“页面名称 + 具体用途”，不再为同类页面复制一句泛化说明。
+- 移除用户工作面中的 Requirement / OUT_OF_SCOPE / canonical 等研发治理词；源代码追溯注释保留，没有为“看起来干净”删除工程证据。
+- BOM 治理、工程变更、替代料、销售定价、寻源定价、寄售等页面将主要货品/客户/供应商/仓库/仓位内部 ID 输入替换为授权范围内的业务选择器。
+- 销售价格、价格覆盖、寻源价格、寄售单价由“整数分”改为“人民币元，最多两位小数”，只在 API 边界精确换算为安全整数分。
+- 静态用户文案守卫增加 Requirement / Design / OUT_OF_SCOPE / canonical / legacy 研发词检查；浏览器门禁发现的报表说明泄漏已同步整改。
+
+### 87.2 DRAFT 用户操作手册
+
+| 项 | 结果 |
+|---|---|
+| 交付物 | `docs/operations/Modern-ERP-用户测试手册-DRAFT-v1.7.0-rc.5.docx` + `.pdf` |
+| 页数 | 13 页（由 9 页扩展） |
+| 内容 | 测试准备、十分钟上手、七类岗位、高风险状态、O2C / P2P / Plan-to-Produce / Plan-to-Outsource / R2R / 库存追溯、信用管理、移动端、反馈模板、排障、九大业务域速查与测试边界 |
+| 安全 | 不包含密码、Token、连接串或客户敏感数据；地址与账号由管理员另行安全发送 |
+| 视觉 QA | DOCX 经 LibreOffice 导出 PDF，13 页全部渲染为 PNG 目视复核；无裁切、重叠或越界，跨页表格重复表头，步骤编号按流程重置 |
+
+### 87.3 验证
+
+| 门禁 | 结果 |
+|---|---|
+| FULL | `4241 / 4241 PASS`（552 suites，0 fail / 0 skipped） |
+| 生产构建 | Vite 7 production build PASS（1992 modules） |
+| 静态守卫 | UI 英文残留 0；用户可见研发标识 0；跨域错误码未登记 0 / 死引用 0 |
+| 文档 | `migration` C1–C6 ALL CHECKS PASSED；13 页手册视觉 QA PASS |
+| 代码卫生 | `git diff --check` PASS |
+| 浏览器 | canonical 交付门禁 `6504` 项判定、0 失败；5 角色 × 4 宽度 × 93 route 全覆盖，`PRODUCT_FAILURE=0 / FIXTURE_FAILURE=0 / CONTRACT_DRIFT=0` |
+
+### 87.4 已知边界与交付阻塞
+
+1. **腾讯云实际部署身份未核验**：本轮未获得 deploy 授权，也没有将本地改动发布到云端。交客户前必须确认云端 commit 与本轮最终提交一致。
+2. **少数高级页面仍有技术型参照输入**：班次组合、计划预留来源、销售预留意图与部分库存所有权/跟踪工作面仍使用来源 ID。主流程可按手册测试，但这些高级页面尚未达到“零技术 ID”的最终目标。
+3. VMI 结算仍无独立操作员工作面；系统通知暂不包含邮件/短信通道。
+4. 手册仍为 `DRAFT`；需根据客户测试反馈修订后再定稿。
+5. 本轮 Acceptance / Freeze 未签发；未运行真实 MySQL，未执行 push / tag / release / deploy。
+
+### 87.5 机器可读状态
+
+```text
+CUSTOMER_TEST_UX=IMPLEMENTED_CORE_PATHS(93 routes audited; advanced technical-reference gaps remain)
+USER_MANUAL=DRAFT rc.5 DOCX+PDF(13 pages; full visual QA PASS)
+LOCAL_FULL=4241/4241 PASS(552 suites)
+LOCAL_BUILD=PASS
+STATIC_COPY_GUARDS=PASS(English 0; internal-copy 0; error-code coupling unregistered 0)
+BROWSER_GATE=PASS(6504 checks; 5 roles × 4 widths × 93 routes; failures 0)
+REAL_MYSQL=NOT_RUN
+DEPLOY/PUSH/TAG/RELEASE=NOT_EXECUTED
+ACCEPTANCE/FREEZE=NOT_ISSUED
+```

@@ -1,5 +1,7 @@
 from pathlib import Path
 import json
+import subprocess
+from datetime import date
 from docx import Document
 from docx.enum.section import WD_SECTION
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
@@ -11,6 +13,8 @@ from docx.shared import Cm, Inches, Pt, RGBColor
 ROOT = Path(__file__).resolve().parents[2]
 # 手册的适用版本就是仓库的发布身份：版本号从 package.json 读取，不另抄一份。
 VERSION = json.loads((ROOT / 'package.json').read_text(encoding='utf-8'))['version']
+COMMIT = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], cwd=ROOT, text=True).strip()
+GENERATED_ON = date.today().isoformat()
 OUT = ROOT / 'docs' / 'operations' / f'Modern-ERP-用户测试手册-DRAFT-v{VERSION}.docx'
 NAVY = '17324D'; BLUE = '246B8E'; PALE = 'EAF2F7'; GRAY = '52606D'; LIGHT = 'D8E2EA'; WHITE = 'FFFFFF'
 
@@ -28,6 +32,9 @@ def add_table(doc, headers, rows, widths=None):
     for i, text in enumerate(headers):
         cell = table.rows[0].cells[i]; cell.text = text; shade(cell, NAVY); cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
         for run in cell.paragraphs[0].runs: run.font.color.rgb = RGBColor(255,255,255); run.font.bold = True
+    repeat_header = OxmlElement('w:tblHeader')
+    repeat_header.set(qn('w:val'), 'true')
+    table.rows[0]._tr.get_or_add_trPr().append(repeat_header)
     for r_index, row in enumerate(rows):
         cells = table.add_row().cells
         for i, text in enumerate(row):
@@ -36,24 +43,35 @@ def add_table(doc, headers, rows, widths=None):
     if widths:
         for row in table.rows:
             for i, width in enumerate(widths): row.cells[i].width = Cm(width)
+    for row in table.rows:
+        cant_split = OxmlElement('w:cantSplit')
+        row._tr.get_or_add_trPr().append(cant_split)
     border_table(table); doc.add_paragraph(); return table
 
 def bullet(doc, text, level=0):
     p = doc.add_paragraph(style='List Bullet' if level == 0 else 'List Bullet 2'); p.add_run(text); return p
 
+STEP_COUNTER = 0
+
+def reset_steps():
+    global STEP_COUNTER
+    STEP_COUNTER = 0
+
 def step(doc, text):
-    p = doc.add_paragraph(style='List Number'); p.add_run(text); return p
+    global STEP_COUNTER
+    STEP_COUNTER += 1
+    p = doc.add_paragraph(); p.paragraph_format.left_indent=Cm(.65); p.paragraph_format.first_line_indent=Cm(-.65)
+    marker=p.add_run(f'{STEP_COUNTER}. '); marker.bold=True; p.add_run(text); return p
 
 def note(doc, title, text):
-    table = doc.add_table(rows=1, cols=1); table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    cell = table.cell(0,0); shade(cell, PALE); p = cell.paragraphs[0]; r=p.add_run(f'{title}  '); r.bold=True; r.font.color.rgb=RGBColor(23,50,77); p.add_run(text)
-    border_table(table); doc.add_paragraph()
+    p = doc.add_paragraph(); p.paragraph_format.space_before=Pt(4); p.paragraph_format.space_after=Pt(7)
+    r=p.add_run(f'{title}：'); r.bold=True; p.add_run(text)
 
 doc = Document(); sec = doc.sections[0]
 sec.page_width=Inches(8.5); sec.page_height=Inches(11); sec.top_margin=Inches(.72); sec.bottom_margin=Inches(.68); sec.left_margin=Inches(.78); sec.right_margin=Inches(.72)
 styles=doc.styles
-styles['Normal'].font.name='Microsoft YaHei'; styles['Normal']._element.rPr.rFonts.set(qn('w:eastAsia'),'Microsoft YaHei'); styles['Normal'].font.size=Pt(9.5); styles['Normal'].font.color.rgb=RGBColor(45,55,65)
-for name,size,color in [('Title',30,NAVY),('Heading 1',19,NAVY),('Heading 2',13,BLUE),('Heading 3',10.5,NAVY)]:
+styles['Normal'].font.name='Microsoft YaHei'; styles['Normal']._element.rPr.rFonts.set(qn('w:eastAsia'),'Microsoft YaHei'); styles['Normal'].font.size=Pt(10.5); styles['Normal'].font.color.rgb=RGBColor(30,35,40)
+for name,size,color in [('Title',30,'000000'),('Heading 1',19,'000000'),('Heading 2',13,'000000'),('Heading 3',11,'000000')]:
     s=styles[name]; s.font.name='Microsoft YaHei'; s._element.rPr.rFonts.set(qn('w:eastAsia'),'Microsoft YaHei'); s.font.size=Pt(size); s.font.color.rgb=RGBColor.from_string(color); s.font.bold=True
 styles['Heading 1'].paragraph_format.space_before=Pt(14); styles['Heading 1'].paragraph_format.space_after=Pt(8)
 styles['Heading 2'].paragraph_format.space_before=Pt(10); styles['Heading 2'].paragraph_format.space_after=Pt(5)
@@ -73,8 +91,9 @@ p=doc.add_paragraph(); p.alignment=WD_ALIGN_PARAGRAPH.CENTER; r=p.add_run('腾�
 p=doc.add_paragraph(); p.paragraph_format.space_before=Pt(24); p.alignment=WD_ALIGN_PARAGRAPH.CENTER
 r=p.add_run('DRAFT'); r.bold=True; r.font.size=Pt(18); r.font.color.rgb=RGBColor(180,68,50)
 add_table(doc,['项目','内容'],[
-    ('适用版本',f'v{VERSION}'),('文档状态','DRAFT（待客户测试反馈后修订）'),('Owner','Platform / 项目交付负责人'),('发布日期','2026-11-18'),('网址与账号','由项目管理员通过安全渠道另行提供')],[4.2,10.8])
+    ('适用版本',f'v{VERSION} / 仓库构建 {COMMIT}'),('文档状态','DRAFT（待客户测试反馈后修订）'),('Owner','Platform / 项目交付负责人'),('生成日期',GENERATED_ON),('网址与账号','由项目管理员通过安全渠道另行提供')],[4.2,10.8])
 note(doc,'保密提示','本手册不包含密码、Token、数据库连接串或客户敏感数据。请勿在缺陷截图中暴露真实个人信息、密钥或生产数据。')
+note(doc,'交付前必查',f'本手册记录的是仓库构建 {COMMIT}。项目管理员必须确认腾讯云实际部署构建与之一致后，再将测试地址交给客户。')
 doc.add_page_break()
 
 doc.add_heading('目录与使用方式', level=1)
@@ -91,6 +110,7 @@ for t in ['不要上传身份证、银行卡、真实合同或包含商业秘密
 
 doc.add_heading('2. 十分钟快速上手', level=1)
 doc.add_heading('2.1 登录与退出', level=2)
+reset_steps()
 for t in ['打开管理员提供的 HTTPS 地址。','输入个人测试账号与密码并登录。','登录后先确认右上角显示的账号身份。','测试结束后使用系统的“退出登录”，不要只关闭浏览器标签页。']: step(doc,t)
 note(doc,'无法登录？','先确认网址、网络和账号输入；连续失败不要反复尝试或共享密码，请把时间、浏览器和错误提示发给管理员。')
 doc.add_heading('2.2 认识页面', level=2)
@@ -103,6 +123,21 @@ doc.add_heading('3. 角色与权限', level=1)
 add_table(doc,['角色示例','常用范围','常见限制'],[
 ('销售/客户人员','客户、报价、订单、出货、退货、信用查询','不能维护系统权限或执行无授权审批'),('计划人员','预测、MRP、计划订单、计划员工作台','不能替代采购/生产确认'),('采购人员','供应商、请购、采购订单、收货、委外','不能操作销售或会计凭证'),('仓库人员','库存作业、异动、批次序列、报废、月结','高风险确认受权限与状态限制'),('生产/质量人员','制令、领料、入库、扫码、IQC/OQC','不能跳过检验或库存事实'),('财务/会计人员','应收应付、收付款、发票、凭证、报表','过账、反冲、期间操作受严格控制'),('系统管理员','用户权限、组织、编号、流程、SOD','不应代替业务岗位完成日常交易')],[3.3,6.0,5.7])
 note(doc,'权限原则','页面隐藏不等于授权；所有关键权限由后端再次校验。若菜单缺失或按钮不可用，请先确认岗位与权限，而不是要求共享管理员账号。')
+doc.add_heading('3.1 按岗位开始测试', level=2)
+add_table(doc,['岗位','首个页面','建议完成的任务','结束标志'],[
+('销售','销售订单','新建订单→提交/审批→出货→查看应收','单据号可回查，上下游金额一致'),
+('计划','计划员工作台','录入需求→运行 MRP→检查建议→生成指令','建议日期、数量和来源可解释'),
+('采购','请购单','请购→采购订单→收货→查看应付','库存与应付都能回溯到原单'),
+('仓库','库存作业与主数据','查库存→调拨/盘点/调整→批次序列追溯','数量变化与异动记录一致'),
+('生产/质量','制令单','制令→领料→检验→生产入库','在制、库存与检验结果一致'),
+('财务/会计','应收 / 应付','核对来源→收付款/核销→会计事件→凭证/报表','业务金额与财务余额一致'),
+('管理员','用户与权限','创建测试账号→授权→验证职责分离→查通知','客户账号只看到岗位所需功能'),
+],[2.4,3.6,6.1,4.0])
+
+doc.add_heading('3.2 状态与高风险动作', level=2)
+add_table(doc,['动作','含义','测试时必查'],[
+('保存草稿','保留可编辑内容','刷新后仍可回到原单'),('提交','进入审批或后续状态','不允许的状态应明确阻断'),('确认','形成权威业务事实','库存/应收应付等下游只生成一次'),('过账','形成会计事实','借贷平衡，来源单据可回查'),('反冲/冲销','受控地抵销既有事实','历史不被删除，反向记录可审计')
+],[2.7,5.2,8.2])
 
 doc.add_heading('4. 核心业务测试', level=1)
 doc.add_heading('4.1 推荐顺序', level=2)
@@ -118,15 +153,22 @@ flows=[
     ('4.7 库存与追溯',['从库存作业查看可用量、仓库、批次/序列信息。','执行一笔有权限的调拨、盘点、调整或报废。','确认单据状态变化与库存异动一致。','在追溯页面从批次/序列号回查来源和去向。','涉及月结时仅由授权人员在约定测试期间执行。'])]
 for title,items in flows:
     doc.add_heading(title,level=2)
+    reset_steps()
     for item in items: step(doc,item)
+
+doc.add_heading('4.8 每条流程的验收方法', level=2)
+for t in ['记录起点单据号、测试人、业务日期与输入金额。','每次提交后查看页面状态、成功/失败提示与列表记录。','下游记录必须能回溯到原单；重复点击不得生成重复单据或重复金额。','故意制造一次无权限、状态不允许或必填项缺失，确认系统明确拒绝且不产生部分副作用。','流程完成后在列表、异动/台账和报表至少交叉核对两处。']: bullet(doc,t)
 
 doc.add_heading('5. 信用管理专题', level=1)
 note(doc,'本版变化','客户、销售员、销售订单、销售出货、信用检查结果和评分人均通过授权范围内的中文业务选择器选择；不再要求手工粘贴数据库 ID。金额输入统一按“元”，系统提交时精确换算为整数分。')
 doc.add_heading('5.1 信用档案', level=2)
+reset_steps()
 for t in ['打开“信用管理基础”并进入“信用档案”。','从客户下拉框选择“代码 · 名称 · 状态”。客户信用对象会自动绑定。','如需销售员子额度，选择销售员；留空表示客户总额度。','输入信用额度（元，最多两位小数）；留空表示不设上限。','选择评级、逾期策略和生效日期后保存。']: step(doc,t)
 doc.add_heading('5.2 信用检查与特别审批', level=2)
+reset_steps()
 for t in ['选择客户、可选销售员和业务阶段。','输入本次敞口增量（元），再选择销售订单或销售出货，两者选其一。','执行检查并查看客户总额度/销售员子额度结果。','结果为“需要特别审批”时，在特别审批页选择对应检查结果并填写原因与金额。','审批人员按职责分离要求批准或拒绝；普通申请人不能替代审批人。']: step(doc,t)
 doc.add_heading('5.3 信用评估', level=2)
+reset_steps()
 for t in ['选择评分模型、客户和信用对象类型。','选择销售订单或客户作为信用对象。','通过多选列表选择评分人；停用账号仍按现有历史合同可见，不代表其一定能登录。','评分人逐项提交；所有指定评分人完成后才可终评。','应用评级需要信用管理 + 跨组权限，单独的评分权限不足。']: step(doc,t)
 
 doc.add_heading('6. 移动端与窄屏测试', level=1)
@@ -141,6 +183,11 @@ add_table(doc,['字段','示例'],[
 ('标题','【销售订单】提交后提示与预期不符'),('环境',f'腾讯云客户测试环境 / v{VERSION} / Chrome'),('账号角色','销售测试员（不要填写账号密码）'),('页面/单据','销售订单 / SO-TEST-001'),('前置条件','客户、货品已启用；订单为草稿'),('操作步骤','1. 打开订单；2. 点击提交；3. …'),('实际结果','完整错误提示、状态、是否产生下游记录'),('预期结果','希望出现的业务结果'),('复现率','3/3 必现 或 偶发'),('附件','脱敏截图/录屏；圈出关键区域')],[3.5,11.5])
 note(doc,'严重级别','P0：系统不可用/数据安全；P1：核心流程阻断或数据错误；P2：有绕行办法的功能/交互问题；P3：文字、样式或建议。')
 
+doc.add_heading('7.3 常见问题处理', level=2)
+add_table(doc,['现象','先自查','仍未解决时提供'],[
+('登录失败','地址是否为 HTTPS；账号大小写；是否已过期/停用','时间、浏览器、完整提示，不要提供密码'),('看不到菜单','确认当前账号岗位与业务域','账号角色、期望页面名称'),('按钮不可用','检查必填项、单据状态和审批权限','单据号、当前状态、操作步骤'),('保存后找不到','清除筛选；确认日期区间与状态标签','创建时间、编号/名称、脱敏截图'),('金额不符','确认页面以“元”输入；检查数量、单价、折扣和税','源单号、输入值、预期计算过程'),('页面卡住/空白','刷新一次；用 Chrome/Edge 最新版；检查网络','地址、时间、视口宽度、控制台截图'),('手机端遮挡','设备缩放保持 100%，记录 320/390/430/680 中的实际宽度','设备、宽度、页面名、遮挡位置')
+],[3.2,6.1,6.9])
+
 doc.add_heading('8. 附录', level=1)
 doc.add_heading('8.1 测试完成清单', level=2)
 checks=['可登录、退出和刷新','权限菜单符合岗位','至少完成一条销售流程','至少完成一条采购/收货流程','按岗位完成计划/生产/库存验证','按岗位完成委外加工验证','财务金额均按元理解','错误提示可理解且无静默失败','390/320/430/680 宽度已抽测','问题反馈不含敏感数据','关键单据编号与结果已留档']
@@ -149,6 +196,14 @@ doc.add_heading('8.2 常用术语', level=2)
 add_table(doc,['术语','说明'],[('草稿','尚未提交，可按权限编辑'),('提交','进入审批或下一业务状态'),('确认','形成权威业务事实，通常不可随意撤销'),('过账','形成会计事实'),('反冲/冲销','按受控流程抵销既有事实，不直接删除历史'),('SOD','职责分离，同一人不能同时承担冲突职责'),('幂等','重复提交同一请求不会重复产生业务结果'),('业务日期','业务判断使用的日期，不等同于操作时间')],[3.4,11.6])
 doc.add_heading('8.3 支持边界', level=2)
 for t in ['本手册是 DRAFT 测试指导，不替代正式业务制度。','页面、权限、业务结果与手册不一致时，请提交反馈；不要自行修改数据库。','部署、备份恢复、迁移、清库和生产发布不在普通用户测试范围。','验收与冻结需在 Implementation 完成后按独立 Acceptance 流程执行。']: bullet(doc,t)
+
+doc.add_heading('8.4 九大业务域导航速查', level=2)
+add_table(doc,['业务域','常用入口','关键产出'],[
+('Master & Engineering','货品资料、BOM、制品工序标准、工程变更','可被交易引用的基础资料'),('Sales & Customer','客户、报价、订单、出货、退货、信用','销售承诺、发货与应收来源'),('Planning','预测、MRP、计划订单、生产/采购指令','可执行的供需建议'),('Procurement & Outsourcing','供应商、寻源定价、请购、采购、委外','收货、委外入库与应付来源'),('Manufacturing & Quality','制令、领料、检验、生产入库、扫码','成品、WIP 与质量结论'),('Inventory & Warehouse','库存作业、异动、批次/序列、报废、月结','可用量、追溯链和存货事实'),('Finance Operations','应收、应付、收付款、发票、资金','未结、核销与资金事实'),('Accounting & Analytics','会计事件、凭证、对账、财务/经营报表','过账证据与管理报告'),('Platform','用户权限、组织、流程、编号、通知、SOD','访问控制与平台治理')
+],[4.3,6.2,5.7])
+
+doc.add_heading('8.5 当前测试边界', level=2)
+for t in ['供应商管理库存（VMI）结算暂无独立操作员工作面；不将其作为本轮必测的普通用户路径。','系统通知工作台只展示系统内消息；邮件和短信通道未纳入当前测试范围。','权限不足时页面可能不展示高级配置；这是预期的后端闭合授权，不代表数据丢失。','测试地址、初始账号与密码由管理员通过安全渠道另行提供，不写入手册。']: bullet(doc,t)
 
 doc.core_properties.title='Modern ERP 用户测试手册（DRAFT）'; doc.core_properties.subject='腾讯云客户测试环境 / MySQL 8'; doc.core_properties.author='Modern ERP Platform'; doc.core_properties.keywords='ERP, 用户测试, MySQL, 腾讯云, DRAFT'
 OUT.parent.mkdir(parents=True,exist_ok=True); doc.save(OUT); print(OUT)
