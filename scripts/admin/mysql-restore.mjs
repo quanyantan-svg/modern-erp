@@ -26,7 +26,8 @@ import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  authorizeRestoreTarget, evaluateRecoveryTiming, redactSecrets, removeQuietly, runMysqlImport,
+  authorizeRestoreTarget, createObjectStoreClient, evaluateRecoveryTiming, redactSecrets,
+  removeQuietly, runMysqlImport,
 } from './lib/mysql-dr.mjs';
 
 function parseArgs(argv) {
@@ -101,15 +102,12 @@ async function main() {
     const region = process.env.ERP_DR_S3_REGION;
     const endpoint = process.env.ERP_DR_S3_ENDPOINT;
     if (!bucket || !region || !endpoint) throw new Error('对象存储配置缺失，拒绝恢复');
-    const { S3Client, GetObjectCommand } = await import('@aws-sdk/client-s3');
-    const client = new S3Client({
+    const { GetObjectCommand } = await import('@aws-sdk/client-s3');
+    const client = await createObjectStoreClient({
       region,
       endpoint,
-      forcePathStyle: true,
-      credentials: {
-        accessKeyId: process.env.ERP_DR_S3_ACCESS_KEY_ID,
-        secretAccessKey: process.env.ERP_DR_S3_SECRET_ACCESS_KEY,
-      },
+      accessKeyId: process.env.ERP_DR_S3_ACCESS_KEY_ID,
+      secretAccessKey: process.env.ERP_DR_S3_SECRET_ACCESS_KEY,
     });
     mkdirSync(dumpDir, { recursive: true });
     const fetched = await client.send(new GetObjectCommand({ Bucket: bucket, Key: manifest.objectKey }));

@@ -23,8 +23,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
-  BACKUP_STATES, buildManifest, buildObjectKey, computeRetentionCandidates, hashFile,
-  redactSecrets, removeQuietly, runMysqlDump, validateBackupConfig,
+  BACKUP_STATES, buildManifest, buildObjectKey, computeRetentionCandidates, createObjectStoreClient,
+  hashFile, redactSecrets, removeQuietly, runMysqlDump, validateBackupConfig,
 } from './lib/mysql-dr.mjs';
 
 function parseArgs(argv) {
@@ -44,18 +44,9 @@ function currentCommit() {
   return String(result.stdout || '').trim() || 'unknown';
 }
 
-/** S3 客户端（延迟加载，避免无 S3 场景下也强制依赖）。 */
+/** S3 客户端：寻址方式由 endpoint 决定（腾讯云 COS 用 virtual-hosted style）。 */
 async function s3Client(config) {
-  const { S3Client } = await import('@aws-sdk/client-s3');
-  return new S3Client({
-    region: config.objectStore.region,
-    endpoint: config.objectStore.endpoint,
-    forcePathStyle: true,
-    credentials: {
-      accessKeyId: config.objectStore.accessKeyId,
-      secretAccessKey: config.objectStore.secretAccessKey,
-    },
-  });
+  return createObjectStoreClient(config.objectStore);
 }
 
 async function main() {

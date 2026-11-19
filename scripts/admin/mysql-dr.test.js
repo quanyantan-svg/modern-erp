@@ -19,8 +19,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   BACKUP_STATES, RESTORE_STATES, authorizeRestoreTarget, buildManifest, buildObjectKey,
-  computeRetentionCandidates, evaluateRecoveryTiming, redactEndpoint, redactSecrets,
-  validateBackupConfig,
+  computeRetentionCandidates, evaluateRecoveryTiming, objectStoreAddressing, redactEndpoint,
+  redactSecrets, validateBackupConfig,
 } from './lib/mysql-dr.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -194,4 +194,24 @@ test('T12 systemd 单元与 SQLite 备份单元彼此独立', () => {
   assert.ok(mysqlTimer.includes('OnCalendar='), '定时器必须声明日历');
   assert.ok(mysqlTimer.includes('Unit=modern-erp-mysql-backup.service'));
   assert.ok(mysqlUnit.includes('UMask=0077'), '备份单元必须限制文件权限');
+});
+
+test('T13 对象存储寻址：远端用 virtual-hosted style，本地 sentinel 用 path-style', () => {
+  // 腾讯云 COS 拒绝 path-style 寻址（PathStyleDomainForbidden），
+  // 远端对象存储必须走 virtual-hosted style。
+  assert.equal(objectStoreAddressing('https://cos.ap-guangzhou.myqcloud.com').forcePathStyle, false);
+  assert.equal(objectStoreAddressing('https://cos.ap-guangzhou.myqcloud.com').addressing, 'VIRTUAL_HOSTED');
+  assert.equal(objectStoreAddressing('https://s3.eu-central-1.amazonaws.com').forcePathStyle, false);
+  // 本地 sentinel 保持 path-style：本地 S3 兼容测试服务按 path-style 暴露桶。
+  assert.equal(objectStoreAddressing('http://127.0.0.1:9000').forcePathStyle, true);
+  assert.equal(objectStoreAddressing('http://127.0.0.1:9000').addressing, 'PATH');
+  assert.equal(objectStoreAddressing('http://localhost:9000').forcePathStyle, true);
+
+  // 备份与恢复两个入口都必须走同一个寻址判定，不得各自硬编码。
+  const backupSource = readFileSync(join(repoRoot, 'scripts', 'admin', 'mysql-backup.mjs'), 'utf8');
+  const restoreSource = readFileSync(join(repoRoot, 'scripts', 'admin', 'mysql-restore.mjs'), 'utf8');
+  assert.ok(!backupSource.includes('forcePathStyle'), '备份入口不得硬编码寻址方式');
+  assert.ok(!restoreSource.includes('forcePathStyle'), '恢复入口不得硬编码寻址方式');
+  assert.ok(backupSource.includes('createObjectStoreClient'), '备份入口必须复用共享客户端');
+  assert.ok(restoreSource.includes('createObjectStoreClient'), '恢复入口必须复用共享客户端');
 });

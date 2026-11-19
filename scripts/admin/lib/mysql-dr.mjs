@@ -143,6 +143,44 @@ export function redactEndpoint(endpoint) {
 }
 
 /**
+ * 对象存储寻址方式。
+ *
+ * 腾讯云 COS **拒绝 path-style**：桶必须以 virtual-hosted style 寻址，
+ * 否则返回 `PathStyleDomainForbidden`
+ *（"The bucket you are attempting to access must be addressed using COS
+ * virtual-styled domain"）。因此远端对象存储一律用 virtual-hosted style
+ * （`https://<bucket>.cos.<region>.myqcloud.com/<key>`）。
+ *
+ * 只有**本地** sentinel（127.0.0.1 / localhost / ::1）用 path-style：
+ * 本地 S3 兼容测试服务默认按 path-style 暴露桶。
+ */
+export function objectStoreAddressing(endpoint) {
+  let host = '';
+  try { host = new URL(String(endpoint || '')).hostname; } catch { host = ''; }
+  const isLocal = /^(127\.0\.0\.1|localhost|\[::1\]|::1)$/i.test(host);
+  return { forcePathStyle: isLocal, addressing: isLocal ? 'PATH' : 'VIRTUAL_HOSTED' };
+}
+
+/**
+ * 构造对象存储客户端（延迟加载 SDK：无对象存储场景不强制依赖）。
+ *
+ * 寻址方式由 endpoint 决定，见 {@link objectStoreAddressing}。
+ */
+export async function createObjectStoreClient(objectStore) {
+  const { S3Client } = await import('@aws-sdk/client-s3');
+  const { forcePathStyle } = objectStoreAddressing(objectStore.endpoint);
+  return new S3Client({
+    region: objectStore.region,
+    endpoint: objectStore.endpoint,
+    forcePathStyle,
+    credentials: {
+      accessKeyId: objectStore.accessKeyId,
+      secretAccessKey: objectStore.secretAccessKey,
+    },
+  });
+}
+
+/**
  * 恢复目标授权判定。
  *
  * 默认 fail closed：必须显式声明目标类别；生产恢复还必须同时提供
