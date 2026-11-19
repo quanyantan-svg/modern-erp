@@ -7883,6 +7883,18 @@ ACCEPTANCE/FREEZE=NOT_ISSUED
 | 灾备链路 | 新检出上 `modern-erp-mysql-backup.service` 仍 `COMPLETE` |
 | 共享主机零干扰 | `calculator_db` 仍 1 张表；`pairbook-web` 与 nginx 均 `active`；MySQL `ActiveEnterTimestamp` 仍为 2026-10-02 |
 
+#### 91.2.1 公网访问与浏览器 HTTPS 行为（2026-11-19 交付复核）
+
+初判「可交付」时只验证了 `curl`，遗漏了浏览器的 HTTPS 自动升级行为；复核时逐条实测并修正如下。
+
+| 项 | 实测结果 |
+|---|---|
+| 443 公网可达 | 业务所有者在云安全组放行 TCP 443 后，公网 `https://` 握手成功（75 ms），返回应用 SPA |
+| `http://` 访问 | **浏览器会自动升级到 `https://`**。Edge 的 HTTPS-first 探测因证书不受信而失败 → 导航被**硬拦截**（`ERR_BLOCKED_BY_CLIENT`），无绕过入口，页面显示「当前无法处理此请求」 |
+| `https://` 访问 | 标准证书告警页（`NET::ERR_CERT_AUTHORITY_INVALID`），含**「高级 → 继续前往…（不安全）」**；实测绕过可达，标题 `Modern ERP`、登录页与表单正常渲染、0 网络错误 |
+| 应用侧 | 未改：nginx 仅 `modern-erp.conf` 监听 443（默认站 443 行是注释）、反代 `127.0.0.1:3001`、`TLSv1.2/1.3`；证书自签，`CN=129.204.51.149`、SAN 含该 IP、RSA 2048、有效期至 2036；主机内 `YJ-FIREWALL-INPUT` 链无 443 规则（只有针对扫描器的 SSH 拒绝），3001/3306 公网不可达 |
+| 交付口径 | 客户必须用 **`https://` 开头**并点一次「高级 → 继续前往」；或在浏览器关闭「始终使用安全连接（仅 HTTPS）」改用 `http://`。**若需要零告警**，必须为该主机配域名并签发真实证书（自签证书无法消除告警） |
+
 ### 91.3 未发生事项与已知边界
 
 - 未 push / merge / tag / release；未改 `package.json` 版本；未移动既有 tag（`v1.7.0-rc.5` 不变）。
