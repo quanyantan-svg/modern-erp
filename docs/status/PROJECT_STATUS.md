@@ -7846,3 +7846,67 @@ IMPLEMENTATION_DEVIATIONS=2 registered
 SECURITY_GROUP/UFW=NOT_VERIFIED; QUARTERLY_DRILL_OBJECT=NOT_PRODUCED; PROD_RESTORE_PATH=NOT_EXECUTED
 ACCEPTANCE/FREEZE=NOT_ISSUED
 ```
+
+## 91. 客户测试环境部署：`master` @ `51931b6`（2026-11-19）
+
+| 项目 | 当前状态 |
+|---|---|
+| 授权 | 业务所有者 2026-11-19 指令「现在请将最新的修改提交 部署到腾讯云」 |
+| 目标环境 | `129.204.51.149`（腾讯云轻量应用服务器，Ubuntu 22.04 LTS，MySQL 8.0.46），`/opt/modern-erp`，端口 `3001`，Nginx `80` |
+| 部署前 → 部署后 | `c43435c` → **`51931b6`** |
+| 本次内容 | 3 个提交：`9cc5a47`（COS 灾备证据登记）、`1aff926`（高级页面业务参照收口：5 个新增只读 `work-references` / `workflow-participants` 端点 + 页面改用可搜索业务选择器）、`51931b6`（并发章节编号纠正） |
+| 变更性质 | 新增只读端点与前端选择器；**无** schema / migration / 权限码 / 状态机 / 金额合同 / 业务 mutation 变更 |
+| 未签发 | Acceptance / Freeze / Release Readiness 未签发；未 push / tag / merge / release |
+
+### 91.1 交付方式
+
+| 项 | 值 |
+|---|---|
+| 传输 | `git bundle` 增量包（`c43435c..master`，38,335 B，sha256 `1bbaa554…` 双向一致，`git bundle verify` 通过）；**未 push** |
+| 落地 | `git fetch <bundle> master` + `git reset --hard FETCH_HEAD`，以服务账号 `modern-erp` 执行 |
+| 依赖 | `pnpm install --frozen-lockfile`（锁文件未变） |
+| 构建 | 服务器 `pnpm build` PASS（6.85 s）；本机 `pnpm build` PASS（3.70 s）；抽样 2 个 chunk md5 **完全相同**；asset 59 = 59 |
+| 服务 | 只重启 `modern-erp.service`（13:29:50 `server_started backend=mysql`）；**未重启 nginx、未重启 MySQL** |
+| 数据库 | 无结构变更：427 表 / 1 视图 / 5 触发器，与部署前一致 |
+
+### 91.2 目标环境验证
+
+| 检查 | 结果 |
+|---|---|
+| `live` / `ready`（3001 与 Nginx） | 200 / 200 / 200 / 200 |
+| 未认证（`/api/users` + 5 个新端点） | 全部 401（fail closed） |
+| 新增端点合同 | **35 / 35 PASS**：22 类 kind 全部返回 `{items,total,limit,offset}` 与 `{id,code,name,secondaryText,active}`，状态投影为中文业务标签；非法 kind 均 400「业务参照类型无效」；分页不重不漏；销售角色访问库存参照 → 403「没有执行此操作的权限」且无数据 |
+| 信用参照端点回归 | **13 / 13 PASS** |
+| `system-health` | **24 项 BLOCKING，0 失败**（无回归） |
+| 前端全路由巡检 | **202 组合（93 route × 5 角色可见子集）、0 问题** |
+| 灾备链路 | 新检出上 `modern-erp-mysql-backup.service` 仍 `COMPLETE` |
+| 共享主机零干扰 | `calculator_db` 仍 1 张表；`pairbook-web` 与 nginx 均 `active`；MySQL `ActiveEnterTimestamp` 仍为 2026-10-02 |
+
+### 91.3 未发生事项与已知边界
+
+- 未 push / merge / tag / release；未改 `package.json` 版本；未移动既有 tag（`v1.7.0-rc.5` 不变）。
+- 未在目标环境执行任何结构变更；未清库、未删改客户数据；未重启 MySQL / nginx。
+- 未签发 Acceptance / Freeze / Release Readiness；`1aff926` 的能力尚未经域级 Acceptance。
+- §90 登记的未闭合项仍然有效：安全组与 ufw 未复核、季度演练源对象尚未产生、
+  `APPROVED_PRODUCTION` 恢复路径未执行、控制台临时主账号密钥待业务所有者删除。
+
+### 91.4 机器可读状态
+
+```text
+DEPLOY=TARGET_ENV_DEPLOYED(129.204.51.149; c43435c -> 51931b6; git bundle; not pushed)
+DEPLOY_TRANSPORT=git bundle incremental(38,335 B; sha256 1bbaa554...; verify PASS)
+DEPLOY_BUILD=PASS(server 6.85s; local 3.70s; 2/2 chunk md5 identical; 59 assets = 59)
+DEPLOY_SERVICE=modern-erp.service restarted only; nginx/MySQL NOT restarted
+DEPLOY_SCHEMA=UNCHANGED(427 tables / 1 view / 5 triggers)
+TARGET_HEALTH=PASS(live/ready 200 via 3001 and nginx; 6 endpoints unauth 401)
+TARGET_NEW_ENDPOINTS=35/35 PASS(22 kinds; contract; zh labels; 400 invalid kind; 403 role boundary; paging)
+TARGET_CREDIT_REFS=13/13 PASS
+TARGET_SYSTEM_HEALTH=24 BLOCKING; 0 failing
+TARGET_BROWSER_SWEEP=PASS(202 combinations; 5 roles x 93 routes visible subset; 0 findings)
+TARGET_DR_CHAIN=COMPLETE on new checkout
+SHARED_HOST=UNAFFECTED(calculator_db 1 table; pairbook-web active; nginx active; MySQL never restarted)
+LOCAL_FAST=775/775 PASS; LOCAL_BUILD=PASS
+SCHEMA/MIGRATION/PERMISSION/STATE_MACHINE=UNCHANGED
+PUSH/TAG/MERGE/RELEASE=NOT_EXECUTED
+ACCEPTANCE/FREEZE=NOT_ISSUED
+```
