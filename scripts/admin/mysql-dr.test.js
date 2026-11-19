@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 import {
   BACKUP_STATES, RESTORE_STATES, authorizeRestoreTarget, buildManifest, buildObjectKey,
   computeRetentionCandidates, createDumpCompletion, evaluateRecoveryTiming, objectStoreAddressing,
-  redactEndpoint, redactSecrets, validateBackupConfig,
+  redactEndpoint, redactSecrets, stripDefinerClauses, validateBackupConfig,
 } from './lib/mysql-dr.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -226,6 +226,54 @@ test('T15 恢复入口把目标身份映射成 runMysqlImport 需要的 name 字
   const importSource = readFileSync(join(repoRoot, 'scripts', 'admin', 'lib', 'mysql-dr.mjs'), 'utf8');
   const importFn = importSource.slice(importSource.indexOf('export function runMysqlImport'));
   assert.match(importFn, /database\.name/, 'runMysqlImport 必须以 database.name 作为目标库名');
+});
+
+test('T16 导入侧剥掉 DEFINER 子句：恢复后的对象归恢复账号所有', async () => {
+  const strip = async (text, splitAt = null) => {
+    const chunks = [];
+    const stream = stripDefinerClauses();
+    stream.on('data', (chunk) => chunks.push(chunk.toString()));
+    const done = new Promise((resolve, reject) => {
+      stream.on('end', resolve);
+      stream.on('error', reject);
+    });
+    if (splitAt === null) {
+      stream.write(text);
+    } else {
+      // 跨块切断：验证 carry 逻辑不会漏掉被切开的 DEFINER 子句
+      stream.write(text.slice(0, splitAt));
+      stream.write(text.slice(splitAt));
+    }
+    stream.end();
+    await done;
+    return chunks.join('');
+  };
+
+  // 触发器形态：剥后是空版本注释，语法合法
+  const trigger = '/*!50003 CREATE*/ /*!50017 DEFINER=`modern_erp`@`127.0.0.1`*/ /*!50003 TRIGGER `t` BEFORE INSERT ON `x` FOR EACH ROW BEGIN END */;';
+  const strippedTrigger = await strip(trigger);
+  assert.equal(strippedTrigger.includes('DEFINER'), false, '触发器的 DEFINER 必须被剥掉');
+  assert.match(strippedTrigger, /\/\*!50017 \*\//, '剥后必须留空版本注释，而不是留下畸形片段');
+  assert.match(strippedTrigger, /TRIGGER `t` BEFORE INSERT/, '触发器本体必须原样保留');
+
+  // 视图形态：剥后仍是合法视图属性
+  const view = '/*!50013 DEFINER=`modern_erp`@`127.0.0.1` SQL SECURITY DEFINER */';
+  const strippedView = await strip(view);
+  assert.equal(strippedView.includes('DEFINER=`'), false, '视图的 DEFINER 账号必须被剥掉');
+  assert.match(strippedView, /SQL SECURITY DEFINER/, 'SQL SECURITY DEFINER 属性必须保留');
+
+  // 无反引号与单引号形态同样要剥（仍在版本注释语境里）
+  assert.equal((await strip('/*!50017 DEFINER=root@localhost*/')).includes('DEFINER'), false);
+  assert.equal((await strip("/*!50017 DEFINER='u'@'h'*/")).includes('DEFINER'), false);
+
+  // 跨块切断也必须剥干净
+  const split = await strip(trigger, trigger.indexOf('DEFINER') + 10);
+  assert.equal(split.includes('DEFINER'), false, '跨块的 DEFINER 子句也必须被剥掉');
+  assert.match(split, /TRIGGER `t` BEFORE INSERT/, '跨块时触发器本体仍须完整');
+
+  // 不得误伤正文
+  const body = 'INSERT INTO `t` VALUES (\'DEFINER=x@y\');';
+  assert.equal(await strip(body), body);
 });
 
 test('T14 dump 结果判定与事件到达顺序无关：子进程退出 0 必须判成功', async () => {

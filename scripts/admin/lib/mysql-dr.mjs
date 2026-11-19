@@ -15,8 +15,9 @@ import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream, existsSync, mkdirSync, statSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { Readable } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { StringDecoder } from 'node:string_decoder';
 
 /** 备份状态机。 */
 export const BACKUP_STATES = Object.freeze([
@@ -357,6 +358,43 @@ export function runMysqlDump({ database, user, password, outputPath, mysqldumpPa
 }
 
 /**
+ * 剥掉 dump 里的 `DEFINER=<user>@<host>` 子句。
+ *
+ * 为什么要剥：DEFINER 里的账号来自**源主机**。MySQL 8 要求导入方具备
+ * SET_USER_ID（全局动态权限）才能把对象归属设成别的账号；即使授予，
+ * 该账号在目标库上通常**没有**任何权限——触发器以它的权限执行，
+ * 在隔离的演练库上直接失效。因此恢复后的对象归**恢复账号**所有。
+ *
+ * 两种出现形态都被安全处理：
+ *   - 触发器：`/*!50017 DEFINER=...` 整段是一个版本注释，剥后是空版本注释，语法合法；
+ *   - 视图：`/*!50013 DEFINER=... SQL SECURITY DEFINER` 剥后仍是合法视图属性。
+ *
+ * 存储的备份对象**保持原样**（哈希与上传内容逐字节一致），只在导入流上做变换。
+ */
+export function stripDefinerClauses() {
+  // 只在 mysqldump 的版本注释里剥离：`/*!50017 DEFINER=...` 与
+  // `/*!50013 DEFINER=... SQL SECURITY DEFINER`。这样正文里作为字符串字面量出现的
+  // "DEFINER=..." 不会被误伤。
+  const DEFINER_RE = /(\/\*!\d+\s+)DEFINER=(?:`[^`]*`|'[^']*'|[^\s@]+)@(?:`[^`]*`|'[^']*'|[^\s@]+)(?=\s*\*\/|\s+SQL SECURITY)/g;
+  const decoder = new StringDecoder('utf8');
+  let carry = '';
+  return new Transform({
+    transform(chunk, _encoding, callback) {
+      const text = carry + decoder.write(chunk);
+      // 保留尾部一小段，避免跨块切断的 DEFINER 子句被漏掉
+      const safeLength = Math.max(0, text.length - 128);
+      const safe = text.slice(0, safeLength);
+      carry = text.slice(safeLength);
+      callback(null, safe.replace(DEFINER_RE, '$1'));
+    },
+    flush(callback) {
+      const rest = carry + decoder.end();
+      callback(null, rest.replace(DEFINER_RE, '$1'));
+    },
+  });
+}
+
+/**
  * 以**无 shell** 的方式把 dump 导入目标库。
  */
 export function runMysqlImport({ database, user, password, dumpPath, mysqlPath = 'mysql' }) {
@@ -376,7 +414,8 @@ export function runMysqlImport({ database, user, password, dumpPath, mysqlPath =
     child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
     child.stdin.on('error', () => { /* 导入中断时以退出码为准 */ });
     const source = createReadStream(dumpPath);
-    source.pipe(child.stdin);
+    const stripper = stripDefinerClauses();
+    source.pipe(stripper).pipe(child.stdin);
     child.on('error', (error) => { try { source.destroy(); } catch { /* 已销毁 */ } reject(error); });
     child.on('close', (code) => {
       if (code === 0) resolve({ ok: true, stderr: redactSecrets(stderr) });
