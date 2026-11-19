@@ -7630,7 +7630,7 @@ DEPLOY=PENDING；PUSH/TAG/RELEASE=NOT_EXECUTED
 
 ### 87.4 已知边界与交付阻塞
 
-1. **腾讯云实际部署身份未核验**：本轮未获得 deploy 授权，也没有将本地改动发布到云端。交客户前必须确认云端 commit 与本轮最终提交一致。
+1. **腾讯云实际部署身份未核验**：本轮未获得 deploy 授权，也没有将本地改动发布到云端。交客户前必须确认云端 commit 与本轮最终提交一致。—— **已由 §88 闭合**：客户环境已部署至 `ea53bbe`，云端 commit 与本轮最终提交一致。
 2. **少数高级页面仍有技术型参照输入**：班次组合、计划预留来源、销售预留意图与部分库存所有权/跟踪工作面仍使用来源 ID。主流程可按手册测试，但这些高级页面尚未达到“零技术 ID”的最终目标。
 3. VMI 结算仍无独立操作员工作面；系统通知暂不包含邮件/短信通道。
 4. 手册仍为 `DRAFT`；需根据客户测试反馈修订后再定稿。
@@ -7647,5 +7647,79 @@ STATIC_COPY_GUARDS=PASS(English 0; internal-copy 0; error-code coupling unregist
 BROWSER_GATE=PASS(6504 checks; 5 roles × 4 widths × 93 routes; failures 0)
 REAL_MYSQL=NOT_RUN
 DEPLOY/PUSH/TAG/RELEASE=NOT_EXECUTED
+ACCEPTANCE/FREEZE=NOT_ISSUED
+```
+
+## 88. 客户测试环境部署：`master` @ `ea53bbe`（2026-11-19）
+
+| 项目 | 当前状态 |
+|---|---|
+| 授权 | 业务所有者 2026-11-19 指令「请你将目前的改动部署到腾讯云」；授权范围 = 本地 `master` 当前 HEAD 部署到客户测试环境并做目标环境验证 |
+| 目标环境 | `129.204.51.149`（腾讯云轻量应用服务器，Ubuntu 22.04 LTS，MySQL 8.0.46），应用目录 `/opt/modern-erp`，端口 `3001`，Nginx `80` |
+| 部署前 → 部署后 | `b7d8408e`（v1.7.0-rc.5） → **`ea53bbe`**（v1.7.0-rc.5） |
+| 变更性质 | 8 个提交；无 schema / migration / 权限码 / 状态机 / 金额合同变更；后端仅 `credit-work-references` 只读端点响应合同与三处用户可见措辞 |
+| 未签发 | Acceptance / Freeze / Release Readiness 未签发；未 push / tag / merge / release |
+
+### 88.1 交付方式
+
+| 项 | 值 |
+|---|---|
+| 传输 | `git bundle` 增量包（`b7d8408..master`，1,167,337 B，sha256 `bf4a95dc2ce2ab20339dae4edd5a0bcf37071550bc1b4a395af4ebf8e7723e54` 双向一致，`git bundle verify` 通过）；**未 push** |
+| 落地 | `git fetch <bundle> master` + `git reset --hard FETCH_HEAD`，以服务账号 `modern-erp` 执行（`.git` 属主为该账号） |
+| 依赖 | `pnpm install --frozen-lockfile` → `Already up to date`（锁文件未变） |
+| 构建 | 服务器 `pnpm build` PASS（6.99 s）；本机 `pnpm build` PASS（3.90 s） |
+| 产物一致性 | 抽样 3 个 chunk md5 本机与服务器**完全相同**（`page-credit-check-B7nv6tFl.js` / `page-inventory-work-Jt4_hTAy.js` / `index-CRyvFwY-.js`）；asset 数量 59 = 59 |
+| 服务 | 只重启 `modern-erp.service`（12:13:29 停止 → 12:14:09 启动 → `server_started backend=mysql`）；**未重启 nginx、未重启 MySQL** |
+| 数据库备份 | 部署前触发 `modern-erp-backup.service`：`modern-erp-2026-11-19T04-11-53.sql`，850,192 B，sha256 `fcfdf9f08d7e98604412af2e81e5a5191929c778746b2cfc4f81326c28f94791`，status `COMPLETE` |
+
+### 88.2 目标环境验证
+
+| 检查 | 结果 |
+|---|---|
+| `live` / `ready`（`127.0.0.1:3001`） | 200 / 200 |
+| `live` / `ready` / 根路径（经 Nginx） | 200 / 200 / 200 |
+| 未认证 `/api/users`、`/api/credit/work-references` | 401 / 401（fail closed） |
+| 参照端点合同（真实 MySQL 8） | **13 / 13 PASS**：六类参照返回 `{items,total,limit,offset}`；item 字段 `{id,code,name,secondaryText,active}`；状态与阶段投影为中文业务标签；分页不重不漏；`selectedId` 水合命中该条目；非法 `kind`/`limit`/`offset` 均 400 且中文文案；无权限角色 403「没有执行信用检查的权限」 |
+| `system-health` | **24 项 BLOCKING 检查，0 项失败**（权威结账闭合） |
+| 前端全路由巡检 | **202 组合（93 route × 5 角色可见子集）、0 问题**：无回退、无 console error、无 API ≥400、无路由重定向 |
+| 共享主机零干扰 | `calculator_db` 仍 1 张表；`pairbook-web` 与 nginx 均 `active`；MySQL `ActiveEnterTimestamp` 仍为 2026-10-02，**全程未重启** |
+
+### 88.3 合同语义澄清（部署期实测，非缺陷）
+
+参照端点 `total` 是**授权关系总数**，不是搜索过滤后的命中数：实测 `q=demo_warehouse` 时 `items=1` 而 `total=7`。
+这与已批准合同 §29.54.3（计数与分页在 authorized relation 上完成）及
+`server/credit-work-references.test.js` 的既有断言一致（空页与 `selectedId` 水合均不改变 `total`），
+因此**不是**实现偏差。前端选择器把 `total` 用于「共 N 条」与翻页判定，故搜索态下该数字表示可见范围而非命中数——
+若要让文案随搜索收敛，属合同层变更，需走 Requirement / Design，不在本次部署范围内。
+
+### 88.4 未发生事项与已知边界
+
+- 未 push / tag / merge / release；未改 `package.json` 版本；未移动既有 tag；`v1.7.0-rc.5` 保持不变。
+- 未在目标环境执行任何结构变更（本次无 schema / migration 变更）；未删除或改写客户数据；未清库。
+- 未重启 MySQL、nginx，未触碰同机 `calculator` 与 `pairbook-web`。
+- 未签发 Acceptance / Freeze / Release Readiness。
+- **COS 异机副本仍未配置**：`/etc/modern-erp/env` 无 `ERP_DR_S3_*`，备份只到本地 `COMPLETE`，未达 §10.9 的
+  `REMOTE_VERIFIED`，因此**不得**把当前备份称为可恢复的异机副本。
+- 客户库经 2026-11-18 清库重播种后无销售订单与出货单（`sales_orders=0`、`sales_deliveries=0`），
+  故信用参照的订单 / 出货类别 `total=0` 是真实结果而非缺陷；六类参照中仅 `EVALUATOR` 有数据（7 条）。
+- 演示账号口令已知（`demo_sales` 等），账号与口令由管理员另行安全发送。
+
+### 88.5 机器可读状态
+
+```text
+DEPLOY=TARGET_ENV_DEPLOYED(129.204.51.149; commit b7d8408e -> ea53bbe; git bundle; not pushed)
+DEPLOY_TRANSPORT=git bundle incremental(1,167,337 B; sha256 bf4a95dc...; verify PASS)
+DEPLOY_BUILD=PASS(server 6.99s; local 3.90s; 3/3 chunk md5 identical; 59 assets = 59)
+DEPLOY_SERVICE=modern-erp.service restarted only; nginx/MySQL NOT restarted
+DEPLOY_BACKUP=PRE_DEPLOY_DUMP(850,192 B; sha256 fcfdf9f0...; local COMPLETE; no COS/REMOTE_VERIFIED)
+TARGET_HEALTH=PASS(live/ready 200 via 3001 and nginx; unauth 401)
+TARGET_REFERENCE_API=13/13 PASS(items,total,limit,offset; pagination; hydration; zh labels; 400/403 boundaries)
+TARGET_SYSTEM_HEALTH=24 BLOCKING checks; 0 failing
+TARGET_BROWSER_SWEEP=PASS(202 combinations; 5 roles x 93 routes visible subset; 0 findings)
+SHARED_HOST=UNAFFECTED(calculator_db 1 table; pairbook-web active; nginx active; MySQL never restarted)
+LOCAL_FAST=775/775 PASS
+LOCAL_BUILD=PASS
+SCHEMA/MIGRATION/PERMISSION/STATE_MACHINE=UNCHANGED
+PUSH/TAG/MERGE/RELEASE=NOT_EXECUTED
 ACCEPTANCE/FREEZE=NOT_ISSUED
 ```
