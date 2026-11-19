@@ -7631,7 +7631,7 @@ DEPLOY=PENDING；PUSH/TAG/RELEASE=NOT_EXECUTED
 ### 87.4 已知边界与交付阻塞
 
 1. **腾讯云实际部署身份未核验**：本轮未获得 deploy 授权，也没有将本地改动发布到云端。交客户前必须确认云端 commit 与本轮最终提交一致。—— **已由 §88 闭合**：客户环境已部署至 `ea53bbe`，云端 commit 与本轮最终提交一致。
-2. **少数高级页面仍有技术型参照输入**：班次组合、计划预留来源、销售预留意图与部分库存所有权/跟踪工作面仍使用来源 ID。主流程可按手册测试，但这些高级页面尚未达到“零技术 ID”的最终目标。
+2. **少数高级页面仍有技术型参照输入**：该缺口已由 §89 闭合；班次/班制/日历、计划与销售预留来源、库存所有权/批序列/估值证据、会计科目/经营账簿、流程参与人与组织等可编辑项已不再要求用户手工粘贴内部主键。
 3. VMI 结算仍无独立操作员工作面；系统通知暂不包含邮件/短信通道。
 4. 手册仍为 `DRAFT`；需根据客户测试反馈修订后再定稿。
 5. 本轮 Acceptance / Freeze 未签发；未运行真实 MySQL，未执行 push / tag / release / deploy。
@@ -7711,7 +7711,7 @@ DEPLOY=TARGET_ENV_DEPLOYED(129.204.51.149; commit b7d8408e -> ea53bbe; git bundl
 DEPLOY_TRANSPORT=git bundle incremental(1,167,337 B; sha256 bf4a95dc...; verify PASS)
 DEPLOY_BUILD=PASS(server 6.99s; local 3.90s; 3/3 chunk md5 identical; 59 assets = 59)
 DEPLOY_SERVICE=modern-erp.service restarted only; nginx/MySQL NOT restarted
-DEPLOY_BACKUP=PRE_DEPLOY_DUMP(850,192 B; sha256 fcfdf9f0...; local COMPLETE; no COS/REMOTE_VERIFIED)
+DEPLOY_BACKUP=PRE_DEPLOY_DUMP(850,192 B; sha256 fcfdf9f0...; local COMPLETE; COS offsite copy landed later in §89)
 TARGET_HEALTH=PASS(live/ready 200 via 3001 and nginx; unauth 401)
 TARGET_REFERENCE_API=13/13 PASS(items,total,limit,offset; pagination; hydration; zh labels; 400/403 boundaries)
 TARGET_SYSTEM_HEALTH=24 BLOCKING checks; 0 failing
@@ -7721,5 +7721,128 @@ LOCAL_FAST=775/775 PASS
 LOCAL_BUILD=PASS
 SCHEMA/MIGRATION/PERMISSION/STATE_MACHINE=UNCHANGED
 PUSH/TAG/MERGE/RELEASE=NOT_EXECUTED
+ACCEPTANCE/FREEZE=NOT_ISSUED
+```
+
+## 89. 高级页面业务参照收口 Implementation（2026-11-19）
+
+| 项目 | 当前状态 |
+|---|---|
+| 授权 | 业务所有者 2026-11-19 明确指令「进入 Implementation 阶段」 |
+| 上游合同 | Platform Requirement §36.22 `PL-UX-03` 与 Design §32.22.4 / §32.22.8 |
+| 实现身份 | `master` @ `1aff926`；`package.json` 仍为 `1.7.0-rc.5`；release tag 未变 |
+| 阶段状态 | `IMPLEMENTED`；本轮 Acceptance / Freeze 未签发 |
+
+### 89.1 已闭合范围
+
+- 工程参照：班次组合、班制、日历模板、工作中心与基础活动改为业务编码 + 名称选择。
+- 计划/销售：需求来源、供应来源、销售订单/行、货品与仓库改为可搜索参照；修复 `EXPECTED` 预留容量必填工作面。
+- 库存：所有权对象、批号、序列号、条码对象与已过账估值证据改为受权限的业务参照。
+- 会计/平台：上级科目、经营账簿、流程接收人、编号规则组织与流程绑定组织改为业务参照。
+- 通用选择器补齐多选水合、移除与单选可选项清除；仍提交 canonical ID，不改既有 payload、mutation 、状态机、事务或审计语义。
+
+后端新增的 `planning / sales / inventory / platform work-references` 均为 additive 只读投影；搜索、计数、分页与 `selectedId` 水合使用同一受权关系，无权时后端 fail closed。
+
+### 89.2 验证证据
+
+| 门禁 | 结果 |
+|---|---|
+| focused + route ownership | **122 / 122 PASS** |
+| FAST | **775 / 775 PASS** |
+| FULL | **4244 / 4244 PASS**，552 suites，0 fail / 0 skipped |
+| Vite production build | **PASS**，1993 modules |
+| canonical 浏览器门禁 | **6504 / 6504 PASS**；5 角色 × 320 / 390 / 430 / 680；`PRODUCT_FAILURE=0 / FIXTURE_FAILURE=0 / CONTRACT_DRIFT=0` |
+| 用户文案 / 跨域错误码 | 用户可见技术文案守卫 PASS；未登记错误码耦合 0，死引用 0 |
+| 代码卫生 | `git diff --check` PASS |
+
+### 89.3 未发生事项与当前边界
+
+- 无 schema / migration / 权限码 / 角色种子 / 状态机 / 金额合同变更；未连接或写入真实 MySQL。
+- 未 push / merge / tag / release / deploy；客户测试环境仍是 §88 登记的 `ea53bbe`，**尚未包含** `1aff926`。
+- 未修改客户数据、未重启云端服务；未签发 Acceptance / Freeze / Release Readiness。
+
+### 89.4 机器可读状态
+
+```text
+ADVANCED_BUSINESS_REFERENCES=IMPLEMENTED(commit 1aff926; editable technical-ID inputs closed)
+REFERENCE_ENDPOINTS=ADDITIVE_READ_ONLY(actor-scoped; same-relation search/page/hydration)
+FOCUSED=122/122 PASS
+LOCAL_FAST=775/775 PASS
+LOCAL_FULL=4244/4244 PASS(552 suites)
+LOCAL_BUILD=PASS(1993 modules)
+BROWSER_GATE=PASS(6504 checks; 5 roles x 4 widths; failures 0)
+SCHEMA/MIGRATION/PERMISSION/STATE_MACHINE=UNCHANGED
+REAL_MYSQL=NOT_RUN
+DEPLOY/PUSH/TAG/RELEASE=NOT_EXECUTED
+ACCEPTANCE/FREEZE=NOT_ISSUED
+```
+
+## 89. 客户测试环境 MySQL 异机备份（COS）落地与恢复演练（2026-11-19）
+
+| 项目 | 当前状态 |
+|---|---|
+| 授权 | 业务所有者 2026-11-19 指令「配置COS 异机备份」；并同意由代理代为建桶、建子账号与安装 |
+| 合同 | Requirement §36.16.2（`PL-RI-01`）与 Design §32.16.3；`deployment.md` §4.1 / §9 / §10.3–§10.11 |
+| 目标环境 | `129.204.51.149`（腾讯云轻量应用服务器，Ubuntu 22.04 LTS，MySQL 8.0.46） |
+| 对象存储 | 腾讯云 COS，桶 `modern-erp-dr-1477910165`，地域 `ap-guangzhou`，prefix `modern-erp/dr/` |
+| 证据 | [`docs/acceptance/cos-offsite-backup-acceptance-20261119.md`](../acceptance/cos-offsite-backup-acceptance-20261119.md) |
+| 未签发 | Acceptance / Freeze / Release Readiness **未签发**；本轮只是实施与验证证据 |
+
+### 89.1 落地内容
+
+- **只读备份账号** `modern_erp_backup`@`127.0.0.1`：`GRANT USAGE ON *.*` + `SELECT, EXECUTE, SHOW VIEW, EVENT, TRIGGER ON modern_erp.*`；无写权限、无库外权限。口令在服务器内生成，不进 argv、不进仓库。
+- **独立凭据文件** `/etc/modern-erp/backup-env`（`root:modern-erp-backup`，`0640`）；备份单元经 systemd drop-in **只读这一个文件**，不读应用服务的 `/etc/modern-erp/env`。
+- **COS 最小权限**：CAM 策略 `modern-erp-dr-backup`（PolicyId 294611927）绑定子账号 `modern-erp-dr-backup`（uin 100055346626），仅该桶的 9 个对象级操作 + 桶列举；无删桶、无跨桶、无管理权限。
+- **定时器切换**：`modern-erp-mysql-backup.timer` 启用（每日 03:15 + ≤10 分钟随机延迟）；2026-11-18 因对象存储凭据未到位而落地的本地分支 `modern-erp-backup.timer` 已 `disable --now`，历史本地 dump 保留为历史证据。
+
+### 89.2 实施中发现并修复的 4 个实现缺陷
+
+canonical 灾备链路此前**从未在真实对象存储上跑通**，本轮逐个暴露：
+
+| # | 缺陷 | 现象 | 修复 |
+|---|---|---|---|
+| D1 | 寻址写死 `forcePathStyle: true` | COS 拒绝 path-style：`PathStyleDomainForbidden` | `8c59608` |
+| D2 | `runMysqlDump` 只盯输出流 `'close'` 就读 `child.exitCode` | stdout 的 end 可能早于子进程退出事件 → 成功备份被误报「退出码 null」；实测间歇性失败（2/6 成功） | `c88fc08` |
+| D3 | 恢复入口把 `target.identity` 直接展开给 `runMysqlImport` | 库名被传成 `undefined` → `ERROR 1044 ... to database 'undefined'` | `bc12aee` |
+| D4 | 导入未处理 dump 的 `DEFINER=` 子句 | `ERROR 1227 ... SUPER or SET_USER_ID`；且原 definer 账号在目标库上无权限，触发器在隔离库上直接失效 | `c43435c` |
+
+### 89.3 真实证据
+
+| 项 | 结果 |
+|---|---|
+| 备份 | 单元连续 **6/6 `COMPLETE`**（修复前 2/6）；runId `c3fbb11f-…`，sha256 `115cfa16…`，858,761 B，`REMOTE_VERIFIED`（上传后回读重算哈希一致） |
+| 桶现状 | 18 个对象、15,457,698 字节；18 份 manifest 全部 `REMOTE_VERIFIED` |
+| 恢复演练 | 从 COS 恢复到隔离 disposable 库，终态 `COMPLETE`：428 表 / 1 视图 / 5 触发器 / 835 外键；恢复出的库让临时应用实例 `live=200 ready=200`；生产实例全程 live/ready 200 |
+| 行数比对 | 427 张表逐表比对，仅 1 张差异（`finance_recognition_policy` live=28 / drill=24，为备份后新增的策略行） |
+| RPO / RTO | RPO **4.72 min**（限 24 h）、RTO **60.4 s**（限 4 h），均达标 |
+| 清理 | 演练库已删、演练账号已删、临时实例已按 PID 终止（3002 无监听）；生产 `modern-erp.service` active |
+| 门禁 | DR 合同 **16/16 PASS**；`pnpm test:fast` **775/775 PASS**；`git diff --check` PASS |
+| 共享主机 | MySQL 全程未重启；nginx 未重启未改站点块；`calculator_db` 仍 1 表；`pairbook-web` active |
+
+### 89.4 已登记的实现偏差
+
+1. **恢复后对象归恢复账号所有**：D4 修复在导入流上剥除版本注释里的 `DEFINER=`（存储对象保持原样、哈希不变）。设计未规定恢复后对象归属，这是可移植恢复与隔离库演练的前提，但与源库不同。
+2. **寻址方式由 endpoint 决定**：远端 virtual-hosted style，仅本地 sentinel 保留 path-style。
+
+### 89.5 未闭合项
+
+1. **安全组与主机 `ufw` 未复核**（3306 / 3001 是否确实不可从公网访问、22 是否已收窄到固定出口 IP）。
+2. **季度演练源对象尚未产生**：本轮只有 daily 对象，`kind=drill` 的保留路径未被真实数据验证。
+3. **`APPROVED_PRODUCTION` 恢复路径未在真实环境执行**（需窗口标识 + 审批标识 + 精确目标身份）。
+4. **控制台侧的临时主账号 API 密钥需业务所有者自行删除**（本机文件已由引导脚本销毁）。
+5. manifest 的 `commit` 在服务器 detached HEAD 下记为 `unknown`（备份账号无 git 读权限），不影响对象唯一性。
+
+### 89.6 机器可读状态
+
+```text
+COS_OFFSITE_BACKUP=IMPLEMENTED_AND_VERIFIED(129.204.51.149; bucket modern-erp-dr-1477910165; ap-guangzhou)
+COS_BACKUP_UNIT=modern-erp-mysql-backup.service/timer ENABLED(daily 03:15 + <=10min); local branch retired
+COS_BACKUP_RUN=COMPLETE x6/6 after fix(before fix 2/6); 18 manifests REMOTE_VERIFIED; 18 objects
+COS_RESTORE_DRILL=COMPLETE(isolated disposable DB; 428 tables/1 view/5 triggers/835 fk; app live+ready 200)
+COS_ROW_DIFF=1/427 (finance_recognition_policy; post-backup policy rows)
+RPO=4.72 min PASS; RTO=60.4 s PASS
+DR_DEFECTS_FIXED=4(8c59608 / c88fc08 / bc12aee / c43435c); DR_TESTS=16/16; LOCAL_FAST=775/775
+IMPLEMENTATION_DEVIATIONS=2 registered
+SECURITY_GROUP/UFW=NOT_VERIFIED; QUARTERLY_DRILL_OBJECT=NOT_PRODUCED; PROD_RESTORE_PATH=NOT_EXECUTED
 ACCEPTANCE/FREEZE=NOT_ISSUED
 ```
