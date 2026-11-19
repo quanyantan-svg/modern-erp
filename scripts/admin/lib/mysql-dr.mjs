@@ -286,6 +286,40 @@ export async function writeFileWithHash(destination, readable) {
 }
 
 /**
+ * 把「子进程退出」与「输出流落盘」两个独立事件合成一个确定的结果。
+ *
+ * 只盯输出流的 'close' 是不够的：stdout 的 end 可能早于子进程退出事件被处理，
+ * 此时 `child.exitCode` 仍是 `null`，一次**成功**的备份会被误报成失败
+ * （表现为「退出码 null」）。两个事件都到齐再判定，结论与到达顺序无关。
+ */
+export function createDumpCompletion({ resolve, reject }) {
+  let exit = null;
+  let streamClosed = false;
+  const settle = () => {
+    if (!exit || !streamClosed) return;
+    const { code, signal, stderrText } = exit;
+    if (code === 0) {
+      resolve({ ok: true, stderr: redactSecrets(stderrText) });
+      return;
+    }
+    reject(new Error(`mysqldump 失败: ${redactSecrets(stderrText.trim()
+      || (signal ? `被信号 ${signal} 终止` : `退出码 ${code}`))}`));
+  };
+  return {
+    /** 子进程 'close'：(code, signal)。 */
+    onChildClose(code, signal, stderrText = '') {
+      exit = { code, signal, stderrText };
+      settle();
+    },
+    /** 输出流 'close'：文件已落盘。 */
+    onStreamClose() {
+      streamClosed = true;
+      settle();
+    },
+  };
+}
+
+/**
  * 以**无 shell** 的方式执行 mysqldump。
  *
  * 密码只进子进程环境（MYSQL_PWD），绝不进入 argv。
@@ -314,12 +348,11 @@ export function runMysqlDump({ database, user, password, outputPath, mysqldumpPa
     let stderr = '';
     child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
     child.stdout.pipe(out);
+    const completion = createDumpCompletion({ resolve, reject });
     child.on('error', (error) => { try { out.destroy(); } catch { /* 已销毁 */ } reject(error); });
     out.on('error', reject);
-    out.on('close', () => {
-      if (child.exitCode === 0) resolve({ ok: true, stderr: redactSecrets(stderr) });
-      else reject(new Error(`mysqldump 失败: ${redactSecrets(stderr.trim() || `退出码 ${child.exitCode}`)}`));
-    });
+    child.on('close', (code, signal) => completion.onChildClose(code, signal, stderr));
+    out.on('close', () => completion.onStreamClose());
   });
 }
 

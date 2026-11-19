@@ -19,8 +19,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   BACKUP_STATES, RESTORE_STATES, authorizeRestoreTarget, buildManifest, buildObjectKey,
-  computeRetentionCandidates, evaluateRecoveryTiming, objectStoreAddressing, redactEndpoint,
-  redactSecrets, validateBackupConfig,
+  computeRetentionCandidates, createDumpCompletion, evaluateRecoveryTiming, objectStoreAddressing,
+  redactEndpoint, redactSecrets, validateBackupConfig,
 } from './lib/mysql-dr.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -214,4 +214,67 @@ test('T13 对象存储寻址：远端用 virtual-hosted style，本地 sentinel 
   assert.ok(!restoreSource.includes('forcePathStyle'), '恢复入口不得硬编码寻址方式');
   assert.ok(backupSource.includes('createObjectStoreClient'), '备份入口必须复用共享客户端');
   assert.ok(restoreSource.includes('createObjectStoreClient'), '恢复入口必须复用共享客户端');
+});
+
+test('T14 dump 结果判定与事件到达顺序无关：子进程退出 0 必须判成功', async () => {
+  // 回归：此前只看输出流的 'close'，而 stdout 的 end 可能早于子进程退出事件被处理，
+  // 此时 child.exitCode 仍是 null，一次成功的备份被误报成「退出码 null」。
+  const run = async (order) => {
+    let resolveOuter;
+    let rejectOuter;
+    const promise = new Promise((res, rej) => { resolveOuter = res; rejectOuter = rej; });
+    const completion = createDumpCompletion({ resolve: resolveOuter, reject: rejectOuter });
+    const emit = (which) => {
+      if (which === 'child') completion.onChildClose(0, null, '');
+      else completion.onStreamClose();
+    };
+    order.forEach(emit);
+    return promise;
+  };
+
+  // 两种到达顺序都必须判成功
+  assert.deepEqual(await run(['stream', 'child']), { ok: true, stderr: '' });
+  assert.deepEqual(await run(['child', 'stream']), { ok: true, stderr: '' });
+
+  // 退出码非 0：stderr 有内容时以 stderr 为准，但不得出现 null
+  await assert.rejects(async () => {
+    const promise = new Promise((res, rej) => {
+      const completion = createDumpCompletion({ resolve: res, reject: rej });
+      completion.onStreamClose();
+      completion.onChildClose(3, null, 'mysqldump: Got error: 3 when trying to connect');
+    });
+    await promise;
+  }, (error) => {
+    assert.match(error.message, /Got error: 3/);
+    assert.doesNotMatch(error.message, /null/);
+    return true;
+  });
+
+  // stderr 为空时必须报真实退出码
+  await assert.rejects(async () => {
+    const promise = new Promise((res, rej) => {
+      const completion = createDumpCompletion({ resolve: res, reject: rej });
+      completion.onChildClose(3, null, '');
+      completion.onStreamClose();
+    });
+    await promise;
+  }, (error) => {
+    assert.match(error.message, /退出码 3/);
+    assert.doesNotMatch(error.message, /null/);
+    return true;
+  });
+
+  // 被信号杀死：必须报信号名，不得报 null
+  await assert.rejects(async () => {
+    const promise = new Promise((res, rej) => {
+      const completion = createDumpCompletion({ resolve: res, reject: rej });
+      completion.onChildClose(null, 'SIGTERM', '');
+      completion.onStreamClose();
+    });
+    await promise;
+  }, (error) => {
+    assert.match(error.message, /SIGTERM/);
+    assert.doesNotMatch(error.message, /退出码 null/);
+    return true;
+  });
 });
