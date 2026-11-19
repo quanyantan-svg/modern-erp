@@ -7711,7 +7711,7 @@ DEPLOY=TARGET_ENV_DEPLOYED(129.204.51.149; commit b7d8408e -> ea53bbe; git bundl
 DEPLOY_TRANSPORT=git bundle incremental(1,167,337 B; sha256 bf4a95dc...; verify PASS)
 DEPLOY_BUILD=PASS(server 6.99s; local 3.90s; 3/3 chunk md5 identical; 59 assets = 59)
 DEPLOY_SERVICE=modern-erp.service restarted only; nginx/MySQL NOT restarted
-DEPLOY_BACKUP=PRE_DEPLOY_DUMP(850,192 B; sha256 fcfdf9f0...; local COMPLETE; COS offsite copy landed later in §89)
+DEPLOY_BACKUP=PRE_DEPLOY_DUMP(850,192 B; sha256 fcfdf9f0...; local COMPLETE; COS offsite copy landed later in §90)
 TARGET_HEALTH=PASS(live/ready 200 via 3001 and nginx; unauth 401)
 TARGET_REFERENCE_API=13/13 PASS(items,total,limit,offset; pagination; hydration; zh labels; 400/403 boundaries)
 TARGET_SYSTEM_HEALTH=24 BLOCKING checks; 0 failing
@@ -7777,7 +7777,7 @@ DEPLOY/PUSH/TAG/RELEASE=NOT_EXECUTED
 ACCEPTANCE/FREEZE=NOT_ISSUED
 ```
 
-## 89. 客户测试环境 MySQL 异机备份（COS）落地与恢复演练（2026-11-19）
+## 90. 客户测试环境 MySQL 异机备份（COS）落地与恢复演练（2026-11-19）
 
 | 项目 | 当前状态 |
 |---|---|
@@ -7788,14 +7788,14 @@ ACCEPTANCE/FREEZE=NOT_ISSUED
 | 证据 | [`docs/acceptance/cos-offsite-backup-acceptance-20261119.md`](../acceptance/cos-offsite-backup-acceptance-20261119.md) |
 | 未签发 | Acceptance / Freeze / Release Readiness **未签发**；本轮只是实施与验证证据 |
 
-### 89.1 落地内容
+### 90.1 落地内容
 
 - **只读备份账号** `modern_erp_backup`@`127.0.0.1`：`GRANT USAGE ON *.*` + `SELECT, EXECUTE, SHOW VIEW, EVENT, TRIGGER ON modern_erp.*`；无写权限、无库外权限。口令在服务器内生成，不进 argv、不进仓库。
 - **独立凭据文件** `/etc/modern-erp/backup-env`（`root:modern-erp-backup`，`0640`）；备份单元经 systemd drop-in **只读这一个文件**，不读应用服务的 `/etc/modern-erp/env`。
 - **COS 最小权限**：CAM 策略 `modern-erp-dr-backup`（PolicyId 294611927）绑定子账号 `modern-erp-dr-backup`（uin 100055346626），仅该桶的 9 个对象级操作 + 桶列举；无删桶、无跨桶、无管理权限。
 - **定时器切换**：`modern-erp-mysql-backup.timer` 启用（每日 03:15 + ≤10 分钟随机延迟）；2026-11-18 因对象存储凭据未到位而落地的本地分支 `modern-erp-backup.timer` 已 `disable --now`，历史本地 dump 保留为历史证据。
 
-### 89.2 实施中发现并修复的 4 个实现缺陷
+### 90.2 实施中发现并修复的 4 个实现缺陷
 
 canonical 灾备链路此前**从未在真实对象存储上跑通**，本轮逐个暴露：
 
@@ -7806,7 +7806,7 @@ canonical 灾备链路此前**从未在真实对象存储上跑通**，本轮逐
 | D3 | 恢复入口把 `target.identity` 直接展开给 `runMysqlImport` | 库名被传成 `undefined` → `ERROR 1044 ... to database 'undefined'` | `bc12aee` |
 | D4 | 导入未处理 dump 的 `DEFINER=` 子句 | `ERROR 1227 ... SUPER or SET_USER_ID`；且原 definer 账号在目标库上无权限，触发器在隔离库上直接失效 | `c43435c` |
 
-### 89.3 真实证据
+### 90.3 真实证据
 
 | 项 | 结果 |
 |---|---|
@@ -7819,12 +7819,12 @@ canonical 灾备链路此前**从未在真实对象存储上跑通**，本轮逐
 | 门禁 | DR 合同 **16/16 PASS**；`pnpm test:fast` **775/775 PASS**；`git diff --check` PASS |
 | 共享主机 | MySQL 全程未重启；nginx 未重启未改站点块；`calculator_db` 仍 1 表；`pairbook-web` active |
 
-### 89.4 已登记的实现偏差
+### 90.4 已登记的实现偏差
 
 1. **恢复后对象归恢复账号所有**：D4 修复在导入流上剥除版本注释里的 `DEFINER=`（存储对象保持原样、哈希不变）。设计未规定恢复后对象归属，这是可移植恢复与隔离库演练的前提，但与源库不同。
 2. **寻址方式由 endpoint 决定**：远端 virtual-hosted style，仅本地 sentinel 保留 path-style。
 
-### 89.5 未闭合项
+### 90.5 未闭合项
 
 1. **安全组与主机 `ufw` 未复核**（3306 / 3001 是否确实不可从公网访问、22 是否已收窄到固定出口 IP）。
 2. **季度演练源对象尚未产生**：本轮只有 daily 对象，`kind=drill` 的保留路径未被真实数据验证。
@@ -7832,7 +7832,7 @@ canonical 灾备链路此前**从未在真实对象存储上跑通**，本轮逐
 4. **控制台侧的临时主账号 API 密钥需业务所有者自行删除**（本机文件已由引导脚本销毁）。
 5. manifest 的 `commit` 在服务器 detached HEAD 下记为 `unknown`（备份账号无 git 读权限），不影响对象唯一性。
 
-### 89.6 机器可读状态
+### 90.6 机器可读状态
 
 ```text
 COS_OFFSITE_BACKUP=IMPLEMENTED_AND_VERIFIED(129.204.51.149; bucket modern-erp-dr-1477910165; ap-guangzhou)
